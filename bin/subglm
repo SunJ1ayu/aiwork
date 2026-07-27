@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# subglm - Zhipu (GLM) review employee; thin shim onto the shared subchat body.
+exec "$(dirname "$0")/subchat" zhipu "$@"

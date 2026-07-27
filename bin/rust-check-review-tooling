@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Weekly rust-check for the review tooling. Runs the offline oracle suites and
+# emits a compact summary. Exit 0 = all green, non-zero = something rusted
+# (external API drift, env upgrade, etc.) — the point is to catch silent rot
+# before a live panel-review hits it. Prints a one-line heartbeat even on green
+# so a dead cron is itself visible (the P0-2 "silently stale" lesson).
+# Only the stub/offline suites run here; no live provider probes (no quota burn).
+set -uo pipefail
+T1=/root/aiwork/tests/test-review-tooling.sh
+T2=/root/aiwork/tests/test-submimo-fix-oracle.sh
+T3=/root/aiwork/tests/test_submimo_retry.py
+
+o1="$(bash "$T1" 2>&1)"; r1=$?
+o2="$(bash "$T2" 2>&1)"; r2=$?
+o3="$(python3 "$T3" 2>&1)"; r3=$?
+
+s1="$(printf '%s\n' "$o1" | grep -oE 'total: [0-9]+ passed, [0-9]+ failed' | tail -1)"
+s2="$(printf '%s\n' "$o2" | grep -oE 'total: [0-9]+ passed, [0-9]+ failed' | tail -1)"
+s3="$(printf '%s\n' "$o3" | tail -1)"
+
+if [[ $r1 -eq 0 && $r2 -eq 0 && $r3 -eq 0 ]]; then
+  echo "✅ 评审工具链防锈通过 | review-tooling: ${s1:-?} | fix-oracle: ${s2:-?} | retry: ${s3:-?}"
+  exit 0
+fi
+echo "❌ 评审工具链防锈失败(外部漂移/环境升级?先跑本地 oracle 复现):"
+[[ $r1 -ne 0 ]] && { echo "--- test-review-tooling.sh (rc=$r1) ---"; printf '%s\n' "$o1" | grep -E 'FAIL|total' | tail -20; }
+[[ $r2 -ne 0 ]] && { echo "--- test-submimo-fix-oracle.sh (rc=$r2) ---"; printf '%s\n' "$o2" | grep -E 'FAIL|total' | tail -20; }
+[[ $r3 -ne 0 ]] && { echo "--- test_submimo_retry.py (rc=$r3) ---"; printf '%s\n' "$o3" | tail -20; }
+exit 1

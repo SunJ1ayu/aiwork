@@ -1,0 +1,26 @@
+#!/bin/bash
+# 只读检查:openclaw CLI 版本 vs Gateway 运行版本是否一致。
+# 背景:07-07 全 cron 崩 = 06-28 原地升级后 gateway 未重启,老进程(6.8)跑新 dist(6.10),
+# 潜伏 8 天才爆。此检查把 memory 里的诊断法(比对 status 两版本)固化成脚本。
+# exit 0=一致  1=不一致(需重启 gateway)  2=无法解析(gateway 未跑/命令失败)
+set -u
+OPENCLAW="${OPENCLAW_BIN:-openclaw}"
+command -v "$OPENCLAW" >/dev/null 2>&1 || OPENCLAW=/root/.local/share/pnpm/openclaw
+
+out=$("$OPENCLAW" gateway status 2>/dev/null) || {
+    echo "check-gateway-version: 'openclaw gateway status' failed (gateway down?)" >&2
+    exit 2
+}
+cli=$(printf '%s\n' "$out" | sed -n 's/^CLI version: \([^ ]*\).*/\1/p' | head -1)
+gw=$(printf '%s\n' "$out" | sed -n 's/^Gateway version: \([^ ]*\).*/\1/p' | head -1)
+if [[ -z $cli || -z $gw ]]; then
+    echo "check-gateway-version: cannot parse versions from status output" >&2
+    exit 2
+fi
+if [[ $cli == "$gw" ]]; then
+    echo "gateway version OK: CLI=$cli Gateway=$gw"
+    exit 0
+fi
+echo "gateway VERSION MISMATCH: CLI=$cli Gateway=$gw — 升级后未重启?(07-07 全 cron 崩同型)"
+echo "fix: systemctl --user restart openclaw-gateway && check-gateway-version"
+exit 1

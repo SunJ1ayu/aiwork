@@ -1,0 +1,18 @@
+#!/bin/bash
+# openclaw 唯一升级入口:升级 → 重启 gateway → 断言 CLI/Gateway 版本一致。
+# 以后不要裸跑 openclaw update / npm 升级(07-07 事故根因就是升级后忘了重启)。
+# 参数原样透传给 `openclaw update`。
+set -euo pipefail
+OPENCLAW="${OPENCLAW_BIN:-openclaw}"
+command -v "$OPENCLAW" >/dev/null 2>&1 || OPENCLAW=/root/.local/share/pnpm/openclaw
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+echo "[openclaw-up] upgrading..."
+"$OPENCLAW" update "$@"
+
+echo "[openclaw-up] restarting gateway..."
+systemctl --user restart openclaw-gateway
+sleep 3
+
+echo "[openclaw-up] verifying version consistency..."
+exec /root/aiwork/bin/check-gateway-version

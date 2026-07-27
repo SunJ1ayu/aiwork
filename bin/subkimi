@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# subkimi - Kimi (Moonshot) review employee on an AGENT base: kimi-code CLI
+# run headless (`kimi -p`). Like subglm-agent/subdeepseek-agent, the model
+# explores the repo itself (Read/Glob/Grep + read-only git), so no blind
+# reviews and no manual INCLUDE feeding.
+#
+#   review -> kimi -p, review-only guard, verdict-gated. Works now.
+#   fix    -> NOT supported here on purpose: panel reviewers stay review-only.
+#             Use `submimo fix` (mimo) for fix work.
+#
+# Isolation: KIMI_CODE_HOME points at a dedicated review home whose config
+# carries a PreToolUse guard hook (default-DENY: only Read/ReadMediaFile/Glob/
+# Grep/todo-goal tools plus metachar-free read-only git via Bash are allowed;
+# Write/Edit/Agent/AgentSwarm/Skill/Cron*/FetchURL/WebSearch and unknown tools
+# are blocked). The user's global ~/.kimi-code is never touched. Auth is the
+# Kimi membership OAuth token, shared via a credentials symlink in the review
+# home. NOTE: kimi-code's hook protocol is fail-open (non-0/2 exit = allow),
+# so this wrapper preflights the guard (must deny a canary Write with rc=2)
+# and refuses to dispatch if the guard is broken or node is missing.
+
+REVIEW_HOME="${KIMI_REVIEW_HOME:-/root/aiwork/kimi-review-home}"
+DEFAULT_MODEL="kimi-code/k3"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  subkimi review TASK_FILE LOG_FILE [REPO_DIR]
+  subkimi fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
+
+Runs Kimi (Moonshot kimi-code CLI, headless) as an agentic read-only review
+sub-agent. The reviewer reads the repo itself; mutations are hard-blocked by
+a PreToolUse guard in an isolated KIMI_CODE_HOME.
+
+Environment:
+  KIMI_MODEL        optional, model alias (default: kimi-code/k3, 1M context;
+                    kimi-code/kimi-for-coding = K2.7 coding-tuned, also available)
+  KIMI_TIMEOUT      optional, seconds before timeout (default 900)
+  KIMI_REVIEW_HOME  optional, default /root/aiwork/kimi-review-home
+
+Examples:
+  subkimi review /root/aiwork/tasks/001-review.md /root/aiwork/logs/001-review.log /path/to/repo
+EOF
+}
+
+die() { echo "subkimi: $*" >&2; exit 1; }
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
+if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
+
+MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
+MODEL="${KIMI_MODEL:-$DEFAULT_MODEL}"
+TIMEOUT_SECONDS="${KIMI_TIMEOUT:-900}"
+
+if [[ "$MODE" == "fix" ]]; then
+  die "fix is not supported: panel reviewers are review-only. Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
+fi
+[[ "$MODE" == "review" ]] || { usage; exit 2; }
+
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+[[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
+command -v kimi >/dev/null 2>&1 || die "kimi CLI not found on PATH (npm i -g @moonshot-ai/kimi-code)"
+command -v node >/dev/null 2>&1 || die "node not found on PATH (guard hook needs it; without it the hook fails OPEN)"
+
+GUARD="$REVIEW_HOME/hooks/guard.mjs"
+[[ -f "$REVIEW_HOME/config.toml" ]] || die "review home config missing: $REVIEW_HOME/config.toml"
+[[ -f "$GUARD" ]] || die "guard hook missing: $GUARD"
+[[ -e "$REVIEW_HOME/credentials/kimi-code.json" ]] || die "no Kimi credentials in $REVIEW_HOME/credentials (run 'kimi login' once, then symlink ~/.kimi-code/credentials)"
+
+# Preflight the guard: it must DENY a canary Write with rc=2. kimi-code hooks
+# fail open on any other exit code, so a broken guard means no sandbox at all.
+set +e
+echo '{"tool_name":"Write","tool_input":{"path":"canary"}}' | node "$GUARD" >/dev/null 2>&1
+GUARD_RC=$?
+set -e
+[[ $GUARD_RC -eq 2 ]] || die "guard preflight failed (rc=$GUARD_RC, want 2) - refusing to dispatch with a fail-open sandbox"
+
+# Absolute log path: the agent runs with cwd = REPO_DIR.
+case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
+mkdir -p "$(dirname "$LOG_FILE")"
+
+PROMPT="You are an independent code reviewer running inside a read-only harness.
+Explore the repository yourself with the tools you have (Read, Glob, Grep, and
+read-only git commands via Bash). Do not take the task's claims at face value -
+verify them against the actual files. Some tools are intentionally blocked by
+the harness; if a call is denied, work with the allowed tools instead of
+retrying it.
+
+Report findings with file:line references and a severity each. You MUST end
+your review with a final line of exactly this form:
+Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
+
+--- REVIEW TASK ---
+$(cat "$TASK_FILE")"
+
+{
+  echo "# subkimi review log"
+  echo "time: $(date -Iseconds)"
+  echo "mode: review (agent base: kimi-code headless)"
+  echo "model: $MODEL"
+  echo "review_home: $REVIEW_HOME"
+  echo "repo: $REPO_DIR"
+  echo "task: $TASK_FILE"
+  echo
+} > "$LOG_FILE"
+
+RC=0
+(
+  cd "$REPO_DIR"
+  KIMI_CODE_HOME="$REVIEW_HOME" \
+  KIMI_CODE_NO_AUTO_UPDATE=1 \
+    timeout "$TIMEOUT_SECONDS" kimi -m "$MODEL" -p "$PROMPT"
+) >> "$LOG_FILE" 2>&1 || RC=$?
+
+if [[ $RC -ne 0 ]]; then
+  [[ $RC -eq 124 ]] && die "kimi timed out after ${TIMEOUT_SECONDS}s (log: $LOG_FILE)"
+  die "kimi exited rc=$RC (log: $LOG_FILE)"
+fi
+
+# Verdict gate (same semantics as the other legs): a review that never
+# concludes is a failed review, but the log is kept for forensics. Accepts
+# 「结论: PASS」/full-width colon (Chinese backends drift to it); ： via
+# ANSI-C quoting per the 07-17 full-width-punctuation lesson.
+VERDICT_RE=$'(Conclusion|结论)(:|\uFF1A)[[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)'
+grep -qE "$VERDICT_RE" "$LOG_FILE" \
+  || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+
+exit 0

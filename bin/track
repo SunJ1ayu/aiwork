@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# track — lightweight artifact scaffold borrowed from Comet, without the state
+# machine / guards. Driven by the main agent's judgment + the panel workflow.
+#
+#   track new <name> [project-dir]      scaffold tracks/<name>/ from templates
+#   track archive <name> [project-dir]  move tracks/<name>/ -> tracks/archive/
+#   track list [project-dir]            list active + archived tracks
+#
+# project-dir defaults to the current directory. No phases are enforced — write
+# proposal/design/tasks/verify when they earn their keep; panel hooks live in
+# the templates. See /root/aiwork/track/CONVENTION.md.
+
+set -euo pipefail
+
+TEMPLATES="/root/aiwork/track/templates"
+
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  new)
+    name="${1:-}"; proj="${2:-$PWD}"
+    [ -z "$name" ] && { echo "ERROR: need a track name" >&2; usage 1; }
+    dir="$proj/tracks/$name"
+    [ -e "$dir" ] && { echo "ERROR: $dir already exists" >&2; exit 1; }
+    mkdir -p "$dir"
+    date="$(date +%Y-%m-%d)"
+    baseref="$(git -C "$proj" rev-parse --verify -q HEAD 2>/dev/null || true)"
+    [ -z "$baseref" ] && baseref="<no commit yet>"
+    for f in proposal design tasks verify; do
+      sed -e "s|__NAME__|$name|g" \
+          -e "s|__DATE__|$date|g" \
+          -e "s|__BASEREF__|$baseref|g" \
+          "$TEMPLATES/$f.md" > "$dir/$f.md"
+    done
+    echo "created $dir"
+    ls -1 "$dir"
+    ;;
+  archive)
+    name="${1:-}"; proj="${2:-$PWD}"
+    [ -z "$name" ] && { echo "ERROR: need a track name" >&2; usage 1; }
+    src="$proj/tracks/$name"
+    [ -d "$src" ] || { echo "ERROR: $src not found" >&2; exit 1; }
+    mkdir -p "$proj/tracks/archive"
+    mv "$src" "$proj/tracks/archive/$name"
+    echo "archived -> $proj/tracks/archive/$name"
+    ;;
+  list)
+    proj="${1:-$PWD}"
+    echo "active:"
+    ls -1 "$proj/tracks" 2>/dev/null | grep -v '^archive$' | sed 's/^/  /' || true
+    echo "archived:"
+    ls -1 "$proj/tracks/archive" 2>/dev/null | sed 's/^/  /' || true
+    ;;
+  -h|--help|help|"") usage 0 ;;
+  *) echo "ERROR: unknown command '$cmd'" >&2; usage 1 ;;
+esac

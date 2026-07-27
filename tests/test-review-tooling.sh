@@ -1,0 +1,969 @@
+#!/usr/bin/env bash
+# Regression oracle for the review-tooling fixes V1..V7.
+# Owned by the main agent (the frontier model driving the session).
+# Must NOT be edited by submimo/subdeepseek/subglm.
+#
+#   V1  submimo-review: untracked/new files have their CONTENT inlined under
+#       --git-diff (they are absent from `git diff`, so reviewing new files
+#       must not be a silent blind spot).
+#   V2  subdeepseek: DEEPSEEK_INCLUDE patterns reach the engine LITERALLY; the
+#       shell must not pre-expand globs against subdeepseek's own CWD (needs set -f).
+#   V3  panel-review: a reviewer's early stderr failure is captured to a .err
+#       sidecar (not swallowed, not racing the reviewer's own .log); empty
+#       sidecars are removed on success; exit code is 1 only if ALL THREE fail.
+#   V4  submimo-review: empty / null / verdict-less model output exits non-zero
+#       (log still written, reason on stderr); explore mode (--mode explore /
+#       REVIEW_MODE=explore, flag wins) is exempt from the verdict check; a
+#       custom REVIEW_SYSTEM_PROMPT alone is NOT; dry-run stays exempt from all.
+#   V5  submimo-review: staged and committed work is visible in the diff
+#       (HEAD default, empty-tree fallback in fresh repos, PANEL_DIFF_BASE for
+#       branch review; invalid base is a hard error).
+#   V6  submimo-review: git diff and pooled untracked content are byte-capped
+#       with explicit [TRUNCATED] markers.
+#   V7  submimo-review: empty diff + nothing attached emits a BLIND warning on
+#       stderr and in the log header, but stays rc=0.
+#
+# Run:  bash /root/aiwork/tests/test-review-tooling.sh
+set -uo pipefail
+
+BIN="/root/aiwork/bin"
+PASS=0; FAIL=0
+ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
+bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+check(){ # check "desc" COND_RC   (0 => pass)
+  if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi
+}
+
+# ---------------------------------------------------------------- V1
+v1_untracked_content() {
+  echo "[V1] submimo-review inlines untracked file content under --git-diff"
+  local d; d="$(mktemp -d)"
+  local repo="$d/repo"; mkdir -p "$repo"   # task/out live outside repo so they aren't untracked
+  ( cd "$repo"
+    git init -q; git config user.email t@t; git config user.name t
+    echo old > tracked.txt; git add tracked.txt; git commit -qm init
+    echo CHANGED >> tracked.txt
+    printf 'SECRET_NEW_FILE_CONTENT_LINE\n' > brandnew.py
+    echo '*.log' > .gitignore
+    printf 'should_not_leak\n' > ignore_me.log )
+  printf '# review\ncheck new file\n' > "$d/t.md"
+  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+    "$d/t.md" "$d/out.log" --repo "$repo" --git-diff --dry-run >/dev/null 2>&1
+
+  grep -q SECRET_NEW_FILE_CONTENT_LINE "$d/out.log"; check "untracked content present" $?
+  grep -q "Untracked / New Files" "$d/out.log";       check "untracked section header present" $?
+  grep -q CHANGED "$d/out.log";                        check "tracked diff still present" $?
+  if grep -q ignore_me "$d/out.log"; then bad "gitignored file excluded"; else ok "gitignored file excluded"; fi
+  rm -rf "$d"
+}
+
+v1_no_untracked_and_nonrepo() {
+  echo "[V1] submimo-review: clean repo has no header; non-repo does not crash"
+  local d; d="$(mktemp -d)"
+  local repo="$d/repo"; mkdir -p "$repo"
+  ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
+    echo a > f; git add f; git commit -qm init )
+  printf '# t\n' > "$d/t.md"
+  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+    "$d/t.md" "$d/out.log" --repo "$repo" --git-diff --dry-run >/dev/null 2>&1
+  if grep -q "Untracked / New Files" "$d/out.log"; then bad "no header when no untracked"; else ok "no header when no untracked"; fi
+
+  local nd; nd="$(mktemp -d)"   # not a git repo
+  printf '# t\n' > "$nd/t.md"
+  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+    "$nd/t.md" "$nd/out.log" --repo "$nd" --git-diff --dry-run >/dev/null 2>&1
+  check "non-repo dry-run exits 0 (no crash)" $?
+  rm -rf "$d" "$nd"
+}
+
+# ---------------------------------------------------------------- V2
+v2_glob_not_pre_expanded() {
+  echo "[V2] subdeepseek passes DEEPSEEK_INCLUDE patterns literally (no shell glob)"
+  local d stub_bin; d="$(mktemp -d)"; stub_bin="$d/bin"
+  mkdir -p "$stub_bin"
+  # subdeepseek is a thin shim onto subchat; bin/ deploys as a set, so copy both.
+  cp "$BIN/subdeepseek" "$stub_bin/subdeepseek"
+  cp "$BIN/subchat" "$stub_bin/subchat"
+  # stub engine: subdeepseek does `exec python3 "$ENGINE" ...`; record argv.
+  cat > "$stub_bin/submimo-review" <<PYEOF
+import sys
+open("$d/argv.txt","w").write("\0".join(sys.argv[1:]))
+PYEOF
+  # decoy files in subdeepseek's CWD that *.py would expand to if globbing leaks.
+  ( cd "$d"; touch decoy_a.py decoy_b.py
+    printf '# t\n' > t.md
+    DEEPSEEK_API_KEY=dummy DEEPSEEK_INCLUDE="*.py" \
+      bash "$stub_bin/subdeepseek" review "$d/t.md" "$d/out.log" "$d" >/dev/null 2>&1 )
+
+  if [[ -f "$d/argv.txt" ]]; then
+    # literal pattern present, decoy-expanded names absent
+    grep -qz -- '*.py' "$d/argv.txt"; check "literal '*.py' reached engine" $?
+    if grep -qz decoy_a.py "$d/argv.txt"; then bad "no CWD-expanded decoy leaked"; else ok "no CWD-expanded decoy leaked"; fi
+  else
+    bad "stub engine was invoked (argv captured)"
+  fi
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V3
+make_fake_reviewer() { # path RC  -> writes a stub that mimics a reviewer
+  local p="$1" rc="$2"
+  cat > "$p" <<EOF
+#!/usr/bin/env bash
+# args: review TASK LOG REPO
+echo "stub result" > "\$3"            # mimic writing its own .log
+if [[ $rc -ne 0 ]]; then echo "STUB_STARTUP_FAILURE rc=$rc" >&2; fi
+exit $rc
+EOF
+  chmod +x "$p"
+}
+
+v3_panel_sidecar() {
+  echo "[V3] panel-review captures stderr to .err sidecar, prunes empties, exits right"
+  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  cp "$BIN/panel-review" "$b/panel-review"
+  printf '# t\n' > "$d/t.md"
+
+  # scenario A: all three fail -> each .err non-empty with reason, exit 1
+  make_fake_reviewer "$b/submimo"  3
+  make_fake_reviewer "$b/subdeepseek" 4
+  make_fake_reviewer "$b/subglm"   6
+  bash "$b/panel-review" --no-my-review "$d/t.md" "$d" "$d/A" >/dev/null 2>&1; local rcA=$?
+  check "all-fail exits 1" $([[ $rcA -eq 1 ]]; echo $?)
+  grep -q STUB_STARTUP_FAILURE "$d/A.submimo.log.err"  2>/dev/null; check "submimo failure reason captured in .err" $?
+  grep -q STUB_STARTUP_FAILURE "$d/A.subdeepseek.log.err" 2>/dev/null; check "subdeepseek failure reason captured in .err" $?
+  grep -q STUB_STARTUP_FAILURE "$d/A.subglm.log.err"   2>/dev/null; check "subglm failure reason captured in .err" $?
+
+  # scenario B: all succeed -> empty .err pruned, exit 0
+  make_fake_reviewer "$b/submimo"  0
+  make_fake_reviewer "$b/subdeepseek" 0
+  make_fake_reviewer "$b/subglm"   0
+  bash "$b/panel-review" --no-my-review "$d/t.md" "$d" "$d/B" >/dev/null 2>&1; local rcB=$?
+  check "all-ok exits 0" $([[ $rcB -eq 0 ]]; echo $?)
+  if [[ -e "$d/B.submimo.log.err" || -e "$d/B.subdeepseek.log.err" || -e "$d/B.subglm.log.err" ]]; then bad "empty .err sidecars pruned on success"; else ok "empty .err sidecars pruned on success"; fi
+
+  # scenario C: one fails -> exit 0 (panel only fails if ALL fail), failing .err kept, others pruned
+  make_fake_reviewer "$b/submimo"  0
+  make_fake_reviewer "$b/subdeepseek" 5
+  make_fake_reviewer "$b/subglm"   0
+  bash "$b/panel-review" --no-my-review "$d/t.md" "$d" "$d/C" >/dev/null 2>&1; local rcC=$?
+  check "one-fail exits 0" $([[ $rcC -eq 0 ]]; echo $?)
+  grep -q STUB_STARTUP_FAILURE "$d/C.subdeepseek.log.err" 2>/dev/null; check "failing reviewer's .err kept" $?
+  if [[ -e "$d/C.submimo.log.err" || -e "$d/C.subglm.log.err" ]]; then bad "passing reviewers' empty .err pruned"; else ok "passing reviewers' empty .err pruned"; fi
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V4
+# Stub OpenAI-compatible API: serves one fixed JSON body on every POST.
+# Binds port 0 and reports the real port via a file (avoids collisions).
+# Sets STUB_URL/STUB_PID globals; must NOT be called in a command substitution
+# (a $() would wait for EOF on the pipe the background server keeps open, and
+# would also lose STUB_PID to the subshell -> unkillable stub + suite deadlock).
+start_stub_api() { # dir response_json -> sets STUB_URL, STUB_PID
+  local dir="$1" body="$2"
+  rm -f "$dir/port"
+  python3 - "$dir/port" "$body" <<'PY' >/dev/null 2>&1 &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+portfile, body = sys.argv[1], sys.argv[2].encode()
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+srv = HTTPServer(('127.0.0.1', 0), H)
+open(portfile, 'w').write(str(srv.server_address[1]))
+srv.serve_forever()
+PY
+  STUB_PID=$!
+  for _ in $(seq 50); do [[ -s "$dir/port" ]] && break; sleep 0.1; done
+  STUB_URL="http://127.0.0.1:$(cat "$dir/port")/chat/completions"
+}
+
+run_engine_against() { # url task log [VAR=VAL...] [engine-args...] -> engine rc
+  local url="$1" task="$2" log="$3"; shift 3
+  local envs=()
+  while [[ "${1:-}" == *=* ]]; do envs+=("$1"); shift; done
+  env "${envs[@]}" MIMO_API_KEY=x MIMO_CHAT_COMPLETIONS_URL="$url" \
+    python3 "$BIN/submimo-review" "$task" "$log" --git-diff "$@" 2>"${log}.stderr"
+}
+
+v4_output_validation() {
+  echo "[V4] submimo-review rejects empty/null/verdict-less output; explore exempt"
+  local d url rc; d="$(mktemp -d)"
+  printf '# t\n' > "$d/t.md"
+
+  start_stub_api "$d" '{"choices":[{"message":{"content":""}}]}'
+  run_engine_against "$STUB_URL" "$d/t.md" "$d/empty.log" --repo "$d" >/dev/null; rc=$?
+  check "empty content exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
+  [[ -f "$d/empty.log" ]]; check "log still written on empty content" $?
+  grep -q "model returned empty output" "$d/empty.log.stderr"; check "reason on stderr (sidecar)" $?
+  kill "$STUB_PID" 2>/dev/null; rm -f "$d/port"
+
+  start_stub_api "$d" '{"choices":[{"message":{"content":null}}]}'
+  run_engine_against "$STUB_URL" "$d/t.md" "$d/null.log" --repo "$d" >/dev/null; rc=$?
+  check "null content exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
+  if grep -q "Traceback" "$d/null.log.stderr"; then bad "null content: no traceback"; else ok "null content: no traceback"; fi
+  [[ -f "$d/null.log" ]]; check "log still written on null content" $?
+  kill "$STUB_PID" 2>/dev/null; rm -f "$d/port"
+
+  # GLM-family reasoning models: content null but the review lives in
+  # reasoning_content -> that leg must be recovered, not reported empty
+  start_stub_api "$d" '{"choices":[{"message":{"content":null,"reasoning_content":"Conclusion: PASS (reasoning fallback)"}}]}'
+  run_engine_against "$STUB_URL" "$d/t.md" "$d/reasoning.log" --repo "$d" >/dev/null; rc=$?
+  check "reasoning_content fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  grep -q "reasoning fallback" "$d/reasoning.log"; check "reasoning_content text lands in log" $?
+  kill "$STUB_PID" 2>/dev/null; rm -f "$d/port"
+
+  start_stub_api "$d" '{"choices":[{"message":{"content":"looks fine to me"}}]}'
+  run_engine_against "$STUB_URL" "$d/t.md" "$d/noverdict.log" --repo "$d" >/dev/null; rc=$?
+  check "verdict-less review output exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
+  run_engine_against "$STUB_URL" "$d/t.md" "$d/explore.log" \
+    REVIEW_MODE=explore REVIEW_SYSTEM_PROMPT="divergent design" --repo "$d" >/dev/null; rc=$?
+  check "explore mode exempt from verdict check" $([[ $rc -eq 0 ]]; echo $?)
+  # the old trap: a CUSTOM review prompt must NOT silently disable the verdict
+  # check - only an explicit explore mode may
+  run_engine_against "$STUB_URL" "$d/t.md" "$d/customprompt.log" \
+    REVIEW_SYSTEM_PROMPT="my stricter review prompt" --repo "$d" >/dev/null; rc=$?
+  check "custom review prompt still verdict-checked" $([[ $rc -ne 0 ]]; echo $?)
+  # --mode flag wins over REVIEW_MODE env
+  run_engine_against "$STUB_URL" "$d/t.md" "$d/modeflag.log" \
+    REVIEW_MODE=review REVIEW_SYSTEM_PROMPT="divergent design" --repo "$d" --mode explore >/dev/null; rc=$?
+  check "--mode flag overrides REVIEW_MODE env" $([[ $rc -eq 0 ]]; echo $?)
+  kill "$STUB_PID" 2>/dev/null; rm -f "$d/port"
+
+  start_stub_api "$d" '{"choices":[{"message":{"content":"Conclusion: PASS"}}]}'
+  run_engine_against "$STUB_URL" "$d/t.md" "$d/pass.log" --repo "$d" >/dev/null; rc=$?
+  check "verdict output exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  kill "$STUB_PID" 2>/dev/null
+
+  # dry-run produces result="" by design and must stay exempt
+  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+    "$d/t.md" "$d/dry.log" --repo "$d" --git-diff --dry-run >/dev/null 2>&1
+  check "dry-run still exits 0" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V5
+dry_prompt() { # task log repo extra-args/env... (env VAR=VAL pairs first)
+  local envs=()
+  while [[ "${1:-}" == *=* ]]; do envs+=("$1"); shift; done
+  env "${envs[@]}" MIMO_API_KEY=x MIMO_BASE_URL=http://x \
+    python3 "$BIN/submimo-review" "$@" --git-diff --dry-run
+}
+
+v5_diff_scope() {
+  echo "[V5] staged/committed work visible; empty-tree fallback; PANEL_DIFF_BASE"
+  local d repo; d="$(mktemp -d)"; repo="$d/repo"; mkdir -p "$repo"
+  printf '# t\n' > "$d/t.md"
+
+  # -b main: deterministic base branch name so the PANEL_DIFF_BASE case below
+  # does not depend on the machine's init.defaultBranch
+  ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
+    echo base > f.txt; git add f.txt; git commit -qm init
+    echo STAGED_ONLY_CHANGE >> f.txt; git add f.txt )
+  dry_prompt "$d/t.md" "$d/staged.log" --repo "$repo" >/dev/null 2>&1
+  grep -q STAGED_ONLY_CHANGE "$d/staged.log"; check "staged-only change visible in diff" $?
+
+  local fresh="$d/fresh"; mkdir -p "$fresh"
+  ( cd "$fresh"; git init -q; git config user.email t@t; git config user.name t
+    echo FRESH_STAGED_CONTENT > new.txt; git add new.txt )
+  dry_prompt "$d/t.md" "$d/fresh.log" --repo "$fresh" >/dev/null 2>&1; local rc=$?
+  check "fresh repo (no HEAD) exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  grep -q FRESH_STAGED_CONTENT "$d/fresh.log"; check "fresh repo staged content visible" $?
+
+  ( cd "$repo"; git checkout -q -b feature
+    echo COMMITTED_BRANCH_CHANGE >> f.txt; git commit -qam branchwork )
+  PANEL_DIFF_BASE=main dry_prompt "$d/t.md" "$d/branch.log" --repo "$repo" >/dev/null 2>&1
+  grep -q COMMITTED_BRANCH_CHANGE "$d/branch.log"; check "PANEL_DIFF_BASE shows committed branch work" $?
+
+  PANEL_DIFF_BASE=no-such-ref dry_prompt "$d/t.md" "$d/bad.log" --repo "$repo" >/dev/null 2>&1; rc=$?
+  check "invalid PANEL_DIFF_BASE is a hard error" $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V6
+v6_truncation() {
+  echo "[V6] diff and pooled untracked content are byte-capped with markers"
+  local d repo; d="$(mktemp -d)"; repo="$d/repo"; mkdir -p "$repo"
+  printf '# t\n' > "$d/t.md"
+  ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
+    echo base > big.txt; git add big.txt; git commit -qm init
+    python3 -c "print('X'*5000)" >> big.txt )
+  MIMO_MAX_DIFF_BYTES=1000 dry_prompt "$d/t.md" "$d/diff.log" --repo "$repo" >/dev/null 2>&1
+  grep -q "TRUNCATED: git diff exceeded 1000 bytes" "$d/diff.log"; check "oversized diff truncated with marker" $?
+
+  ( cd "$repo"; git checkout -q big.txt
+    for i in 1 2 3 4 5 6; do python3 -c "print('U'*400)" > "untracked_$i.txt"; done )
+  MIMO_MAX_UNTRACKED_TOTAL_BYTES=1000 dry_prompt "$d/t.md" "$d/untr.log" --repo "$repo" >/dev/null 2>&1
+  grep -q "untracked files exceeded 1000 bytes total" "$d/untr.log"; check "untracked pool capped with marker" $?
+  grep -q "listed by name only" "$d/untr.log"; check "omitted untracked files listed by name" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V7
+v7_blind_warning() {
+  echo "[V7] empty diff + nothing attached warns BLIND on stderr and in log, rc=0"
+  local d repo; d="$(mktemp -d)"; repo="$d/repo"; mkdir -p "$repo"
+  printf '# t\n' > "$d/t.md"
+  ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
+    echo a > f; git add f; git commit -qm init )
+  dry_prompt "$d/t.md" "$d/out.log" --repo "$repo" >/dev/null 2>"$d/stderr.txt"; local rc=$?
+  check "empty-diff run still exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  grep -q "BLIND" "$d/stderr.txt"; check "BLIND warning on stderr" $?
+  grep -q "warning:.*BLIND" "$d/out.log"; check "BLIND warning in log header" $?
+
+  # attaching an include silences the warning
+  echo content > "$repo/x.py"; ( cd "$repo"; git add x.py; git commit -qm x )
+  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+    "$d/t.md" "$d/inc.log" --repo "$repo" --git-diff --include x.py --dry-run >/dev/null 2>"$d/stderr2.txt"
+  if grep -q "BLIND" "$d/stderr2.txt"; then bad "no warning when include attached"; else ok "no warning when include attached"; fi
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V8
+v8_subchat_provider_table() {
+  echo "[V8] subchat: provider table drives engine env; shims + auth fallback intact"
+  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  cp "$BIN/subchat" "$b/subchat"
+  cp "$BIN/subdeepseek" "$b/subdeepseek"
+  cp "$BIN/subglm"   "$b/subglm"
+  # stub engine: record argv + the MIMO_*/REVIEW_LABEL env subchat must inject.
+  cat > "$b/submimo-review" <<'PYEOF'
+import sys, os, json
+keys = ["MIMO_API_KEY","MIMO_BASE_URL","MIMO_CHAT_COMPLETIONS_URL",
+        "MIMO_MODEL","MIMO_TIMEOUT","REVIEW_LABEL"]
+out = {"argv": sys.argv[1:], "env": {k: os.environ.get(k) for k in keys}}
+open(os.environ["CAPTURE"], "w").write(json.dumps(out))
+PYEOF
+  printf '# t\n' > "$d/t.md"
+  envget() { # capture.json KEY -> value ('' if unset)
+    python3 -c "import json,sys;v=json.load(open(sys.argv[1]))['env'].get(sys.argv[2]);print('' if v is None else v)" "$1" "$2"
+  }
+
+  # unknown provider is a hard error naming the supported ones
+  env CAPTURE="$d/c0.json" bash "$b/subchat" nope review "$d/t.md" "$d/o0.log" "$d" \
+    >/dev/null 2>"$d/e0.txt"; rc=$?
+  check "unknown provider exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "deepseek" "$d/e0.txt"; check "unknown-provider error lists supported providers" $?
+
+  # deepseek leg: base-URL style endpoint, default model, label; a stray
+  # engine endpoint var inherited from the caller must NOT leak through; an
+  # EMPTY (set-but-null) model var must still fall back to the default
+  env CAPTURE="$d/c1.json" DEEPSEEK_MODEL= \
+    MIMO_CHAT_COMPLETIONS_URL=http://stray.example/chat DEEPSEEK_API_KEY=sk-dummy \
+    bash "$b/subchat" deepseek review "$d/t.md" "$d/o1.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subchat deepseek review exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ "$(envget "$d/c1.json" MIMO_BASE_URL)" == "https://api.deepseek.com" ]]
+  check "deepseek: MIMO_BASE_URL default" $?
+  [[ "$(envget "$d/c1.json" MIMO_MODEL)" == "deepseek-v4-flash" ]]
+  check "deepseek: default model (even when env var set-but-empty)" $?
+  [[ "$(envget "$d/c1.json" MIMO_TIMEOUT)" == "900" ]]
+  check "deepseek: default timeout 900" $?
+  [[ "$(envget "$d/c1.json" REVIEW_LABEL)" == "subdeepseek-review" ]]
+  check "deepseek: REVIEW_LABEL preserved" $?
+  [[ "$(envget "$d/c1.json" MIMO_API_KEY)" == "sk-dummy" ]]
+  check "deepseek: env key wins" $?
+  [[ -z "$(envget "$d/c1.json" MIMO_CHAT_COMPLETIONS_URL)" ]]
+  check "deepseek: stray MIMO_CHAT_COMPLETIONS_URL scrubbed" $?
+
+  # zhipu leg: exact chat-URL style endpoint, label; model override; stray
+  # MIMO_BASE_URL from the caller must be scrubbed likewise
+  env CAPTURE="$d/c2.json" MIMO_BASE_URL=http://stray.example/v1 \
+    ZHIPU_API_KEY=zk-dummy ZHIPU_MODEL=glm-custom ZHIPU_TIMEOUT=123 \
+    bash "$b/subchat" zhipu review "$d/t.md" "$d/o2.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subchat zhipu review exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ "$(envget "$d/c2.json" MIMO_CHAT_COMPLETIONS_URL)" == "https://open.bigmodel.cn/api/paas/v4/chat/completions" ]]
+  check "zhipu: exact MIMO_CHAT_COMPLETIONS_URL default" $?
+  [[ "$(envget "$d/c2.json" MIMO_MODEL)" == "glm-custom" ]]
+  check "zhipu: ZHIPU_MODEL override honored" $?
+  [[ "$(envget "$d/c2.json" REVIEW_LABEL)" == "subglm-review" ]]
+  check "zhipu: REVIEW_LABEL preserved" $?
+  [[ -z "$(envget "$d/c2.json" MIMO_BASE_URL)" ]]
+  check "zhipu: stray MIMO_BASE_URL scrubbed" $?
+  [[ "$(envget "$d/c2.json" MIMO_TIMEOUT)" == "123" ]]
+  check "zhipu: ZHIPU_TIMEOUT override honored" $?
+
+  # auth-file fallback: no *_API_KEY in env -> key read from JSON auth file
+  printf '{"key":"file-key-zhipu"}' > "$d/zauth.json"
+  env -u ZHIPU_API_KEY CAPTURE="$d/c3.json" ZHIPU_AUTH_FILE="$d/zauth.json" \
+    bash "$b/subchat" zhipu review "$d/t.md" "$d/o3.log" "$d" >/dev/null 2>&1; rc=$?
+  check "zhipu auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ "$(envget "$d/c3.json" MIMO_API_KEY)" == "file-key-zhipu" ]]
+  check "zhipu: key loaded from auth file" $?
+  printf '{"key":"file-key-ds"}' > "$d/sauth.json"
+  env -u DEEPSEEK_API_KEY CAPTURE="$d/c4.json" DEEPSEEK_AUTH_FILE="$d/sauth.json" \
+    bash "$b/subchat" deepseek review "$d/t.md" "$d/o4.log" "$d" >/dev/null 2>&1; rc=$?
+  check "deepseek auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ "$(envget "$d/c4.json" MIMO_API_KEY)" == "file-key-ds" ]]
+  check "deepseek: key loaded from auth file" $?
+  # missing key everywhere is a hard error
+  env -u DEEPSEEK_API_KEY CAPTURE="$d/c5.json" DEEPSEEK_AUTH_FILE="$d/nope.json" \
+    bash "$b/subchat" deepseek review "$d/t.md" "$d/o5.log" "$d" >/dev/null 2>&1; rc=$?
+  check "missing key + missing auth file is a hard error" $([[ $rc -ne 0 ]]; echo $?)
+  # malformed auth JSON is a hard error, not a silent empty key
+  printf '{"key":' > "$d/bad.json"
+  env -u ZHIPU_API_KEY CAPTURE="$d/c5b.json" ZHIPU_AUTH_FILE="$d/bad.json" \
+    bash "$b/subchat" zhipu review "$d/t.md" "$d/o5b.log" "$d" >/dev/null 2>&1; rc=$?
+  check "malformed auth JSON is a hard error" $([[ $rc -ne 0 ]]; echo $?)
+
+  # -h through a shim lands in subchat's $2 and must still print usage, rc=0
+  bash "$b/subdeepseek" -h >"$d/h.out" 2>"$d/h.err"; rc=$?
+  check "subdeepseek -h exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  grep -q "Usage" "$d/h.out" "$d/h.err" 2>/dev/null; check "subdeepseek -h prints usage" $?
+
+  # fix stays refused, on subchat and through a shim
+  env CAPTURE="$d/c6.json" ZHIPU_API_KEY=zk \
+    bash "$b/subchat" zhipu fix "$d/t.md" "$d/o6.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subchat zhipu fix refused" $([[ $rc -ne 0 ]]; echo $?)
+  env CAPTURE="$d/c7.json" DEEPSEEK_API_KEY=sk \
+    bash "$b/subdeepseek" fix "$d/t.md" "$d/o7.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subdeepseek shim fix refused" $([[ $rc -ne 0 ]]; echo $?)
+
+  # subglm shim end-to-end: literal include glob survives the shim->subchat chain
+  ( cd "$d"; touch decoy_c.py
+    env CAPTURE="$d/c8.json" ZHIPU_API_KEY=zk ZHIPU_INCLUDE="*.py" \
+      bash "$b/subglm" review "$d/t.md" "$d/o8.log" "$d" >/dev/null 2>&1 )
+  if [[ -f "$d/c8.json" ]]; then
+    python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];sys.exit(0 if '*.py' in a else 1)" "$d/c8.json"
+    check "subglm shim: literal '*.py' reached engine" $?
+    python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];sys.exit(1 if 'decoy_c.py' in a else 0)" "$d/c8.json"
+    check "subglm shim: no CWD-expanded decoy leaked" $?
+  else
+    bad "subglm shim invoked stub engine"
+    bad "subglm shim invoked stub engine (decoy)"
+  fi
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V9
+v9_subglm_agent() {
+  echo "[V9] subglm-agent: claude-shell env injection, read-only tools, verdict gate"
+  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  cp "$BIN/subglm-agent" "$b/subglm-agent"
+  # stub claude: record argv + the env subglm-agent must (and must not) inject,
+  # then emit STUB_REVIEW_OUT as the review text.
+  cat > "$b/claude" <<'PYEOF'
+#!/usr/bin/env python3
+import sys, os, json
+out = {"argv": sys.argv[1:],
+       "stdin": sys.stdin.read() if not sys.stdin.isatty() else "",
+       "env": {k: os.environ.get(k) for k in
+               ["ANTHROPIC_AUTH_TOKEN","ANTHROPIC_BASE_URL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL","ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL","ANTHROPIC_API_KEY"]},
+       "cwd": os.getcwd()}
+open(os.environ["CAPTURE"], "w").write(json.dumps(out))
+print(os.environ.get("STUB_REVIEW_OUT", "stub review\nConclusion: PASS"))
+PYEOF
+  chmod +x "$b/claude"
+  printf '# review this\n' > "$d/t.md"
+  agentget() { python3 -c "import json,sys;o=json.load(open(sys.argv[1]));v=o['env'].get(sys.argv[2]);print('' if v is None else v)" "$1" "$2"; }
+  argvhas() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];sys.exit(0 if sys.argv[2] in ' '.join(a) else 1)" "$1" "$2"; }
+
+  # env-key path: token, base url, model mapping, API_KEY scrubbed
+  env PATH="$b:$PATH" CAPTURE="$d/a1.json" ANTHROPIC_API_KEY=real-anthropic-key \
+    ZHIPU_API_KEY=zk-env ZHIPU_MODEL=glm-4.6 \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/a1.log" "$d" >/dev/null 2>&1; rc=$?
+  check "agent review (env key) exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_AUTH_TOKEN)" == "zk-env" ]]
+  check "agent: AUTH_TOKEN from ZHIPU_API_KEY" $?
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_BASE_URL)" == "https://open.bigmodel.cn/api/anthropic" ]]
+  check "agent: default Anthropic-compatible base URL" $?
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_DEFAULT_SONNET_MODEL)" == "glm-4.6" ]]
+  check "agent: sonnet slot mapped to ZHIPU_MODEL" $?
+  [[ -z "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" ]]
+  check "agent: stray ANTHROPIC_API_KEY scrubbed" $?
+  grep -q "Conclusion: PASS" "$d/a1.log"; check "agent: review text lands in log" $?
+  # the task content must reach claude via STDIN (a trailing positional prompt
+  # would be swallowed by the variadic --disallowedTools list)
+  python3 -c "import json,sys;o=json.load(open(sys.argv[1]));sys.exit(0 if 'review this' in o.get('stdin','') else 1)" "$d/a1.json"
+  check "agent: task content reaches claude via stdin" $?
+  python3 -c "import json,sys;o=json.load(open(sys.argv[1]));sys.exit(1 if any('review this' in x for x in o['argv']) else 0)" "$d/a1.json"
+  check "agent: prompt not passed as positional argv" $?
+
+  # read-only tool posture on argv
+  argvhas "$d/a1.json" "--allowedTools";    check "agent: --allowedTools present" $?
+  argvhas "$d/a1.json" "Read";              check "agent: Read allowed" $?
+  if python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];i=a.index('--allowedTools');rest=a[i+1:];j=[k for k,x in enumerate(rest) if x.startswith('--')];seg=rest[:j[0]] if j else rest;sys.exit(1 if any(t in seg for t in ('Write','Edit','NotebookEdit')) else 0)" "$d/a1.json"; then
+    ok "agent: no write-capable tool in allowlist"
+  else
+    bad "agent: no write-capable tool in allowlist"
+  fi
+  argvhas "$d/a1.json" "--disallowedTools"; check "agent: --disallowedTools present" $?
+  argvhas "$d/a1.json" "Write";             check "agent: Write explicitly disallowed" $?
+  argvhas "$d/a1.json" "Agent";             check "agent: subagent tool (Agent) disallowed" $?
+  argvhas "$d/a1.json" "Bash(git diff:*)";  check "agent: Bash limited to git read-only patterns" $?
+  argvhas "$d/a1.json" "--model sonnet";    check "agent: --model sonnet (mapped slot)" $?
+  argvhas "$d/a1.json" "--setting-sources project"; check "agent: user settings not loaded" $?
+  argvhas "$d/a1.json" "--max-turns";       check "agent: turn cap present" $?
+
+  # auth-file fallback
+  printf '{"key":"zk-file"}' > "$d/auth.json"
+  env -u ZHIPU_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" ZHIPU_AUTH_FILE="$d/auth.json" \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/a2.log" "$d" >/dev/null 2>&1; rc=$?
+  check "agent auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ "$(agentget "$d/a2.json" ANTHROPIC_AUTH_TOKEN)" == "zk-file" ]]
+  check "agent: key loaded from auth file" $?
+
+  # verdict gate: no Conclusion -> non-zero, log still written
+  env PATH="$b:$PATH" CAPTURE="$d/a3.json" ZHIPU_API_KEY=zk \
+    STUB_REVIEW_OUT="looks fine to me" \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/a3.log" "$d" >/dev/null 2>&1; rc=$?
+  check "agent: verdict-less output exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
+  [[ -f "$d/a3.log" ]]; check "agent: log still written on verdict miss" $?
+
+  # verdict gate: Chinese 「结论：PASS」 (full-width colon) accepted — the drift
+  # that bit subdeepseek twice (Track B + client-tools)
+  env PATH="$b:$PATH" CAPTURE="$d/a3b.json" ZHIPU_API_KEY=zk \
+    STUB_REVIEW_OUT=$'review body\n结论：PASS' \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/a3b.log" "$d" >/dev/null 2>&1; rc=$?
+  check "agent: Chinese 结论+full-width colon accepted" $([[ $rc -eq 0 ]]; echo $?)
+
+  # fix refused; -h ok
+  env PATH="$b:$PATH" CAPTURE="$d/a4.json" ZHIPU_API_KEY=zk \
+    bash "$b/subglm-agent" fix "$d/t.md" "$d/a4.log" "$d" >/dev/null 2>&1; rc=$?
+  check "agent: fix refused" $([[ $rc -ne 0 ]]; echo $?)
+  bash "$b/subglm-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
+
+  # panel-review leg selection: default=agent, PANEL_GLM_LEG=chat, missing agent
+  local pb="$d/panelbin"; mkdir -p "$pb"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  for stubname in submimo subdeepseek; do
+    cat > "$pb/$stubname" <<'EOF'
+#!/usr/bin/env bash
+echo "other leg" > "$3"; exit 0
+EOF
+    chmod +x "$pb/$stubname"
+  done
+  cat > "$pb/subglm" <<'EOF'
+#!/usr/bin/env bash
+echo "CHAT-LEG" > "$3"; exit 0
+EOF
+  cat > "$pb/subglm-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "AGENT-LEG" > "$3"; exit 0
+EOF
+  chmod +x "$pb/subglm" "$pb/subglm-agent"
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1" >/dev/null 2>&1
+  grep -q AGENT-LEG "$d/P1.subglm.log"; check "panel: GLM leg defaults to agent" $?
+  PANEL_GLM_LEG=chat bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P2" >/dev/null 2>&1
+  grep -q CHAT-LEG "$d/P2.subglm.log"; check "panel: PANEL_GLM_LEG=chat forces chat leg" $?
+  rm -f "$pb/subglm-agent"
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P3" >/dev/null 2>&1
+  grep -q CHAT-LEG "$d/P3.subglm.log"; check "panel: missing agent falls back to chat leg" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V10
+v10_git_stderr_isolation() {
+  echo "[V10] git stderr never pollutes values or prompt (F4/F5, 07-04 存量债)"
+  local d; d="$(mktemp -d)"
+
+  # F4: non-git dir -> fatal text must NOT appear as diff content, BLIND must fire
+  local nr="$d/notrepo"; mkdir -p "$nr"; printf '# t\n' > "$d/t.md"
+  dry_prompt "$d/t.md" "$d/f4.log" --repo "$nr" >/dev/null 2>"$d/f4.err"
+  if grep -q "fatal: not a git repository" "$d/f4.log"; then
+    bad "F4: no fatal text in prompt for non-git dir"
+  else ok "F4: no fatal text in prompt for non-git dir"; fi
+  grep -q "BLIND" "$d/f4.err"; check "F4: BLIND warning fires in non-git dir" $?
+
+  # F5: git stderr noise must not pollute the merge-base value
+  local repo="$d/repo" gb; gb="$(command -v git)"; mkdir -p "$d/shim"
+  printf '#!/bin/bash\necho "warning: shim noise" >&2\nexec %s "$@"\n' "$gb" > "$d/shim/git"
+  chmod +x "$d/shim/git"
+  ( cd "$repo" 2>/dev/null || mkdir -p "$repo" && cd "$repo"
+    git init -q -b main; git config user.email t@t; git config user.name t
+    echo base > f.txt; git add f.txt; git commit -qm init
+    git checkout -qb feat; echo featline >> f.txt; git add f.txt; git commit -qm feat )
+  PATH="$d/shim:$PATH" PANEL_DIFF_BASE=main \
+    dry_prompt "$d/t.md" "$d/f5.log" --repo "$repo" >/dev/null 2>"$d/f5.err"
+  grep -q "featline" "$d/f5.log"; check "F5: branch diff vs merge-base survives stderr noise" $?
+  if grep -qE "shim noise|ambiguous argument|fatal:" "$d/f5.log"; then
+    bad "F5: no stderr noise leaked into prompt"
+  else ok "F5: no stderr noise leaked into prompt"; fi
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V11
+v11_panel_gates() {
+  echo "[V11] panel-review: PANEL_ORACLE_CMD 记录位 + --require-my-review 闸门"
+  local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  for leg in submimo subdeepseek subglm; do
+    printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"
+    chmod +x "$pb/$leg"
+  done
+  printf '# t\n' > "$d/t.md"
+  ( cd "$d/repo"; git init -q )
+
+  # oracle red: recorded + loud warning, but NOT blocking (rc stays 0)
+  PANEL_ORACLE_CMD="exit 3" bash "$pb/panel-review" --no-my-review "$d/t.md" "$d/repo" "$d/O1" >"$d/o1.out" 2>&1
+  check "oracle red: panel still exits 0" $?
+  grep -q "ORACLE:.*rc=3" "$d/o1.out"; check "oracle red: rc recorded on stdout" $?
+  grep -qi "oracle is RED" "$d/o1.out"; check "oracle red: loud warning printed" $?
+  [[ -f "$d/O1.oracle.log" ]]; check "oracle red: output captured to sidecar log" $?
+
+  # oracle green: recorded, no red warning
+  PANEL_ORACLE_CMD="true" bash "$pb/panel-review" --no-my-review "$d/t.md" "$d/repo" "$d/O2" >"$d/o2.out" 2>&1
+  grep -q "ORACLE:.*rc=0" "$d/o2.out"; check "oracle green: rc=0 recorded" $?
+  if grep -qi "oracle is RED" "$d/o2.out"; then bad "oracle green: no red warning"
+  else ok "oracle green: no red warning"; fi
+
+  # --require-my-review: missing file refuses to dispatch
+  bash "$pb/panel-review" --require-my-review "$d/nope.md" "$d/t.md" "$d/repo" "$d/M1" \
+    >"$d/m1.out" 2>&1
+  [[ $? -ne 0 ]]; check "my-review missing: non-zero exit" $?
+  [[ ! -f "$d/M1.submimo.log" ]]; check "my-review missing: no dispatch happened" $?
+
+  # --require-my-review: file inside the repo under review is rejected
+  echo r > "$d/repo/selfrev.md"
+  bash "$pb/panel-review" --require-my-review "$d/repo/selfrev.md" "$d/t.md" "$d/repo" "$d/M2" \
+    >"$d/m2.out" 2>&1
+  [[ $? -ne 0 ]]; check "my-review inside repo: rejected" $?
+  grep -qi "inside" "$d/m2.out"; check "my-review inside repo: reason names the leak" $?
+
+  # --require-my-review: valid outside file passes through
+  echo r > "$d/myrev.md"
+  bash "$pb/panel-review" --require-my-review "$d/myrev.md" "$d/t.md" "$d/repo" "$d/M3" \
+    >"$d/m3.out" 2>&1
+  check "my-review valid: panel runs" $?
+  [[ -f "$d/M3.submimo.log" ]]; check "my-review valid: dispatch happened" $?
+
+  # --require-my-review: a symlink PHYSICALLY in the repo but pointing outside
+  # must still be rejected (collect_untracked follows it and leaks). realpath
+  # alone resolves the link and misses this; needs a lexical check too.
+  echo outside > "$d/outside-rev.md"
+  ln -s "$d/outside-rev.md" "$d/repo/linkrev.md"
+  bash "$pb/panel-review" --require-my-review "$d/repo/linkrev.md" "$d/t.md" "$d/repo" "$d/M4" \
+    >"$d/m4.out" 2>&1
+  [[ $? -ne 0 ]]; check "my-review repo-internal symlink: rejected" $?
+  [[ ! -f "$d/M4.submimo.log" ]]; check "my-review symlink: no dispatch (no leak)" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V12
+v12_gate_default_on() {
+  echo "[V12] panel-review my-review gate is DEFAULT-ON (opt-out), auto-arms on convention path"
+  local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  for leg in submimo subdeepseek subglm; do
+    printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
+  done
+  ( cd "$d/repo"; git init -q )
+  # task file basename drives the convention path the tool looks for
+  local t="$d/mytask.md"; printf '# t\n' > "$t"
+  local conv="/root/aiwork/tasks/mytask-my-review.md"
+
+  # no flag + no convention file present -> REFUSE (forgetting = tool stops you)
+  rm -f "$conv"
+  bash "$pb/panel-review" "$t" "$d/repo" "$d/D1" >"$d/d1.out" 2>&1
+  [[ $? -ne 0 ]]; check "default-on: refuses when no my-review exists" $?
+  [[ ! -f "$d/D1.submimo.log" ]]; check "default-on: no dispatch on refuse" $?
+  grep -qi "my-review" "$d/d1.out"; check "default-on: message points at my-review" $?
+
+  # explicit opt-out -> runs
+  bash "$pb/panel-review" --no-my-review "$t" "$d/repo" "$d/D2" >/dev/null 2>&1
+  check "opt-out --no-my-review: runs" $?
+  [[ -f "$d/D2.submimo.log" ]]; check "opt-out: dispatch happened" $?
+
+  # convention file present -> auto-arms with NO flag, runs
+  echo "my review" > "$conv"
+  bash "$pb/panel-review" "$t" "$d/repo" "$d/D3" >/dev/null 2>&1
+  check "auto-arm: convention my-review present -> runs with no flag" $?
+  [[ -f "$d/D3.submimo.log" ]]; check "auto-arm: dispatch happened" $?
+  rm -f "$conv"
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V13
+v13_subkimi_leg() {
+  echo "[V13] subkimi: guard default-deny, wrapper contract, panel 4th-leg selection"
+  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+
+  # --- the SHIPPED guard, invoked directly: default-deny semantics
+  local guard="/root/aiwork/kimi-review-home/hooks/guard.mjs"
+  if [[ -f "$guard" ]]; then
+    echo '{"tool_name":"Write","tool_input":{}}' | node "$guard" >/dev/null 2>&1
+    check "guard: Write denied (rc=2)" $([[ $? -eq 2 ]]; echo $?)
+    echo '{"tool_name":"Read","tool_input":{}}' | node "$guard" >/dev/null 2>&1
+    check "guard: Read allowed (rc=0)" $?
+    echo '{"tool_name":"Bash","tool_input":{"command":"git log --oneline -3"}}' | node "$guard" >/dev/null 2>&1
+    check "guard: read-only git allowed" $?
+    echo '{"tool_name":"Bash","tool_input":{"command":"git log && rm -rf /"}}' | node "$guard" >/dev/null 2>&1
+    check "guard: metachar chain denied" $([[ $? -eq 2 ]]; echo $?)
+    echo '{"tool_name":"Bash","tool_input":{"command":"curl http://evil"}}' | node "$guard" >/dev/null 2>&1
+    check "guard: non-git bash denied" $([[ $? -eq 2 ]]; echo $?)
+    echo '{"tool_name":"SomeFutureTool","tool_input":{}}' | node "$guard" >/dev/null 2>&1
+    check "guard: unknown tool denied (default-deny)" $([[ $? -eq 2 ]]; echo $?)
+    echo 'garbage not json' | node "$guard" >/dev/null 2>&1
+    check "guard: garbage stdin fails CLOSED (rc=2)" $([[ $? -eq 2 ]]; echo $?)
+  else
+    bad "shipped guard missing: $guard"
+  fi
+
+  # --- subkimi wrapper against a stub kimi + fixture review home
+  cp "$BIN/subkimi" "$b/subkimi"
+  local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
+  printf 'default_model = "x"\n' > "$rh/config.toml"
+  cp "$guard" "$rh/hooks/guard.mjs" 2>/dev/null || printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
+  echo '{}' > "$rh/credentials/kimi-code.json"
+  cat > "$b/kimi" <<'PYEOF'
+#!/usr/bin/env python3
+import sys, os, json
+out = {"argv": sys.argv[1:],
+       "env": {k: os.environ.get(k) for k in
+               ["KIMI_CODE_HOME", "KIMI_CODE_NO_AUTO_UPDATE"]},
+       "cwd": os.getcwd()}
+open(os.environ["CAPTURE"], "w").write(json.dumps(out))
+print(os.environ.get("STUB_REVIEW_OUT", "stub review\nConclusion: PASS"))
+PYEOF
+  chmod +x "$b/kimi"
+  printf '# review this\n' > "$d/t.md"
+  kimiget() { python3 -c "import json,sys;o=json.load(open(sys.argv[1]));v=o['env'].get(sys.argv[2]);print('' if v is None else v)" "$1" "$2"; }
+
+  env PATH="$b:$PATH" CAPTURE="$d/k1.json" KIMI_REVIEW_HOME="$rh" \
+    bash "$b/subkimi" review "$d/t.md" "$d/k1.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subkimi: review exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ "$(kimiget "$d/k1.json" KIMI_CODE_HOME)" == "$rh" ]]
+  check "subkimi: KIMI_CODE_HOME points at review home" $?
+  [[ "$(kimiget "$d/k1.json" KIMI_CODE_NO_AUTO_UPDATE)" == "1" ]]
+  check "subkimi: auto-update disabled" $?
+  grep -q 'Conclusion: PASS' "$d/k1.log"; check "subkimi: verdict recorded in log" $?
+
+  env PATH="$b:$PATH" CAPTURE="$d/k2.json" KIMI_REVIEW_HOME="$rh" STUB_REVIEW_OUT="no verdict here" \
+    bash "$b/subkimi" review "$d/t.md" "$d/k2.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subkimi: verdict-less output rejected" $([[ $rc -ne 0 ]]; echo $?)
+
+  # Chinese-style verdict (结论 + full-width colon) must pass the gate — the
+  # drift that bit subdeepseek twice (Track B + client-tools).
+  env PATH="$b:$PATH" CAPTURE="$d/k2b.json" KIMI_REVIEW_HOME="$rh" \
+    STUB_REVIEW_OUT=$'review body\n结论：PASS' \
+    bash "$b/subkimi" review "$d/t.md" "$d/k2b.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subkimi: Chinese 结论+full-width colon accepted" $([[ $rc -eq 0 ]]; echo $?)
+
+  env PATH="$b:$PATH" CAPTURE="$d/k3.json" KIMI_REVIEW_HOME="$rh" \
+    bash "$b/subkimi" fix "$d/t.md" "$d/k3.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subkimi: fix refused" $([[ $rc -ne 0 ]]; echo $?)
+
+  # broken (fail-open) guard must refuse to dispatch BEFORE invoking kimi
+  local rh2="$d/review-home2"; mkdir -p "$rh2/hooks" "$rh2/credentials"
+  printf 'default_model = "x"\n' > "$rh2/config.toml"
+  printf 'process.exit(0)\n' > "$rh2/hooks/guard.mjs"
+  echo '{}' > "$rh2/credentials/kimi-code.json"
+  rm -f "$d/k4.json"
+  env PATH="$b:$PATH" CAPTURE="$d/k4.json" KIMI_REVIEW_HOME="$rh2" \
+    bash "$b/subkimi" review "$d/t.md" "$d/k4.log" "$d" >/dev/null 2>&1; rc=$?
+  check "subkimi: fail-open guard refused (preflight)" $([[ $rc -ne 0 ]]; echo $?)
+  if [[ -e "$d/k4.json" ]]; then bad "subkimi: kimi never invoked on bad guard"; else ok "subkimi: kimi never invoked on bad guard"; fi
+
+  bash "$b/subkimi" -h >/dev/null 2>&1; check "subkimi: -h exits 0" $?
+
+  # --- panel-review 4th-leg selection
+  local pb="$d/panelbin"; mkdir -p "$pb"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  for stubname in submimo subdeepseek subglm; do
+    cat > "$pb/$stubname" <<'EOF'
+#!/usr/bin/env bash
+echo "other leg" > "$3"; exit 0
+EOF
+    chmod +x "$pb/$stubname"
+  done
+  cat > "$pb/subkimi" <<'EOF'
+#!/usr/bin/env bash
+echo "KIMI-LEG" > "$3"; exit 0
+EOF
+  chmod +x "$pb/subkimi"
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K1" >/dev/null 2>&1
+  grep -q KIMI-LEG "$d/K1.subkimi.log" 2>/dev/null; check "panel: subkimi auto-enabled when installed" $?
+  PANEL_KIMI_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K2" >/dev/null 2>&1
+  if [[ -e "$d/K2.subkimi.log" ]]; then bad "panel: PANEL_KIMI_LEG=off skips kimi"; else ok "panel: PANEL_KIMI_LEG=off skips kimi"; fi
+
+  # exit semantics: 3 classic legs fail + kimi passes -> evidence exists -> rc=0
+  for stubname in submimo subdeepseek subglm; do
+    cat > "$pb/$stubname" <<'EOF'
+#!/usr/bin/env bash
+echo "stub result" > "$3"; echo fail >&2; exit 7
+EOF
+    chmod +x "$pb/$stubname"
+  done
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K3" >/dev/null 2>&1; rc=$?
+  check "panel: 3 legs fail + kimi passes -> rc=0" $([[ $rc -eq 0 ]]; echo $?)
+  # all 4 fail -> rc=1
+  cat > "$pb/subkimi" <<'EOF'
+#!/usr/bin/env bash
+echo "stub result" > "$3"; echo fail >&2; exit 7
+EOF
+  chmod +x "$pb/subkimi"
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K4" >/dev/null 2>&1; rc=$?
+  check "panel: all 4 legs fail -> rc=1" $([[ $rc -ne 0 ]]; echo $?)
+  # kimi absent -> classic 3-leg panel still works
+  rm -f "$pb/subkimi"
+  for stubname in submimo subdeepseek subglm; do
+    cat > "$pb/$stubname" <<'EOF'
+#!/usr/bin/env bash
+echo "other leg" > "$3"; exit 0
+EOF
+    chmod +x "$pb/$stubname"
+  done
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K5" >/dev/null 2>&1; rc=$?
+  check "panel: no subkimi installed -> classic 3-leg rc=0" $([[ $rc -eq 0 ]]; echo $?)
+  if [[ -e "$d/K5.subkimi.log" ]]; then bad "panel: no kimi log when absent"; else ok "panel: no kimi log when absent"; fi
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V14
+v14_leg_fallback_and_include() {
+  echo "[V14] panel-review: agent 腿失败自动回落 chat 腿 + PANEL_INCLUDE 喂 oracle + DS 轮次上限"
+  local d pb rc; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  printf '# review\n' > "$d/t.md"
+  # 中立的两条腿(不参与本组断言)
+  for leg in submimo subkimi; do
+    printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
+  done
+
+  # --- ① agent 腿失败 → 自动回落 chat 腿(GLM:CodingPlan 未订阅那种 400 即死)
+  cat > "$pb/subglm-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "API Error: 400 does not have a valid CodingPlan subscription" >&2
+echo "AGENT-JUNK" > "$3"
+exit 1
+EOF
+  printf '#!/bin/bash\necho "CHAT-LEG-GLM" > "$3"\nexit 0\n' > "$pb/subglm"
+  # --- ② 同样适用于 DeepSeek(max turns 那种)
+  cat > "$pb/subdeepseek-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "Error: Reached max turns (40)" >&2
+echo "AGENT-JUNK" > "$3"
+exit 1
+EOF
+  printf '#!/bin/bash\necho "CHAT-LEG-DS" > "$3"\nexit 0\n' > "$pb/subdeepseek"
+  chmod +x "$pb/subglm" "$pb/subglm-agent" "$pb/subdeepseek" "$pb/subdeepseek-agent"
+
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d/repo" "$d/F1" >"$d/f1.out" 2>&1; rc=$?
+  check "V14: 两条 agent 腿都失败仍 rc=0(chat 腿顶上)" $([[ $rc -eq 0 ]]; echo $?)
+  grep -q "CHAT-LEG-GLM" "$d/F1.subglm.log"; check "V14: GLM agent 腿失败 → 日志是 chat 腿的卷" $?
+  grep -q "CHAT-LEG-DS" "$d/F1.subdeepseek.log"; check "V14: DeepSeek agent 腿失败 → chat 腿顶上" $?
+  grep -qi "fallback\|回落" "$d/f1.out"; check "V14: 控制台明说发生了回落(不许静默)" $?
+  # 失败的 agent 产出必须留证,不许被 chat 腿覆盖抹掉
+  [[ -s "$d/F1.subglm.agent.log" || -s "$d/F1.subglm.agent.log.err" ]]
+  check "V14: 失败的 agent 腿产出另存留证" $?
+  grep -q "CodingPlan" "$d/F1.subglm.agent.log.err" 2>/dev/null
+  check "V14: agent 腿的失败原因可追(stderr 留在 .agent.log.err)" $?
+
+  # --- ③ agent 与 chat 都失败 → 该腿算失败(err 侧车留着)
+  printf '#!/bin/bash\necho "chat also broke" >&2\nexit 1\n' > "$pb/subglm"; chmod +x "$pb/subglm"
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d/repo" "$d/F2" >/dev/null 2>&1
+  [[ -s "$d/F2.subglm.log.err" ]]; check "V14: 双失败仍留 .err 侧车" $?
+  printf '#!/bin/bash\necho "CHAT-LEG-GLM" > "$3"\nexit 0\n' > "$pb/subglm"; chmod +x "$pb/subglm"
+
+  # --- ④ PANEL_INCLUDE 转发给 chat 腿(chat 腿只吃增量 diff,看不到基线里的 oracle)
+  cat > "$pb/subglm" <<'EOF'
+#!/usr/bin/env bash
+echo "ZHIPU_INCLUDE=[${ZHIPU_INCLUDE:-}]" > "$3"; exit 0
+EOF
+  cat > "$pb/subdeepseek" <<'EOF'
+#!/usr/bin/env bash
+echo "DEEPSEEK_INCLUDE=[${DEEPSEEK_INCLUDE:-}]" > "$3"; exit 0
+EOF
+  chmod +x "$pb/subglm" "$pb/subdeepseek"
+  PANEL_GLM_LEG=chat PANEL_DEEPSEEK_LEG=chat     PANEL_INCLUDE="tests/test_a.py tests/e2e/b.mjs"     bash "$pb/panel-review" --no-my-review "$d/t.md" "$d/repo" "$d/F3" >"$d/f3.out" 2>&1
+  grep -q "ZHIPU_INCLUDE=\[tests/test_a.py tests/e2e/b.mjs\]" "$d/F3.subglm.log"
+  check "V14: PANEL_INCLUDE 原样转成 ZHIPU_INCLUDE" $?
+  grep -q "DEEPSEEK_INCLUDE=\[tests/test_a.py tests/e2e/b.mjs\]" "$d/F3.subdeepseek.log"
+  check "V14: PANEL_INCLUDE 原样转成 DEEPSEEK_INCLUDE" $?
+
+  # 没给 PANEL_INCLUDE 而确实有 chat 腿在跑 → 必须提醒(它看不到基线里的 oracle)
+  PANEL_GLM_LEG=chat PANEL_DEEPSEEK_LEG=chat     bash "$pb/panel-review" --no-my-review "$d/t.md" "$d/repo" "$d/F4" >"$d/f4.out" 2>&1
+  grep -qi "PANEL_INCLUDE" "$d/f4.out"; check "V14: 有 chat 腿却没喂 oracle 时出提醒" $?
+  # 全 agent 腿时不该乱提醒
+  cat > "$pb/subglm-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "AGENT-OK" > "$3"; exit 0
+EOF
+  cat > "$pb/subdeepseek-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "AGENT-OK" > "$3"; exit 0
+EOF
+  chmod +x "$pb/subglm-agent" "$pb/subdeepseek-agent"
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d/repo" "$d/F5" >"$d/f5.out" 2>&1
+  if grep -qi "PANEL_INCLUDE" "$d/f5.out"; then
+    bad "V14: 全 agent 腿时不该提 PANEL_INCLUDE"
+  else ok "V14: 全 agent 腿时不该提 PANEL_INCLUDE"; fi
+
+  # --- ⑤ subdeepseek-agent 的轮次上限:默认放宽到 80,env 仍可覆盖
+  local ab="$d/agentbin"; mkdir -p "$ab"
+  cp "$BIN/subdeepseek-agent" "$ab/subdeepseek-agent"
+  cat > "$ab/claude" <<'PYEOF'
+#!/usr/bin/env python3
+import sys, os, json
+open(os.environ["CAPTURE"], "w").write(json.dumps({"argv": sys.argv[1:]}))
+print("stub review\nConclusion: PASS")
+PYEOF
+  chmod +x "$ab/claude"
+  turns() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];print(a[a.index('--max-turns')+1])" "$1"; }
+  env PATH="$ab:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY=dk     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d/repo" >/dev/null 2>&1
+  [[ "$(turns "$d/ds1.json")" -ge 80 ]]
+  check "V14: subdeepseek-agent 默认轮次上限 ≥80(40 撞墙实事故)" $?
+  env PATH="$ab:$PATH" CAPTURE="$d/ds2.json" DEEPSEEK_API_KEY=dk DEEPSEEK_MAX_TURNS=25     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds2.log" "$d/repo" >/dev/null 2>&1
+  [[ "$(turns "$d/ds2.json")" == "25" ]]
+  check "V14: DEEPSEEK_MAX_TURNS 仍可覆盖" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V15
+v15_anchor_leak_warning() {
+  echo "[V15] panel-review: 主审自己的评审落进被评 diff 时报警(反锚定,07-21 实事故)"
+  local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  for leg in submimo subdeepseek subglm subkimi; do
+    printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
+  done
+  printf '# review\n' > "$d/t.md"
+  local repo="$d/repo"; mkdir -p "$repo/tracks/x"
+  ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
+    echo base > f.txt; git add -A; git commit -qm init )
+
+  # 干净仓:不该报警
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/A1" >"$d/a1.out" 2>&1
+  if grep -qi "anchor\|锚定" "$d/a1.out"; then bad "V15: 干净仓不该报锚定"; else ok "V15: 干净仓不该报锚定"; fi
+
+  # 未提交的 verify.md(带主审 findings)在仓里 → 会被 collect_untracked 喂给评审腿
+  printf '# Verify\n- findings: M1 主审抓到的真问题\n' > "$repo/tracks/x/verify.md"
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/A2" >"$d/a2.out" 2>&1
+  grep -qi "anchor\|锚定" "$d/a2.out"; check "V15: 仓里有 verify.md 时报锚定风险" $?
+
+  # 已提交进被评 diff 的 verify.md(= 07-21 的真实踩法)
+  ( cd "$repo"; git add -A; git commit -qm "verify" )
+  PANEL_DIFF_BASE=HEAD~1 bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/A3" >"$d/a3.out" 2>&1
+  grep -qi "anchor\|锚定" "$d/a3.out"; check "V15: verify.md 已提交进 diff 时同样报警" $?
+
+  # 报警不阻断:腿照跑,rc 照常
+  [[ -s "$d/A3.subglm.log" ]]; check "V15: 报警只是提醒,不阻断派发" $?
+  rm -rf "$d"
+}
+
+echo "=== review-tooling regression oracle ==="
+v1_untracked_content
+v1_no_untracked_and_nonrepo
+v2_glob_not_pre_expanded
+v3_panel_sidecar
+v4_output_validation
+v5_diff_scope
+v6_truncation
+v7_blind_warning
+v8_subchat_provider_table
+v9_subglm_agent
+v10_git_stderr_isolation
+v11_panel_gates
+v12_gate_default_on
+v13_subkimi_leg
+v14_leg_fallback_and_include
+v15_anchor_leak_warning
+echo "=== total: $PASS passed, $FAIL failed ==="
+[[ $FAIL -eq 0 ]]

@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#
+# submimo-iso — concurrency-safe wrapper around submimo for running TWO agents
+# (e.g. Claude + Codex) that both call MiMo at the same time.
+#
+# Why this exists:
+#   `mimo` keeps ALL global state (sessions sqlite mimocode.db + -wal/-shm,
+#   memory/, snapshot/, plans/, state/) in one XDG data/state home, and git
+#   worktrees SHARE the same .git common dir — which holds .git/mimocode-project-id
+#   — so two concurrent `submimo` runs in two worktrees would map to the SAME
+#   project in the SAME single-writer sqlite and clobber each other's
+#   plans/memory/snapshot. Passing --dir alone does NOT isolate this.
+#
+#   This wrapper gives each agent its OWN persistent mimo home via XDG_*_HOME, so
+#   each gets an independent sqlite/memory/plans/state. Credentials (auth.json,
+#   mimo-free-client, mimo-key-name, installation_id) live in the data home, so
+#   they are re-seeded from the canonical home on every run to keep the isolated
+#   home authenticated.
+#
+# Isolation it provides:
+#   - per-agent mimo data/config/cache/state home  -> no shared sqlite contention,
+#     no shared-project-id collision across worktrees.
+#   - enforced ABSOLUTE --dir (repo/worktree path)  -> never falls back to $PWD,
+#     never edits the wrong worktree.
+#   - auto-namespaced task/log filenames per agent  -> no task/log cross-talk.
+#
+# Residual risk (documented, not solved here):
+#   All agents still share ONE upstream MiMo account/quota. Independent token
+#   refresh in two homes can race on the same refresh token. If auth starts
+#   failing, re-authenticate in the canonical home (`mimo providers`) and re-run;
+#   the next invocation re-seeds the refreshed credentials.
+#
+# Usage:
+#   submimo-iso <agent> <review|fix> <task_file> <repo_dir> [log_file]
+#     agent      short id, e.g. claude | codex (becomes the private home name)
+#     review|fix forwarded to submimo
+#     task_file  task markdown under /root/aiwork/tasks/
+#     repo_dir   ABSOLUTE path to this agent's git worktree (required, must exist)
+#     log_file   optional; default /root/aiwork/logs/<agent>-<UTC>-<task>.log
+#
+# Exit status: forwards submimo's exit status (or 2 on usage/setup error).
+
+set -euo pipefail
+
+SUBMIMO="/root/aiwork/bin/submimo"
+CANON_HOME="/root/.local/share/mimocode"          # canonical mimo data home
+HOMES_ROOT="/root/aiwork/mimo-home"               # per-agent isolated homes
+LOGS_DIR="/root/aiwork/logs"
+CRED_FILES=(auth.json mimo-free-client mimo-key-name installation_id)
+
+die() { echo "submimo-iso: $*" >&2; exit 2; }
+
+usage() {
+  sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//; /^set -euo/d' >&2
+}
+
+[[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { usage; exit 0; }
+[[ $# -lt 4 || $# -gt 5 ]] && { usage; die "expected 4-5 args"; }
+
+AGENT="$1"; MODE="$2"; TASK_FILE="$3"; REPO_DIR="$4"; LOG_FILE="${5:-}"
+
+[[ "$AGENT" =~ ^[a-zA-Z0-9_-]+$ ]] || die "agent id must be alnum/-/_: $AGENT"
+[[ "$MODE" == "review" || "$MODE" == "fix" ]] || die "mode must be review|fix: $MODE"
+[[ -x "$SUBMIMO" ]] || die "submimo not found/executable at $SUBMIMO"
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+
+# Enforce an absolute, existing repo/worktree dir — the whole point is to never
+# let mimo fix edit the wrong tree via a $PWD fallback.
+[[ "$REPO_DIR" = /* ]] || die "repo_dir must be ABSOLUTE: $REPO_DIR"
+[[ -d "$REPO_DIR" ]] || die "repo_dir not found: $REPO_DIR"
+git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 || die "repo_dir is not a git worktree: $REPO_DIR"
+
+# Per-agent isolated mimo home.
+AGENT_HOME="$HOMES_ROOT/$AGENT"
+export XDG_DATA_HOME="$AGENT_HOME/data"
+export XDG_CONFIG_HOME="$AGENT_HOME/config"
+export XDG_CACHE_HOME="$AGENT_HOME/cache"
+export XDG_STATE_HOME="$AGENT_HOME/state"
+mkdir -p "$XDG_DATA_HOME/mimocode" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
+
+# Seed credentials from the canonical home so the isolated home stays
+# authenticated. Copy only credential files — never the sqlite/memory/plans,
+# which must stay independent per agent.
+#
+# The current credential (auth.json) is a static API key with no refresh token,
+# so there is no per-home token to protect — just copy canonical over each run to
+# keep the isolated home authenticated. The canonical home stays the single source
+# of credentials; if the key is ever rotated, re-auth there (`mimo providers`) and
+# the next run re-seeds. (installation_id is intentionally shared across agents.)
+[[ -d "$CANON_HOME" ]] || die "canonical mimo home not found: $CANON_HOME (run mimo once / authenticate first)"
+seeded=0
+for f in "${CRED_FILES[@]}"; do
+  if [[ -f "$CANON_HOME/$f" ]]; then
+    cp -p "$CANON_HOME/$f" "$XDG_DATA_HOME/mimocode/$f"
+    seeded=$((seeded + 1))
+  fi
+done
+[[ "$seeded" -gt 0 ]] || die "no credentials found in $CANON_HOME; authenticate with 'mimo providers' first"
+
+# Auto-namespace the log if not given explicitly.
+if [[ -z "$LOG_FILE" ]]; then
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  base="$(basename "${TASK_FILE%.*}")"
+  LOG_FILE="$LOGS_DIR/${AGENT}-${ts}-${base}.log"
+fi
+mkdir -p "$(dirname "$LOG_FILE")"
+
+echo "submimo-iso: agent=$AGENT home=$AGENT_HOME repo=$REPO_DIR log=$LOG_FILE" >&2
+exec "$SUBMIMO" "$MODE" "$TASK_FILE" "$LOG_FILE" "$REPO_DIR"

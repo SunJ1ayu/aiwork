@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# panel-explore - the DIVERGENT sibling of panel-review.
+#
+# panel-review converges: three weak models check one design/diff and the main
+# agent (the frontier model driving the session) arbitrates down to a single
+# PASS/BLOCK verdict.
+# panel-explore diverges: three DIFFERENT model families (MiMo / DeepSeek / GLM)
+# each answer the SAME design brief in isolation and propose ONE concrete
+# direction from the angle their priors favor, plus the blind spots they see in
+# the brief. There is deliberately NO verdict - the spread is the output.
+#
+#   submimo explore (MiMo)  +  subdeepseek (DeepSeek)  +  subglm (Zhipu GLM)
+#
+# The main agent commits its OWN direction FIRST (anti-anchoring, same discipline
+# as panel-review), then reads these three as angle-expansion + a blind-spot net,
+# and SYNTHESISES. It must not collapse the spread into one answer, and must not
+# let three shallow takes launder into a fake-thorough consensus.
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  panel-explore BRIEF_FILE [REPO_DIR] [LOG_PREFIX]
+
+Runs all three models in parallel on the SAME design brief:
+  submimo explore -> <LOG_PREFIX>.submimo.log
+  subdeepseek review -> <LOG_PREFIX>.subdeepseek.log   (divergent system prompt injected)
+  subglm   review -> <LOG_PREFIX>.subglm.log      (divergent system prompt injected)
+
+Each returns ONE position paper (Direction / Core bet / How it works / Best at /
+Sacrifices / Blind spots in the brief / Smallest first step). No PASS/BLOCK.
+
+Args:
+  BRIEF_FILE   markdown design brief / open question (required)
+  REPO_DIR     repo for context (default: $PWD)
+  LOG_PREFIX   log path prefix (default: /root/aiwork/logs/explore-<briefname>-<ts>)
+
+The main agent reads ALL three, then SYNTHESISES - it never averages them into a
+verdict. A failure in one model does not block the others.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
+if [[ $# -lt 1 || $# -gt 3 ]]; then usage; exit 2; fi
+
+BIN="$(dirname "$0")"
+BRIEF_FILE="$1"
+REPO_DIR="${2:-$PWD}"
+
+[[ -f "$BRIEF_FILE" ]] || { echo "panel-explore: brief file not found: $BRIEF_FILE" >&2; exit 1; }
+[[ -d "$REPO_DIR" ]]   || { echo "panel-explore: repo dir not found: $REPO_DIR" >&2; exit 1; }
+
+TS="$(date +%Y%m%d-%H%M%S)"
+BRIEFNAME="$(basename "${BRIEF_FILE%.*}")"
+LOG_PREFIX="${3:-/root/aiwork/logs/explore-${BRIEFNAME}-${TS}}"
+mkdir -p "$(dirname "$LOG_PREFIX")"
+
+SUBMIMO_LOG="${LOG_PREFIX}.submimo.log"
+SUBDEEPSEEK_LOG="${LOG_PREFIX}.subdeepseek.log"
+SUBGLM_LOG="${LOG_PREFIX}.subglm.log"
+SUBMIMO_ERR="${SUBMIMO_LOG}.err"
+SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
+SUBGLM_ERR="${SUBGLM_LOG}.err"
+
+# Explore mode: tells the engine not to demand a PASS/BLOCK verdict in the
+# output (the Direction/Core-bet format has none by design).
+export REVIEW_MODE=explore
+
+# Divergent system prompt for the chat-engine employees (subdeepseek/subglm). It is
+# injected via REVIEW_SYSTEM_PROMPT, which submimo-review reads in place of its
+# baked review prompt (prompt TEXT only - mode is REVIEW_MODE above). MiMo gets
+# the equivalent framing from `submimo explore`'s MESSAGE instead (mimo CLI has
+# no separate system role). Keep the two in sync.
+export REVIEW_SYSTEM_PROMPT='You are an independent design-exploration agent. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
+
+Rules:
+- Propose exactly ONE concrete direction. Do NOT hedge across multiple options or output a menu.
+- Do NOT output PASS/BLOCK/approve/reject - this is not a review.
+- Commit to a position even under uncertainty; state your assumptions.
+- Ground claims in the supplied brief and any provided files; do not invent facts about the codebase.
+
+Output format (use exactly these labels):
+Direction: <one-line name of the approach you propose>
+Core bet: <the single key assumption/trade-off this direction bets on>
+How it works: <concrete shape - components, flow, key decisions>
+Best at: <what it optimizes for / where it wins>
+Sacrifices: <what it gives up; when it is the wrong choice>
+Blind spots in the brief: <what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen>
+Smallest first step: <the first concrete thing to build to validate this>'
+
+# Divergence wants exploration, not the review path's near-deterministic 0.2.
+# subdeepseek/subglm inherit this and pass it to the engine; they do not override it.
+export MIMO_TEMPERATURE="${PANEL_EXPLORE_TEMPERATURE:-0.7}"
+
+echo "panel-explore: brief=$BRIEF_FILE repo=$REPO_DIR temp=$MIMO_TEMPERATURE"
+echo "  submimo(explore) -> $SUBMIMO_LOG"
+echo "  subdeepseek         -> $SUBDEEPSEEK_LOG"
+echo "  subglm           -> $SUBGLM_LOG"
+echo "  running all in parallel..."
+
+# Light pre-launch stagger (mirrors panel-review): the three models share provider
+# tpm budgets and bursting at once is the main 429 trigger. Sleep a small random
+# gap (default up to 2s; PANEL_STAGGER_MAX=0 disables) before the 2nd and 3rd
+# launches. $RANDOM seeds awk to dodge same-second srand() collisions. Pairs with
+# the engine's 429 backoff.
+stagger() {
+  local max="${PANEL_STAGGER_MAX:-2}"
+  [[ "$max" == 0 || "$max" == 0.0 ]] && return 0
+  sleep "$(awk -v m="$max" -v r="$RANDOM" 'BEGIN{printf "%.3f", (r/32768)*m}')"
+}
+
+# Same stderr-sidecar approach as panel-review: capture each model's startup
+# stderr so an early failure (missing key, 429, bad endpoint) is recorded rather
+# than swallowed. stdout is dropped (the result lands in the .log).
+"$BIN/submimo"  explore "$BRIEF_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" >/dev/null 2>"$SUBMIMO_ERR"  &
+PID_MIMO=$!
+stagger
+"$BIN/subdeepseek" review  "$BRIEF_FILE" "$SUBDEEPSEEK_LOG" "$REPO_DIR" >/dev/null 2>"$SUBDEEPSEEK_ERR" &
+PID_DEEPSEEK=$!
+stagger
+"$BIN/subglm"   review  "$BRIEF_FILE" "$SUBGLM_LOG"   "$REPO_DIR" >/dev/null 2>"$SUBGLM_ERR"   &
+PID_GLM=$!
+
+wait "$PID_MIMO";  RC_MIMO=$?
+wait "$PID_DEEPSEEK"; RC_DEEPSEEK=$?
+wait "$PID_GLM";   RC_GLM=$?
+
+echo
+echo "panel-explore: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK  subglm rc=$RC_GLM"
+if [[ $RC_MIMO -eq 0 ]]; then
+  [[ -s "$SUBMIMO_ERR" ]] || rm -f "$SUBMIMO_ERR"
+else
+  echo "  WARNING: submimo explore failed (rc=$RC_MIMO); reason in $SUBMIMO_ERR, log $SUBMIMO_LOG"
+fi
+if [[ $RC_DEEPSEEK -eq 0 ]]; then
+  [[ -s "$SUBDEEPSEEK_ERR" ]] || rm -f "$SUBDEEPSEEK_ERR"
+else
+  echo "  WARNING: subdeepseek failed (rc=$RC_DEEPSEEK); reason in $SUBDEEPSEEK_ERR, log $SUBDEEPSEEK_LOG"
+fi
+if [[ $RC_GLM -eq 0 ]]; then
+  [[ -s "$SUBGLM_ERR" ]] || rm -f "$SUBGLM_ERR"
+else
+  echo "  WARNING: subglm failed (rc=$RC_GLM); reason in $SUBGLM_ERR, log $SUBGLM_LOG"
+fi
+echo "  read all three, commit your OWN direction first, then SYNTHESISE."
+echo "  do NOT collapse the spread into a single verdict - the spread is the point."
+
+# Non-zero only if ALL three failed (panel produced no directions at all).
+if [[ $RC_MIMO -ne 0 && $RC_DEEPSEEK -ne 0 && $RC_GLM -ne 0 ]]; then exit 1; fi
+exit 0

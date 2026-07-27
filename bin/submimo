@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_MODEL="xiaomi/mimo-v2.5-pro"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  submimo review  TASK_FILE LOG_FILE [REPO_DIR]
+  submimo explore TASK_FILE LOG_FILE [REPO_DIR]
+  submimo fix     TASK_FILE LOG_FILE [REPO_DIR]
+
+Runs official MiMoCode CLI as a bounded executor.
+
+Modes:
+  review   Read-only review. Uses MiMoCode plan agent.
+  explore  Read-only divergent design pass: propose ONE direction from this
+           model's angle + flag blind spots in the brief. Used by panel-explore.
+  fix      Small scoped code changes. Uses MiMoCode build agent.
+
+Fix-only options (goal-based bounded loop; oracle is DEFAULT-ON):
+  --oracle CMD    after each fix, run CMD in REPO_DIR; green (rc=0) -> exit 0,
+                  red -> retry, capped at 2 attempts then non-zero back to you.
+                  Each attempt's git diff is archived into LOG_FILE.
+  --no-oracle     opt out and run a raw single shot. fix REFUSES to run with
+                  neither --oracle nor --no-oracle, so forgetting the check stops
+                  you instead of silently doing the unverified thing.
+  --protect PATH  (repeatable) hash-check PATH every attempt; any change is a
+                  HARD failure (exit 3) even if the oracle is green — stops the
+                  weak model from passing by editing the judge/oracle files.
+
+Environment:
+  MIMO_CLI_MODEL     optional, provider/model passed to `mimo run -m`
+                     default: xiaomi/mimo-v2.5-pro
+  MIMO_CLI_TIMEOUT   optional, seconds before timeout, default 900
+
+Examples:
+  submimo review /root/aiwork/tasks/001-review.md /root/aiwork/logs/001-review.log /path/to/repo
+  submimo fix    /root/aiwork/tasks/002-fix.md    /root/aiwork/logs/002-fix.log    /path/to/repo
+EOF
+}
+
+die() {
+  echo "submimo: $*" >&2
+  exit 1
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+# Separate flags from positionals. --oracle / --protect are fix-only extras for
+# the bounded goal-based retry loop; everything else stays positional as before.
+ORACLE_CMD=""
+NO_ORACLE=0
+PROTECT=()
+POS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --oracle)     ORACLE_CMD="${2:-}"; [[ -n "$ORACLE_CMD" ]] || die "--oracle needs a command"; shift 2 ;;
+    --no-oracle)  NO_ORACLE=1; shift ;;
+    --protect)    PROTECT+=("${2:-}"); [[ -n "${PROTECT[-1]}" ]] || die "--protect needs a path"; shift 2 ;;
+    *)            POS+=("$1"); shift ;;
+  esac
+done
+set -- "${POS[@]}"
+
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+  usage
+  exit 2
+fi
+
+MODE="$1"
+TASK_FILE="$2"
+LOG_FILE="$3"
+REPO_DIR="${4:-$PWD}"
+TIMEOUT_SECONDS="${MIMO_CLI_TIMEOUT:-900}"
+MODEL="${MIMO_CLI_MODEL:-$DEFAULT_MODEL}"
+
+if [[ -n "$ORACLE_CMD" || ${#PROTECT[@]} -gt 0 ]]; then
+  [[ "$MODE" == "fix" ]] || die "--oracle/--protect are only valid in fix mode"
+fi
+
+# fix is DEFAULT-ON for the oracle: refuse a raw single-shot unless the caller
+# either gives an --oracle (the verifiable loop) or explicitly opts out with
+# --no-oracle. This flips "remember to pass --oracle" into "forgetting stops you",
+# and forces the question 'what objectively judges this fix?' every time.
+if [[ "$MODE" == "fix" && -z "$ORACLE_CMD" && $NO_ORACLE -eq 0 ]]; then
+  die "fix needs an objective check: pass --oracle CMD (bounded verify+retry loop, judge files via --protect), or --no-oracle to consciously run a raw single shot"
+fi
+
+command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: mimo"
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+[[ -d "$REPO_DIR" ]] || die "repo dir not found: $REPO_DIR"
+
+case "$MODE" in
+  review)
+    AGENT="plan"
+    MESSAGE='Read the attached task file first. Execute it strictly as a read-only review. Treat the task file as self-contained: do NOT read or request access to any path outside the working directory - this run is headless and such permission requests are auto-rejected, wasting the attempt. Do not call planning tools, do not create a plan file, do not spawn sub-agents, do not ask whether to continue, and do not wait for user input. Do not modify files, delete files, push, install dependencies, or access production systems. Output the required report completely now as plain text. If the supplied context is insufficient, output NEEDS_MORE_INFO with the missing context instead of exploring for it.'
+    ;;
+  explore)
+    AGENT="plan"
+    MESSAGE='Read the attached task file first; it is a DESIGN BRIEF, not a review. You are one of several different models each answering the SAME brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus. CRITICAL: Answer purely from the attached brief. Do NOT use any tools - no file reads, no glob, no grep, no codebase exploration, no shell. Your FIRST and ONLY action is to output the answer as text right now; calling any tool is a failure. The brief is self-contained; you do not need repo files. Propose exactly ONE concrete direction; do NOT hedge across multiple options and do NOT output PASS/BLOCK/approve/reject. Commit to a position even under uncertainty, stating your assumptions. Ground claims in the brief; do not invent facts. This is read-only: do not modify, create, or delete files, do not push, install dependencies, or access production systems, and do not wait for user input. Output now using exactly these labels: Direction / Core bet / How it works / Best at / Sacrifices / Blind spots in the brief / Smallest first step. Under "Blind spots in the brief", call out what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen.'
+    ;;
+  fix)
+    AGENT="build"
+    MESSAGE='Read the attached task file first. Implement only the explicitly requested small scoped change. You may edit files only when the task file clearly allows it, and only within the listed scope. Do not push, do not delete files, do not install dependencies, do not access production systems, do not perform broad refactors, and do not change unrelated behavior. If the task is ambiguous or the allowed files are not specified, stop and output NEEDS_MORE_INFO. At the end, print: changed files, summary, verification run, and remaining risks.'
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# task 文件若在 repo 外,复制一份进 repo 再跑:mimocode 沙箱只放行 --dir 内的路径,
+# headless 下越界读=权限自动拒(历史 review 失败的头号死因)。--file 附件之外,模型
+# 常会再去 Read 任务路径本身,复制进去让这一步也落在沙箱内。
+CLEANUP_TASK=""
+REPO_REAL="$(realpath "$REPO_DIR")"
+TASK_REAL="$(realpath "$TASK_FILE")"
+case "$TASK_REAL" in
+  "$REPO_REAL"/*) : ;;
+  *)
+    CLEANUP_TASK="$REPO_REAL/.submimo-task-$$.md"
+    cp "$TASK_REAL" "$CLEANUP_TASK"
+    TASK_FILE="$CLEANUP_TASK"
+    trap '[[ -n "$CLEANUP_TASK" ]] && rm -f "$CLEANUP_TASK"' EXIT
+    ;;
+esac
+
+CMD=(mimo run --agent "$AGENT" --dir "$REPO_DIR" --format default -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
+
+# One mimo pass. $1 = attempt label for the log header. Appends to LOG_FILE.
+run_mimo_once() {
+  {
+    echo "# submimo $MODE log${1:+ ($1)}"
+    echo "time: $(date -Is)"
+    echo "mode: $MODE"
+    echo "agent: $AGENT"
+    echo "repo: $REPO_DIR"
+    echo "task: $TASK_FILE"
+    echo "model: $MODEL"
+    echo
+    # -k 30:TERM 后 30 秒仍活着就 KILL(node 底座曾在启动阶段挂死,TERM 可能被吞)
+    # </dev/null:mimo 是交互优先 CLI,stdin 若是"开着但无数据"的管道会等输入 →
+    # 挂死或启动后静默退出(2026-07-02 实测复现+对照确认);显式关死 stdin 免疫之。
+    timeout -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
+  } 2>&1 | tee -a "$LOG_FILE"
+}
+
+# sha256 of a protected path (empty string if absent), for tamper detection.
+protect_hash() {
+  local p="$1"; [[ "$p" != /* ]] && p="$REPO_DIR/$p"
+  [[ -f "$p" ]] && sha256sum "$p" | cut -d' ' -f1 || echo ""
+}
+
+# Simple single-shot (review/explore/fix without oracle) — behavior unchanged.
+if [[ -z "$ORACLE_CMD" ]]; then
+  : > "$LOG_FILE"
+  run_mimo_once
+  exit 0
+fi
+
+# --- Goal-based bounded loop (fix --oracle) ---------------------------------
+# The oracle is the judge and is owned by the main agent; a weak model's likeliest
+# cheat is editing the judge, so --protect files are hash-checked every attempt
+# and a change is a HARD failure regardless of oracle color (AGENTS.md safety rule).
+: > "$LOG_FILE"
+declare -A BASE
+for p in "${PROTECT[@]}"; do BASE["$p"]="$(protect_hash "$p")"; done
+
+MAX_ATTEMPTS=2   # AGENTS.md: cap retries at ~2, then hand back to the main agent
+final_rc=1
+for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
+  echo "submimo fix: attempt $attempt/$MAX_ATTEMPTS" >&2
+  # Capture mimo's rc instead of letting it abort the loop (set -e + pipefail):
+  # a weak model that times out / crashes still leaves a partial edit, and the
+  # protect-check + oracle + retry MUST run on it - aborting here would skip the
+  # judge-tamper check and the retry a transient timeout deserves.
+  mimo_rc=0; run_mimo_once "attempt $attempt" || mimo_rc=$?
+  [[ $mimo_rc -ne 0 ]] && echo "submimo fix: mimo exited $mimo_rc on attempt $attempt (continuing to protect+oracle checks)" | tee -a "$LOG_FILE" >&2
+
+  {
+    echo; echo "## attempt $attempt — git diff --stat"
+    git -C "$REPO_DIR" diff --stat 2>&1 || true
+    echo; echo "## attempt $attempt — git diff (capped 200k)"
+    git -C "$REPO_DIR" diff 2>&1 | head -c 200000 || true
+  } >> "$LOG_FILE"
+
+  for p in "${PROTECT[@]}"; do
+    if [[ "$(protect_hash "$p")" != "${BASE[$p]}" ]]; then
+      echo "submimo fix: FATAL — protected file changed: $p (mimo may have edited the judge; refusing)" | tee -a "$LOG_FILE" >&2
+      exit 3
+    fi
+  done
+
+  if ( cd "$REPO_DIR" && eval "$ORACLE_CMD" ) >>"$LOG_FILE" 2>&1; then
+    echo "submimo fix: oracle GREEN on attempt $attempt" | tee -a "$LOG_FILE" >&2
+    final_rc=0
+    break
+  fi
+  echo "submimo fix: oracle RED on attempt $attempt" | tee -a "$LOG_FILE" >&2
+done
+
+if [[ $final_rc -ne 0 ]]; then
+  echo "submimo fix: oracle still RED after $MAX_ATTEMPTS attempts — handing back to main agent" | tee -a "$LOG_FILE" >&2
+fi
+exit "$final_rc"

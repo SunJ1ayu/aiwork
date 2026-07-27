@@ -1,0 +1,19 @@
+# /root/aiwork 版本控制 —— 纯本地仓,不推任何远端。
+# 目的:bin/ 里的安全闸门工具、track 模板、任务书有历史可回滚。
+
+# 别的仓的 worktree,不能嵌套进来
+worktrees/
+
+# 含登录凭证(auth.json / credentials),永不入库
+mimo-home/
+kimi-review-home/
+
+# 日志是流水,不入库;但 oracle 哈希存档是安全工件,留下
+logs/*
+!logs/*oracle-hashes.txt
+
+# 生成物
+quicklook/runs/
+__pycache__/
+*.pyc
+*.raw

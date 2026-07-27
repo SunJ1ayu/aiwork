@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# subdeepseek-agent - the second panel reviewer (the "subdeepseek" slot) on an
+# AGENT base: Claude Code run headless against DeepSeek's official
+# Anthropic-compatible endpoint. The model explores the repo itself
+# (Read/Glob/Grep + read-only git): no blind reviews, no manual INCLUDE
+# feeding, no empty-diff-after-commit problem.
+#
+#   review -> claude -p, read-only tool allowlist, verdict-gated.
+#   fix    -> NOT supported here on purpose: panel reviewers stay review-only.
+#             Use `submimo fix` (mimo) for fix work.
+#
+# DeepSeek env is injected into the child process ONLY - this wrapper must never
+# write ~/.claude/settings.json (that would hijack the main harness). The chat
+# leg (subdeepseek -> DeepSeek official chat API) stays available as a fallback
+# via PANEL_DEEPSEEK_LEG=chat.
+
+DEFAULT_MODEL="deepseek-v4-flash"   # 07-25:官方端点只剩 v4-flash / v4-pro,
+                                    # 老的 deepseek-chat / deepseek-reasoner 已下架。
+# DeepSeek's Anthropic-compatible endpoint (Claude Code base URL).
+BASE_URL="${DEEPSEEK_ANTHROPIC_URL:-https://api.deepseek.com/anthropic}"
+AUTH_FILE="${DEEPSEEK_AUTH_FILE:-$HOME/.config/deepseek/auth.json}"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  subdeepseek-agent review TASK_FILE LOG_FILE [REPO_DIR]
+  subdeepseek-agent fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
+
+Runs DeepSeek as an agentic read-only review sub-agent: Claude Code headless
+(`claude -p`) pointed at DeepSeek's Anthropic-compatible endpoint. The reviewer
+reads the repo itself (Read/Glob/Grep + read-only git commands); write tools are
+hard-disallowed. This is the agent base for the "subdeepseek" panel slot.
+
+Environment:
+  DEEPSEEK_MODEL        optional, model id (default: deepseek-v4-flash; also deepseek-v4-pro)
+  DEEPSEEK_TIMEOUT      optional, seconds before timeout (default 900)
+  DEEPSEEK_MAX_TURNS    optional, agent turn cap (default 80; 40 撞过墙,见 07-21)
+  DEEPSEEK_API_KEY      optional, overrides the key read from the auth file
+  DEEPSEEK_ANTHROPIC_URL optional, default https://api.deepseek.com/anthropic
+  DEEPSEEK_AUTH_FILE    optional, default ~/.config/deepseek/auth.json
+
+Examples:
+  subdeepseek-agent review /root/aiwork/tasks/001-review.md /root/aiwork/logs/001-review.log /path/to/repo
+EOF
+}
+
+die() { echo "subdeepseek-agent: $*" >&2; exit 1; }
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
+if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
+
+MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
+MODEL="${DEEPSEEK_MODEL:-$DEFAULT_MODEL}"
+TIMEOUT_SECONDS="${DEEPSEEK_TIMEOUT:-900}"
+MAX_TURNS="${DEEPSEEK_MAX_TURNS:-80}"
+
+if [[ "$MODE" == "fix" ]]; then
+  die "fix is not supported: panel reviewers are review-only. Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
+fi
+[[ "$MODE" == "review" ]] || { usage; exit 2; }
+
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+[[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
+command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
+
+# Load API key (env wins over auth file), same {"key":"..."} contract as the others.
+API_KEY="${DEEPSEEK_API_KEY:-}"
+if [[ -z "$API_KEY" ]]; then
+  [[ -f "$AUTH_FILE" ]] || die "auth file not found: $AUTH_FILE (set DEEPSEEK_API_KEY or create it as {\"key\":\"...\"})"
+  API_KEY="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['key'])" "$AUTH_FILE")" \
+    || die "could not read 'key' from $AUTH_FILE"
+fi
+[[ -n "$API_KEY" ]] || die "empty DEEPSEEK_API_KEY"
+
+# Absolute log path: the agent runs with cwd = REPO_DIR.
+case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
+mkdir -p "$(dirname "$LOG_FILE")"
+
+PROMPT="You are an independent code reviewer running inside a read-only harness.
+Explore the repository yourself with the tools you have (Read, Glob, Grep, and
+read-only git commands). Do not take the task's claims at face value - verify
+them against the actual files.
+
+Report findings with file:line references and a severity each. You MUST end
+your review with a final line of exactly this form:
+Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
+
+--- REVIEW TASK ---
+$(cat "$TASK_FILE")"
+
+{
+  echo "# subdeepseek-agent review log"
+  echo "time: $(date -Iseconds)"
+  echo "mode: review (agent base: claude-code headless -> DeepSeek)"
+  echo "base_url: $BASE_URL"
+  echo "model: $MODEL"
+  echo "repo: $REPO_DIR"
+  echo "task: $TASK_FILE"
+  echo
+} > "$LOG_FILE"
+
+# env is per-invocation only; the stray real ANTHROPIC_API_KEY from the parent
+# harness is scrubbed so it cannot outrank the DeepSeek token.
+# The prompt goes in via stdin: --allowedTools/--disallowedTools are variadic
+# and would swallow a trailing positional prompt as more tool names.
+RC=0
+(
+  cd "$REPO_DIR"
+  printf '%s\n' "$PROMPT" | env -u ANTHROPIC_API_KEY \
+    ANTHROPIC_AUTH_TOKEN="$API_KEY" \
+    ANTHROPIC_BASE_URL="$BASE_URL" \
+    ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
+    ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
+    timeout "$TIMEOUT_SECONDS" claude -p \
+      --model sonnet \
+      --setting-sources project \
+      --max-turns "$MAX_TURNS" \
+      --allowedTools Read Glob Grep "Bash(git diff:*)" "Bash(git log:*)" "Bash(git status:*)" \
+      --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent
+) >> "$LOG_FILE" || RC=$?
+
+if [[ $RC -ne 0 ]]; then
+  [[ $RC -eq 124 ]] && die "claude timed out after ${TIMEOUT_SECONDS}s (log: $LOG_FILE)"
+  die "claude exited rc=$RC (log: $LOG_FILE)"
+fi
+
+# Verdict gate (same semantics as the chat engine's review mode): a review that
+# never concludes is a failed review, but the log is kept for forensics.
+# Chinese-model models often conclude with 「结论: PASS」 despite the English
+# instruction (bit subdeepseek twice: Track B + client-tools). Accept 结论 and the
+# full-width colon; ： via ANSI-C quoting — a literal full-width colon in
+# source risks silent half-width corruption (07-17 set-stage lesson).
+VERDICT_RE=$'(Conclusion|结论)(:|\uFF1A)[[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)'
+grep -qE "$VERDICT_RE" "$LOG_FILE" \
+  || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+
+exit 0

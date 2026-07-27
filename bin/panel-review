@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# panel-review - run the review employees in parallel on one task, then let the
+# main agent (the frontier model driving the session) arbitrate.
+#   submimo (MiMo) + subdeepseek (DeepSeek) + subglm (Zhipu GLM) [+ subkimi (Moonshot)]
+#
+# Each reviewer writes its own log; this script does NOT decide anything - it just
+# fans out the work and reports where the reports landed.
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  panel-review TASK_FILE [REPO_DIR] [LOG_PREFIX]
+
+Runs all reviewers in parallel on TASK_FILE:
+  submimo review  -> <LOG_PREFIX>.submimo.log
+  subdeepseek review -> <LOG_PREFIX>.subdeepseek.log
+  subglm review   -> <LOG_PREFIX>.subglm.log
+  subkimi review  -> <LOG_PREFIX>.subkimi.log   (4th leg, only if installed;
+                                                 PANEL_KIMI_LEG=off disables)
+
+Args:
+  TASK_FILE    markdown task/review brief (required)
+  REPO_DIR     repo to review (default: $PWD)
+  LOG_PREFIX   log path prefix (default: /root/aiwork/logs/panel-<taskname>-<ts>)
+
+Options / env:
+  (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
+                             convention file /root/aiwork/tasks/<taskname>-my-review.md
+                             (taskname = TASK_FILE basename) and REFUSES to dispatch
+                             if it is absent - so forgetting to write your own review
+                             stops the panel instead of silently skipping the gate.
+  --require-my-review PATH   use PATH instead of the convention path (still must
+                             exist and live OUTSIDE REPO_DIR - the engine inlines
+                             untracked repo files into reviewer prompts).
+  --no-my-review             explicit opt-out: run without the gate (a conscious
+                             choice, e.g. a task that has no diff to self-review).
+  PANEL_ORACLE_CMD           if set, run it (in REPO_DIR) BEFORE dispatching and
+                             record 'ORACLE: <cmd> rc=<N>' + <prefix>.oracle.log.
+                             Records only, never blocks: 07-04 lesson - three
+                             reviewers PASSed a broken oracle nobody had run.
+
+The main agent reads ALL logs and makes the final call. Reviewers are advisors,
+not voters. A failure in one reviewer does not block the others.
+EOF
+}
+
+MY_REVIEW=""
+NO_MY_REVIEW=0
+POSARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --require-my-review)
+      MY_REVIEW="${2:-}"
+      [[ -n "$MY_REVIEW" ]] || { echo "panel-review: --require-my-review needs a path" >&2; exit 2; }
+      shift 2 ;;
+    --no-my-review) NO_MY_REVIEW=1; shift ;;
+    *) POSARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${POSARGS[@]}"
+if [[ $# -lt 1 || $# -gt 3 ]]; then usage; exit 2; fi
+
+BIN="$(dirname "$0")"
+TASK_FILE="$1"
+REPO_DIR="${2:-$PWD}"
+
+[[ -f "$TASK_FILE" ]] || { echo "panel-review: task file not found: $TASK_FILE" >&2; exit 1; }
+[[ -d "$REPO_DIR" ]]  || { echo "panel-review: repo dir not found: $REPO_DIR" >&2; exit 1; }
+
+# The my-review gate is DEFAULT-ON. Unless explicitly opted out, resolve a path:
+# an explicit --require-my-review wins; otherwise derive the convention path from
+# the task name. Then require it to exist and to live outside the repo. This flips
+# the anti-anchoring discipline from "remember to arm it" to "forgetting stops you".
+if [[ $NO_MY_REVIEW -eq 0 && -z "$MY_REVIEW" ]]; then
+  MY_REVIEW="/root/aiwork/tasks/$(basename "${TASK_FILE%.*}")-my-review.md"
+fi
+if [[ $NO_MY_REVIEW -eq 0 ]]; then
+  if [[ ! -f "$MY_REVIEW" ]]; then
+    echo "panel-review: my-review file not found: $MY_REVIEW" >&2
+    echo "  write your OWN review there first (anti-anchoring), then dispatch;" >&2
+    echo "  or pass --no-my-review to consciously opt out." >&2
+    exit 1
+  fi
+  RPD="$(realpath "$REPO_DIR")"
+  # Check BOTH the symlink-resolved path AND the lexical path (realpath -s, which
+  # resolves .. but does NOT follow a final-component symlink). A review file that
+  # is physically a symlink inside the repo resolves outside via plain realpath but
+  # is still listed by `git ls-files --others` and read-followed by the engine -
+  # so the lexical location is what actually decides the leak.
+  for MRV in "$(realpath "$MY_REVIEW")" "$(realpath -s "$MY_REVIEW")"; do
+    case "$MRV" in
+      "$RPD"/*)
+        echo "panel-review: my-review file is INSIDE the repo under review: $MRV" >&2
+        echo "  the engine inlines untracked repo files into reviewer prompts and would leak it" >&2
+        echo "  (a symlink physically in the repo counts too). Move it outside," >&2
+        echo "  e.g. /root/aiwork/tasks/<name>-my-review.md" >&2
+        exit 1 ;;
+    esac
+  done
+fi
+
+TS="$(date +%Y%m%d-%H%M%S)"
+TASKNAME="$(basename "${TASK_FILE%.*}")"
+LOG_PREFIX="${3:-/root/aiwork/logs/panel-${TASKNAME}-${TS}}"
+mkdir -p "$(dirname "$LOG_PREFIX")"
+
+# GLM leg selection: agent base (subglm-agent, reads the repo itself) is the
+# default when installed; PANEL_GLM_LEG=chat forces the chat leg (subglm).
+GLM_LEG="${PANEL_GLM_LEG:-agent}"
+if [[ "$GLM_LEG" == "agent" && -x "$BIN/subglm-agent" ]]; then
+  GLM_CMD="$BIN/subglm-agent"
+else
+  GLM_CMD="$BIN/subglm"
+fi
+
+# DeepSeek leg selection: agent base (subdeepseek-agent = DeepSeek via
+# Claude Code, reads the repo itself) is the default when installed;
+# PANEL_DEEPSEEK_LEG=chat forces the chat leg
+# (subdeepseek -> DeepSeek official chat API), which goes
+# blind on an empty diff. Mirrors the GLM leg above.
+DEEPSEEK_LEG="${PANEL_DEEPSEEK_LEG:-agent}"
+if [[ "$DEEPSEEK_LEG" == "agent" && -x "$BIN/subdeepseek-agent" ]]; then
+  DEEPSEEK_CMD="$BIN/subdeepseek-agent"
+else
+  DEEPSEEK_CMD="$BIN/subdeepseek"
+fi
+
+# Kimi leg (4th reviewer, Moonshot kimi-code agent base): auto-enabled when
+# subkimi is installed; PANEL_KIMI_LEG=off disables. There is no chat fallback -
+# absent or disabled just means the classic 3-leg panel.
+KIMI_CMD=""
+if [[ "${PANEL_KIMI_LEG:-agent}" != "off" && -x "$BIN/subkimi" ]]; then
+  KIMI_CMD="$BIN/subkimi"
+fi
+
+SUBMIMO_LOG="${LOG_PREFIX}.submimo.log"
+SUBDEEPSEEK_LOG="${LOG_PREFIX}.subdeepseek.log"
+SUBGLM_LOG="${LOG_PREFIX}.subglm.log"
+SUBKIMI_LOG="${LOG_PREFIX}.subkimi.log"
+SUBMIMO_ERR="${SUBMIMO_LOG}.err"
+SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
+SUBGLM_ERR="${SUBGLM_LOG}.err"
+SUBKIMI_ERR="${SUBKIMI_LOG}.err"
+
+# Oracle record slot: run BEFORE dispatch so the arbiter never reads reviewer
+# verdicts without knowing whether the objective check is green. Records only -
+# the verdict stays with the main agent.
+if [[ -n "${PANEL_ORACLE_CMD:-}" ]]; then
+  ORACLE_LOG="${LOG_PREFIX}.oracle.log"
+  ( cd "$REPO_DIR" && bash -c "$PANEL_ORACLE_CMD" ) >"$ORACLE_LOG" 2>&1
+  ORACLE_RC=$?
+  echo "ORACLE: $PANEL_ORACLE_CMD rc=$ORACLE_RC (output: $ORACLE_LOG)"
+  if [[ $ORACLE_RC -ne 0 ]]; then
+    echo "  WARNING: oracle is RED - reviewer PASS 不可信 (07-04 教训: 先跑 oracle 再读 panel)"
+    tail -n 5 "$ORACLE_LOG" | sed 's/^/  | /'
+  fi
+fi
+
+# PANEL_INCLUDE -> chat legs (2026-07-21 工具债): a chat leg only ever sees the
+# incremental `git diff`, so oracle/test files that live in the BASELINE commit are
+# invisible to it — both chat legs literally reported "测试文件不在 diff 里没法评".
+# Forward the patterns verbatim to each chat leg's own INCLUDE var (agent legs read
+# the repo themselves and ignore this).
+if [[ -n "${PANEL_INCLUDE:-}" ]]; then
+  export ZHIPU_INCLUDE="${ZHIPU_INCLUDE:-$PANEL_INCLUDE}"
+  export DEEPSEEK_INCLUDE="${DEEPSEEK_INCLUDE:-$PANEL_INCLUDE}"
+fi
+
+echo "panel-review: task=$TASK_FILE repo=$REPO_DIR"
+echo "  submimo  -> $SUBMIMO_LOG"
+echo "  subdeepseek -> $SUBDEEPSEEK_LOG (leg: $(basename "$DEEPSEEK_CMD"))"
+echo "  subglm   -> $SUBGLM_LOG (leg: $(basename "$GLM_CMD"))"
+if [[ -n "$KIMI_CMD" ]]; then
+  echo "  subkimi  -> $SUBKIMI_LOG (leg: $(basename "$KIMI_CMD"))"
+fi
+# A chat leg with nothing attached beyond the diff cannot review the oracle itself
+# ("是规格错还是实现错"就查不了)。Nudge, never block — the arbiter decides.
+if [[ -z "${PANEL_INCLUDE:-}" ]] \
+   && { [[ "$(basename "$GLM_CMD")" == "subglm" ]] || [[ "$(basename "$DEEPSEEK_CMD")" == "subdeepseek" ]]; }; then
+  echo "  HINT: chat leg in play and PANEL_INCLUDE is empty — it only sees the incremental diff."
+  echo "        Pass PANEL_INCLUDE=\"tests/test_x.py tests/e2e/y.mjs\" so it can review the oracle too."
+fi
+
+# Anti-anchoring leak check (2026-07-21 实事故): the engine inlines untracked repo
+# files and the whole diff into every reviewer prompt. If the main agent's OWN
+# findings are sitting in the repo (a filled-in tracks/**/verify.md, a stray
+# *my-review*), the "independent" legs end up quoting them back — one chat leg
+# literally cited verify.md as evidence. Warn (never block); the arbiter decides.
+anchor_leak_files() {
+  # -uall: 不带它 git 会把未跟踪目录折叠成 `tracks/`,verify.md 就漏检了(oracle 实抓)
+  { git -C "$REPO_DIR" status --porcelain -uall 2>/dev/null | awk '{print $NF}'
+    if [[ -n "${PANEL_DIFF_BASE:-}" ]]; then
+      git -C "$REPO_DIR" diff --name-only "${PANEL_DIFF_BASE}...HEAD" 2>/dev/null
+    fi
+  } | grep -Ei 'verify\.md$|my.?review' | sort -u
+}
+LEAK="$(anchor_leak_files)"
+if [[ -n "$LEAK" ]]; then
+  echo "  WARNING: anchor leak(反锚定) — 主审自己的评审可能进了评审腿的 prompt:"
+  echo "$LEAK" | sed 's/^/    /'
+  echo "    (引擎会把未跟踪文件与整份 diff 内联进每条腿;先派发、后写 verify.md)"
+fi
+
+echo "  running all in parallel..."
+
+# Light pre-launch stagger: the three reviewers share provider tpm budgets, and
+# bursting all at once is the main 429 trigger. Sleep a small random gap (default
+# up to 2s; PANEL_STAGGER_MAX=0 disables) before the 2nd and 3rd launches so the
+# token bursts don't perfectly overlap. $RANDOM seeds awk to dodge same-second
+# srand() collisions. Pairs with the engine's 429 backoff (belt and suspenders).
+stagger() {
+  local max="${PANEL_STAGGER_MAX:-2}"
+  [[ "$max" == 0 || "$max" == 0.0 ]] && return 0
+  sleep "$(awk -v m="$max" -v r="$RANDOM" 'BEGIN{printf "%.3f", (r/32768)*m}')"
+}
+
+# Capture each reviewer's stderr to a sidecar .err file so an early startup failure
+# (missing key, bad endpoint, etc.) is recorded instead of swallowed. We do NOT
+# redirect into the .log itself because each reviewer truncates its own .log on
+# success; a sidecar avoids that race. stdout is dropped (the result is in the .log).
+# Agent-leg failure -> automatic chat-leg fallback (2026-07-21): a dead agent leg
+# used to cost a whole reviewer (GLM: unsubscribed CodingPlan -> 400; DeepSeek:
+# "Reached max turns"). The chat leg is a weaker but live reviewer, so retry there
+# instead of silently shipping a 2-leg panel. The failed agent output is preserved
+# as <log>.agent.log(+.err) so the infra failure stays diagnosable.
+run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
+  local agent="$1" chat="$2" log="$3" err="$4" label="$5" rc
+  "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  if [[ $rc -eq 0 || "$agent" == "$chat" ]]; then return $rc; fi
+  # agent leg died and a distinct chat leg exists -> keep the evidence, then retry
+  [[ -e "$log" ]] && mv -f "$log" "${log%.log}.agent.log"
+  [[ -s "$err" ]] && mv -f "$err" "${log%.log}.agent.log.err" || rm -f "$err"
+  echo "  NOTE: $label agent leg failed (rc=$rc) -> fallback to chat leg;" \
+       "agent output kept at ${log%.log}.agent.log(.err)"
+  "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  return $rc
+}
+
+"$BIN/submimo"  review "$TASK_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" >/dev/null 2>"$SUBMIMO_ERR"  &
+PID_MIMO=$!
+stagger
+run_leg "$DEEPSEEK_CMD" "$BIN/subdeepseek" "$SUBDEEPSEEK_LOG" "$SUBDEEPSEEK_ERR" subdeepseek &
+PID_DEEPSEEK=$!
+stagger
+run_leg "$GLM_CMD" "$BIN/subglm" "$SUBGLM_LOG" "$SUBGLM_ERR" subglm &
+PID_GLM=$!
+PID_KIMI=""
+if [[ -n "$KIMI_CMD" ]]; then
+  stagger
+  "$KIMI_CMD"   review "$TASK_FILE" "$SUBKIMI_LOG"  "$REPO_DIR" >/dev/null 2>"$SUBKIMI_ERR"  &
+  PID_KIMI=$!
+fi
+
+wait "$PID_MIMO";  RC_MIMO=$?
+wait "$PID_DEEPSEEK"; RC_DEEPSEEK=$?
+wait "$PID_GLM";   RC_GLM=$?
+RC_KIMI=0
+if [[ -n "$PID_KIMI" ]]; then
+  wait "$PID_KIMI"; RC_KIMI=$?
+fi
+
+echo
+if [[ -n "$KIMI_CMD" ]]; then
+  echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK  subglm rc=$RC_GLM  subkimi rc=$RC_KIMI"
+else
+  echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK  subglm rc=$RC_GLM"
+fi
+# On success, drop the (empty) stderr sidecar; on failure keep it and point to it.
+if [[ $RC_MIMO -eq 0 ]]; then
+  [[ -s "$SUBMIMO_ERR" ]] || rm -f "$SUBMIMO_ERR"
+else
+  echo "  WARNING: submimo review failed (rc=$RC_MIMO); reason in $SUBMIMO_ERR, log $SUBMIMO_LOG"
+fi
+if [[ $RC_DEEPSEEK -eq 0 ]]; then
+  [[ -s "$SUBDEEPSEEK_ERR" ]] || rm -f "$SUBDEEPSEEK_ERR"
+else
+  echo "  WARNING: subdeepseek review failed (rc=$RC_DEEPSEEK); reason in $SUBDEEPSEEK_ERR, log $SUBDEEPSEEK_LOG"
+fi
+if [[ $RC_GLM -eq 0 ]]; then
+  [[ -s "$SUBGLM_ERR" ]] || rm -f "$SUBGLM_ERR"
+else
+  echo "  WARNING: subglm review failed (rc=$RC_GLM); reason in $SUBGLM_ERR, log $SUBGLM_LOG"
+fi
+if [[ -n "$KIMI_CMD" ]]; then
+  if [[ $RC_KIMI -eq 0 ]]; then
+    [[ -s "$SUBKIMI_ERR" ]] || rm -f "$SUBKIMI_ERR"
+  else
+    echo "  WARNING: subkimi review failed (rc=$RC_KIMI); reason in $SUBKIMI_ERR, log $SUBKIMI_LOG"
+  fi
+fi
+echo "  read all logs above, then arbitrate."
+
+# Non-zero only if ALL dispatched reviewers failed (panel produced no evidence).
+if [[ $RC_MIMO -ne 0 && $RC_DEEPSEEK -ne 0 && $RC_GLM -ne 0 ]]; then
+  if [[ -z "$KIMI_CMD" || $RC_KIMI -ne 0 ]]; then exit 1; fi
+fi
+exit 0
