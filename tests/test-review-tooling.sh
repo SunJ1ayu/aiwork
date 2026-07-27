@@ -948,6 +948,73 @@ v15_anchor_leak_warning() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V16
+v16_timeout_and_blind_chat_leg() {
+  echo "[V16] subkimi 超时可用性 + chat 腿「先 commit 再派发 = 空 diff 盲评」(07-27 实事故)"
+  local d pb rc; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
+
+  # --- ① subkimi:超时后仍要留下裁决 → prompt 必须要求「一有结论就先写出来」
+  # 07-27 取证:kimi 900s 被砍时,最值钱的发现已经在正文里,唯独裁决行没写成
+  # (prompt 原文要求 "MUST end your review with a final line")。工具调用只有个位数,
+  # 时间全花在长推理上 —— 所以解法不是缩小它的自读面,而是让裁决先落地。
+  cp "$BIN/subkimi" "$pb/subkimi"
+  local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
+  printf 'default_model = "x"\n' > "$rh/config.toml"
+  printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
+  echo '{}' > "$rh/credentials/kimi-code.json"
+  # stub timeout:记下它拿到的秒数,再原样执行后面的命令
+  cat > "$pb/timeout" <<'EOF'
+#!/usr/bin/env bash
+echo "$1" > "$CAPTURE_TIMEOUT"; shift; exec "$@"
+EOF
+  chmod +x "$pb/timeout"
+  cat > "$pb/kimi" <<'EOF'
+#!/usr/bin/env bash
+# 把收到的 prompt 原样落盘,供断言检查
+while [[ $# -gt 0 ]]; do [[ "$1" == "-p" ]] && { echo "$2" > "$CAPTURE_PROMPT"; }; shift; done
+echo "stub review"; echo "Conclusion: PASS"
+EOF
+  chmod +x "$pb/kimi"
+  printf '# review this\n' > "$d/t.md"
+  env PATH="$pb:$PATH" KIMI_REVIEW_HOME="$rh" \
+      CAPTURE_TIMEOUT="$d/to.txt" CAPTURE_PROMPT="$d/prompt.txt" \
+      bash "$pb/subkimi" review "$d/t.md" "$d/k.log" "$d" >/dev/null 2>&1
+
+  [[ "$(cat "$d/to.txt" 2>/dev/null)" -ge 1500 ]]
+  check "V16: subkimi 默认超时 ≥1500s(900 实测不够,证据在 07-27 日志)" $?
+  grep -qiE '(as soon as|immediately|一有|尽早|先给出|first).*(conclusion|verdict|裁决|结论)' "$d/prompt.txt"
+  check "V16: prompt 要求一有结论就先写出裁决行(超时也能留下裁决)" $?
+  grep -q 'Conclusion: PASS | BLOCK | NEEDS_MORE_INFO' "$d/prompt.txt"
+  check "V16: 裁决行格式仍逐字给出" $?
+
+  # --- ② chat 腿的空 diff 盲评:先 commit 再派发是本机的**标准流程**,
+  # 而 chat 腿默认只看工作区未提交改动 → 它拿到的实现代码是空的。
+  # 07-27 实事故:subglm agent 腿挂了回落 chat 腿,报告里自己写着
+  # "bin/ds_web.py 的具体实现内容不可得",findings 全是把任务书复述回来。
+  local repo="$d/repo"; mkdir -p "$repo"
+  ( cd "$repo"; git init -qb main; git config user.email t@t; git config user.name t
+    echo base > impl.py; git add -A; git commit -qm init
+    git checkout -qb feature; echo "真正要审的实现" >> impl.py
+    git add -A; git commit -qm work )
+  cp "$BIN/panel-review" "$pb/panel-review"
+  for leg in submimo subdeepseek subglm subkimi; do
+    printf '#!/bin/bash\necho "DIFF_BASE=${PANEL_DIFF_BASE:-unset}" > "$3"\nexit 0\n' \
+      > "$pb/$leg"; chmod +x "$pb/$leg"
+  done
+  ( cd "$repo" && bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/B1" \
+      >"$d/b1.out" 2>&1 )
+  grep -q 'DIFF_BASE=main' "$d/B1.subglm.log" 2>/dev/null
+  check "V16: 工作区干净时 panel 自动把 diff 基线设成默认分支(否则 chat 腿空手评审)" $?
+
+  # 显式给了就不覆盖
+  ( cd "$repo" && PANEL_DIFF_BASE=HEAD~1 bash "$pb/panel-review" --no-my-review \
+      "$d/t.md" "$repo" "$d/B2" >/dev/null 2>&1 )
+  grep -q 'DIFF_BASE=HEAD~1' "$d/B2.subglm.log" 2>/dev/null
+  check "V16: 显式 PANEL_DIFF_BASE 不被默认值覆盖" $?
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 v1_untracked_content
 v1_no_untracked_and_nonrepo
@@ -965,5 +1032,6 @@ v12_gate_default_on
 v13_subkimi_leg
 v14_leg_fallback_and_include
 v15_anchor_leak_warning
+v16_timeout_and_blind_chat_leg
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
