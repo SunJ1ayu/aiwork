@@ -982,10 +982,35 @@ EOF
 
   [[ "$(cat "$d/to.txt" 2>/dev/null)" -ge 1500 ]]
   check "V16: subkimi 默认超时 ≥1500s(900 实测不够,证据在 07-27 日志)" $?
-  grep -qiE '(as soon as|immediately|一有|尽早|先给出|first).*(conclusion|verdict|裁决|结论)' "$d/prompt.txt"
+  # 两个方向都认(「verdict … as soon as」与「as soon as … verdict」都是同一个意思)
+  grep -qiE '(conclusion|verdict|裁决).*(as soon as|immediately|一有|尽早|先写)|(as soon as|immediately|一有|尽早|先写).*(conclusion|verdict|裁决)' "$d/prompt.txt"
   check "V16: prompt 要求一有结论就先写出裁决行(超时也能留下裁决)" $?
   grep -q 'Conclusion: PASS | BLOCK | NEEDS_MORE_INFO' "$d/prompt.txt"
   check "V16: 裁决行格式仍逐字给出" $?
+
+  # 超时本身必须不再作废整份评审:裁决行已经写出来了就算数(否则「先写裁决」白做)
+  # ⚠️ 必须先撤掉上面那个 stub timeout(它忽略秒数直接 exec),否则这两条根本没真超时
+  #    —— 首版判据就栽在这:两条假绿,还各白等 30 秒。
+  rm -f "$pb/timeout"
+  cat > "$pb/kimi" <<'EOF'
+#!/usr/bin/env bash
+echo "findings: 一条真发现"; echo "Conclusion: BLOCK"; sleep 30
+EOF
+  chmod +x "$pb/kimi"
+  env PATH="$pb:$PATH" KIMI_REVIEW_HOME="$rh" KIMI_TIMEOUT=2 \
+      bash "$pb/subkimi" review "$d/t.md" "$d/kt.log" "$d" >/dev/null 2>"$d/kt.err"; rc=$?
+  check "V16: 超时但裁决已写出 → rc=0(评审算数)" $([[ $rc -eq 0 ]]; echo $?)
+  grep -qiE 'timed out|超时' "$d/kt.err" "$d/kt.log"
+  check "V16: 超时仍要留痕(不静默当成正常完卷)" $?
+  # 超时且没有裁决 → 仍然是失败(原语义不变)
+  cat > "$pb/kimi" <<'EOF'
+#!/usr/bin/env bash
+echo "还在想"; sleep 30
+EOF
+  chmod +x "$pb/kimi"
+  env PATH="$pb:$PATH" KIMI_REVIEW_HOME="$rh" KIMI_TIMEOUT=2 \
+      bash "$pb/subkimi" review "$d/t.md" "$d/kt2.log" "$d" >/dev/null 2>&1; rc=$?
+  check "V16: 超时且无裁决 → 仍判失败" $([[ $rc -ne 0 ]]; echo $?)
 
   # --- ② chat 腿的空 diff 盲评:先 commit 再派发是本机的**标准流程**,
   # 而 chat 腿默认只看工作区未提交改动 → 它拿到的实现代码是空的。
