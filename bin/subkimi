@@ -36,7 +36,8 @@ a PreToolUse guard in an isolated KIMI_CODE_HOME.
 Environment:
   KIMI_MODEL        optional, model alias (default: kimi-code/k3, 1M context;
                     kimi-code/kimi-for-coding = K2.7 coding-tuned, also available)
-  KIMI_TIMEOUT      optional, seconds before timeout (default 900)
+  KIMI_TIMEOUT      optional, seconds before timeout (default 1500; 07-27 取证:
+                    900 不够,时间花在长推理而非自读仓库)
   KIMI_REVIEW_HOME  optional, default /root/aiwork/kimi-review-home
 
 Examples:
@@ -51,7 +52,7 @@ if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
 
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
 MODEL="${KIMI_MODEL:-$DEFAULT_MODEL}"
-TIMEOUT_SECONDS="${KIMI_TIMEOUT:-900}"
+TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 
 if [[ "$MODE" == "fix" ]]; then
   die "fix is not supported: panel reviewers are review-only. Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
@@ -87,8 +88,16 @@ verify them against the actual files. Some tools are intentionally blocked by
 the harness; if a call is denied, work with the allowed tools instead of
 retrying it.
 
-Report findings with file:line references and a severity each. You MUST end
-your review with a final line of exactly this form:
+Report findings with file:line references and a severity each.
+
+Write the verdict line AS SOON AS you have enough to judge, immediately after
+your findings — do not save it for the end. You may keep analysing afterwards
+and restate the line at the end if your judgement changes; the last one counts.
+(This harness kills long reviews on a timeout. 2026-07-27: a run was cut off
+with its best finding already written out but no verdict line, so the whole
+review was discarded. Verdict first means a timeout still costs you nothing.)
+
+The verdict line must be exactly this form:
 Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 
 --- REVIEW TASK ---
@@ -113,17 +122,29 @@ RC=0
     timeout "$TIMEOUT_SECONDS" kimi -m "$MODEL" -p "$PROMPT"
 ) >> "$LOG_FILE" 2>&1 || RC=$?
 
-if [[ $RC -ne 0 ]]; then
-  [[ $RC -eq 124 ]] && die "kimi timed out after ${TIMEOUT_SECONDS}s (log: $LOG_FILE)"
-  die "kimi exited rc=$RC (log: $LOG_FILE)"
-fi
-
 # Verdict gate (same semantics as the other legs): a review that never
 # concludes is a failed review, but the log is kept for forensics. Accepts
 # 「结论: PASS」/full-width colon (Chinese backends drift to it); ： via
 # ANSI-C quoting per the 07-17 full-width-punctuation lesson.
 VERDICT_RE=$'(Conclusion|结论)(:|\uFF1A)[[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)'
-grep -qE "$VERDICT_RE" "$LOG_FILE" \
+HAS_VERDICT=0
+grep -qE "$VERDICT_RE" "$LOG_FILE" && HAS_VERDICT=1
+
+# A timeout with the verdict already written is a COMPLETE review, not a lost one
+# (2026-07-27: kimi was cut off at 900s with its best finding already in the log,
+# and the whole thing got discarded for want of a last line). Paired with the
+# verdict-first instruction in the prompt: judgement lands early, extra thinking
+# is a bonus. Still loud on stderr — a truncated review must never look like a
+# clean one to the arbiter.
+if [[ $RC -eq 124 ]]; then
+  [[ $HAS_VERDICT -eq 1 ]] || die "kimi timed out after ${TIMEOUT_SECONDS}s with no verdict (log: $LOG_FILE)"
+  echo "subkimi: timed out after ${TIMEOUT_SECONDS}s, but a verdict was already written —" \
+       "accepting it; the analysis may be cut off mid-flow (log: $LOG_FILE)" >&2
+  exit 0
+fi
+[[ $RC -eq 0 ]] || die "kimi exited rc=$RC (log: $LOG_FILE)"
+
+[[ $HAS_VERDICT -eq 1 ]] \
   || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
 
 exit 0

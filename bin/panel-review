@@ -169,6 +169,25 @@ if [[ -n "${PANEL_INCLUDE:-}" ]]; then
   export DEEPSEEK_INCLUDE="${DEEPSEEK_INCLUDE:-$PANEL_INCLUDE}"
 fi
 
+# PANEL_DIFF_BASE 默认值(2026-07-27 实事故):chat 腿默认只看**工作区未提交改动**,
+# 而本机流程是「先 commit 再派发」(oracle 先行、my-review 落在仓外),所以派发时
+# 工作区通常是干净的 —— chat 腿拿到的实现代码是**空的**。那次 subglm 的 agent 腿挂了
+# 回落 chat 腿,报告里自己写着「bin/ds_web.py 的具体实现内容不可得」,findings 全是把
+# 任务书复述回来还标 HIGH。**这是结构性盲评,不是模型差**,而且 agent 腿一回落就复发。
+# 故:未显式指定时,把 diff 基线设成仓库的默认分支,让 chat 腿看见整条分支的改动。
+if [[ -z "${PANEL_DIFF_BASE:-}" ]]; then
+  for _b in main master; do
+    if git -C "$REPO_DIR" rev-parse --verify --quiet "$_b" >/dev/null 2>&1 \
+       && [[ "$(git -C "$REPO_DIR" rev-parse "$_b" 2>/dev/null)" \
+             != "$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)" ]]; then
+      export PANEL_DIFF_BASE="$_b"
+      echo "  NOTE: PANEL_DIFF_BASE 未给,自动用 '$_b' 作 diff 基线(chat 腿否则只看未提交改动)"
+      break
+    fi
+  done
+  unset _b
+fi
+
 echo "panel-review: task=$TASK_FILE repo=$REPO_DIR"
 echo "  submimo  -> $SUBMIMO_LOG"
 echo "  subdeepseek -> $SUBDEEPSEEK_LOG (leg: $(basename "$DEEPSEEK_CMD"))"
