@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# track-guard — pre-commit 守卫:两条机械规矩,红一条挡一条。
+#   规矩1: bump 版本号的 commit 必须挂在一个 track 下(本次提交里 tracks/ 有动静,
+#          或最近一次 verify.md 改动落在 7 天内 —— 兜住「归进现成 track」的情况)。
+#   规矩2: 最近被改动的 track 的 verify.md 里,lane 和 派给 不许空着。
+# 只查工件,不查自述;误报时可用 --no-verify 走,但那本身会留在 reflog 里。
+set -u
+
+fail=0
+say() { printf 'track-guard: %s\n' "$1" >&2; }
+
+staged() { git diff --cached --name-only; }
+
+# ---- 规矩1:bump 必挂 track ----
+bumped=""
+for f in $(staged | grep -E '(^|/)package\.json$' || true); do
+  if git diff --cached -U0 -- "$f" | grep -qE '^\+.*"version"[[:space:]]*:'; then
+    bumped="$f"; break
+  fi
+done
+
+if [ -n "$bumped" ]; then
+  if staged | grep -q '^tracks/'; then
+    : # 本次提交带 track 工件,过
+  else
+    recent=$(git log --since='7 days ago' --name-only --pretty=format: -- 'tracks/*/verify.md' | grep . | head -1)
+    if [ -z "$recent" ]; then
+      fail=1
+      say "🔴 规矩1:$bumped 在 bump 版本号,但本提交没动 tracks/,近 7 天也没有 verify.md 更新。"
+      say "   bump 必须挂 track(新起一个,或把这单归进现成 track 的 verify.md)。"
+    fi
+  fi
+fi
+
+# ---- 规矩2:最近改动的 verify.md 里 lane / 派给 非空 ----
+# 取「本提交涉及的 verify.md」∪「工作区里最近 7 天内改过的 verify.md」逐个查。
+verifies=$( { staged | grep -E '^tracks/[^/]+/verify\.md$' || true; \
+              git log --since='7 days ago' --name-only --pretty=format: -- 'tracks/*/verify.md' | grep . || true; } | sort -u )
+
+for v in $verifies; do
+  [ -f "$v" ] || continue
+  # 有暂存版本时以暂存内容为准
+  if staged | grep -qx "$v"; then
+    content=$(git show ":$v" 2>/dev/null) || content=$(cat "$v")
+  else
+    content=$(cat "$v")
+  fi
+  if printf '%s\n' "$content" | grep -qE '^-[[:space:]]*lane:[[:space:]]*(<|$)'; then
+    fail=1
+    say "🔴 规矩2:$v 的 lane 空着(空着 = 走哪条 lane 从头到尾没被问过)。"
+  fi
+  if printf '%s\n' "$content" | grep -qE '^-[[:space:]]*派给:[[:space:]]*(<|$)'; then
+    fail=1
+    say "🔴 规矩2:$v 的 派给 空着(开工前就该写一句派给谁、为什么)。"
+  fi
+done
+
+if [ "$fail" -ne 0 ]; then
+  say "被挡下的不是这次改动,是没留痕的判断。补上再提交。"
+  exit 1
+fi
+exit 0
