@@ -38,7 +38,10 @@
 # Run:  bash /root/aiwork/tests/test-review-tooling.sh
 set -uo pipefail
 
-BIN="/root/aiwork/bin"
+# 从判据自身位置推 bin/,**不写死绝对路径**:执行腿在 worktree 里改了代码,
+# 写死路径会让判据仍去测主仓的文件 = 改了也永远红(2026-08-01 派活前发现)。
+# 可用 REVIEW_BIN 覆盖。
+BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
