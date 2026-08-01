@@ -7,7 +7,8 @@ set -euo pipefail
 # (Read/Glob/Grep + read-only git): no blind reviews, no manual INCLUDE
 # feeding, no empty-diff-after-commit problem.
 #
-#   review -> claude -p, read-only tool allowlist, verdict-gated.
+#   review  -> claude -p, read-only tool allowlist, verdict-gated.
+#   explore -> claude -p, same read-only posture, no verdict gate.
 #   fix    -> NOT supported here on purpose: panel reviewers stay review-only.
 #             Use `submimo fix` (mimo) for fix work.
 #
@@ -26,6 +27,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   subdeepseek-agent review TASK_FILE LOG_FILE [REPO_DIR]
+  subdeepseek-agent explore TASK_FILE LOG_FILE [REPO_DIR]
   subdeepseek-agent fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
 
 Runs DeepSeek as an agentic read-only review sub-agent: Claude Code headless
@@ -43,6 +45,7 @@ Environment:
 
 Examples:
   subdeepseek-agent review /root/aiwork/tasks/001-review.md /root/aiwork/logs/001-review.log /path/to/repo
+  subdeepseek-agent explore /root/aiwork/tasks/001-brief.md /root/aiwork/logs/001-explore.log /path/to/repo
 EOF
 }
 
@@ -59,7 +62,7 @@ MAX_TURNS="${DEEPSEEK_MAX_TURNS:-80}"
 if [[ "$MODE" == "fix" ]]; then
   die "fix is not supported: panel reviewers are review-only. Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
 fi
-[[ "$MODE" == "review" ]] || { usage; exit 2; }
+[[ "$MODE" == "review" || "$MODE" == "explore" ]] || { usage; exit 2; }
 
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
@@ -78,7 +81,7 @@ fi
 case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
 
-PROMPT="You are an independent code reviewer running inside a read-only harness.
+REVIEW_PROMPT="You are an independent code reviewer running inside a read-only harness.
 Explore the repository yourself with the tools you have (Read, Glob, Grep, and
 read-only git commands). Do not take the task's claims at face value - verify
 them against the actual files.
@@ -90,10 +93,36 @@ Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 --- REVIEW TASK ---
 $(cat "$TASK_FILE")"
 
+EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent design-exploration agent running inside a read-only harness. Explore the repository yourself with the tools you have (Read, Glob, Grep, and read-only git commands) when the codebase matters to the brief. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
+
+Rules:
+- Propose exactly ONE concrete direction. Do NOT hedge across multiple options or output a menu.
+- Do NOT output PASS/BLOCK/approve/reject - this is not a review.
+- Commit to a position even under uncertainty; state your assumptions.
+- Ground claims in the supplied brief and the repository; do not invent facts about the codebase.
+
+Output format (use exactly these labels):
+Direction: <one-line name of the approach you propose>
+Core bet: <the single key assumption/trade-off this direction bets on>
+How it works: <concrete shape - components, flow, key decisions>
+Best at: <what it optimizes for / where it wins>
+Sacrifices: <what it gives up; when it is the wrong choice>
+Blind spots in the brief: <what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen>
+Smallest first step: <the first concrete thing to build to validate this>}"
+
+if [[ "$MODE" == "explore" ]]; then
+  PROMPT="${EXPLORE_SYSTEM_PROMPT}
+
+--- DESIGN BRIEF ---
+$(cat "$TASK_FILE")"
+else
+  PROMPT="$REVIEW_PROMPT"
+fi
+
 {
-  echo "# subdeepseek-agent review log"
+  echo "# subdeepseek-agent $MODE log"
   echo "time: $(date -Iseconds)"
-  echo "mode: review (agent base: claude-code headless -> DeepSeek)"
+  echo "mode: $MODE (agent base: claude-code headless -> DeepSeek)"
   echo "base_url: $BASE_URL"
   echo "model: $MODEL"
   echo "repo: $REPO_DIR"
@@ -127,14 +156,16 @@ if [[ $RC -ne 0 ]]; then
   die "claude exited rc=$RC (log: $LOG_FILE)"
 fi
 
-# Verdict gate (same semantics as the chat engine's review mode): a review that
-# never concludes is a failed review, but the log is kept for forensics.
-# Chinese-model models often conclude with 「结论: PASS」 despite the English
-# instruction (bit subdeepseek twice: Track B + client-tools). Accept 结论 and the
-# full-width colon; ： via ANSI-C quoting — a literal full-width colon in
-# source risks silent half-width corruption (07-17 set-stage lesson).
-VERDICT_RE=$'(Conclusion|结论)(:|\uFF1A)[[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)'
-grep -qE "$VERDICT_RE" "$LOG_FILE" \
-  || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+if [[ "$MODE" == "review" ]]; then
+  # Verdict gate (same semantics as the chat engine's review mode): a review that
+  # never concludes is a failed review, but the log is kept for forensics.
+  # Chinese-model models often conclude with 「结论: PASS」 despite the English
+  # instruction (bit subdeepseek twice: Track B + client-tools). Accept 结论 and the
+  # full-width colon; ： via ANSI-C quoting — a literal full-width colon in
+  # source risks silent half-width corruption (07-17 set-stage lesson).
+  VERDICT_RE=$'(Conclusion|结论)(:|\uFF1A)[[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)'
+  grep -qE "$VERDICT_RE" "$LOG_FILE" \
+    || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+fi
 
 exit 0
