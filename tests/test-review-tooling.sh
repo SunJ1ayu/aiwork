@@ -22,6 +22,18 @@
 #       with explicit [TRUNCATED] markers.
 #   V7  submimo-review: empty diff + nothing attached emits a BLIND warning on
 #       stderr and in the log header, but stays rc=0.
+#   V17 panel-explore 的 GLM / DeepSeek 两腿必须走**底座**(自己读仓库),不是聊天壳。
+#       2026-08-01 实证:panel-explore 建于 6-26,底座腿是 7-05/7-14 才有的,它一直
+#       硬写着 `subdeepseek review` / `subglm review` 两个聊天壳。聊天腿看代码的**唯一
+#       通道是 git diff**,而发散任务按定义没有 diff(工作树干净)⇒ **那两腿结构性
+#       蒙眼**,brief 里写「请自己读代码」对它们是空话。同一个病 panel-review 治过了
+#       (代码里就有那条注释),发散这边漏改。
+#       光把调用换成底座腿会**立刻坏两处**,所以判据把这两处一起钉死:
+#         ① 底座腿的提示词写死"评审员"且强制 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`
+#            出卷闸 —— 发散没有裁决 ⇒ 闸判失败 ⇒ 自动回落聊天腿 ⇒ 绕回蒙眼;
+#         ② 底座腿不读发散用的系统提示词(那是聊天引擎才认的)⇒ 就算跑通也写成评审。
+#       模式沿用仓里已有的约定(submimo-review 的 --mode explore / REVIEW_MODE),
+#       不另立第二套写法;panel-explore 早就在用 `submimo explore` 当第一位置参数。
 #
 # Run:  bash /root/aiwork/tests/test-review-tooling.sh
 set -uo pipefail
@@ -1040,6 +1052,116 @@ EOF
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V17
+# 两条底座腿(subglm-agent / subdeepseek-agent)的 explore 模式 + panel-explore 选腿。
+# 全程用假 claude / 假腿脚本,不打任何真端点、不烧额度。
+v17_explore_agent_legs() {
+  echo "[V17] panel-explore 走底座腿:explore 模式 + 无裁决闸 + 只读姿态不松"
+  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  cp "$BIN/subglm-agent" "$b/subglm-agent"
+  cp "$BIN/subdeepseek-agent" "$b/subdeepseek-agent"
+  # 假 claude:把 argv/stdin/env 落盘,输出由 STUB_REVIEW_OUT 控制。
+  # 默认输出**不带任何裁决行** —— 发散的正常形态就是没有 Conclusion。
+  cat > "$b/claude" <<'PYEOF'
+#!/usr/bin/env python3
+import sys, os, json
+out = {"argv": sys.argv[1:],
+       "stdin": sys.stdin.read() if not sys.stdin.isatty() else "",
+       "cwd": os.getcwd()}
+cap = os.environ.get("CAPTURE")
+if cap:
+    open(cap, "w").write(json.dumps(out))
+print(os.environ.get("STUB_REVIEW_OUT", "Direction: 单一看法\nCore bet: 略"))
+PYEOF
+  chmod +x "$b/claude"
+  printf '# BRIEF\n开放设计分叉,请给一个方向。\n' > "$d/brief.md"
+  stdin_has() { python3 -c "import json,sys;o=json.load(open(sys.argv[1]));sys.exit(0 if sys.argv[2] in o.get('stdin','') else 1)" "$1" "$2"; }
+
+  # ---- ① explore 模式必须被接受,且不套裁决闸(输出里没有 Conclusion 也得 rc=0)
+  for leg in subglm subdeepseek; do
+    local keyenv=(ZHIPU_API_KEY=zk); [[ "$leg" == subdeepseek ]] && keyenv=(DEEPSEEK_API_KEY=dk)
+    env PATH="$b:$PATH" CAPTURE="$d/$leg.e1.json" "${keyenv[@]}" \
+      bash "$b/$leg-agent" explore "$d/brief.md" "$d/$leg.e1.log" "$d" >/dev/null 2>&1; rc=$?
+    check "V17: $leg-agent 接受 explore 模式且无裁决输出仍 rc=0" $([[ $rc -eq 0 ]]; echo $?)
+    [[ -s "$d/$leg.e1.log" ]]; check "V17: $leg-agent explore 写出了日志" $?
+    # ② 发散提示词到位:要"一个方向",且**不能**再要求裁决行
+    stdin_has "$d/$leg.e1.json" "Direction"
+    check "V17: $leg-agent explore 提示词带发散格式(Direction)" $?
+    # ⚠️ 锚:这条是"不含某串"的否定断言,**捕获文件不存在时它会假绿**
+    # (功能还没做 = 文件没生成 = 也"不含" ⇒ 永远绿 = 等于没判)。
+    # 先要求捕获存在且确实带着 brief,再问它含不含裁决行。
+    if [[ -f "$d/$leg.e1.json" ]] && stdin_has "$d/$leg.e1.json" "开放设计分叉" \
+       && ! stdin_has "$d/$leg.e1.json" "Conclusion: PASS"; then
+      ok  "V17: $leg-agent explore 提示词不再索要裁决行"
+    else
+      bad "V17: $leg-agent explore 提示词不再索要裁决行"
+    fi
+    # ③ 护栏:只读姿态一个字都不许松(换模式 ≠ 换权限)
+    python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];i=a.index('--allowedTools');rest=a[i+1:];j=[k for k,x in enumerate(rest) if x.startswith('--')];seg=rest[:j[0]] if j else rest;sys.exit(1 if any(t in seg for t in ('Write','Edit','NotebookEdit')) else 0)" "$d/$leg.e1.json"
+    check "V17: $leg-agent explore 仍无写工具" $?
+    python3 -c "import json,sys;a=' '.join(json.load(open(sys.argv[1]))['argv']);sys.exit(0 if '--disallowedTools' in a and 'Write' in a else 1)" "$d/$leg.e1.json"
+    check "V17: $leg-agent explore 仍显式禁写" $?
+    # ④ 护栏:review 模式的裁决闸**不许被这次改动放松**
+    env PATH="$b:$PATH" CAPTURE="$d/$leg.r1.json" "${keyenv[@]}" \
+      STUB_REVIEW_OUT="看着还行" \
+      bash "$b/$leg-agent" review "$d/brief.md" "$d/$leg.r1.log" "$d" >/dev/null 2>&1; rc=$?
+    check "V17: $leg-agent review 无裁决仍判失败(闸没被放松)" $([[ $rc -ne 0 ]]; echo $?)
+  done
+
+  # ---- ⑤ 发散的系统提示词必须真的送达底座腿(单一真相源:panel-explore 导出它)
+  env PATH="$b:$PATH" CAPTURE="$d/sysp.json" ZHIPU_API_KEY=zk \
+    REVIEW_SYSTEM_PROMPT="ANGLE_NOT_CONSENSUS_MARKER" \
+    bash "$b/subglm-agent" explore "$d/brief.md" "$d/sysp.log" "$d" >/dev/null 2>&1
+  stdin_has "$d/sysp.json" "ANGLE_NOT_CONSENSUS_MARKER"
+  check "V17: REVIEW_SYSTEM_PROMPT 送达底座腿(发散指令不丢)" $?
+
+  # ---- ⑥ panel-explore 选腿:默认底座 / 可强制回落 / 缺底座自动回落 / 模式必须是 explore
+  local pb="$d/panelbin"; mkdir -p "$pb"
+  cp "$BIN/panel-explore" "$pb/panel-explore"
+  cat > "$pb/submimo" <<'EOF'
+#!/usr/bin/env bash
+echo "mimo leg mode=$1" > "$3"; exit 0
+EOF
+  chmod +x "$pb/submimo"
+  for leg in subglm subdeepseek; do
+    cat > "$pb/$leg" <<'EOF'
+#!/usr/bin/env bash
+echo "CHAT-LEG mode=$1" > "$3"; exit 0
+EOF
+    cat > "$pb/$leg-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "AGENT-LEG mode=$1" > "$3"; exit 0
+EOF
+    chmod +x "$pb/$leg" "$pb/$leg-agent"
+  done
+  PANEL_STAGGER_MAX=0 bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E1" >/dev/null 2>&1
+  for leg in subglm subdeepseek; do
+    grep -q AGENT-LEG "$d/E1.$leg.log" 2>/dev/null
+    check "V17: panel-explore 的 $leg 默认走底座腿" $?
+    grep -q "mode=explore" "$d/E1.$leg.log" 2>/dev/null
+    check "V17: panel-explore 派给 $leg 底座腿的模式是 explore(不是 review)" $?
+  done
+  PANEL_STAGGER_MAX=0 PANEL_GLM_LEG=chat PANEL_DEEPSEEK_LEG=chat \
+    bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E2" >/dev/null 2>&1
+  grep -q CHAT-LEG "$d/E2.subglm.log" 2>/dev/null
+  check "V17: PANEL_GLM_LEG=chat 仍能强制回落聊天腿" $?
+  grep -q CHAT-LEG "$d/E2.subdeepseek.log" 2>/dev/null
+  check "V17: PANEL_DEEPSEEK_LEG=chat 仍能强制回落聊天腿" $?
+
+  # ⑦ 底座腿挂了 -> 自动回落聊天腿,且失败证据留档(照 panel-review V14 的约定)
+  cat > "$pb/subglm-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "agent boom" >&2; exit 3
+EOF
+  chmod +x "$pb/subglm-agent"
+  PANEL_STAGGER_MAX=0 bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E3" >/dev/null 2>&1
+  grep -q CHAT-LEG "$d/E3.subglm.log" 2>/dev/null
+  check "V17: 底座腿失败自动回落聊天腿" $?
+  [[ -s "$d/E3.subglm.log.agent.log" || -s "$d/E3.subglm.log.agent.log.err" ]]
+  check "V17: 底座腿失败的证据留档(.agent.log/.err)" $?
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 v1_untracked_content
 v1_no_untracked_and_nonrepo
@@ -1058,5 +1180,6 @@ v13_subkimi_leg
 v14_leg_fallback_and_include
 v15_anchor_leak_warning
 v16_timeout_and_blind_chat_leg
+v17_explore_agent_legs
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
