@@ -11,7 +11,8 @@ set -uo pipefail
 # direction from the angle their priors favor, plus the blind spots they see in
 # the brief. There is deliberately NO verdict - the spread is the output.
 #
-#   submimo explore (MiMo)  +  subdeepseek (DeepSeek)  +  subglm (Zhipu GLM)
+#   submimo explore (MiMo) + subdeepseek-agent explore/subdeepseek review
+#   + subglm-agent explore/subglm review
 #
 # The main agent commits its OWN direction FIRST (anti-anchoring, same discipline
 # as panel-review), then reads these three as angle-expansion + a blind-spot net,
@@ -25,8 +26,10 @@ Usage:
 
 Runs all three models in parallel on the SAME design brief:
   submimo explore -> <LOG_PREFIX>.submimo.log
-  subdeepseek review -> <LOG_PREFIX>.subdeepseek.log   (divergent system prompt injected)
-  subglm   review -> <LOG_PREFIX>.subglm.log      (divergent system prompt injected)
+  subdeepseek-agent explore -> <LOG_PREFIX>.subdeepseek.log
+                         (falls back to subdeepseek review when requested/needed)
+  subglm-agent explore -> <LOG_PREFIX>.subglm.log
+                         (falls back to subglm review when requested/needed)
 
 Each returns ONE position paper (Direction / Core bet / How it works / Best at /
 Sacrifices / Blind spots in the brief / Smallest first step). No PASS/BLOCK.
@@ -63,6 +66,24 @@ SUBMIMO_ERR="${SUBMIMO_LOG}.err"
 SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
 SUBGLM_ERR="${SUBGLM_LOG}.err"
 
+# GLM/DeepSeek leg selection mirrors panel-review: agent base is the default
+# when installed; PANEL_*_LEG=chat forces the chat leg; absent agent auto-falls
+# back to chat. Agent legs read the repo themselves, chat legs only see the
+# prompt/diff context supplied by their own wrapper.
+GLM_LEG="${PANEL_GLM_LEG:-agent}"
+if [[ "$GLM_LEG" == "agent" && -x "$BIN/subglm-agent" ]]; then
+  GLM_CMD="$BIN/subglm-agent"
+else
+  GLM_CMD="$BIN/subglm"
+fi
+
+DEEPSEEK_LEG="${PANEL_DEEPSEEK_LEG:-agent}"
+if [[ "$DEEPSEEK_LEG" == "agent" && -x "$BIN/subdeepseek-agent" ]]; then
+  DEEPSEEK_CMD="$BIN/subdeepseek-agent"
+else
+  DEEPSEEK_CMD="$BIN/subdeepseek"
+fi
+
 # Explore mode: tells the engine not to demand a PASS/BLOCK verdict in the
 # output (the Direction/Core-bet format has none by design).
 export REVIEW_MODE=explore
@@ -95,8 +116,8 @@ export MIMO_TEMPERATURE="${PANEL_EXPLORE_TEMPERATURE:-0.7}"
 
 echo "panel-explore: brief=$BRIEF_FILE repo=$REPO_DIR temp=$MIMO_TEMPERATURE"
 echo "  submimo(explore) -> $SUBMIMO_LOG"
-echo "  subdeepseek         -> $SUBDEEPSEEK_LOG"
-echo "  subglm           -> $SUBGLM_LOG"
+echo "  subdeepseek      -> $SUBDEEPSEEK_LOG (leg: $(basename "$DEEPSEEK_CMD"))"
+echo "  subglm           -> $SUBGLM_LOG (leg: $(basename "$GLM_CMD"))"
 echo "  running all in parallel..."
 
 # Light pre-launch stagger (mirrors panel-review): the three models share provider
@@ -113,13 +134,31 @@ stagger() {
 # Same stderr-sidecar approach as panel-review: capture each model's startup
 # stderr so an early failure (missing key, 429, bad endpoint) is recorded rather
 # than swallowed. stdout is dropped (the result lands in the .log).
+# Agent-leg failure -> automatic chat-leg fallback. The agent evidence is kept
+# as <log>.agent.log(+.err) because the chat retry reuses the normal log path.
+run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
+  local agent="$1" chat="$2" log="$3" err="$4" label="$5" rc
+  if [[ "$agent" == "$chat" ]]; then
+    "$chat" review "$BRIEF_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+    return $rc
+  fi
+  "$agent" explore "$BRIEF_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  if [[ $rc -eq 0 ]]; then return 0; fi
+  [[ -e "$log" ]] && mv -f "$log" "${log}.agent.log"
+  [[ -s "$err" ]] && mv -f "$err" "${log}.agent.log.err" || rm -f "$err"
+  echo "  NOTE: $label agent leg failed (rc=$rc) -> fallback to chat leg;" \
+       "agent output kept at ${log}.agent.log(.err)"
+  "$chat" review "$BRIEF_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  return $rc
+}
+
 "$BIN/submimo"  explore "$BRIEF_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" >/dev/null 2>"$SUBMIMO_ERR"  &
 PID_MIMO=$!
 stagger
-"$BIN/subdeepseek" review  "$BRIEF_FILE" "$SUBDEEPSEEK_LOG" "$REPO_DIR" >/dev/null 2>"$SUBDEEPSEEK_ERR" &
+run_leg "$DEEPSEEK_CMD" "$BIN/subdeepseek" "$SUBDEEPSEEK_LOG" "$SUBDEEPSEEK_ERR" subdeepseek &
 PID_DEEPSEEK=$!
 stagger
-"$BIN/subglm"   review  "$BRIEF_FILE" "$SUBGLM_LOG"   "$REPO_DIR" >/dev/null 2>"$SUBGLM_ERR"   &
+run_leg "$GLM_CMD" "$BIN/subglm" "$SUBGLM_LOG" "$SUBGLM_ERR" subglm &
 PID_GLM=$!
 
 wait "$PID_MIMO";  RC_MIMO=$?
