@@ -49,7 +49,17 @@ case "$cmd" in
   list)
     proj="${1:-$PWD}"
     echo "active:"
-    ls -1 "$proj/tracks" 2>/dev/null | grep -v '^archive$' | sed 's/^/  /' || true
+    # 结论栏还是模板占位符的,当场标出来。守卫钉在归档那一刻(那时"做完了"没有歧义),
+    # 但 stage-timer 那种「已合并上线、就是一直不归档」的漏网守卫够不到 —— 靠这里每次
+    # list 都看得见。软提示,不阻断。
+    for t in $(ls -1 "$proj/tracks" 2>/dev/null | grep -v '^archive$'); do
+      v="$proj/tracks/$t/verify.md"
+      if [ -f "$v" ] && grep -qE '^-[[:space:]]*Verdict:[[:space:]]*<' "$v"; then
+        echo "  $t  ⚠️ 结论栏还空着(空着 = 没判过)"
+      else
+        echo "  $t"
+      fi
+    done
     echo "archived:"
     ls -1 "$proj/tracks/archive" 2>/dev/null | sed 's/^/  /' || true
     ;;
