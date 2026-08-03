@@ -480,7 +480,8 @@ PYEOF
 v9_subglm_agent() {
   echo "[V9] subglm-agent: claude-shell env injection, read-only tools, verdict gate"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
-  cp "$BIN/subglm-agent" "$b/subglm-agent"
+  # subglm-agent 是瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
+  cp "$BIN/subglm-agent" "$BIN/subagent" "$b/"
   # stub claude: record argv + the env subglm-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
   cat > "$b/claude" <<'PYEOF'
@@ -494,7 +495,9 @@ out = {"argv": sys.argv[1:],
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL","ANTHROPIC_API_KEY"]},
        "cwd": os.getcwd()}
 open(os.environ["CAPTURE"], "w").write(json.dumps(out))
-print(os.environ.get("STUB_REVIEW_OUT", "stub review\nConclusion: PASS"))
+# 真 claude 在 --output-format stream-json 下吐的是 JSONL;stub 照同一个契约说话。
+text = os.environ.get("STUB_REVIEW_OUT", "stub review\nConclusion: PASS")
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}))
 PYEOF
   chmod +x "$b/claude"
   printf '# review this\n' > "$d/t.md"
@@ -934,12 +937,14 @@ EOF
 
   # --- ⑤ subdeepseek-agent 的轮次上限:默认放宽到 80,env 仍可覆盖
   local ab="$d/agentbin"; mkdir -p "$ab"
-  cp "$BIN/subdeepseek-agent" "$ab/subdeepseek-agent"
+  # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
+  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$ab/"
   cat > "$ab/claude" <<'PYEOF'
 #!/usr/bin/env python3
 import sys, os, json
 open(os.environ["CAPTURE"], "w").write(json.dumps({"argv": sys.argv[1:]}))
-print("stub review\nConclusion: PASS")
+# 底座腿走 --output-format stream-json(V20),stub 照同一契约说话
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "stub review\nConclusion: PASS"}]}}))
 PYEOF
   chmod +x "$ab/claude"
   turns() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];print(a[a.index('--max-turns')+1])" "$1"; }
@@ -1082,8 +1087,8 @@ EOF
 v17_explore_agent_legs() {
   echo "[V17] panel-explore 走底座腿:explore 模式 + 无裁决闸 + 只读姿态不松"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
-  cp "$BIN/subglm-agent" "$b/subglm-agent"
-  cp "$BIN/subdeepseek-agent" "$b/subdeepseek-agent"
+  # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
   # 假 claude:把 argv/stdin/env 落盘,输出由 STUB_REVIEW_OUT 控制。
   # 默认输出**不带任何裁决行** —— 发散的正常形态就是没有 Conclusion。
   cat > "$b/claude" <<'PYEOF'
@@ -1095,7 +1100,8 @@ out = {"argv": sys.argv[1:],
 cap = os.environ.get("CAPTURE")
 if cap:
     open(cap, "w").write(json.dumps(out))
-print(os.environ.get("STUB_REVIEW_OUT", "Direction: 单一看法\nCore bet: 略"))
+text = os.environ.get("STUB_REVIEW_OUT", "Direction: 单一看法\nCore bet: 略")
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}))
 PYEOF
   chmod +x "$b/claude"
   printf '# BRIEF\n开放设计分叉,请给一个方向。\n' > "$d/brief.md"
@@ -1316,6 +1322,33 @@ v21_agent_leg_body_is_single_source() {
   # 供应商差异只准活在躯干的供应商表里
   grep -q "deepseek" "$BIN/subagent" 2>/dev/null; check "V21: 供应商表含 deepseek" $?
   grep -q "zhipu\|glm" "$BIN/subagent" 2>/dev/null; check "V21: 供应商表含 zhipu/glm" $?
+
+  # 合并躯干时**每条腿的默认预算不许被顺手统一掉**。2026-08-03 实证:我把两条腿
+  # 合进 subagent 时,zhipu 的默认轮次上限被从历史的 40 悄悄抬到 80(翻倍的是**钱**),
+  # 而合并说明里一个字没提 —— 这是"超出规格的好意",不是修复。讽刺的是抓到它的正是
+  # 这次刚修好的那条 deepseek 腿的首跑。⇒ 每条腿的默认值单独钉死,改要显式改判据。
+  local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$ab/"
+  cat > "$ab/claude" <<'CAPEOF'
+#!/usr/bin/env python3
+import sys, os, json
+open(os.environ["CAPTURE"], "w").write(json.dumps({"argv": sys.argv[1:]}))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Conclusion: PASS"}]}}))
+CAPEOF
+  chmod +x "$ab/claude"
+  printf '# t\n' > "$d/t.md"
+  capturing_turns() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];print(a[a.index('--max-turns')+1])" "$1"; }
+  env PATH="$ab:$PATH" CAPTURE="$d/z.json" ZHIPU_API_KEY=zk \
+    bash "$ab/subglm-agent" review "$d/t.md" "$d/z.log" "$d/repo" >/dev/null 2>&1
+  [[ "$(capturing_turns "$d/z.json")" -eq 40 ]]
+  check "V21: zhipu 默认轮次上限仍是历史值 40(合并躯干不许顺手改别人的预算)" $?
+  env PATH="$ab:$PATH" CAPTURE="$d/s.json" DEEPSEEK_API_KEY=dk \
+    bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/s.log" "$d/repo" >/dev/null 2>&1
+  # deepseek 的上限是**凭测量**定的:08-03 实测一个只看单文件的琐碎任务就用掉 56 轮
+  # (log: scratchpad/smoke.log),而它 07-21 撞过 40、08-03 撞过 80。翻倍法到此为止。
+  [[ "$(capturing_turns "$d/s.json")" -ge 200 ]]
+  check "V21: deepseek 默认轮次上限 ≥200(56 轮/单文件的实测外推)" $?
+  rm -rf "$d"
 }
 
 echo "=== review-tooling regression oracle ==="
