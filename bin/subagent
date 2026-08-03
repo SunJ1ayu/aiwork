@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# subagent - 底座腿的**唯一躯干**:把 Claude Code headless(`claude -p`)指向某个
+# Anthropic 兼容端点,让那个模型自己读仓库(Read/Glob/Grep + 只读 git)做评审/发散。
+# 今天服务 deepseek 与 zhipu 两条腿,经 `subdeepseek-agent` / `subglm-agent` 两个瘦
+# shim 调用,调用方一个字都不用改。加新供应商 = 在下面的供应商表里加一段。
+#
+# 为什么要有这个文件(2026-08-03):`subdeepseek-agent` 与 `subglm-agent` 曾是 95%
+# 相同的两份拷贝(342 行只差 80 行,多半还是注释)⇒ 每条修法都要改两遍,而历史证明
+# **总有一份会落下**。聊天腿早就用 `subchat` + 供应商表治过这个病,底座腿一直没治。
+#
+#   review  -> claude -p,只读工具白名单,出卷闸(必须给裁决)。
+#   explore -> claude -p,同样只读,无裁决闸。
+#   fix     -> 故意不支持:评审腿保持只读。要改代码用 `submimo fix`。
+#
+# 端点凭据只注入子进程,**绝不写 ~/.claude/settings.json**(那会劫持主 harness)。
+#
+# 撞上 max-turns 不丢工作(V20):`claude -p` 默认只印最后一条消息,撞上限时整轮探索
+# 产出为零 —— deepseek 腿 07-21 撞 40、08-03 撞 80,两次的修法都是把上限翻倍,那是修
+# 数字不是修因。真正的因是**一个会把"慢"变成"什么都没有"的护栏**。所以这里走
+# stream-json,把模型说过的话与工具动作实时落盘再渲染成人能读的日志,并记下
+# 「用了 N / 上限 M 轮」——**下次调上限凭这个测量,不凭翻倍**。
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  subagent <provider> review  TASK_FILE LOG_FILE [REPO_DIR]
+  subagent <provider> explore TASK_FILE LOG_FILE [REPO_DIR]
+
+Providers (thin shims in parentheses; callers normally use the shim):
+  deepseek  (subdeepseek-agent)  default deepseek-v4-flash, env DEEPSEEK_*
+  zhipu     (subglm-agent)       default glm-4.6v,          env ZHIPU_*
+
+Environment (PREFIX = DEEPSEEK | ZHIPU):
+  <PREFIX>_MODEL          model id
+  <PREFIX>_TIMEOUT        seconds before timeout (default 900)
+  <PREFIX>_MAX_TURNS      agent turn cap (per-provider default; see the table)
+  <PREFIX>_API_KEY        overrides the key read from the auth file
+  <PREFIX>_ANTHROPIC_URL  Anthropic-compatible base URL
+  <PREFIX>_AUTH_FILE      auth file, {"key":"..."} (default ~/.config/<name>/auth.json)
+EOF
+}
+
+die() { echo "${LABEL:-subagent}: $*" >&2; exit 1; }
+
+# -h may arrive as $2 when invoked through a shim (`subdeepseek-agent -h`).
+for a in "${1:-}" "${2:-}"; do
+  if [[ "$a" == "-h" || "$a" == "--help" ]]; then usage; exit 0; fi
+done
+if [[ $# -lt 4 || $# -gt 5 ]]; then usage; exit 2; fi
+
+PROVIDER="$1"; MODE="$2"; TASK_FILE="$3"; LOG_FILE="$4"; REPO_DIR="${5:-$PWD}"
+
+# ── 供应商表:腿与腿之间的差异**只准活在这里** ────────────────────────────
+case "$PROVIDER" in
+  deepseek)
+    PREFIX="DEEPSEEK"; LABEL="subdeepseek-agent"
+    # 07-25:官方端点只剩 v4-flash / v4-pro,老的 deepseek-chat / deepseek-reasoner 已下架。
+    DEFAULT_MODEL="deepseek-v4-flash"
+    DEFAULT_BASE_URL="https://api.deepseek.com/anthropic"
+    DEFAULT_AUTH_FILE="$HOME/.config/deepseek/auth.json"
+    # 轮次预算**凭测量**:08-03 实测「只看一个文件」的琐碎评审就用掉 56 轮
+    # (deepseek-v4-flash 的做法是大量小步 Read/Bash,单位工作的轮次消耗远高于强模型)。
+    # 它 07-21 撞过 40、08-03 撞过 80 —— 两次的修法都是翻倍,那是修数字。
+    # 200 是从 56 轮/单文件外推的,不是拍的;下次要动请拿新的 turns 实测来动。
+    DEFAULT_MAX_TURNS=200
+    ;;
+  zhipu)
+    PREFIX="ZHIPU"; LABEL="subglm-agent"
+    # GLM 后端沿革:bigmodel(1113 余额不足)→ 百炼(429)→ 火山方舟(07-17,Anthropic
+    # 面只有 /api/coding 且要 CodingPlan 订阅)→ **07-25 切回智谱开放平台**:方舟账号的
+    # glm-5-2 触发 SetLimitExceeded(安全体验模式限额,工具侧无解),而方舟上没有
+    # glm-4.6 系。bigmodel 的 Anthropic 面 = /api/anthropic,不要订阅,实测 glm-4.6v 可用。
+    # 方舟 key 备份在 auth.json.ark-bak。
+    DEFAULT_MODEL="glm-4.6v"
+    DEFAULT_BASE_URL="https://open.bigmodel.cn/api/anthropic"
+    DEFAULT_AUTH_FILE="$HOME/.config/zhipu/auth.json"
+    # 保持这条腿的**历史值 40**。合并躯干时我一度把它统一成 80,等于在没有任何
+    # glm 轮次实测的情况下把它的单次预算翻倍 —— 顺手统一别人的预算不是重构。
+    # 要改请先跑一次真腿、拿 turns 说话(日志末尾那行现在会告诉你)。
+    DEFAULT_MAX_TURNS=40
+    ;;
+  *) LABEL="subagent"; die "unknown provider: $PROVIDER (supported: deepseek, zhipu)" ;;
+esac
+
+# 前缀化 env 查表(保持 DEEPSEEK_* / ZHIPU_* 这些公开变量名不变)
+v="${PREFIX}_MODEL";          MODEL="${!v:-$DEFAULT_MODEL}"
+v="${PREFIX}_TIMEOUT";        TIMEOUT_SECONDS="${!v:-900}"
+v="${PREFIX}_MAX_TURNS";      MAX_TURNS="${!v:-$DEFAULT_MAX_TURNS}"
+v="${PREFIX}_API_KEY";        API_KEY="${!v:-}"
+v="${PREFIX}_ANTHROPIC_URL";  BASE_URL="${!v:-$DEFAULT_BASE_URL}"
+v="${PREFIX}_AUTH_FILE";      AUTH_FILE="${!v:-$DEFAULT_AUTH_FILE}"
+
+if [[ "$MODE" == "fix" ]]; then
+  die "fix is not supported: panel reviewers are review-only. Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
+fi
+[[ "$MODE" == "review" || "$MODE" == "explore" ]] || { usage; exit 2; }
+
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+[[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
+command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
+
+if [[ -z "$API_KEY" ]]; then
+  [[ -f "$AUTH_FILE" ]] || die "auth file not found: $AUTH_FILE (set ${PREFIX}_API_KEY or create it as {\"key\":\"...\"})"
+  API_KEY="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['key'])" "$AUTH_FILE")" \
+    || die "could not read 'key' from $AUTH_FILE"
+fi
+[[ -n "$API_KEY" ]] || die "empty ${PREFIX}_API_KEY"
+
+# 绝对日志路径:agent 以 cwd = REPO_DIR 运行
+case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
+mkdir -p "$(dirname "$LOG_FILE")"
+
+REVIEW_PROMPT="You are an independent code reviewer running inside a read-only harness.
+Explore the repository yourself with the tools you have (Read, Glob, Grep, and
+read-only git commands). Do not take the task's claims at face value - verify
+them against the actual files.
+
+Report findings with file:line references and a severity each. You MUST end
+your review with a final line of exactly this form:
+Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
+
+--- REVIEW TASK ---
+$(cat "$TASK_FILE")"
+
+EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent design-exploration agent running inside a read-only harness. Explore the repository yourself with the tools you have (Read, Glob, Grep, and read-only git commands) when the codebase matters to the brief. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
+
+Rules:
+- Propose exactly ONE concrete direction. Do NOT hedge across multiple options or output a menu.
+- Do NOT output PASS/BLOCK/approve/reject - this is not a review.
+- Commit to a position even under uncertainty; state your assumptions.
+- Ground claims in the supplied brief and the repository; do not invent facts about the codebase.
+
+Output format (use exactly these labels):
+Direction: <one-line name of the approach you propose>
+Core bet: <the single key assumption/trade-off this direction bets on>
+How it works: <concrete shape - components, flow, key decisions>
+Best at: <what it optimizes for / where it wins>
+Sacrifices: <what it gives up; when it is the wrong choice>
+Blind spots in the brief: <what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen>
+Smallest first step: <the first concrete thing to build to validate this>}"
+
+if [[ "$MODE" == "explore" ]]; then
+  PROMPT="${EXPLORE_SYSTEM_PROMPT}
+
+--- DESIGN BRIEF ---
+$(cat "$TASK_FILE")"
+else
+  PROMPT="$REVIEW_PROMPT"
+fi
+
+STREAM_FILE="${LOG_FILE%.log}.stream.jsonl"
+ERR_FILE="$(mktemp)"
+
+{
+  echo "# $LABEL $MODE log"
+  echo "time: $(date -Iseconds)"
+  echo "mode: $MODE (agent base: claude-code headless -> $PROVIDER)"
+  echo "base_url: $BASE_URL"
+  echo "model: $MODEL"
+  echo "repo: $REPO_DIR"
+  echo "task: $TASK_FILE"
+  echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep + 只读 git),不依赖别人喂 diff。"
+  echo
+} > "$LOG_FILE"
+
+# 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,
+# 否则它会盖过供应商 token。提示词走 stdin:--allowedTools/--disallowedTools 是变长
+# 参数,尾随的位置参数会被当成又一个工具名吞掉。
+RC=0
+(
+  cd "$REPO_DIR"
+  printf '%s\n' "$PROMPT" | env -u ANTHROPIC_API_KEY \
+    ANTHROPIC_AUTH_TOKEN="$API_KEY" \
+    ANTHROPIC_BASE_URL="$BASE_URL" \
+    ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
+    ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
+    timeout "$TIMEOUT_SECONDS" claude -p \
+      --model sonnet \
+      --setting-sources project \
+      --max-turns "$MAX_TURNS" \
+      --output-format stream-json --verbose \
+      --allowedTools Read Glob Grep "Bash(git diff:*)" "Bash(git log:*)" "Bash(git status:*)" \
+      --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent
+) > "$STREAM_FILE" 2>"$ERR_FILE" || RC=$?
+
+# 渲染:把 stream-json 还原成人能读的日志。**撞上限/超时也要渲染** —— 那正是这条
+# 改动的全部意义:护栏可以打断工作,不许没收工作。
+python3 - "$STREAM_FILE" "$LOG_FILE" "$MAX_TURNS" "$RC" "$ERR_FILE" <<'PY'
+import json, sys, pathlib
+
+stream, log, cap, rc, errfile = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+turns, out = 0, []
+for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").splitlines():
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        ev = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if ev.get("type") != "assistant":
+        continue
+    turns += 1
+    for block in (ev.get("message") or {}).get("content") or []:
+        if block.get("type") == "text" and block.get("text", "").strip():
+            out.append(block["text"].rstrip())
+        elif block.get("type") == "tool_use":
+            inp = block.get("input") or {}
+            hint = inp.get("file_path") or inp.get("pattern") or inp.get("command") or ""
+            out.append(f"  → {block.get('name','tool')} {hint}".rstrip())
+
+err = pathlib.Path(errfile).read_text(encoding="utf-8", errors="replace") if pathlib.Path(errfile).exists() else ""
+body = "\n\n".join(out) if out else "(模型没有产出任何可渲染的内容;原始流见 %s)" % stream
+
+footer = ["", "-" * 60, f"turns: {turns} / 上限 {cap}"]
+if "max turns" in err.lower() or "reached max turns" in err.lower():
+    footer.append(f"⚠️  本次是被**轮次上限**打断的(max-turns {cap}),不是模型自己收尾的。")
+    footer.append("    上面的内容是打断前已经产出的部分 —— 它是残缺的,但不是零。")
+    footer.append("    要调上限请用这里的 turns 实测值,别再翻倍。")
+elif rc == 124:
+    footer.append("⚠️  本次是被**超时**打断的;上面是超时前已产出的部分。")
+elif rc != 0:
+    footer.append(f"⚠️  底座腿非零退出 rc={rc};上面是退出前已产出的部分。stderr:")
+    footer.append("    " + " ".join(err.split())[:400])
+footer.append(f"(原始 stream-json:{stream})")
+
+with open(log, "a", encoding="utf-8") as fh:
+    fh.write(body + "\n" + "\n".join(footer) + "\n")
+PY
+
+if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
+rm -f "$ERR_FILE"
+
+if [[ $RC -ne 0 ]]; then
+  [[ $RC -eq 124 ]] && die "claude timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)"
+  die "claude exited rc=$RC (partial work kept in $LOG_FILE)"
+fi
+
+if [[ "$MODE" == "review" ]]; then
+  # 出卷闸(与聊天引擎 review 模式同语义):不给裁决的评审算失败,但日志留档取证。
+  # 中文模型常无视英文指令写「结论: PASS」(subdeepseek 栽过两次:Track B + client-tools),
+  # 所以接受 结论 与全角冒号;全角冒号用 ANSI-C 引法写 —— 源码里直接放一个全角冒号
+  # 有被静默半角化的风险(07-17 set-stage 的教训)。
+  VERDICT_RE=$'(Conclusion|结论)(:|\uFF1A)[[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)'
+  grep -qE "$VERDICT_RE" "$LOG_FILE" \
+    || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+fi
+
+exit 0

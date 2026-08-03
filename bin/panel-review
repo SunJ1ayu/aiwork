@@ -252,9 +252,22 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   # agent leg died and a distinct chat leg exists -> keep the evidence, then retry
   [[ -e "$log" ]] && mv -f "$log" "${log%.log}.agent.log"
   [[ -s "$err" ]] && mv -f "$err" "${log%.log}.agent.log.err" || rm -f "$err"
-  echo "  NOTE: $label agent leg failed (rc=$rc) -> fallback to chat leg;" \
+  local agent_rc=$rc   # 底座腿的死因;下面 rc 会被聊天腿的返回码覆盖
+  echo "  NOTE: $label agent leg failed (rc=$agent_rc) -> fallback to chat leg;" \
        "agent output kept at ${log%.log}.agent.log(.err)"
   "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  # 横幅写进日志本身,不只印在 stdout:这份结论以后会被单独读到(归档、断线重连),
+  # 那时终端上那行 NOTE 早就没了,而一份降级腿的结论长得和健康腿一模一样。
+  # 2026-08-03 我就是这样差点按「四审三腿 PASS」给权重,实际只有两腿睁着眼。
+  if [[ -s "$log" ]]; then
+    { echo "⚠️  DEGRADED / 降级腿 —— 这份结论不是底座腿给的。"
+        echo "    $label 的底座腿(自己读仓库)先死了:rc=$agent_rc,证据在 ${log##*/}"
+      echo "    去掉 .log 后加 .agent.log(.err);随后自动回落到聊天腿重跑。"
+      echo "    ⇒ 它只看得见 diff,**没有独立查证仓库的能力**。给权重时按此折扣。"
+      echo
+      cat "$log"
+    } > "$log.tmp" && mv -f "$log.tmp" "$log"
+  fi
   return $rc
 }
 

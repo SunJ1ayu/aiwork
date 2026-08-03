@@ -70,8 +70,16 @@ Coverage:
 """
 
 
+# 本进程的身份:**唯一来源**。这个引擎被 subchat 复用给 deepseek / zhipu 两条腿
+# (`REVIEW_LABEL` 由 subchat 注入),所以名字不许在别处再写第二遍 —— 2026-08-03
+# 实证:日志头用 REVIEW_LABEL、stderr 却硬写 submimo-review,于是 subglm 腿把智谱的
+# 429/1113 印成「submimo-review: ... from Mimo endpoint」,读日志的人会把死因记到
+# 错误的模型头上。同一件事写在两个地方、只更新其中一个。
+LABEL = os.environ.get("REVIEW_LABEL", "submimo-review")
+
+
 def fail(message: str, code: int = 1) -> None:
-    print(f"submimo-review: {message}", file=sys.stderr)
+    print(f"{LABEL}: {message}", file=sys.stderr)
     raise SystemExit(code)
 
 
@@ -263,8 +271,9 @@ def call_model(prompt: str, timeout: int) -> str:
         "temperature": float(os.environ.get("MIMO_TEMPERATURE", "0.2")),
     }
 
+    url = chat_url()   # 绑成变量:报错要打真实端点(见下面 HTTPError 分支)
     req = urllib.request.Request(
-        chat_url(),
+        url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -287,13 +296,15 @@ def call_model(prompt: str, timeout: int) -> str:
                 # Note retries on stderr: a silently-retried (then recovered)
                 # reviewer would otherwise hide that we're hitting rate limits.
                 print(
-                    f"submimo-review: HTTP {exc.code}, retry "
+                    f"{LABEL}: HTTP {exc.code}, retry "
                     f"{attempt + 2}/{RETRY_ATTEMPTS} in {delay:.1f}s",
                     file=sys.stderr,
                 )
                 time.sleep(delay)
                 continue
-            fail(f"HTTP {exc.code} from Mimo endpoint:\n{err_body}")
+            # 打真实端点 URL,不打厂商名:这个引擎服务三个供应商,写死的名字必然
+            # 有两次是错的,而 URL 天然不会撒谎。
+            fail(f"HTTP {exc.code} from {url}:\n{err_body}")
         except Exception as exc:
             # Network-level failures (incl. timeouts) are NOT retried: the per-
             # request timeout is large (default 900s), so retrying a hang would
@@ -403,13 +414,14 @@ def validate_result(result: str, mode: str) -> str | None:
 def write_log(log_path: Path, content: str, prompt: str, dry_run: bool, warnings: list[str] | None = None) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     now = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
-    label = os.environ.get("REVIEW_LABEL", "submimo-review")
     header = textwrap.dedent(
         f"""\
-        # {label} log
+        # {LABEL} log
         time: {now}
         model: {os.environ.get("MIMO_MODEL", "mimo-2.5")}
         dry_run: {dry_run}
+        视野: 聊天腿(chat-completions)—— 只看得见下面附上的 diff 与 INCLUDE 文件,
+              **看不到仓库其余部分**,不能自己 Read/Grep 去查证。据此给这份结论定权重。
         """
     )
     # Warnings go in the header too: the arbiter reads the log, not stderr.
@@ -445,7 +457,7 @@ def main() -> None:
 
     prompt, warnings = build_prompt(args)
     for w in warnings:
-        print(f"submimo-review: WARNING: {w}", file=sys.stderr)
+        print(f"{LABEL}: WARNING: {w}", file=sys.stderr)
     if args.dry_run:
         result = ""
     else:
