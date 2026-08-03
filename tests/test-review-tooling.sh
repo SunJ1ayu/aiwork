@@ -34,6 +34,27 @@
 #         ② 底座腿不读发散用的系统提示词(那是聊天引擎才认的)⇒ 就算跑通也写成评审。
 #       模式沿用仓里已有的约定(submimo-review 的 --mode explore / REVIEW_MODE),
 #       不另立第二套写法;panel-explore 早就在用 `submimo explore` 当第一位置参数。
+#   V18 引擎的身份只有一个来源。2026-08-03 实证:`REVIEW_LABEL` 只喂了日志头,
+#       而 `submimo-review` 的每一条 stderr 都硬写着自己的名字 ⇒ **subglm 腿把智谱的
+#       429/1113 印成 `submimo-review: ... from Mimo endpoint`**,我第一遍差点把死因
+#       记到 MiMo 头上。同一件事写在两个地方、只更新其中一个 —— 本仓反复记账的那条债。
+#       附带:端点报错不许硬写厂商名,要打印**真实端点 URL**(它不可能撒谎)。
+#   V19 降级的事实必须写进**结论所在的那份日志**。底座腿死了自动回落聊天腿是对的,
+#       但那行 `NOTE: ... fallback` 只印在 panel-review 的实时 stdout 上;事后(或断线
+#       重连后)读日志的人,看到的是一份和健康腿长得一模一样的结论。2026-08-03 我就是
+#       这样差点按「四审三腿 PASS」给权重,实际是两腿睁眼、一腿只看得见 diff、一腿没来。
+#       ⇒ ① 回落时把降级横幅写进 <log> 本身;② 聊天腿日志头必须自报**视野边界**
+#       (只有 diff + INCLUDE,看不到仓库其余部分)。结论可以旅行,资格必须跟着走。
+#   V20 撞上 max-turns 不许把工作全丢掉。`claude -p` 默认只印最后一条消息 ⇒ 撞上限
+#       时**80 轮的探索产出为零**,然后静默换上蒙眼的聊天腿。deepseek 腿 07-21 撞 40、
+#       08-03 撞 80,两次的修法都是把上限翻倍 —— 那是在修数字不是修因。
+#       真正的因:**一个会把"慢"变成"什么都没有"的护栏**。⇒ 底座腿走 stream-json,
+#       模型说过的话与工具动作实时落盘,撞上限也留得下;并记一行「用了 N/上限 M 轮」,
+#       下次调上限**凭测量不凭翻倍**。
+#   V21 底座腿的躯干只有一份。`subdeepseek-agent` 与 `subglm-agent` 是 95% 相同的两份
+#       拷贝(342 行里只有 80 行不同,且多半是注释)⇒ V18/V19/V20 每条修法都得改两遍,
+#       而历史证明**总有一份会落下**(聊天腿早就用 subchat + 供应商表治过这个病,
+#       底座腿这边一直没治)。⇒ 共享躯干 `subagent` + 供应商表 + 瘦 shim,照 subchat 的先例。
 #
 # Run:  bash /root/aiwork/tests/test-review-tooling.sh
 set -uo pipefail
@@ -1165,6 +1186,138 @@ EOF
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V18
+v18_engine_identity_single_source() {
+  echo "[V18] submimo-review: 身份只有一个来源(不许用别人的名字报自己的错)"
+  local d; d="$(mktemp -d)"
+  printf '# t\n' > "$d/t.md"
+  # 走"无裁决 ⇒ fail()"这条必然报错的路径,看它自报家门用的是哪个名字。
+  # 起一个只回 429 的本地端点,顺便验端点报错不写死厂商名。
+  cat > "$d/stub_429.py" <<'PY'
+import http.server, socketserver, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = '{"error":{"code":"1113","message":"quota"}}'.encode()
+        self.send_response(429); self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+socketserver.TCPServer.allow_reuse_address = True
+srv = socketserver.TCPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(srv.server_address[1]))
+srv.serve_forever()
+PY
+  python3 "$d/stub_429.py" "$d/port.txt" &
+  local srv_pid=$!
+  for _ in $(seq 1 50); do [[ -s "$d/port.txt" ]] && break; sleep 0.1; done
+  local port; port="$(cat "$d/port.txt")"
+
+  REVIEW_LABEL="subglm-review" MIMO_API_KEY=x MIMO_RETRIES=1 \
+    MIMO_CHAT_COMPLETIONS_URL="http://127.0.0.1:$port/v1/chat/completions" \
+    python3 "$BIN/submimo-review" "$d/t.md" "$d/out.log" >/dev/null 2>"$d/err.txt"
+  kill "$srv_pid" 2>/dev/null; wait "$srv_pid" 2>/dev/null
+
+  [[ -s "$d/err.txt" ]];                    check "V18: 锚 —— stderr 非空(stub 端点真的被打到了)" $?
+  grep -q "subglm-review" "$d/err.txt";      check "V18: stderr 自报的是本腿的名字" $?
+  if grep -q "submimo-review" "$d/err.txt"; then
+    bad "V18: stderr 不许出现别的腿的名字"
+  else ok "V18: stderr 不许出现别的腿的名字"; fi
+  if grep -qi "Mimo endpoint" "$d/err.txt"; then
+    bad "V18: 端点报错不许硬写厂商名"
+  else ok "V18: 端点报错不许硬写厂商名"; fi
+  grep -q "127.0.0.1:$port" "$d/err.txt";    check "V18: 端点报错打印真实端点 URL" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V19
+v19_degradation_travels_with_conclusion() {
+  echo "[V19] 降级的事实必须写进结论所在的那份日志"
+  local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  # 三腿:mimo 正常;deepseek 底座腿必死 + 聊天腿成功(这就是要验的回落路径);glm 关掉
+  for n in submimo subglm subkimi; do
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "Conclusion: PASS" > "$3"\n' > "$pb/$n"
+    chmod +x "$pb/$n"
+  done
+  printf '#!/usr/bin/env bash\necho "boom" >&2\nexit 7\n' > "$pb/subdeepseek-agent"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "CHAT-LEG" "Conclusion: PASS" > "$3"\n' > "$pb/subdeepseek"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "Conclusion: PASS" > "$3"\n' > "$pb/subglm-agent"
+  chmod +x "$pb/subdeepseek-agent" "$pb/subdeepseek" "$pb/subglm-agent"
+  printf '# t\n' > "$d/t.md"
+  PANEL_STAGGER_MAX=0 PANEL_KIMI_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/R" >/dev/null 2>&1
+
+  local log="$d/R.subdeepseek.log"
+  [[ -s "$log" ]];                              check "V19: 回落后的结论日志存在" $?
+  grep -q "CHAT-LEG" "$log" 2>/dev/null;        check "V19: 结论确实来自聊天腿" $?
+  grep -qi "DEGRADED\|降级" "$log" 2>/dev/null; check "V19: 结论日志里带降级横幅" $?
+  grep -q "rc=7" "$log" 2>/dev/null;            check "V19: 横幅写明底座腿的死因 rc" $?
+  # 健康腿不许被误标
+  if grep -qi "DEGRADED\|降级" "$d/R.submimo.log" 2>/dev/null; then
+    bad "V19: 健康腿不许带降级横幅"
+  else ok "V19: 健康腿不许带降级横幅"; fi
+  rm -rf "$d"
+}
+
+v19_chat_leg_declares_its_blindness() {
+  echo "[V19] 聊天腿日志头自报视野边界"
+  local d; d="$(mktemp -d)"; local repo="$d/repo"; mkdir -p "$repo"
+  ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
+    echo a > f; git add f; git commit -qm init; echo b >> f )
+  printf '# t\n' > "$d/t.md"
+  REVIEW_LABEL="subglm-review" MIMO_API_KEY=x MIMO_BASE_URL=http://x \
+    python3 "$BIN/submimo-review" "$d/t.md" "$d/out.log" --repo "$repo" --git-diff --dry-run >/dev/null 2>&1
+  grep -qi "视野\|scope:" "$d/out.log"; check "V19: 日志头有视野字段" $?
+  grep -qi "看不到\|cannot read\|only" "$d/out.log"; check "V19: 视野字段说明看不到仓库其余部分" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V20
+v20_max_turns_does_not_discard_work() {
+  echo "[V20] 底座腿撞上 max-turns 不许把工作全丢掉"
+  local d fake; d="$(mktemp -d)"; fake="$d/fakebin"; mkdir -p "$fake"
+  # 假 claude:吐几条 stream-json(含模型说的话与工具动作)后按 max-turns 那样 rc=1
+  cat > "$fake/claude" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+cat <<'J'
+{"type":"assistant","message":{"content":[{"type":"text","text":"FINDING-ALPHA 我在 bin/x.py:12 看到一个洞"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"bin/x.py"}}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"FINDING-BETA 第二条"}]}}
+J
+echo "Error: Reached max turns (80)" >&2
+exit 1
+FAKE
+  chmod +x "$fake/claude"
+  printf '# t\n' > "$d/t.md"
+  mkdir -p "$d/repo"; ( cd "$d/repo"; git init -q )
+  printf '{"key":"x"}\n' > "$d/auth.json"
+  PATH="$fake:$PATH" DEEPSEEK_AUTH_FILE="$d/auth.json" \
+    "$BIN/subdeepseek-agent" review "$d/t.md" "$d/a.log" "$d/repo" >/dev/null 2>"$d/a.err"
+
+  if grep -q '^{"type":' "$d/a.log" 2>/dev/null; then
+    bad "V20: 锚 —— 日志是渲染过的,不是把 stream-json 原文倒进去"
+  else ok "V20: 锚 —— 日志是渲染过的,不是把 stream-json 原文倒进去"; fi
+  grep -q "FINDING-ALPHA" "$d/a.log" 2>/dev/null; check "V20: 撞上限也留下模型说过的话" $?
+  grep -q "FINDING-BETA"  "$d/a.log" 2>/dev/null; check "V20: 留下的是全部而不是最后一条" $?
+  grep -qi "max.turns\|轮次上限" "$d/a.log" 2>/dev/null; check "V20: 日志里写明是被上限打断的" $?
+  grep -qE "turns[: ]+[0-9]+" "$d/a.log" 2>/dev/null; check "V20: 记下实际用了多少轮" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V21
+v21_agent_leg_body_is_single_source() {
+  echo "[V21] 底座腿的躯干只有一份(照 subchat 的先例)"
+  [[ -f "$BIN/subagent" ]]; check "V21: 共享躯干 subagent 存在" $?
+  local n
+  for n in subdeepseek-agent subglm-agent; do
+    grep -q "subagent" "$BIN/$n" 2>/dev/null; check "V21: $n 走共享躯干" $?
+    [[ "$(grep -cvE '^\s*(#.*)?$' "$BIN/$n" 2>/dev/null)" -le 6 ]]
+    check "V21: $n 是瘦 shim(有效行 ≤ 6)" $?
+  done
+  # 供应商差异只准活在躯干的供应商表里
+  grep -q "deepseek" "$BIN/subagent" 2>/dev/null; check "V21: 供应商表含 deepseek" $?
+  grep -q "zhipu\|glm" "$BIN/subagent" 2>/dev/null; check "V21: 供应商表含 zhipu/glm" $?
+}
+
 echo "=== review-tooling regression oracle ==="
 v1_untracked_content
 v1_no_untracked_and_nonrepo
@@ -1184,5 +1337,10 @@ v14_leg_fallback_and_include
 v15_anchor_leak_warning
 v16_timeout_and_blind_chat_leg
 v17_explore_agent_legs
+v18_engine_identity_single_source
+v19_degradation_travels_with_conclusion
+v19_chat_leg_declares_its_blindness
+v20_max_turns_does_not_discard_work
+v21_agent_leg_body_is_single_source
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
