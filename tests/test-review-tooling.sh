@@ -822,6 +822,15 @@ EOF
   PANEL_KIMI_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K2" >/dev/null 2>&1
   if [[ -e "$d/K2.subkimi.log" ]]; then bad "panel: PANEL_KIMI_LEG=off skips kimi"; else ok "panel: PANEL_KIMI_LEG=off skips kimi"; fi
 
+  # 2026-08-04:智谱账号余额不足(429/1113),每轮四审都白等它超时一次。
+  # 用户拍板「先关掉,等我重置了再开」⇒ GLM 腿要能像 kimi 一样被关,而且
+  # **默认就是关的**(不是靠每次记得加环境变量 —— 那正是自述型开关的老毛病)。
+  # 充值后打开的方式:PANEL_GLM_LEG=agent(或把脚本里的默认值改回 agent)。
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G1" >/dev/null 2>&1
+  if [[ -e "$d/G1.subglm.log" ]]; then bad "panel: GLM 腿默认关闭(欠费期间不白等)"; else ok "panel: GLM 腿默认关闭(欠费期间不白等)"; fi
+  PANEL_GLM_LEG=agent bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G2" >/dev/null 2>&1
+  if [[ -e "$d/G2.subglm.log" ]]; then ok "panel: PANEL_GLM_LEG=agent 能把它开回来"; else bad "panel: PANEL_GLM_LEG=agent 能把它开回来"; fi
+
   # exit semantics: 3 classic legs fail + kimi passes -> evidence exists -> rc=0
   for stubname in submimo subdeepseek subglm; do
     cat > "$pb/$stubname" <<'EOF'
