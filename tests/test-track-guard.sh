@@ -134,6 +134,47 @@ g2_list_surfaces_unjudged_tracks() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- G3
+# 为什么加这一组(2026-08-04 晚,归档 workbench-p1 那单实战后发现的缺口):
+#   规矩3 只钉在 `git commit` 那一步 —— `track archive` **命令本身照样把目录移进
+#   archive/**,只有事后提交才被红字拦住。中间那段时间磁盘状态是「已归档但没结论」,
+#   而归档是个**移动目录**的动作:被挡下之后要么手工 mv 回去,要么带着这个状态干别的。
+#   守卫该守在动作发生那一刻,不是它的痕迹被提交那一刻。
+# 现存 51 个已归档 track 实测:verify.md 无一缺失、Verdict 无一是占位符
+#   ⇒ 把这两条都做成硬挡,不会误报到历史工件上。
+g3_archive_command_itself_blocks() {
+  echo "[G3] track archive 命令本身要挡,不能只靠 commit 那一步"
+  local d; d="$(newrepo)"
+
+  # ① 结论栏还是占位符 —— 命令必须失败,**且目录不许被移走**
+  ( cd "$d"; mkdir -p tracks/t
+    verify_with "<PASS | BLOCK | NEEDS_MORE_INFO>" > tracks/t/verify.md )
+  "$TRACK" archive t "$d" >/dev/null 2>&1
+  [[ $? -ne 0 ]]; check "G3: 结论栏是占位符 → archive 命令失败" $?
+  [[ -d "$d/tracks/t" && ! -d "$d/tracks/archive/t" ]]
+  check "G3: 被挡下时目录留在原地(没有半归档状态)" $?
+  rm -rf "$d"
+
+  # ② 填了真结论 —— 正常归档。
+  #    **必须换一个干净的临时仓**:修复前 ① 会真把目录移走,② 若沿用同一个仓就成了
+  #    "红在文件不存在上",而 ②-2 那条反而假绿 —— 那种红等于没红检过。
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t; verify_with "**PASS**(主裁)" > tracks/t/verify.md )
+  "$TRACK" archive t "$d" >/dev/null 2>&1
+  check "G3: 结论栏已填 → archive 正常放行" $?
+  [[ -d "$d/tracks/archive/t" && ! -d "$d/tracks/t" ]]
+  check "G3: 放行时目录确实移进了 archive/" $?
+  rm -rf "$d"
+
+  # ③ 压根没有 verify.md —— 同样是「没判过」,照挡
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t; printf '# proposal\n' > tracks/t/proposal.md )
+  "$TRACK" archive t "$d" >/dev/null 2>&1
+  [[ $? -ne 0 ]]; check "G3: 没有 verify.md → archive 命令失败" $?
+  [[ -d "$d/tracks/t" ]]; check "G3: 没有 verify.md 时目录也留在原地" $?
+  rm -rf "$d"
+}
+
 # ---------------------------------------------------------------- 回归
 r_existing_rules_still_hold() {
   echo "[R] 原有两条规矩不许退化"
@@ -155,6 +196,7 @@ echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
 g2_list_surfaces_unjudged_tracks
+g3_archive_command_itself_blocks
 r_existing_rules_still_hold
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
