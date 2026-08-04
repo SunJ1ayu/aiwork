@@ -63,6 +63,12 @@ set -uo pipefail
 # 写死路径会让判据仍去测主仓的文件 = 改了也永远红(2026-08-01 派活前发现)。
 # 可用 REVIEW_BIN 覆盖。
 BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
+# 2026-08-04:GLM 腿默认改成 off(智谱欠费,见 bin/panel-review 里的理由)。
+# 下面的老用例问的是**这条腿的行为**(回落、失败留证、rc 语义……),不是"它默不默认开",
+# 所以统一在这里把腿显式打开 —— 断言一条不删、一条不弱。
+# 只有"默认关不关"那两条用 `env -u PANEL_GLM_LEG` 在干净环境里问。
+export PANEL_GLM_LEG=agent
+
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -826,7 +832,7 @@ EOF
   # 用户拍板「先关掉,等我重置了再开」⇒ GLM 腿要能像 kimi 一样被关,而且
   # **默认就是关的**(不是靠每次记得加环境变量 —— 那正是自述型开关的老毛病)。
   # 充值后打开的方式:PANEL_GLM_LEG=agent(或把脚本里的默认值改回 agent)。
-  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G1" >/dev/null 2>&1
+  env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G1" >/dev/null 2>&1
   if [[ -e "$d/G1.subglm.log" ]]; then bad "panel: GLM 腿默认关闭(欠费期间不白等)"; else ok "panel: GLM 腿默认关闭(欠费期间不白等)"; fi
   PANEL_GLM_LEG=agent bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G2" >/dev/null 2>&1
   if [[ -e "$d/G2.subglm.log" ]]; then ok "panel: PANEL_GLM_LEG=agent 能把它开回来"; else bad "panel: PANEL_GLM_LEG=agent 能把它开回来"; fi

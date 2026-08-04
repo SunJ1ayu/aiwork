@@ -16,7 +16,8 @@ Usage:
 Runs all reviewers in parallel on TASK_FILE:
   submimo review  -> <LOG_PREFIX>.submimo.log
   subdeepseek review -> <LOG_PREFIX>.subdeepseek.log
-  subglm review   -> <LOG_PREFIX>.subglm.log
+  subglm review   -> <LOG_PREFIX>.subglm.log   (**默认 off**,欠费期间不白等;
+                                                 PANEL_GLM_LEG=agent 开回来)
   subkimi review  -> <LOG_PREFIX>.subkimi.log   (4th leg, only if installed;
                                                  PANEL_KIMI_LEG=off disables)
 
@@ -107,13 +108,19 @@ TASKNAME="$(basename "${TASK_FILE%.*}")"
 LOG_PREFIX="${3:-/root/aiwork/logs/panel-${TASKNAME}-${TS}}"
 mkdir -p "$(dirname "$LOG_PREFIX")"
 
-# GLM leg selection: agent base (subglm-agent, reads the repo itself) is the
-# default when installed; PANEL_GLM_LEG=chat forces the chat leg (subglm).
-GLM_LEG="${PANEL_GLM_LEG:-agent}"
-if [[ "$GLM_LEG" == "agent" && -x "$BIN/subglm-agent" ]]; then
+# GLM leg selection.
+# **默认 off(2026-08-04)**:智谱账号余额不足(429 / 1113),这条腿每轮都只会
+# 白等一次超时,还会让"四审"看起来满编、实际三腿。用户拍板「先关掉,等我重置了再开」。
+# 充值之后开回来:`PANEL_GLM_LEG=agent`(或把下面这行默认值改回 agent)。
+# 其余取值不变:agent = 底座腿(自己读仓库,推荐);chat = 聊天腿(空 diff 会瞎)。
+GLM_LEG="${PANEL_GLM_LEG:-off}"
+GLM_CMD=""
+if [[ "$GLM_LEG" == "off" ]]; then
+  GLM_CMD=""                      # 关着:不派发、不报 rc
+elif [[ "$GLM_LEG" == "agent" && -x "$BIN/subglm-agent" ]]; then
   GLM_CMD="$BIN/subglm-agent"
 else
-  GLM_CMD="$BIN/subglm"
+  GLM_CMD="$BIN/subglm"           # 要 agent 但没装 → 回落聊天腿(老行为,不许退化)
 fi
 
 # DeepSeek leg selection: agent base (subdeepseek-agent = DeepSeek via
@@ -277,8 +284,11 @@ stagger
 run_leg "$DEEPSEEK_CMD" "$BIN/subdeepseek" "$SUBDEEPSEEK_LOG" "$SUBDEEPSEEK_ERR" subdeepseek &
 PID_DEEPSEEK=$!
 stagger
-run_leg "$GLM_CMD" "$BIN/subglm" "$SUBGLM_LOG" "$SUBGLM_ERR" subglm &
-PID_GLM=$!
+PID_GLM=""
+if [[ -n "$GLM_CMD" ]]; then
+  run_leg "$GLM_CMD" "$BIN/subglm" "$SUBGLM_LOG" "$SUBGLM_ERR" subglm &
+  PID_GLM=$!
+fi
 PID_KIMI=""
 if [[ -n "$KIMI_CMD" ]]; then
   stagger
@@ -288,17 +298,20 @@ fi
 
 wait "$PID_MIMO";  RC_MIMO=$?
 wait "$PID_DEEPSEEK"; RC_DEEPSEEK=$?
-wait "$PID_GLM";   RC_GLM=$?
+RC_GLM=0
+if [[ -n "$PID_GLM" ]]; then wait "$PID_GLM"; RC_GLM=$?; fi
 RC_KIMI=0
 if [[ -n "$PID_KIMI" ]]; then
   wait "$PID_KIMI"; RC_KIMI=$?
 fi
 
 echo
+GLM_REPORT=" subglm rc=$RC_GLM"
+[[ -z "$GLM_CMD" ]] && GLM_REPORT=" subglm=off(PANEL_GLM_LEG=agent 开回来)"
 if [[ -n "$KIMI_CMD" ]]; then
-  echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK  subglm rc=$RC_GLM  subkimi rc=$RC_KIMI"
+  echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK $GLM_REPORT  subkimi rc=$RC_KIMI"
 else
-  echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK  subglm rc=$RC_GLM"
+  echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK $GLM_REPORT"
 fi
 # On success, drop the (empty) stderr sidecar; on failure keep it and point to it.
 if [[ $RC_MIMO -eq 0 ]]; then
@@ -311,7 +324,9 @@ if [[ $RC_DEEPSEEK -eq 0 ]]; then
 else
   echo "  WARNING: subdeepseek review failed (rc=$RC_DEEPSEEK); reason in $SUBDEEPSEEK_ERR, log $SUBDEEPSEEK_LOG"
 fi
-if [[ $RC_GLM -eq 0 ]]; then
+if [[ -z "$GLM_CMD" ]]; then
+  :   # 腿关着,没有 rc 可报(报了会被误读成"跑过且通过")
+elif [[ $RC_GLM -eq 0 ]]; then
   [[ -s "$SUBGLM_ERR" ]] || rm -f "$SUBGLM_ERR"
 else
   echo "  WARNING: subglm review failed (rc=$RC_GLM); reason in $SUBGLM_ERR, log $SUBGLM_LOG"
