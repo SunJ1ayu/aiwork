@@ -17,7 +17,11 @@ in `<project>/tracks/<name>/` with four artifacts:
 | `tasks.md` | task checklist + `base-ref` | when breaking the work down |
 | `verify.md` | what was checked + arbitrated verdict | before calling it done; **panel-review hook** here |
 
-On close: `track archive <name>` moves the folder to `tracks/archive/`.
+On close: `track archive <name>` moves the folder to `tracks/archive/`. It **refuses**
+if `verify.md` is missing or its `Verdict:` line is still the template placeholder —
+archiving means "this is done", and done without an arbitrated verdict means the
+judgment was never made. Superseded work still archives: write the real outcome
+(e.g. `ARCHIVED-SUPERSEDED`), just don't stamp a `PASS` on it.
 
 ## Commands
 
@@ -29,7 +33,10 @@ track list [project-dir]            # active + archived
 
 ## What's deliberately NOT here
 
-- No guard scripts forcing build→verify→archive order.
+- No guard scripts forcing build→verify→archive order. **One exception, added
+  2026-08-04**: archiving requires a filled-in verdict (see above). It guards the
+  *content of the last field*, not the *order of the phases* — you can still skip
+  proposal/design/tasks entirely.
 - No blocking user-decision points at every transition.
 - No "brainstorming cannot be skipped" rule. Small/obvious → just do it, skip the
   artifacts entirely (consistent with the main workflow's "don't spend a panel"

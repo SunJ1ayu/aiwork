@@ -42,6 +42,21 @@ case "$cmd" in
     [ -z "$name" ] && { echo "ERROR: need a track name" >&2; usage 1; }
     src="$proj/tracks/$name"
     [ -d "$src" ] || { echo "ERROR: $src not found" >&2; exit 1; }
+    # 归档 = 宣布做完了。没有主裁结论就没做完 —— 在**动目录之前**挡,
+    # 别留下「已归档但没结论」的半截状态(pre-commit 的规矩3 只挡痕迹被提交那一步,
+    # 目录那时早就搬走了)。现存 51 个已归档 track 实测无一缺 verify.md、
+    # 无一是占位符 ⇒ 这两条硬挡不会误报到历史工件上。
+    v="$src/verify.md"
+    if [ ! -f "$v" ]; then
+      echo "🔴 拒绝归档:$v 不存在(归档 = 宣布做完了,没有 verify.md 就没有结论)" >&2
+      exit 1
+    fi
+    if grep -qE '^-[[:space:]]*Verdict:[[:space:]]*<' "$v"; then
+      echo "🔴 拒绝归档:$v 的结论栏还是模板占位符(空着 = 没判过)。" >&2
+      echo "   路线被取代、不是验收通过的,也要如实写(例:ARCHIVED-SUPERSEDED)," >&2
+      echo "   别拿一个 PASS 充数。" >&2
+      exit 1
+    fi
     mkdir -p "$proj/tracks/archive"
     mv "$src" "$proj/tracks/archive/$name"
     echo "archived -> $proj/tracks/archive/$name"
