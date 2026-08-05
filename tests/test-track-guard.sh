@@ -192,11 +192,37 @@ r_existing_rules_still_hold() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- G4(已知盲区)
+g4_known_blind_spots() {
+  echo "[G4] 版本号写成别的形状时,守卫认不认得出来(2026-08-05 实测钉下来的盲区)"
+  local d
+
+  # ① 真实形状复核:ds_web 那行是 `VERSION = "x"  # 一句话说明`,带行尾注释
+  d="$(newrepo)"
+  ( cd "$d"; printf 'VERSION = "0.2.0"  # 断线自愈\n' > bin/ds_web.py; git add -A >/dev/null )
+  ( cd "$d"; "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G4: 带行尾注释的 VERSION 照样认得出来" $?
+  rm -rf "$d"
+
+  # ② 已知盲区:JS/TS 的 `export const VERSION = "…"` 认不出来。
+  #    **故意不去放宽正则**:放宽就会连 `SCHEMA_VERSION: str = "2"` 这类无关赋值一起挡,
+  #    而守卫一误报就会被 `--no-verify` 绕过 —— 那比没有守卫更糟(规矩3 的注释同理)。
+  #    design-studio 的版本号真相源是 bin/ds_web.py,这个盲区当下不咬人;
+  #    **哪天有项目把版本号放进 TS 常量,先加判据再改守卫。**
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p web/src; printf 'export const VERSION = "0.2.0";\n' > web/src/version.ts
+    git add -A >/dev/null )
+  ( cd "$d"; "$GUARD" >/dev/null 2>&1 )
+  check "G4: (已知盲区,非期望行为)TS 常量形式的 bump 目前不会被挡" $?
+  rm -rf "$d"
+}
+
 echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
 g2_list_surfaces_unjudged_tracks
 g3_archive_command_itself_blocks
 r_existing_rules_still_hold
+g4_known_blind_spots
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
