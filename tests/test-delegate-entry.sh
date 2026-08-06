@@ -308,6 +308,13 @@ EOF
   check "E1: 基线上不存在的新实现 ⇒ 退回=删掉它,判据照样红" $([[ $rc -eq 0 ]]; echo $?)
   check "E1: 跑完那个新文件回来了" $([[ -f "$repo/src/helper.sh" ]]; echo $?)
   check "E1: 跑完工作树仍然干净" $([[ -z "$(git -C "$repo" status --porcelain -uall)" ]]; echo $?)
+
+  # ⑨ `--impl a b`(变长)要和 `--impl a --impl b` 一样认 —— 用法里写的就是 `--impl PATH...`,
+  #    而 08-06 第一次真用它时我照着用法敲,被"不认识的参数"顶了回来。
+  #    工具的用法说明和它的解析对不上,下次照样会撞;这一条把两者钉在一起。
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/helper.sh src/impl.sh \
+       --oracle 'bash tests/oracle.sh' >"$d/e10" 2>&1; rc=$?
+  check "E1: --impl 接多个路径(变长写法)也认" $([[ $rc -eq 0 ]]; echo $?)
   rm -rf "$d"
 }
 
