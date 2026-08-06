@@ -34,7 +34,13 @@ while [[ $# -gt 0 ]]; do
     -h|--help) sed -n '/^# 用法:/,/^#   9 /p' "$0" | sed 's/^# \?//' >&2; exit 0 ;;
     --repo)      REPO="${2:-}";     shift 2 ;;
     --base)      BASE="${2:-}";     shift 2 ;;
-    --impl)      [[ -n "${2:-}" ]] || die "--impl 要一个路径"; IMPL+=("$2"); shift 2 ;;
+    # --impl 收**变长**:`--impl a b c` 与 `--impl a --impl b` 等价。
+    # 用法里写的就是 `--impl PATH...`,解析却只认单值 = 说明书和实现对不上,
+    # 08-06 第一次真用它时我自己就被顶了回来。
+    --impl)
+      shift
+      [[ $# -gt 0 && "$1" != --* ]] || die "--impl 要至少一个路径"
+      while [[ $# -gt 0 && "$1" != --* ]]; do IMPL+=("$1"); shift; done ;;
     --oracle)    ORACLE="${2:-}";   shift 2 ;;
     --build)     BUILD="${2:-}";    shift 2 ;;
     --must-fail) MUSTFAIL="${2:-}"; shift 2 ;;
@@ -87,7 +93,22 @@ trap 'restore' EXIT
 trap 'echo; echo "redcheck: 收到中断信号,先恢复再退出。" >&2; restore; exit 130' INT TERM
 
 # ── 退回 ────────────────────────────────────────────────────────────────
-git -C "$REPO" checkout "$BASE_SHA" -- "${IMPL[@]}" || die "退回失败(checkout $BASE -- ...)"
+# 基线上**还不存在**的实现文件(整单新增一个模块/工具就是这形状):
+# "退回"对它的正确含义是**删掉**。`git checkout <base> -- <新文件>` 会 pathspec 报错,
+# 照着报错走就等于这条路上根本没红检 —— 08-06 拿 redcheck 红检 redcheck 自己时撞到的。
+have=(); gone=()
+for p in "${IMPL[@]}"; do
+  if git -C "$REPO" cat-file -e "$BASE_SHA:$p" 2>/dev/null; then have+=("$p")
+  elif [[ -d "$REPO/$p" ]]; then have+=("$p")   # 目录:交给 checkout,内部差异它自己处理
+  else gone+=("$p"); fi
+done
+if [[ ${#have[@]} -gt 0 ]]; then
+  git -C "$REPO" checkout "$BASE_SHA" -- "${have[@]}" || die "退回失败(checkout $BASE -- ...)"
+fi
+for p in "${gone[@]}"; do
+  echo "  (基线上没有 $p ⇒ 退回 = 删掉它)"
+  rm -rf "${REPO:?}/$p"
+done
 
 if [[ -n "$BUILD" ]]; then
   echo "  build ..."
