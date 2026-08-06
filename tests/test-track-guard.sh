@@ -217,6 +217,47 @@ g4_known_blind_spots() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- G5
+# 规矩4:动了**评审/派活工具**也必须挂 track。
+# 出处(2026-08-06 当天自查):规矩1 只在 bump 版本号时触发,而 `/root/aiwork` 这个仓
+# **根本没有版本号** ⇒ 那个仓的改动结构上永远不会被要求挂 track。当天实证:
+# 我改了 `bin/panel-review`(评审工具链本身、信任面)+ 建了两个新工具,
+# 三条改动没有任何 track、没有 verify ⇒ **`lane:` 那道题从头到尾没被问过**,
+# 而同一天我却因为"碰判卷防线"给另一单走了 full 四审。同性质两种待遇。
+# 守卫守错门的第二例(第一例是 08-04:守在 package.json、而真版本号在 ds_web.py)。
+g5_tooling_changes_need_a_track() {
+  echo "[G5] 规矩4:改评审/派活工具(bin/panel-*, bin/sub*, bin/delegate-*, redcheck, track*)必须挂 track"
+  local d; d="$(newrepo)"; local out rc
+  ( cd "$d"; mkdir -p bin; printf '#!/bin/bash\necho v1\n' > bin/panel-review
+    printf '#!/bin/bash\necho v1\n' > bin/redcheck
+    printf '#!/bin/bash\necho v1\n' > bin/unrelated-tool
+    git add -A >/dev/null; git commit -qm "工具就位" )
+
+  # ① 改评审工具、不挂 track ⇒ 挡下
+  ( cd "$d"; printf '#!/bin/bash\necho v2\n' > bin/panel-review; git add -A >/dev/null )
+  out="$(cd "$d" && bash "$BIN/track-guard" 2>&1)"; rc=$?
+  check "G5: 改 bin/panel-review 却没挂 track ⇒ 挡下" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "panel-review" <<<"$out"; check "G5: 挡下时点名是哪个工具" $?
+
+  # ② 同一次提交带上 track 工件 ⇒ 放行(和规矩1 同款逃生口)
+  ( cd "$d"; mkdir -p tracks/t; verify_with "PASS" > tracks/t/verify.md; git add -A >/dev/null )
+  out="$(cd "$d" && bash "$BIN/track-guard" 2>&1)"; rc=$?
+  check "G5: 同次提交带 track 工件 ⇒ 放行" $([[ $rc -eq 0 ]]; echo $?)
+  ( cd "$d" && git commit -qm "带 track 的工具改动" )
+
+  # ③ 改的是**不相干的**脚本 ⇒ 不许误报(误报的守卫活不过一周)
+  ( cd "$d"; printf '#!/bin/bash\necho v2\n' > bin/unrelated-tool; git add -A >/dev/null )
+  out="$(cd "$d" && bash "$BIN/track-guard" 2>&1)"; rc=$?
+  check "G5: 改不相干脚本 ⇒ 放行(不误报)" $([[ $rc -eq 0 ]]; echo $?)
+  ( cd "$d" && git commit -qm "无关脚本" )
+
+  # ④ 判据文件本身也算判卷防线(改判据不挂 track,和改守卫是同一类事)
+  ( cd "$d"; mkdir -p tests; printf 'echo t\n' > tests/test-review-tooling.sh; git add -A >/dev/null )
+  out="$(cd "$d" && bash "$BIN/track-guard" 2>&1)"; rc=$?
+  check "G5: 新增/改动 tests/test-*.sh 判据 ⇒ 也要挂 track" $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
 echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
@@ -224,5 +265,6 @@ g2_list_surfaces_unjudged_tracks
 g3_archive_command_itself_blocks
 r_existing_rules_still_hold
 g4_known_blind_spots
+g5_tooling_changes_need_a_track
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

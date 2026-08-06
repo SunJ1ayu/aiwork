@@ -1490,6 +1490,52 @@ EOF
   rm -rf "$d"
 }
 
+
+# ---------------------------------------------------------------- V23
+v23_my_review_gate_on_every_review_path() {
+  echo "[V23] 反锚定闸要盖住**每一条评审路径**,不只是 panel-review"
+  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
+  ( cd "$d/repo"; git init -q; git config user.email t@t; git config user.name t
+    echo x > f; git add -A; git commit -qm init )
+  cp "$BIN/_my-review-gate.sh" "$b/" 2>/dev/null
+  printf '# 评审任务书\n' > "$d/t.md"
+
+  # 三条躯干各造一个"被调用就留痕"的假模型端点:闸该在**调用之前**拦下。
+  # 直接用真脚本 + 假 CLI:mimo/claude 都不在这条路径上时脚本会自己报错,
+  # 所以这里只断言 rc 和 stderr 里的那句话(拦在闸上,而不是拦在缺 CLI 上)。
+  for entry in "submimo|review" "subchat|deepseek review" "subagent|deepseek review"; do
+    IFS='|' read -r tool args <<< "$entry"
+    cp "$BIN/$tool" "$b/$tool"
+    # ① 约定路径的自审文件不存在 ⇒ 拒跑,且错误信息点名"先写你自己的一遍"
+    out="$(cd "$d" && env -u REVIEW_MY_REVIEW REVIEW_NO_MY_REVIEW=0 PANEL_DISPATCH=0 \
+            bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
+    check "V23: $tool 没有自审文件 ⇒ 拒跑" $([[ $rc -ne 0 ]]; echo $?)
+    grep -q "自己的一遍" <<<"$out"; check "V23: $tool 说清是缺自审(不是别的报错)" $?
+
+    # ② 自审文件在**仓内** ⇒ 拒跑(腿会照着我的答案抄)
+    printf '我的一遍\n' > "$d/repo/mine.md"
+    out="$(cd "$d" && REVIEW_MY_REVIEW="$d/repo/mine.md" bash "$b/$tool" $args \
+            "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
+    check "V23: $tool 自审文件在仓内 ⇒ 拒跑" $([[ $rc -ne 0 ]]; echo $?)
+
+    # ③ 显式退出闸 ⇒ 不再被这道闸拦(会因为别的原因失败,但不许是这一句)
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=1 bash "$b/$tool" $args \
+            "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
+    if grep -q "自己的一遍" <<<"$out"; then
+      bad "V23: $tool REVIEW_NO_MY_REVIEW=1 应当放行这道闸"
+    else ok "V23: $tool REVIEW_NO_MY_REVIEW=1 应当放行这道闸"; fi
+
+    # ④ panel-review 派发时不许被重复拦(它在自己那层已经查过)
+    out="$(cd "$d" && PANEL_DISPATCH=1 bash "$b/$tool" $args \
+            "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
+    if grep -q "自己的一遍" <<<"$out"; then
+      bad "V23: $tool 在 panel 派发下不许重复拦(否则四审整个派不出去)"
+    else ok "V23: $tool 在 panel 派发下不许重复拦(否则四审整个派不出去)"; fi
+    rm -f "$d/repo/mine.md"
+  done
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 v1_untracked_content
 v1_no_untracked_and_nonrepo
@@ -1517,5 +1563,6 @@ v21_agent_leg_body_is_single_source
 v22_head_moved_during_review
 v22_anchor_leak_sees_committed_track
 v22_roster_file
+v23_my_review_gate_on_every_review_path
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
