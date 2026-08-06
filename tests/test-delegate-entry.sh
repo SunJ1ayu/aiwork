@@ -340,6 +340,77 @@ EOF
   check "E1: 产物按内容改名时红检照常通过" $([[ $rc -eq 0 ]]; echo $?)
   check "E1: **基线那份产物被收拾干净**(git status 为空,不是只喊一声)" \
     $([[ -z "$(git -C "$r2" status --porcelain -uall)" ]]; echo $?)
+
+  # ⑪ 【高危】`--impl` 指到仓外 ⇒ 必须拒跑,**一个字节都不许删**。
+  #    四审 subkimi 抓的(subdeepseek 判成"低危、预检已挡"是错的,我核实过:
+  #    预检 `git status ... -- ../x` 的报错走 stderr,stdout 为空 ⇒ 静默放行,
+  #    然后 `rm -rf "$REPO/../x"` 真删,收尾自证同样 stdout 为空 ⇒ 还打印"✅ 已恢复")。
+  #    这条不需要攻击者,**敲错一个路径就够**。
+  local victim="$d/仓外的重要文件.txt"
+  printf 'DO_NOT_DELETE\n' > "$victim"
+  bash "$BIN/redcheck" --repo "$r2" --base HEAD~1 --impl ../../"$(basename "$d")"/仓外的重要文件.txt \
+       --oracle 'true' >"$d/e12" 2>&1; rc=$?
+  check "E1: --impl 指到仓外 ⇒ 拒跑(rc≠0)" $([[ $rc -ne 0 ]]; echo $?)
+  check "E1: **仓外那个文件必须还在**(不许 rm -rf 出去)" $([[ -f "$victim" ]]; echo $?)
+  grep -qi "仓外\|仓库之外\|outside" "$d/e12"; check "E1: 拒跑时说清是「路径在仓外」" $?
+
+  # ⑫ 恢复时 build 失败 ⇒ **不许说"已恢复,干净"**(自证的意义就在这)。
+  #    subdeepseek F6:原来只 echo 一句警告就照常 exit 0。
+  local r3="$d/repo3"; cp -a "$r2" "$r3"
+  bash "$BIN/redcheck" --repo "$r3" --base HEAD~1 --impl src/impl.sh \
+       --build "if [ -f $d/first_build_done ]; then exit 1; fi; touch $d/first_build_done" \
+       --oracle 'bash tests/oracle.sh' >"$d/e13" 2>&1; rc=$?
+  check "E1: 恢复时 build 失败 ⇒ 非零退出(不许照常报成功)" $([[ $rc -ne 0 ]]; echo $?)
+  if grep -q "已恢复,工作树干净" "$d/e13"; then
+    bad "E1: 恢复 build 失败时**不许**打印「已恢复,工作树干净」"
+  else
+    ok "E1: 恢复 build 失败时**不许**打印「已恢复,工作树干净」"
+  fi
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------- D:四审补的拒发/闸①盲区
+d_gate_blind_spots() {
+  echo "[D4] 四审补的洞:判卷被 gitignore / skip-worktree / 回执落仓内 / 沙箱参数"
+  local d; d="$(mktemp -d)"; local b="$d/bin" rec="$d/rec" repo="$d/repo" rc
+  make_fake_codex "$b" "$rec"; make_repo "$repo"
+  printf '# 任务书\nMARKER\n' > "$d/task.md"
+  printf '攻题记录:……\n' > "$d/attack.md"
+
+  # ① 沙箱参数必须显式(subkimi F12:丢掉 -s workspace-write / -C 判据照样全绿,
+  #    而那等于把腿升成全权限)
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/oracle.sh --log "$d/run.log" >/dev/null 2>&1
+  grep -q 'workspace-write' "$rec/argv.1"; check "D4: 命令行显式给 -s workspace-write" $?
+  grep -qx -- "-C" "$rec/argv.1" && grep -qx -- "$repo" "$rec/argv.1"
+  check "D4: 命令行显式给 -C <仓>(不靠 cwd)" $?
+
+  # ② 判卷文件被 .gitignore 藏起来 ⇒ 拒发(subdeepseek F2:执行腿只要往 .gitignore
+  #    追一行,再塞 conftest.py,闸①两臂全空 —— D3④ 那招被绕过)
+  printf 'tests/conftest.py\n' > "$repo/.gitignore"
+  git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore 一条"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/g1.log" >"$d/g1" 2>&1; rc=$?
+  check "D4: 判卷路径下有被 ignore 的东西 ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
+  grep -qi "ignore\|忽略" "$d/g1"; check "D4: 说清是被 gitignore 藏住了" $?
+  git -C "$repo" rm -q --cached .gitignore >/dev/null 2>&1; rm -f "$repo/.gitignore"
+  git -C "$repo" commit -qm "撤掉 ignore" >/dev/null 2>&1
+
+  # ③ 判卷被 skip-worktree/assume-unchanged 标记 ⇒ 闸① 两臂同时失明(subdeepseek F1)
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/s1.log" >/dev/null 2>&1
+  git -C "$repo" update-index --skip-worktree tests/oracle.sh
+  printf 'echo tampered\n' >> "$repo/tests/oracle.sh"
+  bash "$BIN/delegate-codex" --receive "$d/s1.log.receipt.json" >"$d/s1" 2>&1; rc=$?
+  check "D4: 判卷被 skip-worktree 标记后改动 ⇒ 闸①仍要拦" $([[ $rc -ne 0 ]]; echo $?)
+  git -C "$repo" update-index --no-skip-worktree tests/oracle.sh
+  git -C "$repo" checkout -- tests/oracle.sh
+
+  # ④ 回执/日志落在**被派活的仓里** ⇒ 执行腿能改回执让闸①自证(subdeepseek F15 / subkimi F3)
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$repo/inside.log" >"$d/i1" 2>&1; rc=$?
+  check "D4: 日志/回执落在仓内 ⇒ 拒发(和攻题记录同源:考生不许碰卷宗)" $([[ $rc -ne 0 ]]; echo $?)
+  check "D4: 拒发时 codex 也没被调用" $([[ "$(calls_of "$rec")" -eq 2 ]]; echo $?)
   rm -rf "$d"
 }
 
@@ -347,6 +418,7 @@ echo "=== delegate-entry / redcheck oracle ==="
 d_refuses_without_evidence
 d_injects_and_records
 d_receive_gate
+d_gate_blind_spots
 e_redcheck
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
