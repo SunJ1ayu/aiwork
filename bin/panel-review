@@ -221,6 +221,23 @@ anchor_leak_files() {
     if [[ -n "${PANEL_DIFF_BASE:-}" ]]; then
       git -C "$REPO_DIR" diff --name-only "${PANEL_DIFF_BASE}...HEAD" 2>/dev/null
     fi
+    # 第三臂(2026-08-05 实测):上面两臂在**本机默认形状**下都照不到 ——
+    # 我一直在 main 上干活(main == HEAD ⇒ PANEL_DIFF_BASE 那一臂结构上不存在),
+    # 而 verify.md 是已提交的(⇒ status 那一臂也空)。那次 DeepSeek 日志第 28 行
+    # 读了 verify.md、第 101 行原文引用我的「规格自查第 2 条」,两臂一声没吭。
+    # 底座腿自己读仓库,**不看 diff**,所以只要文件在树上就够得着。
+    # 只报与本任务同名的 track(任务文件常叫 <track>-review.md),不相干的 track
+    # 不报 —— 误报会把警告变噪音,下一次就没人看了。
+    local _base="${TASKNAME%-my-review}"; _base="${_base%-review}"
+    if [[ -n "$_base" ]]; then
+      local _f _t
+      while IFS= read -r _f; do
+        [[ -n "$_f" ]] || continue
+        _t="${_f#tracks/}"; _t="${_t%%/*}"
+        [[ -n "$_t" ]] || continue
+        if [[ "$_base" == "$_t"* || "$_t" == "$_base"* ]]; then echo "$_f"; fi
+      done < <(git -C "$REPO_DIR" ls-files 'tracks/*/verify.md' 2>/dev/null)
+    fi
   } | grep -Ei 'verify\.md$|my.?review' | sort -u
 }
 LEAK="$(anchor_leak_files)"
@@ -229,6 +246,11 @@ if [[ -n "$LEAK" ]]; then
   echo "$LEAK" | sed 's/^/    /'
   echo "    (引擎会把未跟踪文件与整份 diff 内联进每条腿;先派发、后写 verify.md)"
 fi
+
+# 派发窗口的树是不是同一棵(2026-08-05 实事故):22:40 我趁 Kimi 还在跑提交了 80d2d23,
+# 它的日志 1027–1094 行整段在追查"仓库正在被人改",并把 BLOCK 押在这个幻影上 —— 25 分钟全废。
+# 各腿是**并行**的,谁在哪一刻读到哪棵树没人知道;所以派发前后各记一次 HEAD,不同就明说。
+HEAD_BEFORE="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
 
 echo "  running all in parallel..."
 
@@ -306,6 +328,24 @@ if [[ -n "$PID_KIMI" ]]; then
 fi
 
 echo
+# ── 派发期间 HEAD 动了没有 ────────────────────────────────────────────
+# 横幅**写进每份腿日志**,不只印在 stdout:这些结论以后会被单独读到(归档、断线重连),
+# 那时终端上这行早没了,而一份"评的是别的树"的结论长得和正常结论一模一样(同 V19)。
+HEAD_AFTER="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+if [[ -n "$HEAD_BEFORE" && -n "$HEAD_AFTER" && "$HEAD_BEFORE" != "$HEAD_AFTER" ]]; then
+  echo "  ⚠️  评审期间仓库 HEAD 从 $HEAD_BEFORE 移到 $HEAD_AFTER —— 各腿看到的可能不是同一棵树。"
+  echo "     腿报告里的「仓库正在被改/文件对不上」多半是这个,不是被评代码的问题;"
+  echo "     受影响就重跑,别拿它当 finding(2026-08-05 实事故:一条腿为此白跑 25 分钟)。"
+  for _log in "$SUBMIMO_LOG" "$SUBDEEPSEEK_LOG" "$SUBGLM_LOG" "$SUBKIMI_LOG"; do
+    [[ -s "$_log" ]] || continue
+    { echo
+      echo "⚠️  评审期间仓库 HEAD 从 $HEAD_BEFORE 移到 $HEAD_AFTER(本报告尾部由 panel-review 追加)。"
+      echo "    这条腿读到的树可能不是你现在看到的那棵;它若抱怨「仓库正在被人改」,那是这个原因。"
+    } >> "$_log"
+  done
+  unset _log
+fi
+
 GLM_REPORT=" subglm rc=$RC_GLM"
 [[ -z "$GLM_CMD" ]] && GLM_REPORT=" subglm=off(PANEL_GLM_LEG=agent 开回来)"
 if [[ -n "$KIMI_CMD" ]]; then
@@ -338,6 +378,37 @@ if [[ -n "$KIMI_CMD" ]]; then
     echo "  WARNING: subkimi review failed (rc=$RC_KIMI); reason in $SUBKIMI_ERR, log $SUBKIMI_LOG"
   fi
 fi
+# ── 花名册落盘 ────────────────────────────────────────────────────────
+# 2026-08-05 实事故:各腿状态只活在终端里,事后我在 verify.md 写下"三条腿一致 PASS",
+# 而 Kimi 那条腿根本没出结论(同一页第 90 行我自己还写着它没出报告)—— 同页自相矛盾。
+# 手抄一份终端上的东西,抄错的那次不会有人发现。⇒ 机器写一行,verify.md 直接粘。
+# 注意:这里的 PASS 只表示**进程 rc=0**,不表示它给了裁决;裁决永远要自己读日志。
+ROSTER_FILE="${LOG_PREFIX}.roster"
+roster_entry() {  # roster_entry <名字> <rc> <这条腿派没派> <log>
+  local name="$1" rc="$2" enabled="$3" log="$4" state
+  if [[ "$enabled" != 1 ]]; then printf '%s=off' "$name"; return; fi
+  if [[ "$rc" -eq 0 ]]; then state="PASS"; else state="FAIL(rc=$rc)"; fi
+  # 底座腿死了、聊天腿顶上来的:结论可以旅行,资格要跟着走(同 V19 的降级横幅)
+  if [[ -e "${log%.log}.agent.log" || -e "${log%.log}.agent.log.err" ]]; then
+    if [[ "$rc" -eq 0 ]]; then state="PASS(降级:回落聊天腿,只看得见 diff)"
+    else state="FAIL(rc=$rc,降级:回落聊天腿也没成)"; fi
+  fi
+  printf '%s=%s' "$name" "$state"
+}
+{
+  echo "# panel-review 花名册($(date '+%F %T'))task=$TASKNAME"
+  echo "# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。"
+  echo "# 日志:${LOG_PREFIX}.*.log"
+  echo "$(roster_entry submimo     "$RC_MIMO"     1 "$SUBMIMO_LOG") \
+$(roster_entry subdeepseek "$RC_DEEPSEEK" 1 "$SUBDEEPSEEK_LOG") \
+$(roster_entry subglm      "$RC_GLM"      "$([[ -n "$GLM_CMD"  ]] && echo 1 || echo 0)" "$SUBGLM_LOG") \
+$(roster_entry subkimi     "$RC_KIMI"     "$([[ -n "$KIMI_CMD" ]] && echo 1 || echo 0)" "$SUBKIMI_LOG")"
+  if [[ -n "$HEAD_BEFORE" && -n "$HEAD_AFTER" && "$HEAD_BEFORE" != "$HEAD_AFTER" ]]; then
+    echo "# ⚠️ 评审期间 HEAD 从 $HEAD_BEFORE 移到 $HEAD_AFTER —— 各腿未必评的同一棵树。"
+  fi
+} > "$ROSTER_FILE"
+echo "  roster -> $ROSTER_FILE(各腿状态一行,粘进 verify.md,别再手写)"
+
 echo "  read all logs above, then arbitrate."
 
 # Non-zero only if ALL dispatched reviewers failed (panel produced no evidence).
