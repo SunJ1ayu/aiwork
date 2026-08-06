@@ -27,5 +27,10 @@ for repo in /root/aiwork /root/.openclaw/workspace/projects/design-studio; do
     bad "$name: hook 没调 track-guard(装了个别的东西 = 这条防线仍然是空的)"
   fi
 done
+# 一个仓都没查到 ⇒ 判绿是假绿(四审 subkimi:`continue` + `FAIL -eq 0` 会让 0/0 报通过)。
+if [[ $((PASS + FAIL)) -eq 0 ]]; then
+  echo "  FAIL: 一个仓都没查到 —— 这份判据什么都没问,不许算通过"
+  FAIL=1
+fi
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

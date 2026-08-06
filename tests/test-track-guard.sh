@@ -261,6 +261,19 @@ g5_tooling_changes_need_a_track() {
   out="$(cd "$d" && bash "$BIN/track-guard" 2>&1)"; rc=$?
   check "G5: 新增/改动 tests/test-*.sh 判据 ⇒ 也要挂 track" $([[ $rc -ne 0 ]]; echo $?)
   rm -rf "$d"
+
+  # ⑤ 四审(subkimi)点名的三处名单漏网 —— 每一处都是"判卷防线自己不在防线内":
+  #    a) 反锚定闸文件本身(改弱闸逻辑竟然不用挂 track);
+  #    b) `tests/test_*.py` —— 连字符匹配不到下划线,而它是总跑里的正式判据套件;
+  #    c) `track/templates/*` —— 把模板里的 `lane:` 行删掉,规矩2 当场成空文。
+  local f
+  for f in bin/_my-review-gate.sh tests/test_submimo_retry.py track/templates/verify.md; do
+    d="$(newrepo)"
+    ( cd "$d"; mkdir -p "$(dirname "$f")"; printf 'x\n' > "$f"; git add -A >/dev/null )
+    out="$(cd "$d" && bash "$BIN/track-guard" 2>&1)"; rc=$?
+    check "G5: 动 $f ⇒ 也要挂 track" $([[ $rc -ne 0 ]]; echo $?)
+    rm -rf "$d"
+  done
 }
 
 echo "=== track-guard oracle ==="

@@ -86,8 +86,9 @@ export PANEL_GLM_LEG=agent
 # 2026-08-06:反锚定闸(review 模式要求主 agent 先落盘自己那一遍)新上线,而**下面的老用例
 # 问的是各条腿自己的行为**(端点、模型、工具白名单、轮次上限……),不是这道闸。
 # 统一在这里显式退出,和上面 GLM 那条同一个道理:断言一条不删、一条不弱。
-# 只有 V23 那一组在自己内部把它显式打开来问闸本身。
-export REVIEW_NO_MY_REVIEW=1
+# 只有 V23 那一组问闸本身。
+# **不用全局 export**(四审两腿都点名这是脚枪:以后新写的用例会静默跳过闸)——
+# 改成在下面的调用处逐个显式关掉,谁关的一眼看得见,新用例默认闸是开着的。
 
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -1508,66 +1509,77 @@ v23_my_review_gate_on_every_review_path() {
   # 三条躯干各造一个"被调用就留痕"的假模型端点:闸该在**调用之前**拦下。
   # 直接用真脚本 + 假 CLI:mimo/claude 都不在这条路径上时脚本会自己报错,
   # 所以这里只断言 rc 和 stderr 里的那句话(拦在闸上,而不是拦在缺 CLI 上)。
-  for entry in "submimo|review" "subchat|deepseek review" "subagent|deepseek review"; do
+  for entry in "submimo|review" "subchat|deepseek review" "subagent|deepseek review" "subkimi|review"; do
     IFS='|' read -r tool args <<< "$entry"
     cp "$BIN/$tool" "$b/$tool"
     # ① 约定路径的自审文件不存在 ⇒ 拒跑,且错误信息点名"先写你自己的一遍"
     out="$(cd "$d" && env -u REVIEW_MY_REVIEW REVIEW_NO_MY_REVIEW=0 PANEL_DISPATCH=0 \
-            bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
+            timeout 25 bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
     check "V23: $tool 没有自审文件 ⇒ 拒跑" $([[ $rc -ne 0 ]]; echo $?)
     grep -q "自己的一遍" <<<"$out"; check "V23: $tool 说清是缺自审(不是别的报错)" $?
 
     # ② 自审文件在**仓内** ⇒ 拒跑(腿会照着我的答案抄)
     printf '我的一遍\n' > "$d/repo/mine.md"
-    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/repo/mine.md" bash "$b/$tool" $args \
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/repo/mine.md" timeout 25 bash "$b/$tool" $args \
             "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
     check "V23: $tool 自审文件在仓内 ⇒ 拒跑" $([[ $rc -ne 0 ]]; echo $?)
 
     # ③ 显式退出闸 ⇒ 不再被这道闸拦(会因为别的原因失败,但不许是这一句)
-    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=1 bash "$b/$tool" $args \
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=1 timeout 25 bash "$b/$tool" $args \
             "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
     if grep -q "自己的一遍" <<<"$out"; then
       bad "V23: $tool REVIEW_NO_MY_REVIEW=1 应当放行这道闸"
     else ok "V23: $tool REVIEW_NO_MY_REVIEW=1 应当放行这道闸"; fi
 
     # ④ panel-review 派发时不许被重复拦(它在自己那层已经查过)
-    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 PANEL_DISPATCH=1 bash "$b/$tool" $args \
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 PANEL_DISPATCH=1 timeout 25 bash "$b/$tool" $args \
             "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
     if grep -q "自己的一遍" <<<"$out"; then
       bad "V23: $tool 在 panel 派发下不许重复拦(否则四审整个派不出去)"
     else ok "V23: $tool 在 panel 派发下不许重复拦(否则四审整个派不出去)"; fi
     rm -f "$d/repo/mine.md"
   done
+  # ⑤ realpath 不可用 ⇒ **拒跑**,不许静默放行。
+  #    四审 subkimi 指出:panel-review 原来那层对 realpath 不带 `|| return 0`,
+  #    我下沉成共享件时顺手加了个 fail-open —— **重构悄悄把检查改松了**,是真回归。
+  local fb="$d/fakebin"; mkdir -p "$fb"
+  printf '#!/bin/bash\nexit 1\n' > "$fb/realpath"; chmod +x "$fb/realpath"
+  printf '我的一遍\n' > "$d/mine.md"
+  cp "$BIN/_my-review-gate.sh" "$b/" 2>/dev/null
+  out="$(cd "$d" && PATH="$fb:$PATH" REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/mine.md" \
+          timeout 25 bash "$b/submimo" review "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
+  grep -qi "realpath" <<<"$out"
+  check "V23: realpath 不可用 ⇒ 拒跑并说明(不许静默跳过仓内检查)" $?
   rm -rf "$d"
 }
 
 echo "=== review-tooling regression oracle ==="
-v1_untracked_content
-v1_no_untracked_and_nonrepo
-v2_glob_not_pre_expanded
-v3_panel_sidecar
-v4_output_validation
-v5_diff_scope
-v6_truncation
-v7_blind_warning
-v8_subchat_provider_table
-v9_subglm_agent
-v10_git_stderr_isolation
-v11_panel_gates
-v12_gate_default_on
-v13_subkimi_leg
-v14_leg_fallback_and_include
-v15_anchor_leak_warning
-v16_timeout_and_blind_chat_leg
-v17_explore_agent_legs
-v18_engine_identity_single_source
-v19_degradation_travels_with_conclusion
-v19_chat_leg_declares_its_blindness
-v20_max_turns_does_not_discard_work
-v21_agent_leg_body_is_single_source
-v22_head_moved_during_review
-v22_anchor_leak_sees_committed_track
-v22_roster_file
+REVIEW_NO_MY_REVIEW=1 v1_untracked_content
+REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
+REVIEW_NO_MY_REVIEW=1 v2_glob_not_pre_expanded
+REVIEW_NO_MY_REVIEW=1 v3_panel_sidecar
+REVIEW_NO_MY_REVIEW=1 v4_output_validation
+REVIEW_NO_MY_REVIEW=1 v5_diff_scope
+REVIEW_NO_MY_REVIEW=1 v6_truncation
+REVIEW_NO_MY_REVIEW=1 v7_blind_warning
+REVIEW_NO_MY_REVIEW=1 v8_subchat_provider_table
+REVIEW_NO_MY_REVIEW=1 v9_subglm_agent
+REVIEW_NO_MY_REVIEW=1 v10_git_stderr_isolation
+REVIEW_NO_MY_REVIEW=1 v11_panel_gates
+REVIEW_NO_MY_REVIEW=1 v12_gate_default_on
+REVIEW_NO_MY_REVIEW=1 v13_subkimi_leg
+REVIEW_NO_MY_REVIEW=1 v14_leg_fallback_and_include
+REVIEW_NO_MY_REVIEW=1 v15_anchor_leak_warning
+REVIEW_NO_MY_REVIEW=1 v16_timeout_and_blind_chat_leg
+REVIEW_NO_MY_REVIEW=1 v17_explore_agent_legs
+REVIEW_NO_MY_REVIEW=1 v18_engine_identity_single_source
+REVIEW_NO_MY_REVIEW=1 v19_degradation_travels_with_conclusion
+REVIEW_NO_MY_REVIEW=1 v19_chat_leg_declares_its_blindness
+REVIEW_NO_MY_REVIEW=1 v20_max_turns_does_not_discard_work
+REVIEW_NO_MY_REVIEW=1 v21_agent_leg_body_is_single_source
+REVIEW_NO_MY_REVIEW=1 v22_head_moved_during_review
+REVIEW_NO_MY_REVIEW=1 v22_anchor_leak_sees_committed_track
+REVIEW_NO_MY_REVIEW=1 v22_roster_file
 v23_my_review_gate_on_every_review_path
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
