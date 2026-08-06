@@ -55,6 +55,21 @@
 #       拷贝(342 行里只有 80 行不同,且多半是注释)⇒ V18/V19/V20 每条修法都得改两遍,
 #       而历史证明**总有一份会落下**(聊天腿早就用 subchat + 供应商表治过这个病,
 #       底座腿这边一直没治)。⇒ 共享躯干 `subagent` + 供应商表 + 瘦 shim,照 subchat 的先例。
+#   V22 派发窗口里的三个盲区(2026-08-05 `opendesign-turn-id` 一单里各栽一次):
+#       a) **评审期间 HEAD 动了没人说**。22:40 我趁 Kimi 还在跑提交了 `80d2d23`,
+#          它日志 1027–1094 行整段在追查"仓库正在被人改",并把 BLOCK 押在这个幻影上,
+#          25 分钟全废。⇒ 派发前后各记一次 HEAD,不同就报,且横幅要**写进每份腿日志**
+#          (结论会被单独读到,那时终端上那行早没了 —— 和 V19 同一个道理)。
+#       b) **反锚定检查有两臂,本机默认形状下两臂都照不到**。`PANEL_DIFF_BASE` 的推导
+#          要求 `main != HEAD`,而我一直在 main 上干活;verify.md 又是**已提交**的
+#          ⇒ status 那臂也空。实测泄漏:DeepSeek 日志第 28 行读了 verify.md、
+#          第 101 行原文引用我的「规格自查第 2 条」。⇒ 补一条不依赖 diff 基线的:
+#          按任务名去 `git ls-files` 找同名 track 的 verify.md(不相干的 track 不报,
+#          否则警告变噪音、下次就没人看了)。
+#       c) **各腿状态只活在终端里**。08-05 我在 verify.md 写下"三条腿一致 PASS",
+#          而 Kimi 根本没出结论(同一页第 90 行自己还写着它没出报告)—— 同页自相矛盾,
+#          `df527f2` 才更正。⇒ 收尾把花名册落盘成 `<prefix>.roster`,粘进 verify.md;
+#          关着的腿记 `off`(不许记成 PASS),回落腿带降级标记。
 #
 # Run:  bash /root/aiwork/tests/test-review-tooling.sh
 set -uo pipefail
@@ -1366,6 +1381,115 @@ CAPEOF
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V22
+# 派发窗口内的三个盲区(2026-08-05 同一单里各栽一次,见 V22 顶部注释)。
+v22_head_moved_during_review() {
+  echo "[V22a] panel-review: 评审期间 HEAD 动了要报,且要写进每份腿日志"
+  local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb" "$repo"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  printf '# review\n' > "$d/t.md"
+  ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
+    echo base > f.txt; git add -A; git commit -qm init )
+
+  # 老实的三条腿:HEAD 不动
+  for leg in submimo subdeepseek subglm subkimi; do
+    printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
+  done
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/H1" >"$d/h1.out" 2>&1
+  if grep -qi "HEAD 从\|HEAD moved" "$d/h1.out"; then bad "V22a: HEAD 没动时不许报"; else ok "V22a: HEAD 没动时不许报"; fi
+  if grep -qi "HEAD 从" "$d/H1.submimo.log"; then bad "V22a: HEAD 没动时日志不许被加尾巴"; else ok "V22a: HEAD 没动时日志不许被加尾巴"; fi
+
+  # 一条腿还在跑时,仓库被人提交了(08-05 实况:我在 Kimi 跑着时 commit 了 80d2d23)
+  cat > "$pb/submimo" <<'EOF'
+#!/usr/bin/env bash
+git -C "$4" commit -q --allow-empty -m "主审在评审期间提交"
+echo "STUB PASS" > "$3"
+exit 0
+EOF
+  chmod +x "$pb/submimo"
+  bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/H2" >"$d/h2.out" 2>&1
+  grep -qi "HEAD 从" "$d/h2.out"; check "V22a: HEAD 漂移在 stdout 报出来" $?
+  # 报告会被单独读到(归档/断线重连),所以横幅必须跟着结论走 —— 每一份腿日志都要有
+  local missed=0 f
+  for f in "$d/H2.submimo.log" "$d/H2.subdeepseek.log" "$d/H2.subglm.log" "$d/H2.subkimi.log"; do
+    [[ -s "$f" ]] || continue
+    grep -qi "HEAD 从" "$f" || { missed=1; echo "     (缺横幅: $f)"; }
+  done
+  check "V22a: 每份腿日志尾部都带 HEAD 漂移横幅" $([[ $missed -eq 0 ]]; echo $?)
+  # 原结论不许被横幅顶掉
+  grep -q "STUB PASS" "$d/H2.subdeepseek.log"; check "V22a: 加横幅不吞掉腿的原文" $?
+  rm -rf "$d"
+}
+
+v22_anchor_leak_sees_committed_track() {
+  echo "[V22b] panel-review: 已提交的同名 track verify.md 也算锚定泄漏(不依赖 diff 基线)"
+  local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  for leg in submimo subdeepseek subglm subkimi; do
+    printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
+  done
+  # 本机默认形状:在 main 上干活(main == HEAD ⇒ PANEL_DIFF_BASE 那一臂结构上不存在)、
+  # 工作区干净(verify.md 已提交 ⇒ status 那一臂也照不到)。08-05 实测泄漏就长这样。
+  mkdir -p "$repo/tracks/turnid" "$repo/tracks/unrelated"
+  ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
+    echo base > f.txt
+    printf '# Verify\n规格自查第 2 条:……\n' > tracks/turnid/verify.md
+    printf '# Verify\n别的 track\n' > tracks/unrelated/verify.md
+    git add -A; git commit -qm init )
+  printf '# review\n' > "$d/turnid-review.md"
+
+  bash "$pb/panel-review" --no-my-review "$d/turnid-review.md" "$repo" "$d/L1" >"$d/l1.out" 2>&1
+  grep -q "tracks/turnid/verify.md" "$d/l1.out"
+  check "V22b: 同名 track 的已提交 verify.md 被点名" $?
+  grep -qi "anchor\|锚定" "$d/l1.out"; check "V22b: 点名时给的是锚定泄漏警告" $?
+  if grep -q "tracks/unrelated/verify.md" "$d/l1.out"; then
+    bad "V22b: 不相干 track 的 verify.md 不许跟着报(误报会把警告变噪音)"
+  else
+    ok "V22b: 不相干 track 的 verify.md 不许跟着报(误报会把警告变噪音)"
+  fi
+  # 警告只是提醒,不阻断
+  [[ -s "$d/L1.submimo.log" ]]; check "V22b: 报警不阻断派发" $?
+  rm -rf "$d"
+}
+
+v22_roster_file() {
+  echo "[V22c] panel-review: 收尾把各腿状态落盘成 <prefix>.roster(verify.md 直接粘)"
+  local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb" "$repo"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  printf '# review\n' > "$d/t.md"
+  ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
+    echo base > f.txt; git add -A; git commit -qm init )
+
+  # 场景一:submimo 绿、subdeepseek 死(rc=5)、GLM 关着(默认)、kimi 绿
+  printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/submimo"
+  printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/subkimi"
+  printf '#!/bin/bash\necho "boom" >&2\nexit 5\n' > "$pb/subdeepseek"
+  chmod +x "$pb/submimo" "$pb/subkimi" "$pb/subdeepseek"
+  env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/R1" >"$d/r1.out" 2>&1
+  [[ -s "$d/R1.roster" ]]; check "V22c: 收尾写出 <prefix>.roster" $?
+  grep -q "submimo=PASS" "$d/R1.roster";      check "V22c: 绿腿记 PASS" $?
+  grep -q "subdeepseek=FAIL(rc=5)" "$d/R1.roster"; check "V22c: 死腿记 FAIL 且带 rc" $?
+  # 08-05 那次的病根:关着/没出结论的腿被我在 verify.md 里写成了"一致 PASS"
+  grep -q "subglm=off" "$d/R1.roster";        check "V22c: 关着的腿记 off,不许记成 PASS" $?
+  if grep -q "subglm=PASS" "$d/R1.roster"; then bad "V22c: 关着的腿绝不能出现 PASS"; else ok "V22c: 关着的腿绝不能出现 PASS"; fi
+  grep -q "subkimi=PASS" "$d/R1.roster";      check "V22c: 第四腿也在花名册里" $?
+  grep -q "R1.roster" "$d/r1.out";            check "V22c: stdout 指出 roster 路径(不然没人知道它在)" $?
+
+  # 场景二:底座腿死了回落聊天腿 ⇒ 花名册必须带降级标记(结论可以旅行,资格要跟着走)
+  cat > "$pb/subdeepseek-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "Error: Reached max turns" >&2
+echo "AGENT-JUNK" > "$3"
+exit 1
+EOF
+  printf '#!/bin/bash\necho "CHAT-LEG" > "$3"\nexit 0\n' > "$pb/subdeepseek"
+  chmod +x "$pb/subdeepseek" "$pb/subdeepseek-agent"
+  env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/R2" >/dev/null 2>&1
+  grep -qE "subdeepseek=PASS\(.*(降级|DEGRADED).*\)" "$d/R2.roster"
+  check "V22c: 回落腿在花名册里带降级标记" $?
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 v1_untracked_content
 v1_no_untracked_and_nonrepo
@@ -1390,5 +1514,8 @@ v19_degradation_travels_with_conclusion
 v19_chat_leg_declares_its_blindness
 v20_max_turns_does_not_discard_work
 v21_agent_leg_body_is_single_source
+v22_head_moved_during_review
+v22_anchor_leak_sees_committed_track
+v22_roster_file
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
