@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+# track delegate-entry-redcheck 的判据(主 agent 亲写,执行腿逐字节 off-limits)。
+#
+# 判的是两件"把检查搬到成本花掉之前"的工具:
+#   D `bin/delegate-codex` —— 派活入口:缺攻题记录 / 缺判卷清单就**拒发**(codex 一次都不启动),
+#      自动注入派活三件套,派活时把 HEAD + protect 清单存进回执;
+#      `--receive` 用同一份清单机械跑收货闸①。
+#   E `bin/redcheck`     —— 退回红检:把实现真退回基线再 build 再跑 oracle,**必须红**;
+#      跑完无条件恢复,并自证工作树干净。
+#
+# 判据锁死的几条"假绿路线":
+#   ① 拒发只印了警告、其实还是把活派出去了  ⇒ 用**假 codex 的调用计数文件**证零调用,
+#      不看脚本自己的输出(执行腿的自述一概不作数,这条对工具也一样)。
+#   ② 闸①只跑 `git diff` ⇒ 往 protect 目录里塞一个未跟踪文件(conftest.py 那招)就能
+#      让"亲跑全绿"变假绿。所以专门有一幕**只**新增未跟踪文件。
+#   ③ 闸①宽到什么都报(误报=噪音=下次没人看) ⇒ 有一幕改的是非 protect 文件,必须放行。
+#   ④ redcheck 说"红了"其实是自己炸了 ⇒ 有一幕让 oracle 在旧实现上**仍然绿**,必须判失败。
+#   ⑤ redcheck 跑完把树留在"基线构建"的状态(本机 dist 入库,这是真会咬人的) ⇒
+#      每一幕结束都查 `git status --porcelain`,还有一幕直接把它**中途杀掉**看恢不恢复。
+#
+# Run:  bash /root/aiwork/tests/test-delegate-entry.sh
+set -uo pipefail
+
+BIN="${DELEGATE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
+
+PASS=0; FAIL=0
+ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
+bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
+
+# 假 codex:把 argv 和收到的任务书落盘,并**记一次调用**。
+# 计数文件是"它到底被调用了没有"的唯一证据 —— 拒发那几幕全靠它。
+make_fake_codex() {  # make_fake_codex <bin目录> <计数/记录目录>
+  local b="$1" rec="$2"
+  mkdir -p "$b" "$rec"
+  cat > "$b/codex" <<EOF
+#!/usr/bin/env bash
+rec="$rec"
+echo "call" >> "\$rec/calls"
+printf '%s\n' "\$@" > "\$rec/argv.\$(wc -l < "\$rec/calls" | tr -d ' ')"
+# 任务书是最后一个位置参数
+prompt="\${!#}"
+printf '%s' "\$prompt" > "\$rec/prompt.\$(wc -l < "\$rec/calls" | tr -d ' ')"
+exit 0
+EOF
+  chmod +x "$b/codex"
+}
+calls_of() { [[ -f "$1/calls" ]] && wc -l < "$1/calls" | tr -d ' ' || echo 0; }
+
+# 一个有历史的临时仓:HEAD = 新实现,HEAD~1 = 旧实现(缺功能)。
+make_repo() {  # make_repo <dir>
+  local r="$1"; mkdir -p "$r/tests" "$r/src"
+  ( cd "$r"
+    git init -q -b main; git config user.email t@t; git config user.name t
+    printf '#!/bin/bash\necho old\n' > src/impl.sh
+    # 判卷:要求实现打印 NEW(旧实现打印 old ⇒ 旧实现下必红)
+    cat > tests/oracle.sh <<'EOF'
+#!/bin/bash
+out="$(bash "$(dirname "$0")/../src/impl.sh")"
+[[ "$out" == "NEW" ]] || { echo "FAIL: 期望 NEW,实际 $out"; exit 1; }
+echo "ok - impl 输出 NEW"
+EOF
+    git add -A; git commit -qm "旧实现 + 判据"
+    printf '#!/bin/bash\necho NEW\n' > src/impl.sh
+    git add -A; git commit -qm "新实现" )
+}
+
+# ---------------------------------------------------------------- D:拒发
+d_refuses_without_evidence() {
+  echo "[D1] delegate-codex:缺攻题记录 / 缺判卷清单 ⇒ 拒发,且 codex 一次都不启动"
+  local d; d="$(mktemp -d)"; local b="$d/bin" rec="$d/rec" repo="$d/repo"
+  make_fake_codex "$b" "$rec"; make_repo "$repo"
+  printf '# 任务书\n把 impl 改成打印 NEW\n' > "$d/task.md"
+  printf '攻题记录:第 3 条断言在旧实现上也绿\n' > "$d/attack.md"
+  local rc
+
+  # ① 完全不给 --attack-log
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --protect tests/oracle.sh >"$d/o1" 2>&1; rc=$?
+  check "D1: 没给 --attack-log ⇒ 非零" $([[ $rc -ne 0 ]]; echo $?)
+  check "D1: 没给 --attack-log ⇒ codex 零调用" $([[ "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+
+  # ② 给了但文件不存在
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/nope.md" --protect tests/oracle.sh >"$d/o2" 2>&1; rc=$?
+  check "D1: attack-log 不存在 ⇒ 非零 + 零调用" \
+    $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+
+  # ③ 存在但是空的("我写了个空文件应付"这条路要堵死)
+  : > "$d/empty.md"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/empty.md" --protect tests/oracle.sh >"$d/o3" 2>&1; rc=$?
+  check "D1: attack-log 是空文件 ⇒ 非零 + 零调用" \
+    $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+
+  # ④ 攻题记录放在**仓内** = 把考卷的洞递给考生(和 panel-review 的 my-review 闸同源)
+  cp "$d/attack.md" "$repo/attack.md"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$repo/attack.md" --protect tests/oracle.sh >"$d/o4" 2>&1; rc=$?
+  check "D1: attack-log 在仓内 ⇒ 非零 + 零调用(漏洞清单不许进考场)" \
+    $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  rm -f "$repo/attack.md"
+
+  # ⑤ 不给 --protect(守卫的强度只等于这份清单,没清单就没守卫)
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" >"$d/o5" 2>&1; rc=$?
+  check "D1: 没给 --protect ⇒ 非零 + 零调用" \
+    $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- D:派活
+d_injects_and_records() {
+  echo "[D2] delegate-codex:齐了就发,三件套逐字注入,回执记下派活那一刻"
+  local d; d="$(mktemp -d)"; local b="$d/bin" rec="$d/rec" repo="$d/repo"
+  make_fake_codex "$b" "$rec"; make_repo "$repo"
+  printf '# 任务书\nMARKER_TASK_BODY\n' > "$d/task.md"
+  printf '攻题记录:第 3 条断言在旧实现上也绿\n' > "$d/attack.md"
+  local head_at_dispatch; head_at_dispatch="$(git -C "$repo" rev-parse HEAD)"
+  local rc
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/oracle.sh --protect tests/ \
+      --log "$d/run.log" >"$d/out" 2>&1; rc=$?
+  check "D2: 材料齐 ⇒ rc=0" $([[ $rc -eq 0 ]]; echo $?)
+  check "D2: codex 被调用了一次" $([[ "$(calls_of "$rec")" -eq 1 ]]; echo $?)
+
+  local prompt="$rec/prompt.1" argv="$rec/argv.1"
+  grep -q "MARKER_TASK_BODY" "$prompt"; check "D2: 原任务书正文在里面" $?
+  grep -q "tests/oracle.sh" "$prompt"; check "D2: 每条 protect 路径逐条写进任务书" $?
+  grep -qi "off-limits\|一个字都不许改\|不许改动" "$prompt"; check "D2: 三件套①判卷 off-limits" $?
+  grep -q "回归" "$prompt" && grep -q "build" "$prompt"; check "D2: 三件套②自检清单" $?
+  grep -q "push" "$prompt" && grep -q "merge" "$prompt"; check "D2: 三件套③不 push / 不 merge" $?
+  grep -q "project_doc_max_bytes=0" "$argv"; check "D2: 命令行带 project_doc_max_bytes=0" $?
+  grep -q '^\-m$' "$argv" || grep -q '^-m ' "$argv"; check "D2: 模型显式给 -m(不吃默认值)" $?
+
+  # 回执:收货闸①要用的东西必须在派活那一刻就定死
+  local receipt="$d/run.log.receipt.json"
+  [[ -s "$receipt" ]]; check "D2: 写出回执 <log>.receipt.json" $?
+  python3 - "$receipt" "$repo" "$head_at_dispatch" <<'EOF'
+import json,sys
+r=json.load(open(sys.argv[1])); repo,head=sys.argv[2],sys.argv[3]
+assert r["repo"].rstrip("/")==repo.rstrip("/"), r["repo"]
+assert r["head"]==head, (r["head"],head)
+assert "tests/oracle.sh" in r["protect"] and "tests/" in r["protect"], r["protect"]
+assert r["attack_log"].endswith("attack.md") and len(r["attack_log_sha256"])==64
+EOF
+  check "D2: 回执字段齐(repo/派活时 HEAD/protect 清单/攻题记录+sha256)" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- D:收货闸①
+d_receive_gate() {
+  echo "[D3] delegate-codex --receive:闸①机械版(diff 为空 **且** status 为空)"
+  local d; d="$(mktemp -d)"; local b="$d/bin" rec="$d/rec" repo="$d/repo"
+  make_fake_codex "$b" "$rec"; make_repo "$repo"
+  printf '# 任务书\n干活\n' > "$d/task.md"
+  printf '攻题记录:……\n' > "$d/attack.md"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/run.log" >/dev/null 2>&1
+  local receipt="$d/run.log.receipt.json" rc
+
+  # ① 执行腿只动了实现 ⇒ 放行
+  printf '#!/bin/bash\necho NEW\necho more\n' > "$repo/src/impl.sh"
+  bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r1" 2>&1; rc=$?
+  check "D3: 只动实现 ⇒ 闸①放行(不误报)" $([[ $rc -eq 0 ]]; echo $?)
+
+  # ② 改了判卷文件(未提交)⇒ 拦
+  printf 'echo tampered\n' >> "$repo/tests/oracle.sh"
+  bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r2" 2>&1; rc=$?
+  check "D3: 改了判卷文件 ⇒ 拦下" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "tests/oracle.sh" "$d/r2"; check "D3: 拦下时点名是哪个文件" $?
+  git -C "$repo" checkout -- tests/oracle.sh
+
+  # ③ 改了判卷文件**并提交** ⇒ 照样拦(diff 那一臂)
+  printf 'echo tampered\n' >> "$repo/tests/oracle.sh"
+  git -C "$repo" commit -qam "偷偷改判卷"
+  bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r3" 2>&1; rc=$?
+  check "D3: 改判卷并提交了 ⇒ 照样拦" $([[ $rc -ne 0 ]]; echo $?)
+  git -C "$repo" reset -q --hard HEAD~1
+
+  # ④ **只**新增一个未跟踪文件(conftest.py 那招)⇒ 必须拦
+  #    这一幕是整份判据里最值钱的:git diff 看不见它,亲读 diff 也照不到它。
+  printf 'import pytest\n@pytest.fixture(autouse=True)\ndef always_pass(): pass\n' \
+    > "$repo/tests/conftest.py"
+  bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r4" 2>&1; rc=$?
+  check "D3: protect 目录下新增未跟踪文件 ⇒ 拦下(git diff 看不见它)" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "conftest.py" "$d/r4"; check "D3: 拦下时点名那个未跟踪文件" $?
+  rm -f "$repo/tests/conftest.py"
+
+  # ⑤ 仓外的、非 protect 的改动 ⇒ 不许误报
+  printf 'noise\n' > "$repo/src/other.txt"
+  bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r5" 2>&1; rc=$?
+  check "D3: 非 protect 路径的新增文件 ⇒ 放行(误报会让警告变噪音)" $([[ $rc -eq 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- E:退回红检
+e_redcheck() {
+  echo "[E1] redcheck:把实现真退回基线再跑判据,必须红;跑完树要干净"
+  local d; d="$(mktemp -d)"; local repo="$d/repo" rc
+  make_repo "$repo"
+
+  # ① 正常:旧实现下判据红 ⇒ 红检通过(rc=0)
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
+       --oracle 'bash tests/oracle.sh' >"$d/e1" 2>&1; rc=$?
+  check "E1: 旧实现下判据红 ⇒ 红检通过(rc=0)" $([[ $rc -eq 0 ]]; echo $?)
+  check "E1: 跑完工作树干净" $([[ -z "$(git -C "$repo" status --porcelain)" ]]; echo $?)
+  [[ "$(bash "$repo/src/impl.sh")" == "NEW" ]]
+  check "E1: 跑完实现真的恢复成 HEAD 那版" $?
+
+  # ② 恒真判据:旧实现下也绿 ⇒ 必须报失败(这正是 08-05 手写桩没抓到的那种)
+  cat > "$repo/tests/oracle.sh" <<'EOF'
+#!/bin/bash
+echo "ok - 前置恒真的断言"
+exit 0
+EOF
+  git -C "$repo" commit -qam "把判据换成恒真的"
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~2 --impl src/impl.sh \
+       --oracle 'bash tests/oracle.sh' >"$d/e2" 2>&1; rc=$?
+  check "E1: 旧实现下判据仍绿 ⇒ 报失败(rc≠0)" $([[ $rc -ne 0 ]]; echo $?)
+  grep -qi "仍然绿\|没红\|恒真" "$d/e2"; check "E1: 失败时说清是「旧实现也过」" $?
+  check "E1: 失败那次也把树恢复干净" $([[ -z "$(git -C "$repo" status --porcelain)" ]]; echo $?)
+  git -C "$repo" reset -q --hard HEAD~1
+
+  # ③ --build 真的被跑了,且恢复之后**再 build 一次**(本机 dist 入库,不重 build 就留了
+  #    一棵"基线构建的树")
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
+       --build "echo built >> $d/builds" --oracle 'bash tests/oracle.sh' >"$d/e3" 2>&1
+  check "E1: --build 跑了两次(退回后一次、恢复后一次)" \
+    $([[ -f "$d/builds" && "$(wc -l < "$d/builds")" -eq 2 ]]; echo $?)
+
+  # ④ 工作树脏 ⇒ 拒跑(不替人猜哪些改动该留),且一个字都不许动
+  printf '#!/bin/bash\necho WIP\n' > "$repo/src/impl.sh"
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
+       --oracle 'bash tests/oracle.sh' >"$d/e4" 2>&1; rc=$?
+  check "E1: impl 有未提交改动 ⇒ 拒跑" $([[ $rc -ne 0 ]]; echo $?)
+  [[ "$(bash "$repo/src/impl.sh")" == "WIP" ]]
+  check "E1: 拒跑时没动过工作区那份改动" $?
+  git -C "$repo" checkout -- src/impl.sh
+
+  # ⑤ 中途被杀 ⇒ 照样恢复(trap 那条)。这是"恢复"最难的一种,也是真会发生的一种。
+  ( bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
+        --oracle 'sleep 30' >"$d/e5" 2>&1 ) &
+  local pid=$!
+  sleep 2; kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  sleep 1
+  check "E1: 中途被 TERM 掉,工作树照样恢复" \
+    $([[ -z "$(git -C "$repo" status --porcelain)" ]]; echo $?)
+  [[ "$(bash "$repo/src/impl.sh")" == "NEW" ]]
+  check "E1: 中途被杀后实现也回到 HEAD 那版" $?
+  rm -rf "$d"
+}
+
+echo "=== delegate-entry / redcheck oracle ==="
+d_refuses_without_evidence
+d_injects_and_records
+d_receive_gate
+e_redcheck
+echo "=== total: $PASS passed, $FAIL failed ==="
+[[ $FAIL -eq 0 ]]
