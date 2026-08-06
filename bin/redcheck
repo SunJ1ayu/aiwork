@@ -72,7 +72,16 @@ restore() {
   RESTORED=1
   echo
   echo "redcheck: 恢复实现到 HEAD ..."
+  # 三步,缺一不可(08-06 在 design-studio 真 build 上实测):
+  #   ① checkout 铺回 HEAD 的内容 —— 但它**只按 HEAD 的文件名铺**,而且会把结果**入暂存区**;
+  #   ② reset 把暂存区退回 HEAD:退回那一步的 checkout 也是入暂存的,不退就留下一堆 "A " 项;
+  #   ③ clean 清掉**基线特有的产物** —— vite 那种 `index-<hash>.js` 按内容改名,
+  #      基线构建出的文件名在 HEAD 里根本不存在,①②都碰不到它。
+  # 只在 --impl 范围内动手,且开工前已要求这些路径干净 ⇒ 不会误删谁的活。
   git -C "$REPO" checkout "$HEAD_SHA" -- "${IMPL[@]}" 2>/dev/null
+  git -C "$REPO" reset -q "$HEAD_SHA" -- "${IMPL[@]}" 2>/dev/null
+  git -C "$REPO" clean -fdq -- "${IMPL[@]}" 2>/dev/null
+  git -C "$REPO" checkout "$HEAD_SHA" -- "${IMPL[@]}" 2>/dev/null   # clean 之后再铺一次,补上被清掉的跟踪文件
   # 恢复之后**必须重新 build**:本机 dist 入库,不重 build 就把一棵"基线构建的树"
   # 留在盘上 —— 那和"盘上和运行时对不上"是同一种事故,只是发生在仓库里。
   if [[ -n "$BUILD" ]]; then
