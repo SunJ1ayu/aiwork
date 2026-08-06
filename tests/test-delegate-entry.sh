@@ -315,6 +315,31 @@ EOF
   bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/helper.sh src/impl.sh \
        --oracle 'bash tests/oracle.sh' >"$d/e10" 2>&1; rc=$?
   check "E1: --impl 接多个路径(变长写法)也认" $([[ $rc -eq 0 ]]; echo $?)
+
+  # ⑩ **构建产物按内容改名**(vite 那种 index-<hash>.js,而且 dist 入库)。
+  #    08-06 在 design-studio 上真跑一次真 build 时抓到的:退回后 build 出的是
+  #    **基线那个文件名**,恢复时 `git checkout HEAD -- <路径>` 只按 HEAD 的文件名铺,
+  #    基线那份留在索引里 ⇒ 工作树没干净。当时是"恢复自证"那道闸响的(rc=9,大声退出),
+  #    没有静默把一棵混合树留在盘上 —— 但**响了不等于修了**,这一幕要求它真的收拾干净。
+  local r2="$d/repo2"; mkdir -p "$r2/src" "$r2/out" "$r2/tests"
+  local BUILD='rm -f out/asset-*.js; mkdir -p out; echo built > "out/asset-$(md5sum < src/impl.sh | cut -c1-6).js"'
+  ( cd "$r2"
+    git init -q -b main; git config user.email t@t; git config user.name t
+    printf '#!/bin/bash\necho old\n' > src/impl.sh
+    cat > tests/oracle.sh <<'EOF'
+#!/bin/bash
+out="$(bash "$(dirname "$0")/../src/impl.sh")"
+[[ "$out" == "NEW" ]] || { echo "FAIL: 期望 NEW,实际 $out"; exit 1; }
+echo "ok"
+EOF
+    bash -c "$BUILD"; git add -A; git commit -qm "旧实现 + 旧产物"
+    printf '#!/bin/bash\necho NEW\n' > src/impl.sh
+    bash -c "$BUILD"; git add -A; git commit -qm "新实现 + 新产物" )
+  bash "$BIN/redcheck" --repo "$r2" --base HEAD~1 --impl src/impl.sh out \
+       --build "$BUILD" --oracle 'bash tests/oracle.sh' >"$d/e11" 2>&1; rc=$?
+  check "E1: 产物按内容改名时红检照常通过" $([[ $rc -eq 0 ]]; echo $?)
+  check "E1: **基线那份产物被收拾干净**(git status 为空,不是只喊一声)" \
+    $([[ -z "$(git -C "$r2" status --porcelain -uall)" ]]; echo $?)
   rm -rf "$d"
 }
 
