@@ -52,7 +52,11 @@ fi
 tooling=""
 for f in $(staged || true); do
   case "$f" in
-    bin/panel-*|bin/sub*|bin/delegate-*|bin/redcheck|bin/track|bin/track-guard|bin/rust-check-*|tests/test-*)
+    # 名单补三处(2026-08-06 四审 subkimi):**判卷防线自己也得在防线内** ——
+    #   `bin/_*`      反锚定闸文件本身(改弱闸逻辑竟然不用挂 track);
+    #   `tests/test_*` 下划线命名的判据(连字符匹配不到,而它在总跑清单里);
+    #   `track/*`     模板与约定(把模板里的 `lane:` 行删掉,规矩2 当场成空文)。
+    bin/panel-*|bin/sub*|bin/delegate-*|bin/redcheck|bin/track|bin/track-guard|bin/rust-check-*|bin/_*|tests/test-*|tests/test_*|track/templates/*|track/CONVENTION.md)
       tooling="$f"; break ;;
   esac
 done

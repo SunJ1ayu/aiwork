@@ -51,6 +51,18 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
 if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
 
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
+
+# 反锚定闸(2026-08-06 补):第四条腿也要接 —— 上一版只接了三条躯干,
+# 而 subkimi 是**默认开着**的那条,直调它就能跳过"先写自己的一遍"。
+# 四审两条腿把这条顶成 HIGH:目标说的是"每一条评审路径",实现漏了一条 = 实质落差。
+_GATE="$(dirname "$0")/_my-review-gate.sh"
+[ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh
+if [ -f "$_GATE" ]; then
+  . "$_GATE"
+  my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subkimi" || exit 1
+else
+  echo "subkimi: 找不到 _my-review-gate.sh —— 反锚定闸缺件,拒跑(fail closed)" >&2; exit 1
+fi
 MODEL="${KIMI_MODEL:-$DEFAULT_MODEL}"
 TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 

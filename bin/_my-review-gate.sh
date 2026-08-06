@@ -19,7 +19,13 @@
 my_review_gate() {  # my_review_gate <mode> <task_file> <repo_dir> <label>
   local mode="$1" task="$2" repo="$3" label="${4:-review}"
   [[ "$mode" == "review" ]] || return 0
-  [[ "${PANEL_DISPATCH:-0}" == "1" ]] && return 0
+  if [[ "${PANEL_DISPATCH:-0}" == "1" ]]; then
+    # panel-review 已在自己那层查过,这里不重复拦。但**留一行痕**:
+    # 这个标记是内部协调用的,任何人 export 它都能过闸(四审两腿都点名了这个后门)。
+    local _mr="${REVIEW_MY_REVIEW:-/root/aiwork/tasks/$(basename "${task%.*}")-my-review.md}"
+    [[ -f "$_mr" ]] || echo "$label: 注意 —— PANEL_DISPATCH=1 跳过了反锚定闸,而 $_mr 并不存在。" >&2
+    return 0
+  fi
   [[ "${REVIEW_NO_MY_REVIEW:-0}" == "1" ]] && return 0
 
   local mr="${REVIEW_MY_REVIEW:-/root/aiwork/tasks/$(basename "${task%.*}")-my-review.md}"
@@ -35,8 +41,19 @@ my_review_gate() {  # my_review_gate <mode> <task_file> <repo_dir> <label>
   fi
   # 必须在仓外:引擎会把未跟踪文件内联进腿的提示词 —— 自己的 findings 进了仓,
   # "独立的第二意见"就变成了照着我的答案抄(07-21 实事故,panel-review 那层同源)。
+  # realpath 不可用 ⇒ **拒跑**,不是放行。
+  # 2026-08-06 四审 subkimi 指出:`panel-review` 原来那层对 realpath 不带任何逃生,
+  # 而我下沉成共享件时顺手写了 `|| return 0` —— **重构悄悄把检查改松了**。
+  # 少了它,"自审文件在仓内"这条核心检查会在没有 realpath 的环境里整体静默失效。
   local rp mrv
-  rp="$(realpath "$repo" 2>/dev/null)" || return 0
+  command -v realpath >/dev/null 2>&1 || {
+    echo "$label: 系统里没有 realpath,无法判断自审文件在不在仓内 —— 拒跑(fail closed)" >&2
+    return 1
+  }
+  rp="$(realpath "$repo" 2>/dev/null)" || {
+    echo "$label: realpath 解析不了仓库路径 $repo —— 拒跑(fail closed)" >&2
+    return 1
+  }
   for mrv in "$(realpath "$mr" 2>/dev/null)" "$(realpath -s "$mr" 2>/dev/null)"; do
     case "$mrv" in
       "$rp"/*)
