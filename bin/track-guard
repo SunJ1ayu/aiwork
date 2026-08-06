@@ -11,6 +11,16 @@ say() { printf 'track-guard: %s\n' "$1" >&2; }
 
 staged() { git diff --cached --name-only; }
 
+# 逃生口(规矩1 与规矩4 共用):本次提交带了 track 工件,或近 7 天有 verify.md 改动。
+# **只此一份** —— 08-06 第一版把这五行在两条规矩里各抄了一遍,而"两份拷贝总有一份
+# 会落下"是本机反复记账的那条债(底座腿因此合并过躯干)。趁只有两份先合掉。
+hangs_on_a_track() {
+  staged | grep -q '^tracks/' && return 0
+  local recent
+  recent=$(git log --since='7 days ago' --name-only --pretty=format: -- 'tracks/*/verify.md' | grep . | head -1)
+  [ -n "$recent" ]
+}
+
 # ---- 规矩1:bump 必挂 track ----
 # 版本号住在哪由项目决定:npm 系在 package.json,而 design-studio 的真版本号在
 # `bin/ds_web.py` 的 `VERSION = "..."`(/api/health 回显的、部署铁律核对的都是它;
@@ -27,17 +37,10 @@ for f in $(staged || true); do
   [ -n "$bumped" ] && break
 done
 
-if [ -n "$bumped" ]; then
-  if staged | grep -q '^tracks/'; then
-    : # 本次提交带 track 工件,过
-  else
-    recent=$(git log --since='7 days ago' --name-only --pretty=format: -- 'tracks/*/verify.md' | grep . | head -1)
-    if [ -z "$recent" ]; then
-      fail=1
-      say "🔴 规矩1:$bumped 在 bump 版本号,但本提交没动 tracks/,近 7 天也没有 verify.md 更新。"
-      say "   bump 必须挂 track(新起一个,或把这单归进现成 track 的 verify.md)。"
-    fi
-  fi
+if [ -n "$bumped" ] && ! hangs_on_a_track; then
+  fail=1
+  say "🔴 规矩1:$bumped 在 bump 版本号,但本提交没动 tracks/,近 7 天也没有 verify.md 更新。"
+  say "   bump 必须挂 track(新起一个,或把这单归进现成 track 的 verify.md)。"
 fi
 
 # ---- 规矩4:动了评审/派活工具或判据,也必须挂 track ----
@@ -61,18 +64,11 @@ for f in $(staged || true); do
   esac
 done
 
-if [ -n "$tooling" ]; then
-  if staged | grep -q '^tracks/'; then
-    :
-  else
-    recent=$(git log --since='7 days ago' --name-only --pretty=format: -- 'tracks/*/verify.md' | grep . | head -1)
-    if [ -z "$recent" ]; then
-      fail=1
-      say "🔴 规矩4:$tooling 属于评审/派活工具或判据(判卷防线),但本提交没动 tracks/,"
-      say "   近 7 天也没有 verify.md 更新 ⇒ 这单的 lane 从头到尾没人问过。"
-      say "   挂个 track(新起,或归进现成 track 的 verify.md)再提交。"
-    fi
-  fi
+if [ -n "$tooling" ] && ! hangs_on_a_track; then
+  fail=1
+  say "🔴 规矩4:$tooling 属于评审/派活工具或判据(判卷防线),但本提交没动 tracks/,"
+  say "   近 7 天也没有 verify.md 更新 ⇒ 这单的 lane 从头到尾没人问过。"
+  say "   挂个 track(新起,或归进现成 track 的 verify.md)再提交。"
 fi
 
 # ---- 规矩2:最近改动的 verify.md 里 lane / 派给 非空 ----
