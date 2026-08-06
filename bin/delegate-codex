@@ -56,10 +56,19 @@ do_receive() {
   echo "  基线 = 派活时 HEAD ${head:0:12}"
   echo "  判卷清单:${protect[*]}"
 
-  local diff_out status_out bad=0
+  local diff_out status_out ignored_out marked bad=0
   diff_out="$(git -C "$repo" diff "$head" -- "${protect[@]}" 2>&1)"
   # -uall:不带它 git 会把未跟踪目录折叠成 `tests/`,里面塞的文件就漏检了
   status_out="$(git -C "$repo" status --porcelain -uall -- "${protect[@]}" 2>&1)"
+  # 第三臂(四审 subdeepseek F2):被 gitignore 藏起来的新文件,上面两臂都看不见。
+  ignored_out="$(git -C "$repo" status --porcelain -uall --ignored -- "${protect[@]}" 2>/dev/null \
+                 | grep '^!!' || true)"
+  # 第四臂(四审 subdeepseek F1):`git update-index --skip-worktree/--assume-unchanged`
+  # 一挂,diff 和 status **同时**把该文件当没改过 —— 工件查证退化回自述,正好打在
+  # 这道闸的立足点上。`git ls-files -v` 的标志位:**小写字母 = assume-unchanged**,
+  # **`S` = skip-worktree**(两者都要抓;只抓小写会漏掉 skip-worktree 那一半)。
+  marked="$(git -C "$repo" ls-files -v -- "${protect[@]}" 2>/dev/null \
+            | grep -E '^([a-z]|S) ' || true)"
 
   if [[ -n "$diff_out" ]]; then
     bad=1
@@ -70,6 +79,17 @@ do_receive() {
     bad=1
     echo "  ❌ 判卷路径下有未提交/未跟踪的东西(git diff 看不见它):"
     printf '%s\n' "$status_out" | sed 's/^/     /'
+  fi
+  if [[ -n "$ignored_out" ]]; then
+    bad=1
+    echo "  ❌ 判卷路径下有**被 gitignore 藏起来**的文件(前两臂都看不见它):"
+    printf '%s\n' "$ignored_out" | sed 's/^/     /'
+  fi
+  if [[ -n "$marked" ]]; then
+    bad=1
+    echo "  ❌ 判卷文件被挂了 skip-worktree/assume-unchanged 位 —— 挂上之后 diff 和 status"
+    echo "     会同时把它当作没改过(这道闸就瞎了):"
+    printf '%s\n' "$marked" | sed 's/^/     /'
   fi
   if [[ $bad -ne 0 ]]; then
     echo "  ⇒ 闸① 不过。执行腿的自述一概不作数,先查清楚这些改动是谁写的、为什么。"
@@ -82,7 +102,9 @@ do_receive() {
   # 而误报的守卫活不过一周。判断留给闸③,这里只保证它有一份不是自述的清单。
   echo "  ── 执行腿动过的文件(闸③的底账,含未跟踪)──"
   { git -C "$repo" diff --name-only "$head"
-    git -C "$repo" status --porcelain -uall | awk '{print $NF}'
+    # 路径含空格时 `awk '{print $NF}'` 只取最后一个词 —— 底账会失真(四审 subdeepseek F3)。
+    # porcelain 的格式是「两位状态 + 空格 + 路径」,直接砍前三个字符。
+    git -C "$repo" status --porcelain -uall | cut -c4-
   } | sort -u | sed 's/^/     /'
   return 0
 }
@@ -139,6 +161,25 @@ for p in "${PROTECT[@]}"; do
   [[ -e "$REPO/$p" ]] || die "--protect 的路径在仓里不存在:$p(相对 $REPO)"
 done
 
+# 判卷路径**不许有被 gitignore 的东西**(四审 subdeepseek F2):
+# 执行腿只要往 .gitignore 追一行、再塞一个 `tests/conftest.py`,闸①两臂就全空 ——
+# `git status --porcelain -uall` 默认不显示 ignored 文件,那招(闸①最值钱的一幕)被绕过。
+# 在派活这一刻查:判卷目录里现在就有 ignored 文件的话,这套闸从一开始就不成立。
+_ignored="$(git -C "$REPO" status --porcelain -uall --ignored -- "${PROTECT[@]}" 2>/dev/null \
+            | grep '^!!' || true)"
+if [[ -n "$_ignored" ]]; then
+  die "判卷路径下有**被 gitignore 藏起来**的文件,闸① 看不见它们:
+$(printf '%s\n' "$_ignored" | sed 's/^/    /')
+  先把它们从 .gitignore 里放出来(或移出判卷目录)再派活 ——
+  否则执行腿往那儿塞一个 conftest.py 就能让"亲跑全绿"变假绿。"
+fi
+# `.gitignore` 本身也进判卷清单:不然执行腿改 .gitignore 就能把新塞的判卷文件藏起来。
+if [[ -f "$REPO/.gitignore" ]]; then
+  _has_ignorefile=0
+  for p in "${PROTECT[@]}"; do [[ "$p" == ".gitignore" ]] && _has_ignorefile=1; done
+  [[ $_has_ignorefile -eq 1 ]] || PROTECT+=(".gitignore")
+fi
+
 # ③ 攻题记录必须**新过判卷**:攻的是上一版考卷等于没攻。
 #    这条是 gpt-5.6-sol 的独立方案点破的 —— 我原来只查"非空 + 在仓外",
 #    而"攻完之后我又改了 oracle"这条路整条是敞开的(而那正是最常发生的事:
@@ -165,6 +206,15 @@ NAME="$(basename "${TASK%.*}")"
 LOG="${LOG:-/root/aiwork/logs/delegate-${NAME}-${TS}.log}"
 mkdir -p "$(dirname "$LOG")"
 RECEIPT="${LOG}.receipt.json"
+# 回执/日志**必须在仓外**(四审 subdeepseek F15 / subkimi F3):它们是闸①的卷宗,
+# 落在被派活的仓里 = 执行腿可以改 head/protect 让闸①自己给自己开绿灯。
+# 和攻题记录同源的道理:考生不许碰卷宗。
+for _l in "$(realpath -m "$LOG")" "$(realpath -m "$RECEIPT")"; do
+  case "$_l" in
+    "$_rp"/*) die "日志/回执落在被派活的仓里:$_l
+  执行腿能改它 ⇒ 闸① 变成自证。挪到仓外(默认就在 /root/aiwork/logs/)。" ;;
+  esac
+done
 HEAD_AT_DISPATCH="$(git -C "$REPO" rev-parse HEAD)"
 
 # ── 派活三件套:逐字注入 ─────────────────────────────────────────────────
@@ -191,6 +241,15 @@ ${protect_lines}  改判卷(删断言、写死期望值、加 skip、加 autouse
 【三】边界 —— 不许:push、merge、归档、装依赖、删无关文件、碰生产系统、
   跑数据库迁移、改密钥。需要这类操作时**停下来问我**。
 ────────────────────────────────────────────────────────────"
+
+# 任务书 + 三件套是走**命令行参数**递给 codex 的,而 Linux 单个 argv 的上限
+# (MAX_ARG_STRLEN)是 128KiB。超了 `codex exec` 直接 E2BIG,而那时回执**已经写出去了**
+# ⇒ 盘上留着一份"已派活"的回执、实际一次都没跑(四审 subkimi F14)。所以在写回执之前先量。
+_plen=${#PROMPT}
+if [[ $_plen -gt 120000 ]]; then
+  die "任务书 + 注入的规矩共 ${_plen} 字节,超过命令行单参数上限(128KiB),codex 起不来。
+  把任务书拆小,或者把大段材料放成文件让它自己去读。"
+fi
 
 python3 - "$RECEIPT" "$REPO" "$HEAD_AT_DISPATCH" "$ATTACK" "$TASK" "$LOG" "$MODEL" "${PROTECT[@]}" <<'PY'
 import hashlib, json, sys, datetime

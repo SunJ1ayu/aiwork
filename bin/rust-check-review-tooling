@@ -27,7 +27,11 @@ for entry in "${SUITES[@]}"; do
     names+=("$name"); rcs+=(127); summaries+=("判据文件不见了:$path"); outs+=("")
     continue
   fi
-  out="$("$runner" "$path" 2>&1)"; rc=$?
+  # 每个套件套 timeout(四审两腿都点到:没有超时的话,某个套件挂死 = 总跑跟着挂死,
+  # 既不红也不绿、心跳也不打 —— 而这个脚本存在的理由就是"让静默腐烂看得见"）。
+  out="$(timeout "${SUITE_TIMEOUT:-1800}" "$runner" "$path" 2>&1)"; rc=$?
+  if [[ $rc -eq 124 ]]; then out="$out
+（超时:超过 ${SUITE_TIMEOUT:-1800}s 没跑完,当红处理）"; fi
   s="$(printf '%s\n' "$out" | grep -oE 'total: [0-9]+ passed, [0-9]+ failed' | tail -1)"
   [[ -z "$s" ]] && s="$(printf '%s\n' "$out" | tail -1)"
   names+=("$name"); rcs+=("$rc"); summaries+=("$s"); outs+=("$out")

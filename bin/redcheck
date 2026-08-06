@@ -55,13 +55,35 @@ git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || die "--base 解�
 [[ ${#IMPL[@]} -gt 0 ]] || die "缺 --impl(要退回哪些实现文件;**判卷不要列进来**)"
 [[ -n "$ORACLE" ]] || die "缺 --oracle(判据怎么跑)"
 
+# 【高危,四审 subkimi 抓的】`--impl` 必须在仓内。
+# 下面这行 `rm -rf "$REPO/$p"` 是本脚本唯一的破坏性动作:`--impl ../x` 会真删到仓外,
+# 而**旧版没有任何拦截** —— 前置脏检查的 git 报错走 stderr、stdout 为空 ⇒ 静默放行,
+# 收尾自证同样为空 ⇒ 还会打印"✅ 已恢复,工作树干净"。
+# **不需要攻击者,敲错一个路径就够。**(subdeepseek 判成"低危、预检已挡",核对代码是错的:
+# 那一行没有 2>&1。两腿判断打架时以代码为准。)
+REPO_REAL="$(realpath "$REPO")"
+for p in "${IMPL[@]}"; do
+  case "$p" in /*) die "--impl 要相对仓库根的路径,不是绝对路径:$p" ;; esac
+  pr="$(realpath -m "$REPO/$p")"
+  case "$pr" in
+    "$REPO_REAL"/*) ;;
+    *) die "--impl 指到**仓外**了,拒跑(这个脚本会 rm -rf 它):
+    给的是 $p
+    解析成 $pr
+    仓库是 $REPO_REAL" ;;
+  esac
+done
+
 # 开工前必须干净:不替人猜哪些改动该留。脏树上做"退回再恢复"= 拿别人的活当赌注。
-dirty="$(git -C "$REPO" status --porcelain -uall -- "${IMPL[@]}")"
-[[ -z "$dirty" ]] || die "这些实现路径有未提交改动,拒跑(先提交或 stash):
+# 2>&1:git 的报错(坏 pathspec 之类)必须**进到判断里**,不许溜到 stderr 让 stdout 显得干净。
+dirty="$(git -C "$REPO" status --porcelain -uall -- "${IMPL[@]}" 2>&1)"
+[[ -z "$dirty" ]] || die "这些实现路径有未提交改动(或 git 不认这个路径),拒跑:
 $(printf '%s\n' "$dirty" | sed 's/^/  /')"
 
 BASE_SHA="$(git -C "$REPO" rev-parse "$BASE")"
 HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
+# 开工前的全仓快照:收尾自证拿它当基准(见 restore)。
+STATUS_BEFORE="$(git -C "$REPO" status --porcelain -uall 2>&1)"
 echo "redcheck: repo=$REPO"
 echo "  实现退回 ${BASE_SHA:0:12}(判卷留在 HEAD ${HEAD_SHA:0:12})"
 echo "  实现:${IMPL[*]}"
@@ -84,12 +106,25 @@ restore() {
   git -C "$REPO" checkout "$HEAD_SHA" -- "${IMPL[@]}" 2>/dev/null   # clean 之后再铺一次,补上被清掉的跟踪文件
   # 恢复之后**必须重新 build**:本机 dist 入库,不重 build 就把一棵"基线构建的树"
   # 留在盘上 —— 那和"盘上和运行时对不上"是同一种事故,只是发生在仓库里。
+  local build_failed=0
   if [[ -n "$BUILD" ]]; then
-    ( cd "$REPO" && bash -c "$BUILD" ) >/dev/null 2>&1 \
-      || echo "  ⚠️  恢复后的 build 没过 —— 工作树可能还带着基线的产物,自己去看一眼。" >&2
+    ( cd "$REPO" && bash -c "$BUILD" ) >/dev/null 2>&1 || build_failed=1
+  fi
+  # 恢复 build 失败**必须非零退出**(四审 subdeepseek F6):旧版只 echo 一句警告就照常
+  # exit 0 —— 而那时树里躺的是没重建的源码/基线产物,正是"盘上和运行时对不上"。
+  if [[ $build_failed -eq 1 ]]; then
+    echo "  ❌ 恢复后的 build 没过 —— 工作树里可能还带着基线的产物,**不算恢复完成**。" >&2
+    echo "     自己去看一眼:git -C $REPO status;必要时 git checkout $HEAD_SHA -- ${IMPL[*]}" >&2
+    exit 9
   fi
   # 自证:不喊"恢复好了",而是让 git 说话。
-  local left; left="$(git -C "$REPO" status --porcelain -uall -- "${IMPL[@]}")"
+  # 范围**不止 --impl**:build 产物常落在 impl 之外(本机 dist 入库),
+  # 只查 impl 就会出现"树是脏的、自证说干净"(四审 subdeepseek F5:design 写了、实现漏了)。
+  # 拿开工前的**全仓快照**做基准比较:仓里本来就有的无关脏东西(别的 track 的草稿之类)
+  # 不算我留下的,否则这道自证会天天误报、然后被忽略。
+  local left
+  left="$(comm -13 <(printf '%s\n' "$STATUS_BEFORE" | sort) \
+                   <(git -C "$REPO" status --porcelain -uall 2>&1 | sort))"
   if [[ -n "$left" ]]; then
     echo "  ❌ 恢复没干净,工作树还留着东西:" >&2
     printf '%s\n' "$left" | sed 's/^/     /' >&2

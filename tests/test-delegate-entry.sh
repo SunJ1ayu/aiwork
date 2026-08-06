@@ -79,12 +79,16 @@ d_refuses_without_evidence() {
       --protect tests/oracle.sh >"$d/o1" 2>&1; rc=$?
   check "D1: 没给 --attack-log ⇒ 非零" $([[ $rc -ne 0 ]]; echo $?)
   check "D1: 没给 --attack-log ⇒ codex 零调用" $([[ "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  # 四审 subkimi F11:光断言"非零退出"的话,一个 `exit 2` 的空壳(甚至文件被删,bash 报 127)
+  # 就能让 D1 全家恒绿 —— D1 问的必须是"它认出了缺什么",不是"它退出码非零"。
+  grep -q -- "--attack-log" "$d/o1"; check "D1: 拒发时点名缺的是 --attack-log" $?
 
   # ② 给了但文件不存在
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/nope.md" --protect tests/oracle.sh >"$d/o2" 2>&1; rc=$?
   check "D1: attack-log 不存在 ⇒ 非零 + 零调用" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  grep -qi "不存在" "$d/o2"; check "D1: 说清是攻题记录**不存在**" $?
 
   # ③ 存在但是空的("我写了个空文件应付"这条路要堵死)
   : > "$d/empty.md"
@@ -92,6 +96,7 @@ d_refuses_without_evidence() {
       --attack-log "$d/empty.md" --protect tests/oracle.sh >"$d/o3" 2>&1; rc=$?
   check "D1: attack-log 是空文件 ⇒ 非零 + 零调用" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  grep -qi "空文件" "$d/o3"; check "D1: 说清是**空文件**应付" $?
 
   # ④ 攻题记录放在**仓内** = 把考卷的洞递给考生(和 panel-review 的 my-review 闸同源)
   cp "$d/attack.md" "$repo/attack.md"
@@ -99,6 +104,7 @@ d_refuses_without_evidence() {
       --attack-log "$repo/attack.md" --protect tests/oracle.sh >"$d/o4" 2>&1; rc=$?
   check "D1: attack-log 在仓内 ⇒ 非零 + 零调用(漏洞清单不许进考场)" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  grep -qi "仓里\|仓内" "$d/o4"; check "D1: 说清是**在仓里**" $?
   rm -f "$repo/attack.md"
 
   # ⑤ 不给 --protect(守卫的强度只等于这份清单,没清单就没守卫)
@@ -106,6 +112,7 @@ d_refuses_without_evidence() {
       --attack-log "$d/attack.md" >"$d/o5" 2>&1; rc=$?
   check "D1: 没给 --protect ⇒ 非零 + 零调用" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  grep -q -- "--protect" "$d/o5"; check "D1: 拒发时点名缺的是 --protect" $?
 
   # ⑥ 攻题记录**比判卷文件旧** ⇒ 攻的是上一版考卷,等于没攻(gpt-5.6-sol 双出方案点破的洞:
   #    我原来只查"非空 + 在仓外",而"攻完之后我又改了 oracle"这条路整条是敞开的)。
@@ -322,7 +329,11 @@ EOF
   #    基线那份留在索引里 ⇒ 工作树没干净。当时是"恢复自证"那道闸响的(rc=9,大声退出),
   #    没有静默把一棵混合树留在盘上 —— 但**响了不等于修了**,这一幕要求它真的收拾干净。
   local r2="$d/repo2"; mkdir -p "$r2/src" "$r2/out" "$r2/tests"
-  local BUILD='rm -f out/asset-*.js; mkdir -p out; echo built > "out/asset-$(md5sum < src/impl.sh | cut -c1-6).js"'
+  # ⚠️ BUILD **不带** `rm -f out/asset-*.js`(四审 subdeepseek F11 抓的):
+  #    带了的话,恢复时那次 build 会把基线残留的产物顺手删掉 ⇒
+  #    就算把 restore 里的 `git clean` 整步删掉,这一幕照样全绿 —— 判据钉不住它。
+  #    真实的 vite 会清 dist,但**红检要问的是恢复逻辑自己干不干净**,不是靠 build 兜底。
+  local BUILD='mkdir -p out; echo built > "out/asset-$(md5sum < src/impl.sh | cut -c1-6).js"'
   ( cd "$r2"
     git init -q -b main; git config user.email t@t; git config user.name t
     printf '#!/bin/bash\necho old\n' > src/impl.sh
@@ -334,6 +345,7 @@ echo "ok"
 EOF
     bash -c "$BUILD"; git add -A; git commit -qm "旧实现 + 旧产物"
     printf '#!/bin/bash\necho NEW\n' > src/impl.sh
+    rm -f out/asset-*.js                      # 建仓时手工清(模拟 vite 清 dist)
     bash -c "$BUILD"; git add -A; git commit -qm "新实现 + 新产物" )
   bash "$BIN/redcheck" --repo "$r2" --base HEAD~1 --impl src/impl.sh out \
        --build "$BUILD" --oracle 'bash tests/oracle.sh' >"$d/e11" 2>&1; rc=$?
