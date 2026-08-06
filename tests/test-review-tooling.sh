@@ -1532,8 +1532,8 @@ v23_my_review_gate_on_every_review_path() {
     else ok "V23: $tool REVIEW_NO_MY_REVIEW=1 应当放行这道闸"; fi
 
     # ④ panel-review 派发时不许被重复拦(它在自己那层已经查过)
-    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 PANEL_DISPATCH=1 timeout 25 bash "$b/$tool" $args \
-            "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 timeout 25 bash "$b/$tool" $args \
+            "$d/t.md" "$d/out.log" "$d/repo" --panel-dispatch 2>&1)"
     if grep -q "自己的一遍" <<<"$out"; then
       bad "V23: $tool 在 panel 派发下不许重复拦(否则四审整个派不出去)"
     else ok "V23: $tool 在 panel 派发下不许重复拦(否则四审整个派不出去)"; fi
@@ -1550,6 +1550,53 @@ v23_my_review_gate_on_every_review_path() {
           timeout 25 bash "$b/submimo" review "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
   grep -qi "realpath" <<<"$out"
   check "V23: realpath 不可用 ⇒ 拒跑并说明(不许静默跳过仓内检查)" $?
+  rm -rf "$d"
+}
+
+
+# ---------------------------------------------------------------- V24
+v24_no_env_backdoor_and_coverage_report() {
+  echo "[V24] 后门封死:环境变量不再能跳过反锚定闸;清单漏网要有人吭一声"
+  local d b rc out; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
+  ( cd "$d/repo"; git init -q; git config user.email t@t; git config user.name t
+    echo x > f; git add -A; git commit -qm init )
+  cp "$BIN/_my-review-gate.sh" "$b/" 2>/dev/null
+  printf '# 评审任务书\n' > "$d/t.md"
+
+  for tool in submimo subkimi subchat subagent; do
+    cp "$BIN/$tool" "$b/$tool"
+    local args="review"; [[ "$tool" == subchat || "$tool" == subagent ]] && args="deepseek review"
+    # ① **export 一个环境变量不再能过闸**(四审两腿都点名 PANEL_DISPATCH 是零成本后门:
+    #    从 shell 里 export 一次,之后每条命令都自动带着,而且不留痕)
+    out="$(cd "$d" && PANEL_DISPATCH=1 REVIEW_NO_MY_REVIEW=0 \
+            timeout 25 bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
+    grep -q "自己的一遍" <<<"$out"
+    check "V24: $tool export PANEL_DISPATCH=1 **不再**能跳过闸" $?
+
+    # ② 只有**显式写在命令行上**的 --panel-dispatch 才放行(不会从 shell 继承)
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 \
+            timeout 25 bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" --panel-dispatch 2>&1)"
+    if grep -q "自己的一遍" <<<"$out"; then
+      bad "V24: $tool 命令行 --panel-dispatch 应当放行(否则四审派不出去)"
+    else ok "V24: $tool 命令行 --panel-dispatch 应当放行(否则四审派不出去)"; fi
+  done
+
+  # ③ panel-review 派发时必须用命令行传,不许再靠 export
+  grep -q -- "--panel-dispatch" "$BIN/panel-review"
+  check "V24: panel-review 用命令行标记派发各腿" $?
+  if grep -q "export PANEL_DISPATCH" "$BIN/panel-review"; then
+    bad "V24: panel-review 不许再 export 环境变量后门"
+  else ok "V24: panel-review 不许再 export 环境变量后门"; fi
+
+  # ④ 清单漏网要看得见:总跑要报出"bin/ 里哪些工具不在规矩4 名单内"。
+  #    不拦(硬堵会误报把运维脚本也拖进来),只让腐烂时有人吭一声。
+  # 种一个**不在名单里**的工具:没有它这一幕问不出东西($b 里全是 sub*/_* 前缀,都被覆盖)
+  printf '#!/bin/bash\nexit 0\n' > "$b/weird-new-tool"; chmod +x "$b/weird-new-tool"
+  out="$(COVERAGE_BIN_DIR="$b" bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"
+  grep -q "weird-new-tool" <<<"$out"
+  check "V24: 漏网报告点名那个不在名单里的工具" $?
+  grep -qi "名单\|未覆盖\|漏网" <<<"$out"
+  check "V24: 总跑报出规矩4 名单的漏网工具" $?
   rm -rf "$d"
 }
 
@@ -1581,5 +1628,6 @@ REVIEW_NO_MY_REVIEW=1 v22_head_moved_during_review
 REVIEW_NO_MY_REVIEW=1 v22_anchor_leak_sees_committed_track
 REVIEW_NO_MY_REVIEW=1 v22_roster_file
 v23_my_review_gate_on_every_review_path
+v24_no_env_backdoor_and_coverage_report
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

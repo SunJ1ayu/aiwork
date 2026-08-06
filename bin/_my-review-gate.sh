@@ -13,17 +13,19 @@
 #
 # 约定路径与 panel-review 完全一致:/root/aiwork/tasks/<taskname>-my-review.md
 # 显式退出:`REVIEW_NO_MY_REVIEW=1`(清醒的选择,比如给别人的仓做一次性评审)。
-# panel-review 派发各腿时会置 `PANEL_DISPATCH=1` —— 它在自己那层已经查过,
+# panel-review 派发各腿时在**命令行**上带 `--panel-dispatch` —— 它在自己那层已经查过,
 # 这里不再重复挡(否则四审整个派不出去)。
+# **为什么是命令行而不是环境变量**(2026-08-06 四审两腿都点名):环境变量在 shell 里
+# `export` 一次,之后每条命令都自动带着、而且不留痕 —— 那是"想跳过时最省事的路",
+# 等于给自己留了个随手可按的后门。命令行标记必须每次亲手敲,不会被继承。
 
 my_review_gate() {  # my_review_gate <mode> <task_file> <repo_dir> <label>
   local mode="$1" task="$2" repo="$3" label="${4:-review}"
   [[ "$mode" == "review" ]] || return 0
-  if [[ "${PANEL_DISPATCH:-0}" == "1" ]]; then
-    # panel-review 已在自己那层查过,这里不重复拦。但**留一行痕**:
-    # 这个标记是内部协调用的,任何人 export 它都能过闸(四审两腿都点名了这个后门)。
+  if [[ "${GATE_PANEL_DISPATCH:-0}" == "1" ]]; then
+    # panel-review 已在自己那层查过,这里不重复拦;但自审文件确实不存在时留一行痕。
     local _mr="${REVIEW_MY_REVIEW:-/root/aiwork/tasks/$(basename "${task%.*}")-my-review.md}"
-    [[ -f "$_mr" ]] || echo "$label: 注意 —— PANEL_DISPATCH=1 跳过了反锚定闸,而 $_mr 并不存在。" >&2
+    [[ -f "$_mr" ]] || echo "$label: 注意 —— --panel-dispatch 跳过了反锚定闸,而 $_mr 并不存在。" >&2
     return 0
   fi
   [[ "${REVIEW_NO_MY_REVIEW:-0}" == "1" ]] && return 0
@@ -63,4 +65,15 @@ my_review_gate() {  # my_review_gate <mode> <task_file> <repo_dir> <label>
     esac
   done
   return 0
+}
+
+# 从参数里摘掉 `--panel-dispatch`(panel-review 派发时才会带),其余参数原样交回。
+# 各躯干在**解析位置参数之前**调:gate_strip_flags "$@"; set -- "${GATE_ARGS[@]}"
+gate_strip_flags() {
+  GATE_PANEL_DISPATCH=0
+  GATE_ARGS=()
+  local a
+  for a in "$@"; do
+    if [[ "$a" == "--panel-dispatch" ]]; then GATE_PANEL_DISPATCH=1; else GATE_ARGS+=("$a"); fi
+  done
 }

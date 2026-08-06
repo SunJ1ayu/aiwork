@@ -52,16 +52,12 @@ fi
 # 守卫守错门的第二例(第一例:守在 package.json,而真版本号在 ds_web.py)。
 # 逃生口与规矩1 同款(本次提交带 track 工件,或近 7 天有 verify.md 改动),
 # 因为同一个 track 里连着改好几次是常态,每次都要求带工件就成了误报。
+# 名单只此一份,在 bin/_tooling-paths.sh(track-guard 与总跑的漏网报告共用)。
+. "$(dirname "$0")/_tooling-paths.sh" 2>/dev/null || {
+  say "🔴 找不到 _tooling-paths.sh —— 规矩4 的名单缺件,拒绝放行(fail closed)"; exit 1; }
 tooling=""
 for f in $(staged || true); do
-  case "$f" in
-    # 名单补三处(2026-08-06 四审 subkimi):**判卷防线自己也得在防线内** ——
-    #   `bin/_*`      反锚定闸文件本身(改弱闸逻辑竟然不用挂 track);
-    #   `tests/test_*` 下划线命名的判据(连字符匹配不到,而它在总跑清单里);
-    #   `track/*`     模板与约定(把模板里的 `lane:` 行删掉,规矩2 当场成空文)。
-    bin/panel-*|bin/sub*|bin/delegate-*|bin/redcheck|bin/track|bin/track-guard|bin/rust-check-*|bin/_*|tests/test-*|tests/test_*|track/templates/*|track/CONVENTION.md)
-      tooling="$f"; break ;;
-  esac
+  if is_judging_surface "$f"; then tooling="$f"; break; fi
 done
 
 if [ -n "$tooling" ] && ! hangs_on_a_track; then

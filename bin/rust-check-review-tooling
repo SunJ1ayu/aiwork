@@ -21,6 +21,30 @@ SUITES=(
   "hooks-installed|bash|/root/aiwork/tests/test-hooks-installed.sh"
 )
 
+# ── 名单漏网报告(2026-08-06)────────────────────────────────────────────
+# 规矩4 的名单是**手列**的 ⇒ 新起一个不匹配的工具名就漏,而且漏的时候没人会知道。
+# 硬堵不行(把运维脚本也拖进来 = 误报 = 守卫被绕过),所以只**报**不拦:
+# 每次总跑列一次「bin/ 里哪些可执行文件不在名单内」,让清单腐烂时有人吭一声。
+. "$(dirname "$0")/_tooling-paths.sh" 2>/dev/null || true
+uncovered=""
+if declare -f is_judging_surface >/dev/null; then
+  for f in "${COVERAGE_BIN_DIR:-$(dirname "$0")}"/*; do
+    [ -f "$f" ] && [ -x "$f" ] || continue
+    is_judging_surface "bin/$(basename "$f")" || uncovered="$uncovered $(basename "$f")"
+  done
+fi
+
+# --coverage-only:只出漏网报告就退出(判据要问这件事,不该为此跑完 10 分钟的全套件)
+if [[ "${1:-}" == "--coverage-only" ]]; then
+  if [[ -n "$uncovered" ]]; then
+    echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(只扫 bin/):$uncovered"
+  else
+    echo "ℹ️  规矩4 名单覆盖了 bin/ 下所有可执行文件(只扫 bin/,tests/ 与 track/templates/ 未扫)"
+  fi
+  exit 0
+fi
+
+
 names=(); rcs=(); summaries=(); outs=()
 for entry in "${SUITES[@]}"; do
   IFS='|' read -r name runner path <<< "$entry"
@@ -45,6 +69,10 @@ for i in "${!names[@]}"; do
   line+=" | ${names[$i]}: ${summaries[$i]:-?}"
 done
 
+if [[ -n "$uncovered" ]]; then
+  echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**,没扫 tests/ 与 track/templates/;只报不拦):"
+  echo "   $uncovered"
+fi
 if [[ $fail -eq 0 ]]; then
   echo "✅ 工具链防锈通过${line}"
   exit 0

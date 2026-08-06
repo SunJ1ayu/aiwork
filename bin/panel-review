@@ -252,10 +252,6 @@ fi
 # 各腿是**并行**的,谁在哪一刻读到哪棵树没人知道;所以派发前后各记一次 HEAD,不同就明说。
 HEAD_BEFORE="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
 
-# 各腿的躯干里也有一道反锚定闸(fast lane 直接调它们时才该拦)。
-# 这里已经在上面查过 my-review 了,派发时置标记,避免同一件事拦两遍把四审整个卡死。
-export PANEL_DISPATCH=1
-
 echo "  running all in parallel..."
 
 # Light pre-launch stagger: the three reviewers share provider tpm budgets, and
@@ -280,7 +276,10 @@ stagger() {
 # as <log>.agent.log(+.err) so the infra failure stays diagnosable.
 run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   local agent="$1" chat="$2" log="$3" err="$4" label="$5" rc
-  "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  # --panel-dispatch 走**命令行**,不用环境变量(后者会被 shell 继承 = 随手可按的后门);
+  # 而且放在**参数末尾** —— 放开头会把各腿的位置参数整体顶偏一位,
+  # 任何按 $3 取日志路径的调用方(判据里的假腿全是这么写的)当场就坏。08-06 实测。
+  "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   if [[ $rc -eq 0 || "$agent" == "$chat" ]]; then return $rc; fi
   # agent leg died and a distinct chat leg exists -> keep the evidence, then retry
   [[ -e "$log" ]] && mv -f "$log" "${log%.log}.agent.log"
@@ -288,7 +287,7 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   local agent_rc=$rc   # 底座腿的死因;下面 rc 会被聊天腿的返回码覆盖
   echo "  NOTE: $label agent leg failed (rc=$agent_rc) -> fallback to chat leg;" \
        "agent output kept at ${log%.log}.agent.log(.err)"
-  "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   # 横幅写进日志本身,不只印在 stdout:这份结论以后会被单独读到(归档、断线重连),
   # 那时终端上那行 NOTE 早就没了,而一份降级腿的结论长得和健康腿一模一样。
   # 2026-08-03 我就是这样差点按「四审三腿 PASS」给权重,实际只有两腿睁着眼。
@@ -304,7 +303,7 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   return $rc
 }
 
-"$BIN/submimo"  review "$TASK_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" >/dev/null 2>"$SUBMIMO_ERR"  &
+"$BIN/submimo"  review "$TASK_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" --panel-dispatch >/dev/null 2>"$SUBMIMO_ERR"  &
 PID_MIMO=$!
 stagger
 run_leg "$DEEPSEEK_CMD" "$BIN/subdeepseek" "$SUBDEEPSEEK_LOG" "$SUBDEEPSEEK_ERR" subdeepseek &
@@ -318,7 +317,7 @@ fi
 PID_KIMI=""
 if [[ -n "$KIMI_CMD" ]]; then
   stagger
-  "$KIMI_CMD"   review "$TASK_FILE" "$SUBKIMI_LOG"  "$REPO_DIR" >/dev/null 2>"$SUBKIMI_ERR"  &
+  "$KIMI_CMD"   review "$TASK_FILE" "$SUBKIMI_LOG"  "$REPO_DIR" --panel-dispatch >/dev/null 2>"$SUBKIMI_ERR"  &
   PID_KIMI=$!
 fi
 

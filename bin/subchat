@@ -14,6 +14,14 @@ set -euo pipefail
 #             (mimo); for GLM a fix-capable base would be Claude Code via
 #             Zhipu's Anthropic-compatible endpoint (separate tool, not this).
 
+
+# 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
+_GATE="$(dirname "$0")/_my-review-gate.sh"
+[ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
+[ -f "$_GATE" ] || { echo "subchat: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_GATE"
+gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
+
 ENGINE="$(dirname "$0")/submimo-review"
 
 usage() {
@@ -59,16 +67,9 @@ if [[ $# -lt 4 || $# -gt 5 ]]; then usage; exit 2; fi
 PROVIDER="$1"; MODE="$2"; TASK_FILE="$3"; LOG_FILE="$4"; REPO_DIR="${5:-$PWD}"
 
 # 反锚定闸(2026-08-06):review 模式下,主 agent 自己那一遍必须先落盘;
-# panel-review 派发时置 PANEL_DISPATCH=1,不重复拦。共享实现,不抄第二份。
+# panel-review 派发时在命令行末尾带 --panel-dispatch,不重复拦。共享实现,不抄第二份。
 # shellcheck source=_my-review-gate.sh
-_GATE="$(dirname "$0")/_my-review-gate.sh"
-[ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
-if [ -f "$_GATE" ]; then
-  . "$_GATE"
-  my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subchat" || exit 1
-else
-  echo "subchat: 找不到 _my-review-gate.sh —— 反锚定闸缺件,拒跑(fail closed)" >&2; exit 1
-fi
+my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subchat" || exit 1
 
 # Provider table: everything that differs between employees lives here.
 case "$PROVIDER" in
