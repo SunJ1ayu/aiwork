@@ -106,6 +106,16 @@ d_refuses_without_evidence() {
       --attack-log "$d/attack.md" >"$d/o5" 2>&1; rc=$?
   check "D1: 没给 --protect ⇒ 非零 + 零调用" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+
+  # ⑥ 攻题记录**比判卷文件旧** ⇒ 攻的是上一版考卷,等于没攻(gpt-5.6-sol 双出方案点破的洞:
+  #    我原来只查"非空 + 在仓外",而"攻完之后我又改了 oracle"这条路整条是敞开的)。
+  touch -d '2020-01-01' "$d/attack.md"
+  touch "$repo/tests/oracle.sh"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/oracle.sh >"$d/o6" 2>&1; rc=$?
+  check "D1: 攻题记录比判卷还旧 ⇒ 非零 + 零调用(攻的是旧版考卷)" \
+    $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  grep -qi "旧\|过期\|重新攻" "$d/o6"; check "D1: 说清是「攻题记录过期」,不是笼统报错" $?
   rm -rf "$d"
 }
 
@@ -191,6 +201,12 @@ d_receive_gate() {
   printf 'noise\n' > "$repo/src/other.txt"
   bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r5" 2>&1; rc=$?
   check "D3: 非 protect 路径的新增文件 ⇒ 放行(误报会让警告变噪音)" $([[ $rc -eq 0 ]]; echo $?)
+
+  # ⑥ 放行时也要**列出执行腿到底动了哪些文件** —— 闸③(亲读 diff)需要这份清单,
+  #    而"它自己说改了什么"一概不作数。gpt-5.6-sol 的双出方案用白名单
+  #    (--allow-impl)做这件事;这里只列不判(白名单会在"执行腿合理新建文件"时误报)。
+  grep -q "src/impl.sh" "$d/r5" && grep -q "src/other.txt" "$d/r5"
+  check "D3: 放行时列出改动清单(含新增的未跟踪文件),给闸③当底账" $?
   rm -rf "$d"
 }
 
@@ -248,6 +264,26 @@ EOF
     $([[ -z "$(git -C "$repo" status --porcelain)" ]]; echo $?)
   [[ "$(bash "$repo/src/impl.sh")" == "NEW" ]]
   check "E1: 中途被杀后实现也回到 HEAD 那版" $?
+
+  # ⑥ build 都没过 ⇒ **不算有效红检**(红在 build 上等于没红检过)。
+  #    08-04 本机实证过同型:"红在 TypeError 上等于没红检过"。
+  #    双出方案(gpt-5.6-sol)把这条拆得更细:超时/崩溃/收集失败/依赖缺失都不算红。
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
+       --build 'exit 1' --oracle 'bash tests/oracle.sh' >"$d/e6" 2>&1; rc=$?
+  check "E1: build 失败 ⇒ 红检无效(非零)" $([[ $rc -ne 0 ]]; echo $?)
+  grep -qi "build" "$d/e6" && grep -qi "无效\|不算" "$d/e6"
+  check "E1: 说清是「build 没过,这次红检不算数」" $?
+  check "E1: build 失败那次也把树恢复干净" $([[ -z "$(git -C "$repo" status --porcelain)" ]]; echo $?)
+
+  # ⑦ --must-fail:红要红在**目标断言**上,不是红在别处。
+  #    给一个判据里根本不会出现的标记 ⇒ 必须判失败(红错了地方)。
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
+       --must-fail "这句话判据里没有" --oracle 'bash tests/oracle.sh' >"$d/e7" 2>&1; rc=$?
+  check "E1: 红了但不是目标断言红的 ⇒ 判失败" $([[ $rc -ne 0 ]]; echo $?)
+  #    给真实的失败标记 ⇒ 通过
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
+       --must-fail "期望 NEW" --oracle 'bash tests/oracle.sh' >"$d/e8" 2>&1; rc=$?
+  check "E1: 红在目标断言上 ⇒ 通过" $([[ $rc -eq 0 ]]; echo $?)
   rm -rf "$d"
 }
 
