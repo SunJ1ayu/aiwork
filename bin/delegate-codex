@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# delegate-codex —— 派活给 codex(GPT)执行腿的**唯一入口**,以及收货闸①的机械版。
+#
+# 为什么是"入口"而不是又一条规矩(2026-08-06):
+#   本机反复验证过同一件事 —— **补脚本和入口有效,补字段和约定无效**。
+#   `lane:` / `派给:` 有守卫 ⇒ 七份 verify 一次没空过;`Verdict:` 没守卫 ⇒ 两个月空两次。
+#   08-05 那一单里,"派活前请第三方攻一遍我的 design + oracle"这条只住在 track 模板的
+#   填空提示里,而我派活时打开的抽屉(delegate/SKILL.md)一个字都没提;那格填空当天
+#   被我自己一句括号绕过("不适用")。代价:五个真实缺陷里**至少四个不看实现就能发现**,
+#   却全都等到执行腿跑完 22 分钟 + 我收货 53 分钟之后才被抓 ——
+#   用户给这个形状起过名字:**"有能力的检查站在成本花掉之后"**。
+#   所以这里把那两件事钉在**派活那一刻**:给不出攻题记录、给不出判卷清单,就发不出去。
+#
+# 它防的是"忘了",不是"故意":`codex exec` 永远还在,绕过一行命令的事。
+# 这条如实写在这儿,免得把它当成安全边界。
+#
+# 用法:
+#   delegate-codex --task TASK.md --repo DIR --attack-log PATH \
+#                  --protect PATH [--protect PATH ...] \
+#                  [--model gpt-5.5] [--log PATH] [--dry-run] [-- <直通 codex 的参数>]
+#   delegate-codex --receive RECEIPT.json      # 收货闸①(机械版)
+#
+# 退出码:0 正常   2 用法/前置不满足(**拒发,codex 一次都不启动**)   其它 = codex 的 rc
+#         --receive:0 判卷没被动过   1 判卷被动过(含新增未跟踪文件)   2 回执读不了
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+CODEX="${CODEX:-codex}"
+
+die()  { echo "delegate-codex: $*" >&2; exit 2; }
+usage() { sed -n '/^# 用法:/,/^#         --receive/p' "$0" | sed 's/^# \?//' >&2; }
+
+# ── 收货闸①(机械版)─────────────────────────────────────────────────────
+# CLAUDE.md 的闸① 有两半,两半都要:
+#   ① `git diff <派活时 HEAD> -- <判卷路径>` 为空;
+#   ② `git status --porcelain -uall -- <判卷路径>` 也为空。
+# **第二半才是重点**:`git diff` 看不见新增的未跟踪文件 —— 往 tests/ 里塞一个
+# `conftest.py`(autouse fixture)就能让闸②"亲跑全绿"变成假绿,而闸③亲读 diff
+# 也照不到它(它压根不在 diff 里)。08-04 临时仓实测。
+#
+# 基线用**派活那一刻的 HEAD**,不是 oracle 的 commit:08-05 我按字面跑
+# `git diff <oracle-commit> -- tests/` 不为空 —— 因为我自己一笔无关欠账也落在 tests/ 里,
+# 于是这道机械闸当场退化成"人眼把自己的改动减掉"。派活时的 HEAD 天然把它包含在基线里。
+do_receive() {
+  local receipt="$1"
+  [[ -s "$receipt" ]] || die "回执读不到:$receipt"
+  local repo head protect
+  repo="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["repo"])' "$receipt")" \
+    || die "回执解析失败:$receipt"
+  head="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$receipt")"
+  mapfile -t protect < <(python3 -c 'import json,sys;[print(p) for p in json.load(open(sys.argv[1]))["protect"]]' "$receipt")
+  [[ ${#protect[@]} -gt 0 ]] || die "回执里的 protect 清单是空的(这道闸就没有强度可言)"
+
+  echo "闸①(机械版):repo=$repo"
+  echo "  基线 = 派活时 HEAD ${head:0:12}"
+  echo "  判卷清单:${protect[*]}"
+
+  local diff_out status_out bad=0
+  diff_out="$(git -C "$repo" diff "$head" -- "${protect[@]}" 2>&1)"
+  # -uall:不带它 git 会把未跟踪目录折叠成 `tests/`,里面塞的文件就漏检了
+  status_out="$(git -C "$repo" status --porcelain -uall -- "${protect[@]}" 2>&1)"
+
+  if [[ -n "$diff_out" ]]; then
+    bad=1
+    echo "  ❌ 判卷文件相对派活时的基线**变了**:"
+    git -C "$repo" diff --stat "$head" -- "${protect[@]}" | sed 's/^/     /'
+  fi
+  if [[ -n "$status_out" ]]; then
+    bad=1
+    echo "  ❌ 判卷路径下有未提交/未跟踪的东西(git diff 看不见它):"
+    printf '%s\n' "$status_out" | sed 's/^/     /'
+  fi
+  if [[ $bad -ne 0 ]]; then
+    echo "  ⇒ 闸① 不过。执行腿的自述一概不作数,先查清楚这些改动是谁写的、为什么。"
+    return 1
+  fi
+  echo "  ✅ 闸① 通过:判卷文件逐字节没动过,判卷路径下也没有多出来的文件。"
+
+  # 闸③(亲读 diff)要的底账:执行腿到底动了哪些文件。**只列不判** ——
+  # 白名单(只许改这几个文件)更强,但会在"执行腿合理地新建了一个文件"时误报,
+  # 而误报的守卫活不过一周。判断留给闸③,这里只保证它有一份不是自述的清单。
+  echo "  ── 执行腿动过的文件(闸③的底账,含未跟踪)──"
+  { git -C "$repo" diff --name-only "$head"
+    git -C "$repo" status --porcelain -uall | awk '{print $NF}'
+  } | sort -u | sed 's/^/     /'
+  return 0
+}
+
+# ── 参数 ────────────────────────────────────────────────────────────────
+TASK=""; REPO=""; ATTACK=""; LOG=""; MODEL="gpt-5.5"; RECEIVE=""; DRY=0
+PROTECT=(); PASSTHRU=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --task)       TASK="${2:-}";   shift 2 ;;
+    --repo)       REPO="${2:-}";   shift 2 ;;
+    --attack-log) ATTACK="${2:-}"; shift 2 ;;
+    --protect)    [[ -n "${2:-}" ]] || die "--protect 要一个路径"; PROTECT+=("$2"); shift 2 ;;
+    --model)      MODEL="${2:-}";  shift 2 ;;
+    --log)        LOG="${2:-}";    shift 2 ;;
+    --receive)    RECEIVE="${2:-}"; shift 2 ;;
+    --dry-run)    DRY=1; shift ;;
+    --) shift; PASSTHRU+=("$@"); break ;;
+    *) die "不认识的参数:$1" ;;
+  esac
+done
+
+if [[ -n "$RECEIVE" ]]; then do_receive "$RECEIVE"; exit $?; fi
+
+# ── 拒发闸(下面每一条不满足都 exit 2,codex 一次都不启动)──────────────
+[[ -n "$TASK" ]] || { usage; die "缺 --task"; }
+[[ -f "$TASK" ]] || die "任务书不存在:$TASK"
+[[ -n "$REPO" ]] || die "缺 --repo"
+[[ -d "$REPO" ]] || die "仓库目录不存在:$REPO"
+git -C "$REPO" rev-parse HEAD >/dev/null 2>&1 || die "$REPO 不是 git 仓库(闸①要基线)"
+
+# ① 攻题记录:派活前请第三方攻一遍 design + oracle 的记录。
+#    "不看实现就能发现的问题"要在这一刻被发现,而不是在收货那一刻。
+[[ -n "$ATTACK" ]] || die "缺 --attack-log:派活前先请第三方攻一遍 design + oracle,
+  把「哪条断言全绿了结果仍然错」的清单落盘再来。这不是仪式 —— 08-05 那单五个真实缺陷里
+  至少四个不看实现就能发现,却等到 75 分钟成本花完之后才被抓。"
+[[ -f "$ATTACK" ]] || die "攻题记录不存在:$ATTACK"
+[[ -s "$ATTACK" ]] || die "攻题记录是空文件:$ATTACK(空文件应付不算做过这件事)"
+# 必须在仓外:引擎会把未跟踪文件内联进腿的提示词 —— 漏洞清单进了仓,
+# 等于把考卷的洞直接递给考生(和 panel-review 的 my-review 闸同源)。
+_rp="$(realpath "$REPO")"
+for _a in "$(realpath "$ATTACK")" "$(realpath -s "$ATTACK")"; do
+  case "$_a" in
+    "$_rp"/*) die "攻题记录在被派活的仓里:$_a
+  执行腿会读到它 = 把考卷的洞递给考生。挪到仓外,例如 /root/aiwork/tasks/<name>-attack.md" ;;
+  esac
+done
+
+# ② 判卷清单:守卫的强度只等于这份清单,漏列一个就是那个洞。没有清单 = 没有守卫。
+[[ ${#PROTECT[@]} -gt 0 ]] || die "缺 --protect:把 oracle 为得出裁决所读的**每一个**文件
+  (判据、fixture、期望输出)都列进来。收货时用的就是这一份,不再靠人眼重建。"
+for p in "${PROTECT[@]}"; do
+  [[ -e "$REPO/$p" ]] || die "--protect 的路径在仓里不存在:$p(相对 $REPO)"
+done
+
+# ③ 攻题记录必须**新过判卷**:攻的是上一版考卷等于没攻。
+#    这条是 gpt-5.6-sol 的独立方案点破的 —— 我原来只查"非空 + 在仓外",
+#    而"攻完之后我又改了 oracle"这条路整条是敞开的(而那正是最常发生的事:
+#    攻题的产出就是让我去改判卷)。它的做法是内容寻址凭证(哈希所有输入);
+#    这里取最便宜的等价物:mtime 比较。**弱在**能被 `touch` 绕过 ——
+#    但这道闸防的是"忘了重攻",不是防伪造。
+newest_protect=""
+for p in "${PROTECT[@]}"; do
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if [[ -z "$newest_protect" || "$f" -nt "$newest_protect" ]]; then newest_protect="$f"; fi
+  done < <(find "$REPO/$p" -type f 2>/dev/null)
+done
+if [[ -n "$newest_protect" && "$newest_protect" -nt "$ATTACK" ]]; then
+  die "攻题记录比判卷文件**旧**,已过期:
+    攻题记录 $ATTACK
+    判卷      ${newest_protect#$REPO/}(比它新)
+  说明判卷在攻题之后又改过 —— 攻的是上一版考卷,等于没攻。
+  拿现在这版 design + oracle **重新攻一遍**再派(改完记录会自然变新)。"
+fi
+
+TS="$(date +%Y%m%d-%H%M%S)"
+NAME="$(basename "${TASK%.*}")"
+LOG="${LOG:-/root/aiwork/logs/delegate-${NAME}-${TS}.log}"
+mkdir -p "$(dirname "$LOG")"
+RECEIPT="${LOG}.receipt.json"
+HEAD_AT_DISPATCH="$(git -C "$REPO" rev-parse HEAD)"
+
+# ── 派活三件套:逐字注入 ─────────────────────────────────────────────────
+# codex 腿**看不到本机说明书**(说明书叫 CLAUDE.md,codex 只认 AGENTS.md,这是刻意的),
+# 所以规矩不写进任务书就等于不存在。这三件不是客套话,是三次踩过的坑。
+protect_lines=""
+for p in "${PROTECT[@]}"; do protect_lines+="  - $p"$'\n'; done
+PROMPT="$(cat "$TASK")
+
+────────────────────────────────────────────────────────────
+以下是派活方(主 agent)加的硬性规矩,与任务书同等效力。请用**中文**回答。
+
+【一】判卷文件 off-limits —— 下面这些路径**一个字节都不许改、也不许新增文件进去**:
+${protect_lines}  改判卷(删断言、写死期望值、加 skip、加 autouse fixture、往目录里塞新文件)
+  一律视为交付失败;收货时会对派活时的基线逐字节比对,并单独检查未跟踪文件。
+  判据本身若有错,**报告给我**,不要自己动手改。
+
+【二】自检清单 —— 交付前必须自己跑完并在报告里写明结果:
+  1. 判据(oracle)全绿;
+  2. 相关回归全绿;
+  3. build 通过。
+  三条里有任何一条没跑,如实说没跑,**不要用"应该没问题"代替**。
+
+【三】边界 —— 不许:push、merge、归档、装依赖、删无关文件、碰生产系统、
+  跑数据库迁移、改密钥。需要这类操作时**停下来问我**。
+────────────────────────────────────────────────────────────"
+
+python3 - "$RECEIPT" "$REPO" "$HEAD_AT_DISPATCH" "$ATTACK" "$TASK" "$LOG" "$MODEL" "${PROTECT[@]}" <<'PY'
+import hashlib, json, sys, datetime
+receipt, repo, head, attack, task, log, model, *protect = sys.argv[1:]
+sha = hashlib.sha256(open(attack, "rb").read()).hexdigest()
+json.dump({
+    "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    "repo": repo, "head": head, "protect": protect,
+    "attack_log": attack, "attack_log_sha256": sha,
+    "task": task, "log": log, "model": model,
+}, open(receipt, "w"), ensure_ascii=False, indent=2)
+PY
+[[ -s "$RECEIPT" ]] || die "回执写不出来:$RECEIPT"
+
+echo "delegate-codex: repo=$REPO  model=$MODEL"
+echo "  任务书   -> $TASK"
+echo "  攻题记录 -> $ATTACK"
+echo "  判卷清单 -> ${PROTECT[*]}"
+echo "  日志     -> $LOG"
+echo "  回执     -> $RECEIPT(收货时:delegate-codex --receive $RECEIPT)"
+
+if [[ $DRY -eq 1 ]]; then
+  printf '%s\n' "$PROMPT" > "$LOG.prompt"
+  echo "  --dry-run:没有派发,任务书全文在 $LOG.prompt"
+  exit 0
+fi
+
+# -c project_doc_max_bytes=0 **每次都要带**:否则 codex 会自动吞被派仓库里的
+# AGENTS.md 并向上层递归找。本机说明书已改名规避,但别的仓库可能自带一份。
+# 模型显式给 -m:依赖 ~/.codex/config.toml 的默认值 = 以后改配置这里会静默升档。
+"$CODEX" exec -C "$REPO" -m "$MODEL" -s workspace-write \
+  -c project_doc_max_bytes=0 -o "$LOG" \
+  ${PASSTHRU[@]+"${PASSTHRU[@]}"} "$PROMPT"
+rc=$?
+
+echo
+echo "delegate-codex: codex rc=$rc"
+echo "  收货三道闸一道都不能省 —— 先跑闸①:delegate-codex --receive $RECEIPT"
+echo "  然后闸②亲跑 oracle+回归+build、闸③亲读 diff(盯 create mode 120000 符号链接)。"
+exit $rc

@@ -1,29 +1,53 @@
 #!/usr/bin/env bash
-# Weekly rust-check for the review tooling. Runs the offline oracle suites and
-# emits a compact summary. Exit 0 = all green, non-zero = something rusted
-# (external API drift, env upgrade, etc.) — the point is to catch silent rot
-# before a live panel-review hits it. Prints a one-line heartbeat even on green
-# so a dead cron is itself visible (the P0-2 "silently stale" lesson).
-# Only the stub/offline suites run here; no live provider probes (no quota burn).
+# 本仓(/root/aiwork)的**总跑入口**:一条命令跑完全部离线判据套件,并给一行汇总。
+# Exit 0 = 全绿,非零 = 有东西烂了(外部漂移、环境升级、我自己改坏了)——
+# 目的是在真跑一次 panel-review / 真派一次活之前就把静默腐烂抓出来。
+# 绿了也打一行心跳,这样 cron 死了本身也看得见(P0-2「静默过期」的教训)。
+# 只跑桩/离线套件,不做真供应商探活(不烧额度)。
+#
+# 2026-08-06:改成**清单驱动**。此前是三行硬写的 T1/T2/T3,于是
+# `test-track-guard.sh`(08-04 建)和 `test-delegate-entry.sh`(08-06 建)
+# **谁都没被任何总跑调用过** —— 和 design-studio 那边 `tests/mcp-gate.sh` 成了孤儿脚本
+# 是同一种病:病根不是缺哪条检查,是缺一个把它们全串起来的入口。
+# **新增判据套件 = 往下面这张表里加一行。**
 set -uo pipefail
-T1=/root/aiwork/tests/test-review-tooling.sh
-T2=/root/aiwork/tests/test-submimo-fix-oracle.sh
-T3=/root/aiwork/tests/test_submimo_retry.py
 
-o1="$(bash "$T1" 2>&1)"; r1=$?
-o2="$(bash "$T2" 2>&1)"; r2=$?
-o3="$(python3 "$T3" 2>&1)"; r3=$?
+SUITES=(
+  "review-tooling|bash|/root/aiwork/tests/test-review-tooling.sh"
+  "fix-oracle|bash|/root/aiwork/tests/test-submimo-fix-oracle.sh"
+  "retry|python3|/root/aiwork/tests/test_submimo_retry.py"
+  "track-guard|bash|/root/aiwork/tests/test-track-guard.sh"
+  "delegate-entry|bash|/root/aiwork/tests/test-delegate-entry.sh"
+)
 
-s1="$(printf '%s\n' "$o1" | grep -oE 'total: [0-9]+ passed, [0-9]+ failed' | tail -1)"
-s2="$(printf '%s\n' "$o2" | grep -oE 'total: [0-9]+ passed, [0-9]+ failed' | tail -1)"
-s3="$(printf '%s\n' "$o3" | tail -1)"
+names=(); rcs=(); summaries=(); outs=()
+for entry in "${SUITES[@]}"; do
+  IFS='|' read -r name runner path <<< "$entry"
+  if [[ ! -f "$path" ]]; then
+    names+=("$name"); rcs+=(127); summaries+=("判据文件不见了:$path"); outs+=("")
+    continue
+  fi
+  out="$("$runner" "$path" 2>&1)"; rc=$?
+  s="$(printf '%s\n' "$out" | grep -oE 'total: [0-9]+ passed, [0-9]+ failed' | tail -1)"
+  [[ -z "$s" ]] && s="$(printf '%s\n' "$out" | tail -1)"
+  names+=("$name"); rcs+=("$rc"); summaries+=("$s"); outs+=("$out")
+done
 
-if [[ $r1 -eq 0 && $r2 -eq 0 && $r3 -eq 0 ]]; then
-  echo "✅ 评审工具链防锈通过 | review-tooling: ${s1:-?} | fix-oracle: ${s2:-?} | retry: ${s3:-?}"
+fail=0
+line=""
+for i in "${!names[@]}"; do
+  [[ "${rcs[$i]}" -ne 0 ]] && fail=$((fail+1))
+  line+=" | ${names[$i]}: ${summaries[$i]:-?}"
+done
+
+if [[ $fail -eq 0 ]]; then
+  echo "✅ 工具链防锈通过${line}"
   exit 0
 fi
-echo "❌ 评审工具链防锈失败(外部漂移/环境升级?先跑本地 oracle 复现):"
-[[ $r1 -ne 0 ]] && { echo "--- test-review-tooling.sh (rc=$r1) ---"; printf '%s\n' "$o1" | grep -E 'FAIL|total' | tail -20; }
-[[ $r2 -ne 0 ]] && { echo "--- test-submimo-fix-oracle.sh (rc=$r2) ---"; printf '%s\n' "$o2" | grep -E 'FAIL|total' | tail -20; }
-[[ $r3 -ne 0 ]] && { echo "--- test_submimo_retry.py (rc=$r3) ---"; printf '%s\n' "$o3" | tail -20; }
+echo "❌ 工具链防锈失败(外部漂移/环境升级?先跑本地判据复现):"
+for i in "${!names[@]}"; do
+  [[ "${rcs[$i]}" -eq 0 ]] && continue
+  echo "--- ${names[$i]} (rc=${rcs[$i]}) ---"
+  printf '%s\n' "${outs[$i]}" | grep -E 'FAIL|total' | tail -20
+done
 exit 1

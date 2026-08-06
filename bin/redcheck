@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# redcheck —— 退回红检:把**实现**真退回基线,重新 build,再跑判据,**要求它红**。
+#
+# 为什么必须是"真退回"(2026-08-05 亲手证明,两种红检差一个数量级):
+#   20:50 我用**手写桩**红检 ⇒ 一条前置恒真的断言是绿的,洞没露出来;
+#   22:54 把实现**真退回 611dd49 再 build** ⇒ 才发现那条断言在旧实现上也绿。
+#   **桩红不算数,对着退回的真实现红才算数。**
+#   而且退回红检抓的是**所有**恒真断言,不是我当时想得起来的那几条 ——
+#   这正是它比"记得写一条约定"值钱的地方。
+#
+# 红也分真假(08-04 本机实证:"红在 TypeError 上等于没红检过"):
+#   build 都没过 ⇒ 这次红检**不算数**(rc=4),不是"红了真好";
+#   给了 --must-fail 就要求判据的输出里真的出现那个失败标记 ⇒ 否则是**红错了地方**(rc=5)。
+#
+# 用法:
+#   redcheck --base REF --impl PATH... --oracle 'CMD' [--build 'CMD']
+#            [--must-fail '正则'] [--repo DIR]
+#
+# 退出码:
+#   0 红检通过(旧实现下判据确实红,且红在该红的地方)
+#   1 **旧实现下判据仍然绿** —— 有恒真断言/前置恒真,这份判据证明不了任何事
+#   2 用法或前置不满足(工作树脏等,拒跑)
+#   4 build 没过 ⇒ 红检无效(红在 build 上不算红检)
+#   5 红了,但没红在 --must-fail 指定的地方
+#   9 **恢复失败** —— 最响的那个:工作树被留在"基线构建"的状态,必须人来收拾
+
+die()  { echo "redcheck: $*" >&2; exit 2; }
+
+REPO="$PWD"; BASE=""; ORACLE=""; BUILD=""; MUSTFAIL=""; IMPL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) sed -n '/^# 用法:/,/^#   9 /p' "$0" | sed 's/^# \?//' >&2; exit 0 ;;
+    --repo)      REPO="${2:-}";     shift 2 ;;
+    --base)      BASE="${2:-}";     shift 2 ;;
+    --impl)      [[ -n "${2:-}" ]] || die "--impl 要一个路径"; IMPL+=("$2"); shift 2 ;;
+    --oracle)    ORACLE="${2:-}";   shift 2 ;;
+    --build)     BUILD="${2:-}";    shift 2 ;;
+    --must-fail) MUSTFAIL="${2:-}"; shift 2 ;;
+    *) die "不认识的参数:$1" ;;
+  esac
+done
+
+[[ -d "$REPO" ]] || die "仓库目录不存在:$REPO"
+git -C "$REPO" rev-parse HEAD >/dev/null 2>&1 || die "$REPO 不是 git 仓库"
+[[ -n "$BASE" ]] || die "缺 --base(退回到哪一版实现)"
+git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || die "--base 解析不了:$BASE"
+[[ ${#IMPL[@]} -gt 0 ]] || die "缺 --impl(要退回哪些实现文件;**判卷不要列进来**)"
+[[ -n "$ORACLE" ]] || die "缺 --oracle(判据怎么跑)"
+
+# 开工前必须干净:不替人猜哪些改动该留。脏树上做"退回再恢复"= 拿别人的活当赌注。
+dirty="$(git -C "$REPO" status --porcelain -uall -- "${IMPL[@]}")"
+[[ -z "$dirty" ]] || die "这些实现路径有未提交改动,拒跑(先提交或 stash):
+$(printf '%s\n' "$dirty" | sed 's/^/  /')"
+
+BASE_SHA="$(git -C "$REPO" rev-parse "$BASE")"
+HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
+echo "redcheck: repo=$REPO"
+echo "  实现退回 ${BASE_SHA:0:12}(判卷留在 HEAD ${HEAD_SHA:0:12})"
+echo "  实现:${IMPL[*]}"
+
+RESTORED=0
+restore() {
+  [[ $RESTORED -eq 1 ]] && return 0
+  RESTORED=1
+  echo
+  echo "redcheck: 恢复实现到 HEAD ..."
+  git -C "$REPO" checkout "$HEAD_SHA" -- "${IMPL[@]}" 2>/dev/null
+  # 恢复之后**必须重新 build**:本机 dist 入库,不重 build 就把一棵"基线构建的树"
+  # 留在盘上 —— 那和"盘上和运行时对不上"是同一种事故,只是发生在仓库里。
+  if [[ -n "$BUILD" ]]; then
+    ( cd "$REPO" && bash -c "$BUILD" ) >/dev/null 2>&1 \
+      || echo "  ⚠️  恢复后的 build 没过 —— 工作树可能还带着基线的产物,自己去看一眼。" >&2
+  fi
+  # 自证:不喊"恢复好了",而是让 git 说话。
+  local left; left="$(git -C "$REPO" status --porcelain -uall -- "${IMPL[@]}")"
+  if [[ -n "$left" ]]; then
+    echo "  ❌ 恢复没干净,工作树还留着东西:" >&2
+    printf '%s\n' "$left" | sed 's/^/     /' >&2
+    echo "     手工收拾:git -C $REPO checkout $HEAD_SHA -- ${IMPL[*]}" >&2
+    exit 9
+  fi
+  echo "  ✅ 已恢复,工作树干净(git 说的,不是我说的)。"
+}
+trap 'restore' EXIT
+trap 'echo; echo "redcheck: 收到中断信号,先恢复再退出。" >&2; restore; exit 130' INT TERM
+
+# ── 退回 ────────────────────────────────────────────────────────────────
+git -C "$REPO" checkout "$BASE_SHA" -- "${IMPL[@]}" || die "退回失败(checkout $BASE -- ...)"
+
+if [[ -n "$BUILD" ]]; then
+  echo "  build ..."
+  if ! ( cd "$REPO" && bash -c "$BUILD" ) >/tmp/redcheck-build.$$ 2>&1; then
+    echo "  ❌ 旧实现上 **build 就没过** ⇒ 这次红检**不算数**(红在 build 上等于没红检过)。"
+    tail -n 15 /tmp/redcheck-build.$$ | sed 's/^/     /'
+    rm -f /tmp/redcheck-build.$$
+    exit 4
+  fi
+  rm -f /tmp/redcheck-build.$$
+fi
+
+# ── 跑判据(要求它红)──────────────────────────────────────────────────
+echo "  跑判据 ..."
+OUT="$(cd "$REPO" && bash -c "$ORACLE" 2>&1)"; ORC=$?
+printf '%s\n' "$OUT" | sed 's/^/     | /'
+
+if [[ $ORC -eq 0 ]]; then
+  echo
+  echo "  ❌ 旧实现下判据**仍然绿** —— 这份判据证明不了任何事:"
+  echo "     它在没有本轮改动的代码上也过,说明有恒真断言 / 前置永远成立 /"
+  echo "     断言问的根本不是这次改的东西。**先修判据,别派活。**"
+  exit 1
+fi
+
+if [[ -n "$MUSTFAIL" ]]; then
+  if ! printf '%s' "$OUT" | grep -qE "$MUSTFAIL"; then
+    echo
+    echo "  ❌ 判据红了,但**没红在该红的地方**:输出里找不到 /$MUSTFAIL/。"
+    echo "     红在别处(炸了、依赖缺了、语法错了)和没红检过是一回事。"
+    exit 5
+  fi
+  echo "  ✅ 红在目标断言上(命中 /$MUSTFAIL/)。"
+fi
+
+echo
+echo "  ✅ 红检通过:旧实现下判据是红的(rc=$ORC)。这份判据确实在问本轮的改动。"
+exit 0

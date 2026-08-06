@@ -198,6 +198,10 @@ d_receive_gate() {
   rm -f "$repo/tests/conftest.py"
 
   # ⑤ 仓外的、非 protect 的改动 ⇒ 不许误报
+  # ⚠️ 上一幕的 `git reset --hard` 会把第①幕对实现的改动一起 revert 掉 ——
+  #    所以这里重新改一次,否则下面那条"列出改动清单"的断言**在这一幕里问不出来**
+  #    (08-06 红检时先发现的就是这个夹具 bug,不是实现的问题)。
+  printf '#!/bin/bash\necho NEW\necho more\n' > "$repo/src/impl.sh"
   printf 'noise\n' > "$repo/src/other.txt"
   bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r5" 2>&1; rc=$?
   check "D3: 非 protect 路径的新增文件 ⇒ 放行(误报会让警告变噪音)" $([[ $rc -eq 0 ]]; echo $?)
