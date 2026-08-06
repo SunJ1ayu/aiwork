@@ -21,4 +21,4 @@
       `--base 611dd49 --impl web/src/chat/… web/dist --build 'cd web && npm run build'`
       ⇒ 抓到 vite 产物按内容改名导致恢复不干净(**是恢复自证闸响的**,不是静默留下),
       先补判据再修成 checkout+reset+clean 三步,同一条命令复验干净 —— `70d2a6e`
-- [ ] verify(lane: full)+ 归档
+- [x] verify(lane: full)—— 两腿 BLOCK,全部中高危已修 + 真仓复验,主裁 PASS(`a3114e2`)
