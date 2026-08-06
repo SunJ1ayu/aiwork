@@ -252,6 +252,10 @@ fi
 # 各腿是**并行**的,谁在哪一刻读到哪棵树没人知道;所以派发前后各记一次 HEAD,不同就明说。
 HEAD_BEFORE="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
 
+# 各腿的躯干里也有一道反锚定闸(fast lane 直接调它们时才该拦)。
+# 这里已经在上面查过 my-review 了,派发时置标记,避免同一件事拦两遍把四审整个卡死。
+export PANEL_DISPATCH=1
+
 echo "  running all in parallel..."
 
 # Light pre-launch stagger: the three reviewers share provider tpm budgets, and

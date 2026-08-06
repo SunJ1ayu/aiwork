@@ -40,6 +40,37 @@ if [ -n "$bumped" ]; then
   fi
 fi
 
+# ---- 规矩4:动了评审/派活工具或判据,也必须挂 track ----
+# 为什么加(2026-08-06 当天自查):规矩1 只在 **bump 版本号** 时触发,而 `/root/aiwork`
+# 这个仓**根本没有版本号** ⇒ 那个仓的改动结构上永远不会被要求挂 track。当天实证:
+# 我改了 `bin/panel-review`(评审工具链本身 = 信任面)并新建了两个工具,三条改动
+# 没有任何 track、没有 verify ⇒ **`lane:` 那道题从头到尾没被问过**;而同一天我却因为
+# "碰判卷防线"给另一单走了 full 四审 —— 同性质两种待遇,差别只在有没有触发器。
+# 守卫守错门的第二例(第一例:守在 package.json,而真版本号在 ds_web.py)。
+# 逃生口与规矩1 同款(本次提交带 track 工件,或近 7 天有 verify.md 改动),
+# 因为同一个 track 里连着改好几次是常态,每次都要求带工件就成了误报。
+tooling=""
+for f in $(staged || true); do
+  case "$f" in
+    bin/panel-*|bin/sub*|bin/delegate-*|bin/redcheck|bin/track|bin/track-guard|bin/rust-check-*|tests/test-*)
+      tooling="$f"; break ;;
+  esac
+done
+
+if [ -n "$tooling" ]; then
+  if staged | grep -q '^tracks/'; then
+    :
+  else
+    recent=$(git log --since='7 days ago' --name-only --pretty=format: -- 'tracks/*/verify.md' | grep . | head -1)
+    if [ -z "$recent" ]; then
+      fail=1
+      say "🔴 规矩4:$tooling 属于评审/派活工具或判据(判卷防线),但本提交没动 tracks/,"
+      say "   近 7 天也没有 verify.md 更新 ⇒ 这单的 lane 从头到尾没人问过。"
+      say "   挂个 track(新起,或归进现成 track 的 verify.md)再提交。"
+    fi
+  fi
+fi
+
 # ---- 规矩2:最近改动的 verify.md 里 lane / 派给 非空 ----
 # 取「本提交涉及的 verify.md」∪「工作区里最近 7 天内改过的 verify.md」逐个查。
 verifies=$( { staged | grep -E '^tracks/[^/]+/verify\.md$' || true; \

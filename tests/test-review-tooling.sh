@@ -83,6 +83,11 @@ BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 # 所以统一在这里把腿显式打开 —— 断言一条不删、一条不弱。
 # 只有"默认关不关"那两条用 `env -u PANEL_GLM_LEG` 在干净环境里问。
 export PANEL_GLM_LEG=agent
+# 2026-08-06:反锚定闸(review 模式要求主 agent 先落盘自己那一遍)新上线,而**下面的老用例
+# 问的是各条腿自己的行为**(端点、模型、工具白名单、轮次上限……),不是这道闸。
+# 统一在这里显式退出,和上面 GLM 那条同一个道理:断言一条不删、一条不弱。
+# 只有 V23 那一组在自己内部把它显式打开来问闸本身。
+export REVIEW_NO_MY_REVIEW=1
 
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -1514,7 +1519,7 @@ v23_my_review_gate_on_every_review_path() {
 
     # ② 自审文件在**仓内** ⇒ 拒跑(腿会照着我的答案抄)
     printf '我的一遍\n' > "$d/repo/mine.md"
-    out="$(cd "$d" && REVIEW_MY_REVIEW="$d/repo/mine.md" bash "$b/$tool" $args \
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/repo/mine.md" bash "$b/$tool" $args \
             "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
     check "V23: $tool 自审文件在仓内 ⇒ 拒跑" $([[ $rc -ne 0 ]]; echo $?)
 
@@ -1526,7 +1531,7 @@ v23_my_review_gate_on_every_review_path() {
     else ok "V23: $tool REVIEW_NO_MY_REVIEW=1 应当放行这道闸"; fi
 
     # ④ panel-review 派发时不许被重复拦(它在自己那层已经查过)
-    out="$(cd "$d" && PANEL_DISPATCH=1 bash "$b/$tool" $args \
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 PANEL_DISPATCH=1 bash "$b/$tool" $args \
             "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
     if grep -q "自己的一遍" <<<"$out"; then
       bad "V23: $tool 在 panel 派发下不许重复拦(否则四审整个派不出去)"

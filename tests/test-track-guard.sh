@@ -251,7 +251,12 @@ g5_tooling_changes_need_a_track() {
   check "G5: 改不相干脚本 ⇒ 放行(不误报)" $([[ $rc -eq 0 ]]; echo $?)
   ( cd "$d" && git commit -qm "无关脚本" )
 
-  # ④ 判据文件本身也算判卷防线(改判据不挂 track,和改守卫是同一类事)
+  rm -rf "$d"
+
+  # ④ 判据文件本身也算判卷防线(改判据不挂 track,和改守卫是同一类事)。
+  #    **必须换干净仓**:上面第②幕提交过 verify.md,7 天逃生口会合法地放行 ——
+  #    在那个仓里这一条根本问不出来(08-06 红检时先撞到的就是这个夹具 bug,不是实现)。
+  d="$(newrepo)"
   ( cd "$d"; mkdir -p tests; printf 'echo t\n' > tests/test-review-tooling.sh; git add -A >/dev/null )
   out="$(cd "$d" && bash "$BIN/track-guard" 2>&1)"; rc=$?
   check "G5: 新增/改动 tests/test-*.sh 判据 ⇒ 也要挂 track" $([[ $rc -ne 0 ]]; echo $?)

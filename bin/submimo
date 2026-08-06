@@ -90,6 +90,18 @@ if [[ "$MODE" == "fix" && -z "$ORACLE_CMD" && $NO_ORACLE -eq 0 ]]; then
   die "fix needs an objective check: pass --oracle CMD (bounded verify+retry loop, judge files via --protect), or --no-oracle to consciously run a raw single shot"
 fi
 
+# 反锚定闸(2026-08-06):review 模式下,主 agent 自己那一遍必须先落盘。
+# fast lane 走的就是这条命令 —— 此前只有 panel-review 那条路有闸。
+# shellcheck source=_my-review-gate.sh
+_GATE="$(dirname "$0")/_my-review-gate.sh"
+[ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
+if [ -f "$_GATE" ]; then
+  . "$_GATE"
+  my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "submimo" || exit 1
+else
+  echo "submimo: 找不到 _my-review-gate.sh —— 反锚定闸缺件,拒跑(fail closed)" >&2; exit 1
+fi
+
 command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: mimo"
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]] || die "repo dir not found: $REPO_DIR"
