@@ -288,6 +288,26 @@ EOF
   bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
        --must-fail "期望 NEW" --oracle 'bash tests/oracle.sh' >"$d/e8" 2>&1; rc=$?
   check "E1: 红在目标断言上 ⇒ 通过" $([[ $rc -eq 0 ]]; echo $?)
+
+  # ⑧ --impl 里有**基线上还不存在的新文件**(整单新增一个工具就是这形状)。
+  #    "退回"对它的正确含义是**删掉**,不是 checkout 报错就算了 ——
+  #    08-06 拿 redcheck 红检 redcheck 自己时当场撞到的(git checkout <base> -- <新文件>
+  #    直接 pathspec 报错)。这一幕同时钉死"跑完它要回来"。
+  cat > "$repo/src/helper.sh" <<'EOF'
+#!/bin/bash
+echo helper
+EOF
+  cat > "$repo/tests/oracle.sh" <<'EOF'
+#!/bin/bash
+[[ -f "$(dirname "$0")/../src/helper.sh" ]] || { echo "FAIL: helper.sh 不存在"; exit 1; }
+echo "ok - helper 在"
+EOF
+  git -C "$repo" add -A; git -C "$repo" commit -qm "新增 helper + 对应判据"
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/helper.sh \
+       --must-fail "helper.sh 不存在" --oracle 'bash tests/oracle.sh' >"$d/e9" 2>&1; rc=$?
+  check "E1: 基线上不存在的新实现 ⇒ 退回=删掉它,判据照样红" $([[ $rc -eq 0 ]]; echo $?)
+  check "E1: 跑完那个新文件回来了" $([[ -f "$repo/src/helper.sh" ]]; echo $?)
+  check "E1: 跑完工作树仍然干净" $([[ -z "$(git -C "$repo" status --porcelain -uall)" ]]; echo $?)
   rm -rf "$d"
 }
 
