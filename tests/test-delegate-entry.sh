@@ -418,6 +418,7 @@ d_gate_blind_spots() {
   printf '__pycache__/\n' > "$repo/.gitignore"
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore pycache"
   mkdir -p "$repo/tests/__pycache__"; printf 'x' > "$repo/tests/__pycache__/o.cpython-312.pyc"
+  touch "$d/attack.md"   # 改过 .gitignore ⇒ 攻题记录要重新变新(那道过期闸是对的,不绕它)
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g2.log" >"$d/g2" 2>&1; rc=$?
   check "D4: 判卷目录里只有 __pycache__ 被 ignore ⇒ 照发(否则 python 仓永远派不出活)" \
@@ -425,7 +426,7 @@ d_gate_blind_spots() {
   # 同一份 .gitignore 下,真正会藏东西的文件仍要拒 —— 防止上面那条被写成"全放行"
   printf '__pycache__/\ntests/conftest.py\n' > "$repo/.gitignore"
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "再 ignore conftest"
-  printf 'x\n' > "$repo/tests/conftest.py"
+  printf 'x\n' > "$repo/tests/conftest.py"; touch "$d/attack.md"
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g3.log" >"$d/g3" 2>&1; rc=$?
   check "D4: 放行 __pycache__ 之后,被 ignore 的 conftest.py 仍然拒发" \
@@ -445,10 +446,14 @@ d_gate_blind_spots() {
   git -C "$repo" checkout -- tests/oracle.sh
 
   # ④ 回执/日志落在**被派活的仓里** ⇒ 执行腿能改回执让闸①自证(subdeepseek F15 / subkimi F3)
+  # 调用数写成"这一次没变",不写累计常数:常数会让"加一幕"顺带改断言,
+  # 而改断言正是最容易把闸悄悄放松的动作(2026-08-07 加 __pycache__ 那一幕时撞到)。
+  _calls_before="$(calls_of "$rec")"
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$repo/inside.log" >"$d/i1" 2>&1; rc=$?
   check "D4: 日志/回执落在仓内 ⇒ 拒发(和攻题记录同源:考生不许碰卷宗)" $([[ $rc -ne 0 ]]; echo $?)
-  check "D4: 拒发时 codex 也没被调用" $([[ "$(calls_of "$rec")" -eq 2 ]]; echo $?)
+  check "D4: 拒发时 codex 也没被调用" \
+        $([[ "$(calls_of "$rec")" -eq "$_calls_before" ]]; echo $?)
   rm -rf "$d"
 }
 
