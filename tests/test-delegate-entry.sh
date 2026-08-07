@@ -420,6 +420,77 @@ py_compile.compile('src/impl.py', doraise=True,
   check "E1: 跑完盘上没留下 .pyc 缓存(git status 空)" \
     $([[ -z "$(git -C "$pr" status --porcelain)" ]]; echo $?)
 
+  # ⑭ 【四审 subdeepseek F4】事故的**另一半**:还原之后在**干净的树**上假红。
+  #    ⑬ 只钉住了"退回之后跑的是盘上的源码";`restore()` 里那次清缓存它证明不了 ——
+  #    一个"只在退回后清一次 + `PYTHONDONTWRITEBYTECODE=1`"的实现也能让 ⑬ 全绿。
+  #    这里让**判据自己**每跑一次就把当前源码钉成 unchecked-hash 的字节码
+  #    (复刻"缓存被信任",只是确定而非概率),redcheck 跑完之后**再单独跑一次
+  #    只 import 不编译**的检查:restore 不清缓存的话,盘上留的是**基线**那版被钉死的
+  #    字节码 ⇒ 干净树上假红,正是那天晚上我以为"自己刚提交的改动把它弄坏了"那一幕。
+  local pr2="$d/pyrepo2"; mkdir -p "$pr2/src" "$pr2/tests"
+  ( cd "$pr2"
+    git init -q -b main; git config user.email t@t; git config user.name t
+    cat > tests/oracle.py <<'EOF'
+import os, sys, py_compile
+SRC = os.path.join(os.path.dirname(__file__), "..", "src")
+py_compile.compile(os.path.join(SRC, "impl.py"), doraise=True,
+                   invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+sys.path.insert(0, SRC)
+import impl
+assert impl.VALUE == "NEW!", f"FAIL: 期望 NEW!,实际 {impl.VALUE}"
+print("ok - impl.VALUE 是 NEW!")
+EOF
+    cat > tests/check_clean.py <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import impl          # 只 import,**不重新编译** —— 残留的字节码在这里说话
+assert impl.VALUE == "NEW!", f"FAIL: 干净树上却读到 {impl.VALUE}(假红)"
+print("ok - 干净树上判据是绿的")
+EOF
+    printf 'VALUE = "old!"\n' > src/impl.py
+    git add -A; git commit -qm "旧实现 + 判据"
+    printf 'VALUE = "NEW!"\n' > src/impl.py
+    git add -A; git commit -qm "新实现" )
+  bash "$BIN/redcheck" --repo "$pr2" --base HEAD~1 --impl src/impl.py \
+       --oracle 'python3 tests/oracle.py' >"$d/e15" 2>&1; rc=$?
+  check "E1: (另一半)退回那一跑照样判红" $([[ $rc -eq 0 ]]; echo $?)
+  ( cd "$pr2" && python3 tests/check_clean.py ) >"$d/e15b" 2>&1; rc=$?
+  check "E1: 还原之后在**干净的树**上判据必须绿 —— 否则就是那天晚上的假红" \
+    $([[ $rc -eq 0 ]]; echo $?)
+
+  # ⑮ 【四审 subdeepseek F3 起的头,方向我核对过一遍才落这一幕】
+  #    "被 git 跟踪就跳过"那一判用的是 **pathspec,默认按 glob 解释**
+  #    (实测 `git ls-files -- 'bin/[r]edcheck'` 命中 `bin/redcheck`)。
+  #    危险方向是 **fail-open**:目录名带 glob 字符的**未跟踪**缓存,
+  #    撞上一个 glob 匹配得上的**已跟踪**路径 ⇒ 误判"被跟踪" ⇒ 跳过不清
+  #    ⇒ 残留旧字节码 ⇒ **假绿**(防线的洞,不是响亮的报错)。
+  #    腿给的例子(跟踪的是 `a1/__pycache__/*.pyc`)我试过**不成立**:
+  #    带通配符的 pathspec 不做目录前缀展开,匹不上目录下的文件。
+  #    真能撞上的形状是**已跟踪的同名普通文件**(`a1/__pycache__` 是个 file)——
+  #    造作,但确定可复现,而 `:(literal)` 正好整类清掉。
+  local pr3="$d/pyrepo3"; mkdir -p "$pr3/src" "$pr3/tests" "$pr3/a1"
+  ( cd "$pr3"
+    git init -q -b main; git config user.email t@t; git config user.name t
+    printf 'VALUE = "old!"\n' > src/impl.py
+    printf 'grep -q "NEW!" src/impl.py\n' > tests/oracle.sh
+    printf 'not a dir\n' > a1/__pycache__          # **已跟踪的普通文件**,故意的
+    mkdir -p b1/__pycache__; printf 'keep\n' > b1/__pycache__/keep.pyc  # **已跟踪的真缓存目录**
+    git add -A; git commit -qm "旧实现 + 判据"
+    printf 'VALUE = "NEW!"\n' > src/impl.py
+    git add -A; git commit -qm "新实现" )
+  mkdir -p "$pr3/a[1]/__pycache__"; printf 'stale\n' > "$pr3/a[1]/__pycache__/stale.pyc"
+  bash "$BIN/redcheck" --repo "$pr3" --base HEAD~1 --impl src/impl.py \
+       --oracle 'bash tests/oracle.sh' >"$d/e16" 2>&1
+  check "E1: 目录名带 glob 字符时缓存照样清掉(pathspec 必须按字面量比,不然假绿)" \
+    $([[ ! -e "$pr3/a[1]/__pycache__/stale.pyc" ]]; echo $?)
+  check "E1: 被跟踪的那个同名文件一个字节都不许动" \
+    $([[ -f "$pr3/a1/__pycache__" ]]; echo $?)
+  # "跟踪就跳过"那条分支本身也要有人钉住,否则一个"全删"的实现照样能让上面两条绿。
+  check "E1: **被跟踪的**真 __pycache__ 目录跳过不清(删了会把树弄脏)" \
+    $([[ -f "$pr3/b1/__pycache__/keep.pyc" ]]; echo $?)
+  check "E1: 跳过时要吼一声,不许静默(那个目录就是这道防线的洞)" \
+    $([[ "$(grep -c '被 git 跟踪,没清' "$d/e16")" -ge 1 ]]; echo $?)
+
   rm -rf "$d"
 }
 
@@ -473,6 +544,31 @@ d_gate_blind_spots() {
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g3.log" >"$d/g3" 2>&1; rc=$?
   check "D4: 放行 __pycache__ 之后,被 ignore 的 conftest.py 仍然拒发" \
         $([[ $rc -ne 0 ]]; echo $?)
+
+  # ②c 【四审 subdeepseek F5;subkimi 额度用尽前的日志里也独立指到同一处;主 agent 亦然】
+  #    上面那条放行当初写成了 `grep -v '__pycache__'` —— **子串匹配,不是路径成分匹配**。
+  #    执行腿同时握着 `.gitignore` 和文件名 ⇒ 只要名字里带上这个子串,它就能在判卷目录里
+  #    放一个闸①三条臂全照不到的文件。而放行的安全性论证(PEP 3147:没有源码的 .pyc
+  #    import 不进来)对这种文件**根本不成立** —— 它压根不是字节码。
+  printf '__pycache__/\ntests/__pycache__-evil/\n' > "$repo/.gitignore"
+  git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore 伪缓存目录"
+  mkdir -p "$repo/tests/__pycache__-evil"
+  printf 'x\n' > "$repo/tests/__pycache__-evil/conftest.py"
+  touch "$d/attack.md"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/g4.log" >"$d/g4" 2>&1; rc=$?
+  check "D4: 名字里带 __pycache__ 的**伪**缓存目录不算例外,照样拒发" \
+        $([[ $rc -ne 0 ]]; echo $?)
+  printf '__pycache__/\ntests/x__pycache__conftest.py\n' > "$repo/.gitignore"
+  git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore 伪缓存文件"
+  printf 'x\n' > "$repo/tests/x__pycache__conftest.py"
+  touch "$d/attack.md"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/g5.log" >"$d/g5" 2>&1; rc=$?
+  check "D4: 文件名里带 __pycache__ 也不算例外,照样拒发" \
+        $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$repo/tests/__pycache__-evil" "$repo/tests/x__pycache__conftest.py"
+
   rm -rf "$repo/tests/__pycache__" "$repo/tests/conftest.py"
   git -C "$repo" rm -q --cached .gitignore >/dev/null 2>&1; rm -f "$repo/.gitignore"
   git -C "$repo" commit -qm "撤掉 ignore2" >/dev/null 2>&1
