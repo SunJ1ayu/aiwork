@@ -408,6 +408,32 @@ d_gate_blind_spots() {
   git -C "$repo" rm -q --cached .gitignore >/dev/null 2>&1; rm -f "$repo/.gitignore"
   git -C "$repo" commit -qm "撤掉 ignore" >/dev/null 2>&1
 
+  # ②b `__pycache__` 是**唯一的例外**,而且必须是例外(2026-08-07 实事故):
+  #    python 仓库跑一次判据就会在判卷目录里生成 `tests/__pycache__/*.pyc`,它们被
+  #    gitignore 忽略 ⇒ 上面那道闸**永远过不去**,删了也立刻长回来。
+  #    放行它安全的理由是**验过的,不是想当然**:PEP 3147 布局下,
+  #    `__pycache__/x.pyc` 没有对应的 `x.py` 就 import 不进来(当场试过:
+  #    只留 .pyc 删掉源码 ⇒ `No module named 'ghost'`)⇒ 藏不了判卷逻辑。
+  #    **只放 `__pycache__`,别的 ignored 文件照拒。**
+  printf '__pycache__/\n' > "$repo/.gitignore"
+  git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore pycache"
+  mkdir -p "$repo/tests/__pycache__"; printf 'x' > "$repo/tests/__pycache__/o.cpython-312.pyc"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/g2.log" >"$d/g2" 2>&1; rc=$?
+  check "D4: 判卷目录里只有 __pycache__ 被 ignore ⇒ 照发(否则 python 仓永远派不出活)" \
+        $([[ $rc -eq 0 ]]; echo $?)
+  # 同一份 .gitignore 下,真正会藏东西的文件仍要拒 —— 防止上面那条被写成"全放行"
+  printf '__pycache__/\ntests/conftest.py\n' > "$repo/.gitignore"
+  git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "再 ignore conftest"
+  printf 'x\n' > "$repo/tests/conftest.py"
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/g3.log" >"$d/g3" 2>&1; rc=$?
+  check "D4: 放行 __pycache__ 之后,被 ignore 的 conftest.py 仍然拒发" \
+        $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$repo/tests/__pycache__" "$repo/tests/conftest.py"
+  git -C "$repo" rm -q --cached .gitignore >/dev/null 2>&1; rm -f "$repo/.gitignore"
+  git -C "$repo" commit -qm "撤掉 ignore2" >/dev/null 2>&1
+
   # ③ 判卷被 skip-worktree/assume-unchanged 标记 ⇒ 闸① 两臂同时失明(subdeepseek F1)
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/s1.log" >/dev/null 2>&1
