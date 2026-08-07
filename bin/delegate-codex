@@ -64,8 +64,13 @@ do_receive() {
   # `__pycache__` 是唯一放行的 ignored 形状:python 仓跑一次判据就会生成它,
   # 而 PEP 3147 布局下没有对应源码的 .pyc **import 不进来**(2026-08-07 实测),
   # 所以它藏不了判卷逻辑。别的 ignored 文件照拒。
+  # **按路径成分匹配,不是子串**(2026-08-08 四审 subdeepseek F5 / subkimi / 我 三方独立命中):
+  # 写成 `grep -v '__pycache__'` 的话,`tests/__pycache__-evil/conftest.py` 和
+  # `tests/x__pycache__conftest.py` 都会被一起滤掉 —— 执行腿同时握着 .gitignore
+  # 和文件名,于是它能在判卷目录里放一个闸①三条臂全照不到的文件,
+  # 而上面那条"没有源码的 .pyc import 不进来"对这种文件根本不成立(它不是字节码)。
   ignored_out="$(git -C "$repo" status --porcelain -uall --ignored -- "${protect[@]}" 2>/dev/null \
-                 | grep '^!!' | grep -v '__pycache__' || true)"
+                 | grep '^!!' | grep -vE '(^|[ /])__pycache__/' || true)"
   # 第四臂(四审 subdeepseek F1):`git update-index --skip-worktree/--assume-unchanged`
   # 一挂,diff 和 status **同时**把该文件当没改过 —— 工件查证退化回自述,正好打在
   # 这道闸的立足点上。`git ls-files -v` 的标志位:**小写字母 = assume-unchanged**,
@@ -168,9 +173,10 @@ done
 # 执行腿只要往 .gitignore 追一行、再塞一个 `tests/conftest.py`,闸①两臂就全空 ——
 # `git status --porcelain -uall` 默认不显示 ignored 文件,那招(闸①最值钱的一幕)被绕过。
 # 在派活这一刻查:判卷目录里现在就有 ignored 文件的话,这套闸从一开始就不成立。
-# `__pycache__` 放行,理由见上面收货那一臂同名注释(藏不了代码,且删了立刻长回来)。
+# `__pycache__` 放行,理由见上面收货那一臂同名注释(藏不了代码,且删了立刻长回来);
+# 同样**按路径成分匹配** —— 名字里带这个子串的伪缓存不是例外。
 _ignored="$(git -C "$REPO" status --porcelain -uall --ignored -- "${PROTECT[@]}" 2>/dev/null \
-            | grep '^!!' | grep -v '__pycache__' || true)"
+            | grep '^!!' | grep -vE '(^|[ /])__pycache__/' || true)"
 if [[ -n "$_ignored" ]]; then
   die "判卷路径下有**被 gitignore 藏起来**的文件,闸① 看不见它们:
 $(printf '%s\n' "$_ignored" | sed 's/^/    /')

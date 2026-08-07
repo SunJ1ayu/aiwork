@@ -56,7 +56,10 @@ git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || die "--base 解�
 [[ -n "$ORACLE" ]] || die "缺 --oracle(判据怎么跑)"
 
 # 【高危,四审 subkimi 抓的】`--impl` 必须在仓内。
-# 下面这行 `rm -rf "$REPO/$p"` 是本脚本唯一的破坏性动作:`--impl ../x` 会真删到仓外,
+# 下面这行 `rm -rf "$REPO/$p"` 是本脚本**两处**破坏性动作之一(另一处是 `purge_pycache`
+# 全仓清 `__pycache__`,根钉在 `REPO_REAL`、跟踪的跳过;2026-08-08 四审 subdeepseek F2
+# 提醒:这句原本写着"唯一",会让后来的审者以为破坏面只有被守卫的这份清单):
+# `--impl ../x` 会真删到仓外,
 # 而**旧版没有任何拦截** —— 前置脏检查的 git 报错走 stderr、stdout 为空 ⇒ 静默放行,
 # 收尾自证同样为空 ⇒ 还会打印"✅ 已恢复,工作树干净"。
 # **不需要攻击者,敲错一个路径就够。**(subdeepseek 判成"低危、预检已挡",核对代码是错的:
@@ -98,18 +101,36 @@ echo "  实现:${IMPL[*]}"
 #
 # 只删 `__pycache__` 目录,且**跳过被 git 跟踪的**(极少见,但删了会把树弄脏,
 # 而收尾自证会因此喊 rc=9 —— 一个为了正确性加的动作不该反过来触发"恢复没干净")。
+#
+# 三处是 2026-08-08 四审改的,都别改回去:
+#   1. **`:(literal)`**(subdeepseek F3):pathspec 默认按 glob 解释。未跟踪的
+#      `a[1]/__pycache__` 会撞上已跟踪的同名普通文件 `a1/__pycache__` ⇒ 误判"被跟踪"
+#      ⇒ 跳过不清 ⇒ 残留旧字节码 ⇒ **假绿**。(腿举的另一个例子实测不成立:带通配符的
+#      pathspec 不做目录前缀展开。方向核对过才落的。)
+#   2. **一次问清楚谁被跟踪**,不是每个目录起一个 git 进程:带 venv 的仓里
+#      `__pycache__` 数以千计,per-dir spawn 会让红检慢到没人愿意跑 ——
+#      而"没人跑"是这道防线最终失效的方式。
+#   3. **`-prune`,并且剪掉 `site-packages`**:第三方包的字节码不可能对"被测实现是
+#      哪一版"撒谎(两个 commit 之间它们根本没变),删了全是代价零收益。
+#      剪 `site-packages` 而不是猜 venv 目录叫什么 —— 任何 venv 布局都有它。
 purge_pycache() {
-  local d rel
+  local d rel f
+  local -A tracked=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && tracked["${f%/*}"]=1
+  done < <(git -C "$REPO" ls-files -- '*__pycache__/*' 2>/dev/null)
   while IFS= read -r d; do
     rel="${d#"$REPO_REAL"/}"
-    if [[ -n "$(git -C "$REPO" ls-files -- "$rel" 2>/dev/null)" ]]; then
+    if [[ -n "${tracked[$rel]:-}" ]]; then
       # 不静默跳过:跳过的那个目录就是这道防线的洞,得让人看见。
       echo "  ⚠️ $rel 被 git 跟踪,没清 —— 这次红检可能跑的是它里面的旧字节码。" >&2
       continue
     fi
     rm -rf "$d"
-  done < <(find "$REPO_REAL" -type d -name __pycache__ \
-                -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null)
+  done < <(find "$REPO_REAL" \
+                \( -name .git -o -name node_modules -o -name site-packages \
+                   -o -name .tox -o -name .nox \) -prune -o \
+                -type d -name __pycache__ -print 2>/dev/null)
 }
 
 RESTORED=0
