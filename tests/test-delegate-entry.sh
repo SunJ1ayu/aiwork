@@ -378,6 +378,48 @@ EOF
   else
     ok "E1: 恢复 build 失败时**不许**打印「已恢复,工作树干净」"
   fi
+
+  # ⑬ 【2026-08-07 实事故】**判据必须跑盘上那份源码,不许跑残留的字节码缓存。**
+  #    那天晚上我手搓红检:把 `fence_end = f"…{nonce}…"` 换成 `"…deadbeef…"`,
+  #    **两串恰好一样长**,加上还原时 mtime 落在同一秒 —— CPython 的 .pyc 有效性
+  #    检查(源文件 mtime + size)整个通过,于是"红检"跑的是**旧字节码**:
+  #    先报了一句"这是死判据"(假绿),还原之后又在干净的树上假红。
+  #    `redcheck` 走的是同一条路(`git checkout` 之后 mtime 也是新的、同长度回退
+  #    照样撞得上),只是概率事件,没撞上不代表它对。
+  #
+  #    这一幕**不复现那个概率**:用 unchecked-hash 的 .pyc(PEP 552,Python 从不
+  #    拿它跟源码比对)把"缓存被信任"变成确定事件。问的是同一件事 ——
+  #    缓存还在,判据跑的就不是盘上那份代码。
+  local pr="$d/pyrepo"; mkdir -p "$pr/src" "$pr/tests"
+  ( cd "$pr"
+    git init -q -b main; git config user.email t@t; git config user.name t
+    printf 'VALUE = "old!"\n' > src/impl.py          # 和新版**同样长度**,就像那天晚上
+    cat > tests/oracle.py <<'EOF'
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import impl
+assert impl.VALUE == "NEW!", f"FAIL: 期望 NEW!,实际 {impl.VALUE}"
+print("ok - impl.VALUE 是 NEW!")
+EOF
+    git add -A; git commit -qm "旧实现 + 判据"
+    printf 'VALUE = "NEW!"\n' > src/impl.py
+    git add -A; git commit -qm "新实现" )
+  # 在**新实现**上先跑一遍判据(真实工作流里本来就会先跑),并把缓存钉成"永远可信"
+  ( cd "$pr" && python3 -c "
+import py_compile
+py_compile.compile('src/impl.py', doraise=True,
+                   invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)" )
+  check "E1: 夹具就位(缓存里存着新实现的字节码)" \
+    $([[ -n "$(find "$pr/src/__pycache__" -name 'impl*.pyc' 2>/dev/null)" ]]; echo $?)
+  bash "$BIN/redcheck" --repo "$pr" --base HEAD~1 --impl src/impl.py \
+       --oracle 'python3 tests/oracle.py' >"$d/e14" 2>&1; rc=$?
+  check "E1: 退回后判据跑的是**盘上的源码**,不是残留的 .pyc(否则假绿说它是死判据)" \
+    $([[ $rc -eq 0 ]]; echo $?)
+  #    这一条断的是"缓存**没被留在盘上**":`src/__pycache__` 是未跟踪的,
+  #    留着它 `git status` 就不空。顺带钉住"清缓存不许把树弄脏"。
+  check "E1: 跑完盘上没留下 .pyc 缓存(git status 空)" \
+    $([[ -z "$(git -C "$pr" status --porcelain)" ]]; echo $?)
+
   rm -rf "$d"
 }
 
