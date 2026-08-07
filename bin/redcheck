@@ -88,6 +88,30 @@ echo "redcheck: repo=$REPO"
 echo "  实现退回 ${BASE_SHA:0:12}(判卷留在 HEAD ${HEAD_SHA:0:12})"
 echo "  实现:${IMPL[*]}"
 
+# ── 字节码缓存:每次换代码之后必须清 ──────────────────────────────────────
+# 2026-08-07 实事故:手搓红检把 `f"…{nonce}…"` 换成 `"…deadbeef…"`,**两串恰好同长**,
+# 加上还原时 mtime 落在同一秒 ⇒ CPython 的 .pyc 有效性检查(源文件 mtime + size)
+# 整个通过,"红检"跑的是**旧字节码** —— 先假绿(报告"这是死判据"),后假红。
+# `git checkout` 写出来的 mtime 同样是"现在",**同长度回退照样撞得上**;
+# 撞不上只是运气,不是这个工具对。红检的全部价值就是"判据到底证明了什么",
+# 它自己被缓存骗过,上面那一整套(判据先行/退回红检/死断言闸)全落在流沙上。
+#
+# 只删 `__pycache__` 目录,且**跳过被 git 跟踪的**(极少见,但删了会把树弄脏,
+# 而收尾自证会因此喊 rc=9 —— 一个为了正确性加的动作不该反过来触发"恢复没干净")。
+purge_pycache() {
+  local d rel
+  while IFS= read -r d; do
+    rel="${d#"$REPO_REAL"/}"
+    if [[ -n "$(git -C "$REPO" ls-files -- "$rel" 2>/dev/null)" ]]; then
+      # 不静默跳过:跳过的那个目录就是这道防线的洞,得让人看见。
+      echo "  ⚠️ $rel 被 git 跟踪,没清 —— 这次红检可能跑的是它里面的旧字节码。" >&2
+      continue
+    fi
+    rm -rf "$d"
+  done < <(find "$REPO_REAL" -type d -name __pycache__ \
+                -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null)
+}
+
 RESTORED=0
 restore() {
   [[ $RESTORED -eq 1 ]] && return 0
@@ -104,6 +128,9 @@ restore() {
   git -C "$REPO" reset -q "$HEAD_SHA" -- "${IMPL[@]}" 2>/dev/null
   git -C "$REPO" clean -fdq -- "${IMPL[@]}" 2>/dev/null
   git -C "$REPO" checkout "$HEAD_SHA" -- "${IMPL[@]}" 2>/dev/null   # clean 之后再铺一次,补上被清掉的跟踪文件
+  # 恢复也要清:否则盘上留着**基线**的字节码,下一个人跑判据跑的是退回后的代码。
+  # (和下面"恢复之后必须重新 build"同一个道理,只是这一份缓存 build 管不着。)
+  purge_pycache
   # 恢复之后**必须重新 build**:本机 dist 入库,不重 build 就把一棵"基线构建的树"
   # 留在盘上 —— 那和"盘上和运行时对不上"是同一种事故,只是发生在仓库里。
   local build_failed=0
@@ -153,6 +180,7 @@ for p in "${gone[@]}"; do
   echo "  (基线上没有 $p ⇒ 退回 = 删掉它)"
   rm -rf "${REPO:?}/$p"
 done
+purge_pycache      # 换完代码就清:否则下面跑的可能是上一版的字节码
 
 if [[ -n "$BUILD" ]]; then
   echo "  build ..."
