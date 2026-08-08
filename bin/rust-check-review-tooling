@@ -19,6 +19,7 @@ SUITES=(
   "track-guard|bash|/root/aiwork/tests/test-track-guard.sh"
   "delegate-entry|bash|/root/aiwork/tests/test-delegate-entry.sh"
   "hooks-installed|bash|/root/aiwork/tests/test-hooks-installed.sh"
+  "runlog|bash|/root/aiwork/tests/test-runlog.sh"
 )
 
 # ── 名单漏网报告(2026-08-06)────────────────────────────────────────────

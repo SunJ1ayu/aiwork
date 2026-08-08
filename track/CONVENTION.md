@@ -33,9 +33,12 @@ judgment was never made. Superseded work still archives: write the real outcome
 runlog -t <track> [-n <slug>] -- <判据命令>     # 退出码原样透传
 ```
 
-`track-guard` 规矩5 / `track archive` 会查:粘的收据行必须与收据文件**逐字节相同**(5a);
-归档时**最后一份**收据必须被引用(5b);一份收据都没有要写
-`- 无机器证据:<理由>`(5c);收据必须进 git(5d)。
+`track-guard` 规矩5 / `track archive` 会查:**每次提交**——粘的收据行必须与收据文件
+**逐字节相同**(5a,行首行尾的 markdown 装饰会先剥掉);**归档那一次**——最后一份收据
+必须被引用、**跑红的那几遍一份都不许藏**(5b),一份收据都没有要写
+`- 无机器证据:<理由>`(5c),收据必须进 git(5d)。
+「归档那一次」= 这次提交把 verify.md **搬进/新建进** `tracks/archive/`(git 状态 A 或 R);
+改一份早已归档的工件不算,那样会误伤历史文件。
 
 出处:08-05 我写「python 866/0」,听起来完美 —— 实际上回归用的解释器缺依赖,
 一整块闸被整块 SKIP,汇总照印 OK。**汇总会撒谎,细节不会。**

@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
     -t|--track) TRACK="${2:-}"; shift 2 || die "-t 后面要跟 track 名" ;;
     -n|--name)  SLUG="${2:-}";  shift 2 || die "-n 后面要跟 slug" ;;
     --repo)     REPO="${2:-}";  shift 2 || die "--repo 后面要跟目录" ;;
-    -h|--help)  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 0 ;;
+    -h|--help)  sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 0 ;;
     --)         shift; break ;;
     *)          die "不认识的参数 '$1'(命令要写在 -- 后面)" ;;
   esac
@@ -41,6 +41,7 @@ done
 # 收据就会写到**仓外**去。runlog 是新增的写口,写口的第一件事是划边界。
 case "$TRACK" in
   */*|*..*|-*) die "track 名里不许有斜杠、'..' 或打头的 '-':$TRACK" ;;
+  .|archive)   die "'$TRACK' 不是 track 名(它是 tracks/ 或归档目录)" ;;
 esac
 
 if [ -z "$REPO" ]; then
@@ -74,11 +75,14 @@ EVDIR="$REPO/$REL/evidence"
 mkdir -p "$EVDIR" || die "建不了 $EVDIR"
 # 序号 = 同一秒里的第几份。**不能只靠 slug 去重**:同一秒跑 c、b、a 三条,
 # 光看文件名字典序会排成 a<b<c,和时间序正好反过来 ⇒ 规矩5b 会挑错「最后一份」。
+# 用 noclobber 原子占位,不是「先看在不在、再创建」——那中间有空隙,
+# 同秒并发的两个 runlog 会算出同一个序号、写同一个文件(四审 subkimi F5)。
 n=$(find "$EVDIR" -maxdepth 1 -name "$TS-*" 2>/dev/null | wc -l)
 while :; do
   n=$((n+1))
   FILE="$EVDIR/$TS-$(printf '%02d' "$n")-$SLUG.txt"
-  [ -e "$FILE" ] || break
+  if (set -C; : > "$FILE") 2>/dev/null; then break; fi
+  [ "$n" -lt 99 ] || die "同一秒里已经有 99 份收据了,这不正常"
 done
 RELFILE="$REL/evidence/$(basename "$FILE")"
 
@@ -95,7 +99,9 @@ CMDSTR="$(printf '%q ' "$@")"; CMDSTR="${CMDSTR% }"
   printf -- '---------------- 输出开始 ----------------\n'
 } > "$FILE"
 
-printf 'runlog: 跑 %s @%s dirty=%s → %s\n' "$CMDSTR" "$COMMIT" "$DIRTY" "$RELFILE" >&2
+# 横幅**不许**以 `runlog: ` 打头:那样它和下面该粘的收据行长得一模一样,
+# 顺手粘错一行就是一次莫名其妙的 5a 挡下(四审 subdeepseek L7)。
+printf '[runlog] 跑 %s @%s dirty=%s → %s\n' "$CMDSTR" "$COMMIT" "$DIRTY" "$RELFILE" >&2
 
 RCF="$(mktemp)"
 ( cd "$REPO" && "$@" 2>&1; printf '%s' "$?" > "$RCF" ) | tee -a "$FILE"

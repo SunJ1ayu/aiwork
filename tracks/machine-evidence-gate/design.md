@@ -15,9 +15,10 @@ runlog -t <track> [-n <slug>] [--repo <dir>] -- <命令...>
    未跟踪文件在 diff 里是隐形的,所以在这里必须算进"脏")。
    顺序不能反:收据文件本身会把工作树弄脏。
 2. 跑命令,输出**同时**流到终端和收据文件(合并 stdout/stderr)。
-3. 收据落在 `tracks/<track>/evidence/<YYYYMMDDThhmmssZ>-<slug>.txt`
+3. 收据落在 `tracks/<track>/evidence/<YYYYMMDDThhmmssZ>-<NN>-<slug>.txt`
    —— 文件名按字典序排 = 按时间排(规矩5b 靠这个取"最后一份")。
-   同一秒重跑加 `-2`、`-3` 后缀。
+   `<NN>` 是同一秒里的第几份,**两位零填充**:光靠 slug 去重不行 ——
+   同一秒依次跑 c、b、a,字典序会排成 a<b<c,和时间序正好反过来。
 4. 收据末行是**收据行**,单行、可 grep、字节稳定:
 
    ```

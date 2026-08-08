@@ -130,8 +130,16 @@ for v in $verifies; do
   rm -f "$tmp"
 done
 
-# 5b/5c/5d 只在**归档**那一刻查(理由同规矩3:判据是一路补的,中途每次都查必然误报)
-for v in $(staged | grep -E '^tracks/archive/[^/]+/verify\.md$' || true); do
+# 5b/5c/5d 只在**归档**那一刻查(理由同规矩3:判据是一路补的,中途每次都查必然误报)。
+# 「那一刻」= 这次提交把它**搬进/新建进** archive/(状态 A 或 R),**不是**"路径长得像归档"。
+# 2026-08-08 四审两条腿独立命中:按路径匹配的话,改一份两个月前就归档的 verify.md
+# 的错字也会被当成"你在归档"挡下,而仓里 8 份历史归档工件全部零收据 ⇒ 一碰就挡,
+# 报错文案还是错的。任务书自己写着「误报比漏报更致命」,我照样踩了进去。
+archiving_now() {
+  git diff --cached --name-status --find-renames 2>/dev/null \
+    | awk -F'\t' '$1 !~ /^[MD]/ && $NF ~ /^tracks\/archive\/[^\/]+\/verify\.md$/ {print $NF}'
+}
+for v in $(archiving_now); do
   [ -f "$v" ] || continue
   dir="$(dirname "$v")"
   tmp="$(verify_content "$v")"

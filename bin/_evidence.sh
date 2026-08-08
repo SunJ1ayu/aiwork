@@ -30,8 +30,11 @@ ev_files() {  # <trackdir>
 # verify.md 里**声称**的收据行。markdown 里怎么粘都算数:裸行、围栏代码块、
 # `- \`runlog: …\`` 列表项、引用。剥掉行首的列表/引用/反引号和行尾的反引号空白,
 # 剩下的必须整行以 `runlog: ` 打头 —— 剥完再比,所以「换个形状粘」绕不过去。
+# 行首行尾**对称**地剥:只剥装饰(空白、列表符、引用符、反引号、强调符),
+# 剥完必须整行就是收据行。四审 subdeepseek L6:第一版行尾只剥反引号和空白,
+# `**\`runlog: …\`**` 这种老实粘贴反而被挡 —— 误报,而误报是这道闸的死法。
 ev_claimed_lines() {  # <verify.md 路径>
-  sed -n 's/^[[:space:]>*`-]*\(runlog: .*\)$/\1/p' "$1" 2>/dev/null | sed 's/[[:space:]`]*$//'
+  sed -n 's/^[[:space:]>*_`-]*\(runlog: .*\)$/\1/p' "$1" 2>/dev/null | sed 's/[[:space:]*_`]*$//'
 }
 
 # 主检查。问题逐条打印到 stderr;返回 0 = 干净,非 0 = 有问题。
@@ -71,7 +74,7 @@ ev_check() {
 
   # ---- 5c 存在性:归档时一份收据都没有,就得白纸黑字说为什么 ----
   if [ -z "$last" ]; then
-    if ! grep -qE '^[[:space:]]*-[[:space:]]*无机器证据(:|:)[[:space:]]*[^[:space:]]' "$src"; then
+    if ! grep -qE '^[[:space:]]*[-*][[:space:]]*无机器证据(:|:)[[:space:]]*[^[:space:]]' "$src"; then
       bad=1
       printf '%s: 🔴 5c:%s 在归档,但这一单一份机器证据都没有。\n' "$tag" "$v" >&2
       printf '%s:    要么用 `runlog -t <track> -- <判据命令>` 跑一遍再把收据行粘进来,\n' "$tag" >&2
@@ -79,6 +82,21 @@ ev_check() {
     fi
     [ "$bad" -eq 0 ]; return
   fi
+
+  # ---- 5b' 红的一份都不许藏 ----
+  # 四审 subdeepseek M4:跑砸一遍之后补跑一条 `-- true`,最后一份就变绿了,难看的
+  # 那一遍从此不用贴 —— **全程没动任何收据文件**,不属于"蓄意伪造"那条免责。
+  # 红的那几遍恰恰是一单里最值钱的部分(红检、修复前后的对照),藏不得。
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in *" rc=0 "*) continue ;; esac
+    if ! printf '%s\n' "$claimed" | grep -qxF "$line"; then
+      bad=1
+      printf '%s: 🔴 5b:%s 在归档,但这一份**跑红了**的收据没有被引用:\n' "$tag" "$v" >&2
+      printf '%s:      %s\n' "$tag" "$line" >&2
+      printf '%s:    (红的那几遍是这一单最值钱的部分,不许只贴好看的。)\n' "$tag" >&2
+    fi
+  done <<< "$receipts"
 
   # ---- 5b 完整性:最后跑的那一遍必须被引用(不许只贴早先那份好看的)----
   if ! printf '%s\n' "$claimed" | grep -qxF "$last"; then
