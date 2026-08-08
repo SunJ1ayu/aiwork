@@ -71,7 +71,7 @@ ev_check() {
 
   # ---- 5c 存在性:归档时一份收据都没有,就得白纸黑字说为什么 ----
   if [ -z "$last" ]; then
-    if ! grep -qE '^-[[:space:]]*无机器证据(:|:)[[:space:]]*[^[:space:]]' "$src"; then
+    if ! grep -qE '^[[:space:]]*-[[:space:]]*无机器证据(:|:)[[:space:]]*[^[:space:]]' "$src"; then
       bad=1
       printf '%s: 🔴 5c:%s 在归档,但这一单一份机器证据都没有。\n' "$tag" "$v" >&2
       printf '%s:    要么用 `runlog -t <track> -- <判据命令>` 跑一遍再把收据行粘进来,\n' "$tag" >&2
