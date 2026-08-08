@@ -37,6 +37,11 @@ done
 
 [ -n "$TRACK" ] || die "缺 -t <track>"
 [ $# -gt 0 ]    || die "-- 后面没有命令"
+# track 名直接拼进路径,所以先把范围钉死:`-t ../../x` 只要那个目录存在,
+# 收据就会写到**仓外**去。runlog 是新增的写口,写口的第一件事是划边界。
+case "$TRACK" in
+  */*|*..*|-*) die "track 名里不许有斜杠、'..' 或打头的 '-':$TRACK" ;;
+esac
 
 if [ -z "$REPO" ]; then
   REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || true
