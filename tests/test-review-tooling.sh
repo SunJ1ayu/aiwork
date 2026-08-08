@@ -1597,6 +1597,17 @@ v24_no_env_backdoor_and_coverage_report() {
   check "V24: 漏网报告点名那个不在名单里的工具" $?
   grep -qi "名单\|未覆盖\|漏网" <<<"$out"
   check "V24: 总跑报出规矩4 名单的漏网工具" $?
+
+  # ⑤ **孤儿判据套件要红,不是只报**(2026-08-08 四审 F2 实证):
+  #    新写的 tests/test-runlog.sh 没被加进 SUITES ⇒ 落盘那天是绿的,
+  #    但从此没有任何入口再跑它,烂掉不会有人知道。本文件头部注释自己写着
+  #    「新增判据套件 = 往那张表里加一行」—— 靠"记得加"就是没有闸。
+  #    这里和 bin/ 名单不同:tests/test-* 没有"运维脚本"那种歧义,所以**硬红**。
+  local td="$d/tests"; mkdir -p "$td"
+  printf '#!/bin/bash\necho "=== total: 1 passed, 0 failed ==="\n' > "$td/test-orphan-suite.sh"
+  out="$(COVERAGE_TESTS_DIR="$td" bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"; rc=$?
+  check "V24: 有判据套件不在 SUITES 里 ⇒ 总跑红(不是只报一句)" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "test-orphan-suite" <<<"$out"; check "V24: 点名是哪个套件成了孤儿" $?
   rm -rf "$d"
 }
 
