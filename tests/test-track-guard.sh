@@ -403,6 +403,14 @@ g6_archive_needs_the_last_run() {
   ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
   check "G6: 写了「无机器证据:<理由>」⇒ 放行" $?
 
+  # ③b2 认账行**缩进**着写也算数(markdown 里嵌在小节下面很自然)。
+  #     误报的守卫会被 --no-verify 绕过,比没有守卫更糟 —— 这一条是防误报,不是放水:
+  #     它仍然要求那句话真的在,只是不挑它顶不顶格。
+  ( cd "$d"; verify_ev "**PASS**" '  - 无机器证据:纯文档 track,没有可跑的判据' > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G6: 认账行缩进着写 ⇒ 也放行(不误报)" $?
+
   # ③c 认账行必须真给理由,冒号后面空着不算
   ( cd "$d"; verify_ev "**PASS**" '- 无机器证据:' > tracks/archive/t/verify.md
     git add -A >/dev/null )
