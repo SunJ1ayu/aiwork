@@ -34,7 +34,11 @@ ev_files() {  # <trackdir>
 # 剥完必须整行就是收据行。四审 subdeepseek L6:第一版行尾只剥反引号和空白,
 # `**\`runlog: …\`**` 这种老实粘贴反而被挡 —— 误报,而误报是这道闸的死法。
 ev_claimed_lines() {  # <verify.md 路径>
-  sed -n 's/^[[:space:]>*_`-]*\(runlog: .*\)$/\1/p' "$1" 2>/dev/null | sed 's/[[:space:]*_`]*$//'
+  # 先剥掉编号列表的 `1. ` / `1) `,再剥其余装饰。二轮四审 subdeepseek:数字和点
+  # 不在字符类里 ⇒ 老实用编号列表粘的收据行在 claimed 里是**隐形的**,
+  # 归档时 5b 反过来说"你没贴" —— 又一个误报,和 L6 同根。
+  sed -E 's/^[[:space:]]*[0-9]+[.)][[:space:]]*/ /' "$1" 2>/dev/null \
+    | sed -n 's/^[[:space:]>*_`-]*\(runlog: .*\)$/\1/p' | sed 's/[[:space:]*_`]*$//'
 }
 
 # 主检查。问题逐条打印到 stderr;返回 0 = 干净,非 0 = 有问题。
@@ -95,6 +99,8 @@ ev_check() {
       printf '%s: 🔴 5b:%s 在归档,但这一份**跑红了**的收据没有被引用:\n' "$tag" "$v" >&2
       printf '%s:      %s\n' "$tag" "$line" >&2
       printf '%s:    (红的那几遍是这一单最值钱的部分,不许只贴好看的。)\n' "$tag" >&2
+      printf '%s:    这一份如果是误跑/环境噪音:**照样贴上去,旁边写一句为什么不算数** ——\n' "$tag" >&2
+      printf '%s:    删掉它才是造假,贴出来说清楚不是。\n' "$tag" >&2
     fi
   done <<< "$receipts"
 

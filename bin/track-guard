@@ -137,7 +137,8 @@ done
 # 报错文案还是错的。任务书自己写着「误报比漏报更致命」,我照样踩了进去。
 archiving_now() {
   git diff --cached --name-status --find-renames 2>/dev/null \
-    | awk -F'\t' '$1 !~ /^[MD]/ && $NF ~ /^tracks\/archive\/[^\/]+\/verify\.md$/ {print $NF}'
+    | awk -F'\t' '$1 ~ /^R/ && $2 ~ /^tracks\/archive\// { next }   # archive/ 内部改名不是归档
+                   $1 !~ /^[MD]/ && $NF ~ /^tracks\/archive\/[^\/]+\/verify\.md$/ {print $NF}'
 }
 for v in $(archiving_now); do
   [ -f "$v" ] || continue

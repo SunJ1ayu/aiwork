@@ -43,7 +43,7 @@ fi
 # 一个判据套件不进总跑,没有任何正当理由。
 TESTS_DIR="${COVERAGE_TESTS_DIR:-$(dirname "$0")/../tests}"
 orphans=""
-for f in "$TESTS_DIR"/test-*.sh "$TESTS_DIR"/test_*.py; do
+for f in "$TESTS_DIR"/test-*.sh "$TESTS_DIR"/test_*.sh "$TESTS_DIR"/test-*.py "$TESTS_DIR"/test_*.py; do
   [ -f "$f" ] || continue
   b="$(basename "$f")"
   case " ${SUITES[*]} " in *"/$b|"*|*"/$b "*) ;; *) orphans="$orphans $b" ;; esac
