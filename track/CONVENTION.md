@@ -23,19 +23,39 @@ archiving means "this is done", and done without an arbitrated verdict means the
 judgment was never made. Superseded work still archives: write the real outcome
 (e.g. `ARCHIVED-SUPERSEDED`), just don't stamp a `PASS` on it.
 
+## Machine evidence (2026-08-08)
+
+判据结果**由机器写,不由我转述**。用 `runlog` 代跑,它把输出连同
+「哪个 commit / 工作树脏不脏 / 退出码几」落进 `tracks/<name>/evidence/`,
+并打印一行**收据行**粘进 verify.md:
+
+```
+runlog -t <track> [-n <slug>] -- <判据命令>     # 退出码原样透传
+```
+
+`track-guard` 规矩5 / `track archive` 会查:粘的收据行必须与收据文件**逐字节相同**(5a);
+归档时**最后一份**收据必须被引用(5b);一份收据都没有要写
+`- 无机器证据:<理由>`(5c);收据必须进 git(5d)。
+
+出处:08-05 我写「python 866/0」,听起来完美 —— 实际上回归用的解释器缺依赖,
+一整块闸被整块 SKIP,汇总照印 OK。**汇总会撒谎,细节不会。**
+⚠️ 强度只到「堵顺手四舍五入」,**堵不住蓄意伪造**(手改收据文件即可)。别高估它。
+
 ## Commands
 
 ```
 track new <name> [project-dir]      # scaffold tracks/<name>/ (default: cwd)
 track archive <name> [project-dir]  # -> tracks/archive/<name>/
 track list [project-dir]            # active + archived
+runlog -t <name> -- <cmd>           # 跑判据并把收据落进 tracks/<name>/evidence/
 ```
 
 ## What's deliberately NOT here
 
-- No guard scripts forcing build→verify→archive order. **One exception, added
-  2026-08-04**: archiving requires a filled-in verdict (see above). It guards the
-  *content of the last field*, not the *order of the phases* — you can still skip
+- No guard scripts forcing build→verify→archive order. **Two exceptions**:
+  archiving requires a filled-in verdict (2026-08-04) and machine evidence that
+  matches byte-for-byte (2026-08-08, see above). Both guard the *content of the
+  last field*, not the *order of the phases* — you can still skip
   proposal/design/tasks entirely.
 - No blocking user-decision points at every transition.
 - No "brainstorming cannot be skipped" rule. Small/obvious → just do it, skip the

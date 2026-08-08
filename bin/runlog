@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# runlog —— 让**机器**写下它跑了什么(2026-08-08,track machine-evidence-gate)。
+#
+# 为什么有它:verify.md 里的判据结果一直是我打字写进去的。我可能真跑过,也可能记错、
+# 跑了一半、把「跳过」读成「通过」——**从字面上分辨不出来**。08-05 turn_id 那单就是
+# 这个形状:我写「python 866/0」,听起来完美,实际上回归用的解释器没装 mcp,
+# 一整块闸被整块 SKIP,汇总照印 OK。**汇总会撒谎,细节不会。**
+#
+#   runlog -t <track> [-n <slug>] [--repo <dir>] -- <命令...>
+#
+# 它做四件事:
+#   1. 在**跑之前**记下 commit 和工作树脏不脏(顺序不能反 —— 收据文件本身会弄脏工作树);
+#   2. 跑命令,输出同时流到终端和收据文件(stdout/stderr 合并);
+#   3. 收据落进 tracks/<track>/evidence/<UTC时间戳>-<序号>-<slug>.txt,
+#      文件名字典序 = 时间序(track-guard 规矩5b 取「最后一份」靠这个);
+#   4. 末行打印一行**收据行**,粘进 verify.md。守卫会逐字节比对。
+#
+# 退出码:**原样透传被跑的命令**。runlog 要是把红的跑成绿的,它就成了它要堵的那种病。
+#         用法错误用 64(发生在任何命令开跑之前,且不留下任何文件)。
+#
+# 强度声明:手改收据文件仍然骗得过守卫。这道闸堵的是**顺手四舍五入**,不是蓄意伪造。
+set -uo pipefail
+
+die() { printf 'runlog: %s\n' "$*" >&2; exit 64; }
+
+TRACK=""; SLUG=""; REPO=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t|--track) TRACK="${2:-}"; shift 2 || die "-t 后面要跟 track 名" ;;
+    -n|--name)  SLUG="${2:-}";  shift 2 || die "-n 后面要跟 slug" ;;
+    --repo)     REPO="${2:-}";  shift 2 || die "--repo 后面要跟目录" ;;
+    -h|--help)  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 0 ;;
+    --)         shift; break ;;
+    *)          die "不认识的参数 '$1'(命令要写在 -- 后面)" ;;
+  esac
+done
+
+[ -n "$TRACK" ] || die "缺 -t <track>"
+[ $# -gt 0 ]    || die "-- 后面没有命令"
+
+if [ -z "$REPO" ]; then
+  REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || true
+  [ -n "$REPO" ] || die "不在 git 仓里(用 --repo 指一个)"
+fi
+[ -d "$REPO" ] || die "--repo 指的目录不存在:$REPO"
+
+# track 目录:进行中的和已归档的都认(收尾常在归档前后来回)
+REL="tracks/$TRACK"
+[ -d "$REPO/$REL" ] || REL="tracks/archive/$TRACK"
+[ -d "$REPO/$REL" ] || die "找不到 track:$REPO/tracks/$TRACK(也不在 archive/ 里)"
+
+# slug 默认取命令的第一个词,清干净只留 [A-Za-z0-9._-]
+if [ -z "$SLUG" ]; then
+  SLUG="$(basename -- "$1")"
+  SLUG="${SLUG%.sh}"
+fi
+SLUG="$(printf '%s' "$SLUG" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//; s/-*$//')"
+[ -n "$SLUG" ] || SLUG="run"
+
+# ---- 身份:必须在跑之前、写任何文件之前采 ----
+COMMIT="$(git -C "$REPO" rev-parse --short=7 HEAD 2>/dev/null || echo nocommit)"
+# 未跟踪文件也算脏:闸① 的教训 —— 未跟踪文件在 diff 里是隐形的,而它恰恰是
+# 「这次跑的到底是什么代码」最容易失真的地方(往 tests/ 里塞一个 conftest.py)。
+if [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then DIRTY=yes; else DIRTY=no; fi
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
+AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+EVDIR="$REPO/$REL/evidence"
+mkdir -p "$EVDIR" || die "建不了 $EVDIR"
+# 序号 = 同一秒里的第几份。**不能只靠 slug 去重**:同一秒跑 c、b、a 三条,
+# 光看文件名字典序会排成 a<b<c,和时间序正好反过来 ⇒ 规矩5b 会挑错「最后一份」。
+n=$(find "$EVDIR" -maxdepth 1 -name "$TS-*" 2>/dev/null | wc -l)
+while :; do
+  n=$((n+1))
+  FILE="$EVDIR/$TS-$(printf '%02d' "$n")-$SLUG.txt"
+  [ -e "$FILE" ] || break
+done
+RELFILE="$REL/evidence/$(basename "$FILE")"
+
+CMDSTR="$(printf '%q ' "$@")"; CMDSTR="${CMDSTR% }"
+
+{
+  printf '# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)\n'
+  printf 'slug:    %s\n' "$SLUG"
+  printf 'cmd:     %s\n' "$CMDSTR"
+  printf 'cwd:     %s(仓根)\n' "$REPO"
+  printf 'commit:  %s\n' "$COMMIT"
+  printf 'dirty:   %s(跑之前采的;含未跟踪文件)\n' "$DIRTY"
+  printf 'started: %s\n' "$AT"
+  printf -- '---------------- 输出开始 ----------------\n'
+} > "$FILE"
+
+printf 'runlog: 跑 %s @%s dirty=%s → %s\n' "$CMDSTR" "$COMMIT" "$DIRTY" "$RELFILE" >&2
+
+RCF="$(mktemp)"
+( cd "$REPO" && "$@" 2>&1; printf '%s' "$?" > "$RCF" ) | tee -a "$FILE"
+RC="$(cat "$RCF" 2>/dev/null)"; rm -f "$RCF"
+[ -n "$RC" ] || RC=127
+
+LINE="runlog: $SLUG rc=$RC commit=$COMMIT dirty=$DIRTY at=$AT file=$RELFILE"
+{
+  printf -- '---------------- 输出结束 ----------------\n'
+  printf '%s\n' "$LINE"
+} >> "$FILE"
+
+{
+  printf -- '---- 粘这一行进 verify.md(逐字节,别改数)----\n'
+  printf '%s\n' "$LINE"
+  printf -- '---- 完整输出:%s ----\n' "$RELFILE"
+} >&2
+
+exit "$RC"

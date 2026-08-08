@@ -105,6 +105,50 @@ for v in $(staged | grep -E '^tracks/archive/[^/]+/verify\.md$' || true); do
   fi
 done
 
+# ---- 规矩5:verify.md 里粘的数,必须是 runlog 写下的那个数 ----
+# 为什么加(2026-08-05 turn_id 实证):我写「python 866/0」,听起来完美 —— 实际上
+# 回归用的解释器没装 mcp,**一整块闸被整块 SKIP**,汇总照印 OK。汇总会撒谎,细节不会。
+# 08-08 起我已经在粘机器输出了,但**靠自觉**:没有任何东西拦着我写一句「全绿」交差,
+# 而翻开 verify.md 也看不出那行字是机器吐的还是我编的。
+# 强度只到这儿:堵**顺手四舍五入**,堵不住蓄意伪造(手改收据文件即可)——
+# 别高估它,高估一道闸比没有闸更危险。逻辑只此一份,在 bin/_evidence.sh。
+. "$(dirname "$0")/_evidence.sh" 2>/dev/null || {
+  say "🔴 找不到 _evidence.sh —— 规矩5 缺件,拒绝放行(fail closed)"; exit 1; }
+
+verify_content() {  # 有暂存版本时以暂存内容为准
+  local v="$1" tmp; tmp="$(mktemp)"
+  if staged | grep -qx "$v"; then git show ":$v" > "$tmp" 2>/dev/null || cp "$v" "$tmp"
+  else cp "$v" "$tmp"; fi
+  printf '%s' "$tmp"
+}
+
+# 5a 一致性:每次都查(没有 runlog 行的 verify.md 一条都不会被碰 ⇒ 老工件全身而退)
+for v in $verifies; do
+  [ -f "$v" ] || continue
+  tmp="$(verify_content "$v")"
+  ev_check "$(dirname "$v")" "$tmp" always "track-guard" "$v" || fail=1
+  rm -f "$tmp"
+done
+
+# 5b/5c/5d 只在**归档**那一刻查(理由同规矩3:判据是一路补的,中途每次都查必然误报)
+for v in $(staged | grep -E '^tracks/archive/[^/]+/verify\.md$' || true); do
+  [ -f "$v" ] || continue
+  dir="$(dirname "$v")"
+  tmp="$(verify_content "$v")"
+  ev_check "$dir" "$tmp" archive "track-guard" "$v" || fail=1
+  rm -f "$tmp"
+  # 5d 留痕:证据必须进 git。闸① 同款盲点 —— 未跟踪文件在 diff 里是隐形的,
+  # 只躺在本地的证据随手一删就没了,而"删掉就没了"的东西不叫证据。
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
+      fail=1
+      say "🔴 5d:$f 未跟踪、也没暂存 —— 证据没进 git(随手一删就没了)。"
+      say "   git add 它,再提交。"
+    fi
+  done <<< "$(ev_files "$dir")"
+done
+
 if [ "$fail" -ne 0 ]; then
   say "被挡下的不是这次改动,是没留痕的判断。补上再提交。"
   exit 1

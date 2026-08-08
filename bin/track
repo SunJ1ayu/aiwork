@@ -57,6 +57,17 @@ case "$cmd" in
       echo "   别拿一个 PASS 充数。" >&2
       exit 1
     fi
+    # 规矩5 的归档半边(5b 最后一份收据要被引用 / 5c 零证据要显式认账)。
+    # 和上面结论栏那两条同一个道理:守在**动作发生那一刻**,别留下「已归档但证据缺着」
+    # 的半截状态。5d(证据进没进 git)不在这儿查 —— 归档时收据常常还没 add,
+    # 那一条属于提交那一刻,由 pre-commit 查。
+    # shellcheck source=/root/aiwork/bin/_evidence.sh
+    . "$(dirname "$0")/_evidence.sh" 2>/dev/null || {
+      echo "🔴 找不到 _evidence.sh —— 归档检查缺件,拒绝归档(fail closed)" >&2; exit 1; }
+    if ! ev_check "$src" "$v" archive "track archive"; then
+      echo "🔴 拒绝归档:机器证据没对齐(见上)。目录留在原地,没有半归档状态。" >&2
+      exit 1
+    fi
     mkdir -p "$proj/tracks/archive"
     mv "$src" "$proj/tracks/archive/$name"
     echo "archived -> $proj/tracks/archive/$name"
