@@ -103,8 +103,12 @@ g2_verdict_must_be_filled_at_archive() {
   ( cd "$d"; "$GUARD" >/dev/null 2>&1 )
   [[ $? -ne 0 ]]; check "G2: 归档时结论栏还是占位符 → 挡下" $?
 
-  # ② 填了真结论再归档 —— 放行
-  ( cd "$d"; verify_with "**PASS**(主裁)" > tracks/archive/t/verify.md; git add -A >/dev/null )
+  # ② 填了真结论再归档 —— 放行。
+  #    2026-08-08 起夹具多了一行「无机器证据」:规矩5c 要求归档时要么有 runlog 收据、
+  #    要么白纸黑字说明为什么没有。**断言一字没改**(填了结论就该放行),
+  #    改的是夹具 —— 这一格考的是结论栏,不是机器证据,那一条由 G6 ③a 单独考。
+  ( cd "$d"; { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/archive/t/verify.md
+    git add -A >/dev/null )
   ( cd "$d"; "$GUARD" >/dev/null 2>&1 )
   check "G2: 归档时结论栏已填 → 放行" $?
   rm -rf "$d"
@@ -159,7 +163,8 @@ g3_archive_command_itself_blocks() {
   #    **必须换一个干净的临时仓**:修复前 ① 会真把目录移走,② 若沿用同一个仓就成了
   #    "红在文件不存在上",而 ②-2 那条反而假绿 —— 那种红等于没红检过。
   d="$(newrepo)"
-  ( cd "$d"; mkdir -p tracks/t; verify_with "**PASS**(主裁)" > tracks/t/verify.md )
+  ( cd "$d"; mkdir -p tracks/t
+    { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/t/verify.md )
   "$TRACK" archive t "$d" >/dev/null 2>&1
   check "G3: 结论栏已填 → archive 正常放行" $?
   [[ -d "$d/tracks/archive/t" && ! -d "$d/tracks/t" ]]
