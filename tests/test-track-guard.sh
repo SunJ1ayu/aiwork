@@ -180,6 +180,17 @@ g3_archive_command_itself_blocks() {
   rm -rf "$d"
 }
 
+g8_track_new_rejects_path_names() {
+  echo "[G8] track new 不许接受带路径分隔的名字(守卫的正则只认单层)"
+  local d; d="$(newrepo)"
+  "$TRACK" new 'foo/bar' "$d" >/dev/null 2>&1
+  [[ $? -ne 0 ]]; check "G8: track new foo/bar ⇒ 拒绝" $?
+  [[ ! -d "$d/tracks/foo" ]]; check "G8: 拒绝时不许留下半个目录" $?
+  "$TRACK" new 'ok-name' "$d" >/dev/null 2>&1
+  check "G8: 正常名字照常放行" $?
+  rm -rf "$d"
+}
+
 # ---------------------------------------------------------------- 回归
 r_existing_rules_still_hold() {
   echo "[R] 原有两条规矩不许退化"
@@ -465,6 +476,37 @@ g8_archive_mode_only_when_actually_archiving() {
   rm -rf "$d"
 }
 
+# 第二轮四审(subdeepseek)的两处,都是**误报**方向 —— 这道闸的死法就是误报。
+g8_round2_false_positive_shapes() {
+  echo "[G8] 第二轮:编号列表粘贴 / 归档目录内改名,都不许误报"
+  local d
+
+  # ① `1. \`runlog: …\`` —— 行首装饰只剥了 `-*>_` 和反引号,数字和点没剥 ⇒
+  #    诚实的编号列表粘贴在 claimed 里是隐形的 ⇒ 归档时 5b 反过来说"你没贴"。
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    mk_receipt "$d" tracks/archive/t 20260808T020000Z-01-suite.txt "$L2"
+    verify_ev "**PASS**" "1. \`$L2\`" > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G8: 编号列表 \`1. …\` 形式粘贴 ⇒ 放行" $?
+  ( cd "$d"; sed -i 's/rc=3/rc=0/' tracks/archive/t/verify.md; git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G8: 编号列表形式改了数 ⇒ 照样挡下" $?
+  rm -rf "$d"
+
+  # ② 已归档目录内部改名(archive/old → archive/new):状态是 R、落点在 archive/ 下,
+  #    按第一版逻辑会被当成"这次在归档" ⇒ 又一次误伤历史工件(和 F1 同根)。
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/old
+    verify_ev "**PASS**" '- [x] tests pass —— 老工件,零收据' > tracks/archive/old/verify.md
+    git add -A >/dev/null; git commit -qm "早就归档了" )
+  ( cd "$d"; git mv tracks/archive/old tracks/archive/new >/dev/null; git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G8: 归档目录内部改名 ⇒ 不当成归档,不误报" $?
+  rm -rf "$d"
+}
+
 # 5b'(DeepSeek M4):跑砸一遍之后补跑一条 `-- true`,最后一份就变绿了,
 # 难看的那一遍从此不用贴 —— 全程没动任何收据文件,不属于「蓄意伪造」那条免责。
 # 所以:**每一份 rc≠0 的收据都必须被引用**。红的那几遍才是这一单最值钱的部分。
@@ -561,5 +603,7 @@ g7_archive_command_checks_evidence_too
 g8_archive_mode_only_when_actually_archiving
 g8_every_red_run_must_be_quoted
 g8_bold_wrapped_paste_is_fine
+g8_round2_false_positive_shapes
+g8_track_new_rejects_path_names
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

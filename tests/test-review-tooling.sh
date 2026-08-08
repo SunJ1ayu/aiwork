@@ -1608,6 +1608,10 @@ v24_no_env_backdoor_and_coverage_report() {
   out="$(COVERAGE_TESTS_DIR="$td" bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"; rc=$?
   check "V24: 有判据套件不在 SUITES 里 ⇒ 总跑红(不是只报一句)" $([[ $rc -ne 0 ]]; echo $?)
   grep -q "test-orphan-suite" <<<"$out"; check "V24: 点名是哪个套件成了孤儿" $?
+  # ⑥ 下划线的 shell 套件也要扫(名单那边 `tests/test_*` 是覆盖的,这边漏了就不一致)
+  printf '#!/bin/bash\nexit 0\n' > "$td/test_underscore_suite.sh"
+  out="$(COVERAGE_TESTS_DIR="$td" bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"
+  grep -q "test_underscore_suite" <<<"$out"; check "V24: tests/test_*.sh 也算判据套件,漏了要点名" $?
   rm -rf "$d"
 }
 
