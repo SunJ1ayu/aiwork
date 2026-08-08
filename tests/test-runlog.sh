@@ -127,6 +127,20 @@ r5_refuses_bad_usage() {
   ( cd "$d" && "$RUNLOG" -- true ) >/dev/null 2>&1; rc=$?
   [[ $rc -eq 64 ]]; check "R5: 没给 -t ⇒ rc=64" $?
 
+  # **路径穿越**(2026-08-08 主 agent 自审时发现,不是 panel 提的):
+  # track 名直接拼进路径 `tracks/$TRACK` —— `-t ../../tmp` 只要那个目录存在就通过
+  # `[ -d ]` 检查,收据会写到**仓外**去。runlog 是本单新增的**写口**,
+  # 写口的第一件事是把范围钉死:track 名里不许有斜杠、不许有 `..`。
+  mkdir -p "$d/tracks/archive/../../escape"
+  ( cd "$d" && "$RUNLOG" -t ../../escape -n x -- true ) >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 64 ]]; check "R5: track 名带 ../ ⇒ rc=64(不许写到仓外)" $?
+  # 这一条第一版写成 `$d/../escape/evidence` —— 而 `tracks/archive/../../escape`
+  # 解析出来是 `$d/escape`,断言指错了地方 ⇒ **恒真**,红检时它假绿了。
+  # (我自己写的假绿断言,第 N 次;记在这儿别再犯:断言里的路径要照着代码解析一遍。)
+  [[ ! -d "$d/escape/evidence" ]]; check "R5: 穿越被拒时 tracks/ 之外没被写进任何东西" $?
+  ( cd "$d" && "$RUNLOG" -t 'a/b' -n x -- true ) >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 64 ]]; check "R5: track 名带斜杠 ⇒ rc=64" $?
+
   [[ -z "$(receipt_of "$d")" ]]; check "R5: 三次拒跑,一份收据都没落下" $?
   rm -rf "$d"
 }
