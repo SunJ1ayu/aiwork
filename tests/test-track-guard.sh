@@ -276,6 +276,191 @@ g5_tooling_changes_need_a_track() {
   done
 }
 
+# ---------------------------------------------------------------- G6
+# 规矩5:verify.md 里粘的数,必须是 runlog 写下的那个数。
+# 出处(2026-08-05 turn_id):我写「python 866/0」,听起来完美 —— 实际上回归用的
+# 解释器没装 mcp,**一整块闸被整块 SKIP**,汇总照印 OK。汇总会撒谎,细节不会。
+# 08-08 起我已经在粘机器输出了,但**靠自觉**:没有任何东西拦着我写一句「全绿」交差,
+# 翻开 verify.md 也看不出那行字是机器吐的还是我编的。
+# 这道闸堵的是**顺手四舍五入**,不是蓄意伪造(手改收据文件仍然能骗过它 ——
+# 但那要多改一个进了 git 的文件,会出现在闸③亲读的 diff 里)。
+mk_receipt() {  # mk_receipt <repo> <track路径> <文件名> <收据行>
+  mkdir -p "$1/$2/evidence"
+  printf '# runlog receipt\n跑了点什么\n%s\n' "$4" > "$1/$2/evidence/$3"
+}
+verify_ev() {  # verify_ev <verdict> [粘进 Mechanical checks 的行...]
+  printf '# Verify: t\n\n- Date: 2026-08-08\n- Verdict: %s\n\n## Mechanical checks\n\n' "$1"
+  shift
+  local l; for l in "$@"; do printf '%s\n' "$l"; done
+  printf '\n## Review\n\n- lane: **self**\n- 派给: **主 agent 直接干**\n'
+}
+L1='runlog: suite rc=0 commit=aaaaaaa dirty=no at=2026-08-08T01:00:00Z file=tracks/t/evidence/20260808T010000Z-suite.txt'
+L2='runlog: suite rc=3 commit=bbbbbbb dirty=no at=2026-08-08T02:00:00Z file=tracks/t/evidence/20260808T020000Z-suite.txt'
+
+g6_pasted_numbers_must_be_the_machines_numbers() {
+  echo "[G6] 规矩5:粘进 verify.md 的收据行必须与收据文件逐字节相同"
+  local d out rc
+
+  # ①a 一致性:verify.md 里有收据行,evidence/ 里根本没有这份收据 ⇒ 挡下
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t; verify_ev "**PASS**" '```' "$L1" '```' > tracks/t/verify.md
+    git add -A >/dev/null )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check "G6: 凭空写一行收据(没有对应收据文件)⇒ 挡下" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "runlog" <<<"$out"; check "G6: 挡下时点名是哪一行" $?
+  rm -rf "$d"
+
+  # ①b **本单的核心场景**:收据写着 rc=3,我粘成 rc=0 ⇒ 挡下
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" '```' "${L2/rc=3/rc=0}" '```' > tracks/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G6: 收据是 rc=3、粘成 rc=0 ⇒ 挡下(四舍五入的那一手)" $?
+  rm -rf "$d"
+
+  # ①c 逐字节相同 ⇒ 放行
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" '```' "$L2" '```' > tracks/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G6: 原样粘 ⇒ 放行" $?
+  rm -rf "$d"
+
+  # ①d 反误报:仓里现存 40 多份 verify.md 一条 runlog 行都没有,一个都不许被挡
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t; verify_with "**PASS**" > tracks/t/verify.md; git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G6: verify.md 里没有收据行 ⇒ 不误报(老工件全身而退)" $?
+  rm -rf "$d"
+
+  # ①e 反引号/列表符号包着粘也算数(markdown 里这么写很自然,不许因此误报)
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" "- \`$L2\`" > tracks/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G6: 用 \`- \\\`…\\\`\` 形式粘 ⇒ 放行" $?
+  ( cd "$d"; sed -i 's/rc=3/rc=0/' tracks/t/verify.md; git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G6: 同样的形式改了数 ⇒ 照样挡下(不是靠形状放过去的)" $?
+  rm -rf "$d"
+}
+
+g6_archive_needs_the_last_run() {
+  echo "[G6] 规矩5b/5c/5d:归档时,最后一份收据必须被引用;没有收据要显式认账;收据必须进 git"
+  local d out rc
+
+  # ②a 跑了两遍,只贴早先那份好看的 ⇒ 归档时挡下
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    mk_receipt "$d" tracks/archive/t 20260808T010000Z-suite.txt "$L1"
+    mk_receipt "$d" tracks/archive/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" '```' "$L1" '```' > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check "G6: 归档时最后一份收据没被引用 ⇒ 挡下" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "20260808T020000Z" <<<"$out"; check "G6: 挡下时点名缺的是哪一份" $?
+
+  # ②b 两份都贴 ⇒ 放行
+  ( cd "$d"; verify_ev "**PASS**" '```' "$L1" "$L2" '```' > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G6: 引用了最后一份 ⇒ 放行" $?
+  rm -rf "$d"
+
+  # ②c 反误报:同样两份收据,但 track **还没归档** ⇒ 中途只贴一份是正常的
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T010000Z-suite.txt "$L1"
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "${L2/tracks\/t/tracks\/t}"
+    verify_ev "**PASS**" '```' "$L1" '```' > tracks/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G6: 进行中的 track 只贴了一份 ⇒ 不误报(判据是一路补的)" $?
+  rm -rf "$d"
+
+  # ③a 归档、一份收据都没有、也没写理由 ⇒ 挡下
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    verify_ev "**PASS**" '- [x] tests pass —— 判据全绿' > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G6: 归档但零机器证据、零说明 ⇒ 挡下" $?
+
+  # ③b 显式认账 ⇒ 放行(纯文档 track 本来就没什么可跑;要的是白纸黑字,不是沉默)
+  ( cd "$d"; verify_ev "**PASS**" '- 无机器证据:纯文档 track,没有可跑的判据' > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G6: 写了「无机器证据:<理由>」⇒ 放行" $?
+
+  # ③c 认账行必须真给理由,冒号后面空着不算
+  ( cd "$d"; verify_ev "**PASS**" '- 无机器证据:' > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G6: 「无机器证据:」后面空着 ⇒ 仍然挡下(空着 = 没说)" $?
+  rm -rf "$d"
+
+  # ④ 5d 留痕:收据只躺在本地、既没跟踪也没暂存 ⇒ 归档时挡下。
+  #    闸① 同款盲点:未跟踪文件在 diff 里是隐形的,证据不进 git 等于随手一删就没了。
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    verify_ev "**PASS**" '```' "$L2" '```' > tracks/archive/t/verify.md
+    git add -A >/dev/null
+    mk_receipt "$d" tracks/archive/t 20260808T020000Z-suite.txt "$L2" )   # 收据故意不 add
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check "G6: 收据文件未跟踪也未暂存 ⇒ 归档时挡下" $([[ $rc -ne 0 ]]; echo $?)
+  grep -qE "未跟踪|没进 git|untracked" <<<"$out"; check "G6: 挡下时说清是「没进 git」这件事" $?
+  ( cd "$d"; git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G6: 收据一起暂存 ⇒ 放行" $?
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- G7
+# 和 G3 同一个道理:守卫要守在**动作发生那一刻**,不是它的痕迹被提交那一刻。
+# `track archive` 会把目录移走 —— 只靠 pre-commit 挡,中间那段时间磁盘上就是
+# 「已归档但证据缺着」的半截状态。
+g7_archive_command_checks_evidence_too() {
+  echo "[G7] track archive 命令本身也要查机器证据,不能只靠 commit 那一步"
+  local d
+
+  # ① 最后一份收据没被引用 ⇒ 命令失败,且目录不许被移走
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T010000Z-suite.txt "$L1"
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" '```' "$L1" '```' > tracks/t/verify.md )
+  "$TRACK" archive t "$d" >/dev/null 2>&1
+  [[ $? -ne 0 ]]; check "G7: 最后一份收据没引用 ⇒ archive 命令失败" $?
+  [[ -d "$d/tracks/t" && ! -d "$d/tracks/archive/t" ]]
+  check "G7: 被挡下时目录留在原地(没有半归档状态)" $?
+  rm -rf "$d"
+
+  # ② 零收据、零说明 ⇒ 命令失败
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t; verify_ev "**PASS**" '- [x] tests pass' > tracks/t/verify.md )
+  "$TRACK" archive t "$d" >/dev/null 2>&1
+  [[ $? -ne 0 ]]; check "G7: 零机器证据、零说明 ⇒ archive 命令失败" $?
+  rm -rf "$d"
+
+  # ③ 补齐 ⇒ 正常归档(**换干净仓**:①② 修复前会真把目录移走,沿用同一个仓就成了
+  #    "红在文件不存在上",那种红等于没红检过 —— G3 ② 已经栽过一次)
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" '```' "$L2" '```' > tracks/t/verify.md )
+  "$TRACK" archive t "$d" >/dev/null 2>&1
+  check "G7: 引用齐了 ⇒ archive 正常放行" $?
+  [[ -d "$d/tracks/archive/t" && ! -d "$d/tracks/t" ]]
+  check "G7: 放行时目录确实移进了 archive/" $?
+  rm -rf "$d"
+}
+
 echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
@@ -284,5 +469,8 @@ g3_archive_command_itself_blocks
 r_existing_rules_still_hold
 g4_known_blind_spots
 g5_tooling_changes_need_a_track
+g6_pasted_numbers_must_be_the_machines_numbers
+g6_archive_needs_the_last_run
+g7_archive_command_checks_evidence_too
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
