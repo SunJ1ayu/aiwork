@@ -434,6 +434,79 @@ g6_archive_needs_the_last_run() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- G8
+# 2026-08-08 四审修复轮。三条腿里**两条独立命中**同一处(F1/M3):
+# 归档半边的触发条件按**路径**写(`^tracks/archive/…/verify\.md$`),区分不了
+# 「这次提交在归档」和「早就归档了、这次只改了个错字」——仓里 8 份历史归档工件
+# 全部零收据,一碰就被挡,报错还说「在归档」。任务书自己点名「误报比漏报更致命」,
+# 这就是那一类。(实测复现过再修的,不是照单全收。)
+g8_archive_mode_only_when_actually_archiving() {
+  echo "[G8] 归档半边只在**真的归档**那一次触发,不许碰历史工件"
+  local d out rc
+
+  # ① 早已归档的 verify.md,这次只是改一行 ⇒ 放行(它零收据、零认账行)
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    verify_ev "**PASS**" '- [x] tests pass —— 两个月前的老工件' > tracks/archive/t/verify.md
+    git add -A >/dev/null; git commit -qm "两个月前就归档了" )
+  ( cd "$d"; printf '\n改个错字\n' >> tracks/archive/t/verify.md; git add -A >/dev/null )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check "G8: 改一份历史归档工件 ⇒ 不误报" $([[ $rc -eq 0 ]]; echo $?)
+  rm -rf "$d"
+
+  # ② 这一次真的在归档(git mv 进 archive/,状态 R)⇒ 照查不误
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    verify_ev "**PASS**" '- [x] tests pass' > tracks/t/verify.md
+    git add -A >/dev/null; git commit -qm "进行中" )
+  ( cd "$d"; mkdir -p tracks/archive; git mv tracks/t tracks/archive/t >/dev/null; git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G8: 这次提交真的在归档(rename 进 archive)⇒ 照挡" $?
+  rm -rf "$d"
+}
+
+# 5b'(DeepSeek M4):跑砸一遍之后补跑一条 `-- true`,最后一份就变绿了,
+# 难看的那一遍从此不用贴 —— 全程没动任何收据文件,不属于「蓄意伪造」那条免责。
+# 所以:**每一份 rc≠0 的收据都必须被引用**。红的那几遍才是这一单最值钱的部分。
+g8_every_red_run_must_be_quoted() {
+  echo "[G8] 归档时,rc≠0 的收据一份都不许藏"
+  local d
+  local RED='runlog: suite rc=1 commit=aaaaaaa dirty=no at=2026-08-08T01:00:00Z file=tracks/archive/t/evidence/20260808T010000Z-01-suite.txt'
+  local GREEN='runlog: suite rc=0 commit=bbbbbbb dirty=no at=2026-08-08T02:00:00Z file=tracks/archive/t/evidence/20260808T020000Z-01-suite.txt'
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    mk_receipt "$d" tracks/archive/t 20260808T010000Z-01-suite.txt "$RED"
+    mk_receipt "$d" tracks/archive/t 20260808T020000Z-01-suite.txt "$GREEN"
+    verify_ev "**PASS**" '```' "$GREEN" '```' > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G8: 只贴绿的那一遍、把红的那一遍藏了 ⇒ 挡下" $?
+
+  ( cd "$d"; verify_ev "**PASS**" '```' "$RED" "$GREEN" '```' > tracks/archive/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G8: 红的绿的都贴 ⇒ 放行" $?
+  rm -rf "$d"
+}
+
+# L6(DeepSeek):行首装饰剥了、行尾只剥反引号和空白 ⇒ `**\`runlog: …\`**` 这种
+# 老实粘贴反而被挡。误报,修。
+g8_bold_wrapped_paste_is_fine() {
+  echo "[G8] 粗体/强调包着粘也算数(诚实粘贴不许被挡)"
+  local d; d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" "**\`$L2\`**" > tracks/t/verify.md
+    git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check "G8: **\`收据行\`** 形式 ⇒ 放行" $?
+  ( cd "$d"; sed -i 's/rc=3/rc=9/' tracks/t/verify.md; git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  [[ $? -ne 0 ]]; check "G8: 同形式改了数 ⇒ 照样挡下" $?
+  rm -rf "$d"
+}
+
 # ---------------------------------------------------------------- G7
 # 和 G3 同一个道理:守卫要守在**动作发生那一刻**,不是它的痕迹被提交那一刻。
 # `track archive` 会把目录移走 —— 只靠 pre-commit 挡,中间那段时间磁盘上就是
@@ -485,5 +558,8 @@ g5_tooling_changes_need_a_track
 g6_pasted_numbers_must_be_the_machines_numbers
 g6_archive_needs_the_last_run
 g7_archive_command_checks_evidence_too
+g8_archive_mode_only_when_actually_archiving
+g8_every_red_run_must_be_quoted
+g8_bold_wrapped_paste_is_fine
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

@@ -141,7 +141,18 @@ r5_refuses_bad_usage() {
   ( cd "$d" && "$RUNLOG" -t 'a/b' -n x -- true ) >/dev/null 2>&1; rc=$?
   [[ $rc -eq 64 ]]; check "R5: track 名带斜杠 ⇒ rc=64" $?
 
-  [[ -z "$(receipt_of "$d")" ]]; check "R5: 三次拒跑,一份收据都没落下" $?
+  # 保留名(四审 subkimi F4 实测):`-t .` 让 `[ -d tracks/. ]` 恒真 ⇒ 收据写进
+  # `tracks/evidence/`;`-t archive` 写进 `tracks/archive/evidence/`。两处都不属于
+  # 任何 track,所有守卫(只 glob 各 track 自己的 evidence/)结构上看不见它们。
+  # 写口的边界没钉在注释声称的地方。
+  ( cd "$d" && "$RUNLOG" -t . -n x -- true ) >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 64 ]]; check "R5: -t . ⇒ rc=64" $?
+  [[ ! -d "$d/tracks/evidence" ]]; check "R5: -t . 没在 tracks/ 底下留东西" $?
+  ( cd "$d" && "$RUNLOG" -t archive -n x -- true ) >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 64 ]]; check "R5: -t archive ⇒ rc=64(那是归档目录,不是 track)" $?
+  [[ ! -d "$d/tracks/archive/evidence" ]]; check "R5: -t archive 没在 archive/ 底下留东西" $?
+
+  [[ -z "$(receipt_of "$d")" ]]; check "R5: 一连串拒跑,一份收据都没落下" $?
   rm -rf "$d"
 }
 
