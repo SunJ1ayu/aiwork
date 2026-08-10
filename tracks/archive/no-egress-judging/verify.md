@@ -44,6 +44,8 @@ runlog: oracle-after-impl rc=1 commit=4af6f91 dirty=yes at=2026-08-10T07:42:38Z 
 runlog: oracle-green rc=0 commit=4af6f91 dirty=yes at=2026-08-10T07:48:15Z file=tracks/no-egress-judging/evidence/20260810T074815Z-01-oracle-green.txt
 runlog: full-suite rc=0 commit=4af6f91 dirty=yes at=2026-08-10T07:49:09Z file=tracks/no-egress-judging/evidence/20260810T074909Z-01-full-suite.txt
 runlog: full-suite-fast rc=0 commit=4af6f91 dirty=yes at=2026-08-10T08:08:50Z file=tracks/no-egress-judging/evidence/20260810T080850Z-01-full-suite-fast.txt
+runlog: full-suite-final rc=0 commit=4b86efa dirty=yes at=2026-08-10T08:51:51Z file=tracks/no-egress-judging/evidence/20260810T085151Z-01-full-suite-final.txt
+runlog: spend-reconcile rc=0 commit=4b86efa dirty=yes at=2026-08-10T08:55:54Z file=tracks/no-egress-judging/evidence/20260810T085554Z-01-spend-reconcile.txt
 ```
 
 - `oracle-after-impl` 12/6 —— **判据抓到实现一个真 bug**:自举时 export 的
@@ -53,6 +55,12 @@ runlog: full-suite-fast rc=0 commit=4af6f91 dirty=yes at=2026-08-10T08:08:50Z fi
 - `full-suite` 总跑 8 套全绿,但**耗时 346s**,超过每周 cron 的 300s 超时
   ⇒ proposal 里「堵住之后自然变快」那条假设**被自己的测量证伪**(见 F6)。
 - `full-suite-fast` 25s→5s 之后 **215s**,8 套全绿,重新落回超时以内。
+- `full-suite-final` = **四审两条 BLOCK 修完之后**的那一遍,8 套全绿(no-egress 18/0)。
+- `spend-reconcile` 是 subkimi 点出来的窟窿:「额度没掉」是这一单最强的主张,
+  **此前只活在我的汇报里、没有任何收据**。现在它自己算、自己 assert
+  (`成功建立连接的调用: 0`,非零就红)。
+  > 这两行差点也没贴上 —— 我以为贴了,是 `track archive` 的规矩 5b 把我拦下来的
+  > (**同一天第二次**「我以为的状态 ≠ 机器上的状态」,第一次是 subdeepseek 抓的过期绿)。
 
 **这一单真正的验收是"钱"**(判据接不住,只能实测对账):
 
