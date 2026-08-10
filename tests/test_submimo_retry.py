@@ -12,6 +12,13 @@ returns a scripted sequence of statuses and asserts call_model's retry policy:
 Run: python3 /root/aiwork/tests/test_submimo_retry.py
 Exit 0 = all pass (oracle GREEN). Non-zero = a property is violated.
 """
+# 判卷面的不变量:**跑判据的进程不许有外网出口**(2026-08-10,track no-egress-judging)。
+# 导入即生效:把本进程 exec 进一个没有出口的网络命名空间;做不到就拒跑。
+# 必须在起桩服务器之前 —— 桩在 127.0.0.1 上,loopback 不受影响。
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _no_egress  # noqa: F401,E402
+
 import http.server
 import importlib.util
 from importlib.machinery import SourceFileLoader

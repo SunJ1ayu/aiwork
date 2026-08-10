@@ -74,6 +74,10 @@
 # Run:  bash /root/aiwork/tests/test-review-tooling.sh
 set -uo pipefail
 
+# 判卷面的不变量:**跑判据的进程不许有外网出口**(2026-08-10,track no-egress-judging)。
+# 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
+. "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh"
+
 # 从判据自身位置推 bin/,**不写死绝对路径**:执行腿在 worktree 里改了代码,
 # 写死路径会让判据仍去测主仓的文件 = 改了也永远红(2026-08-01 派活前发现)。
 # 可用 REVIEW_BIN 覆盖。

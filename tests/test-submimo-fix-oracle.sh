@@ -11,6 +11,10 @@
 #   G5  each attempt's `git diff` is archived into the log
 #   G6  no --oracle                  -> single-shot behavior unchanged (one attempt, exit 0)
 set -uo pipefail
+
+# 判卷面的不变量:**跑判据的进程不许有外网出口**(2026-08-10,track no-egress-judging)。
+# 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
+. "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh"
 BIN="/root/aiwork/bin"
 PASS=0; FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
