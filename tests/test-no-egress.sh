@@ -27,7 +27,9 @@ PYGUARD="$TESTS/_no_egress.py"
 # 唯一的松口是**守卫还不存在的时候**:那时整份判据应该红在 N3 的断言上,
 # 而不是炸在 `source: 没有那个文件` 上 —— 「红在 TypeError 上等于没红检过」。
 if [[ -f "$TESTS/_no-egress.sh" ]]; then
-  . "$TESTS/_no-egress.sh"   # ← 写成字面路径:N3a 扫的就是这一行,自己也得扫得到
+  # 字面路径 + `|| exit`:N3a 扫的就是这一行,自己也得扫得到、也得 fail-closed。
+  # 外层的 `-f` 只负责"守卫还不存在时别炸,让 N3 去红";`|| exit` 负责"存在但引失败"。
+  . "$TESTS/_no-egress.sh" || exit 78
 fi
 
 PASS=0; FAIL=0
@@ -65,6 +67,17 @@ PYEOF
 PY
   } > "$f"
   chmod +x "$f"
+}
+
+
+__noeg_suites() {  # 要覆盖的判据套件 = tests/ 下的命名约定 ∪ **总跑 SUITES 里点名的**
+  # 08-10 四审 subdeepseek 指出:两条覆盖闸都按文件名 glob 扫,
+  # 而总跑的 SUITES 是**手列**的 —— 往里加一个不叫 test-* 的判据,两条闸完全看不见,
+  # 孤儿闸只查反方向(tests/ 里有没有落单的)。这里把两边取并集。
+  {
+    ls "$TESTS"/test-*.sh "$TESTS"/test_*.sh "$TESTS"/test-*.py "$TESTS"/test_*.py 2>/dev/null
+    sed -n 's/^[[:space:]]*"[^|]*|[^|]*|\([^"]*\)".*/\1/p' "$TESTS/../bin/rust-check-review-tooling"
+  } | sort -u
 }
 
 D="$(mktemp -d)"
@@ -128,11 +141,13 @@ n3_every_suite_carries_the_guard() {
   # N3a 只是**便宜的先筛**:它是文本匹配,一行注释就能骗过去。
   #     真正说了算的是下面 N3c 的行为抽检 —— 别把 N3a 当保证。
   local missing="" f b
-  for f in "$TESTS"/test-*.sh "$TESTS"/test_*.sh "$TESTS"/test-*.py "$TESTS"/test_*.py; do
+  for f in $(__noeg_suites); do
     [[ -f "$f" ]] || continue
     b="$(basename "$f")"
     # 必须是**能执行的**引入行(行首不是 #),不是提一嘴文件名的注释
-    grep -qE '^[[:space:]]*(\.|source)[[:space:]].*_no-egress\.sh' "$f" \
+    # bash 的引入行必须自带 `|| exit`:没开 set -e 时,source 失败会**若无其事地裸跑**
+    # (08-10 四审 subkimi 抓到的静默 fail-open;python 的 import 失败自己就非零,不需要)
+    grep -qE '^[[:space:]]*(\.|source)[[:space:]].*_no-egress\.sh.*\|\|[[:space:]]*exit' "$f" \
       || grep -qE '^[[:space:]]*(import|from|exec\(open)[^#]*_no_egress' "$f" \
       || missing="$missing $b"
   done
@@ -145,14 +160,18 @@ n3_every_suite_carries_the_guard() {
   local fb2="$D/fakebin2"; mkdir -p "$fb2"
   printf '#!/bin/bash\nexit 1\n' > "$fb2/unshare"; chmod +x "$fb2/unshare"
   local leaky="" runner out rc
-  for f in "$TESTS"/test-*.sh "$TESTS"/test_*.sh "$TESTS"/test-*.py "$TESTS"/test_*.py; do
+  for f in $(__noeg_suites); do
     [[ -f "$f" ]] || continue
     b="$(basename "$f")"
     [[ "$b" == "test-no-egress.sh" ]] && continue   # 本判据的行为由 N4 直接考
     runner=bash; [[ "$f" == *.py ]] && runner=python3
     out="$(in_host env PATH="$fb2:$PATH" timeout 20 "$runner" "$f" 2>&1)"; rc=$?
     # 非零、且不是超时(超时说明它压根没理守卫、跑起来了)、且一条用例都没跑
-    if [[ $rc -eq 0 || $rc -eq 124 ]] || grep -qE '^\s*(PASS|ok|FAIL):' <<<"$out"; then
+    # 不只问"拒跑了",还要问"**是不是被这道闸**拒的" —— 因为别的原因早死也会非零,
+    # 那样 N3c 会为了错误的理由变绿(08-10 四审 subkimi 与我自审 F3 同时点到)。
+    if [[ $rc -eq 0 || $rc -eq 124 ]] \
+       || grep -qE '^\s*(PASS|ok|FAIL):' <<<"$out" \
+       || ! grep -qE "unshare|隔离|出口" <<<"$out"; then
       leaky="$leaky $b"
     fi
   done
@@ -166,7 +185,11 @@ n3_every_suite_carries_the_guard() {
     [[ -f "$f" ]] || continue
     b="$(basename "$f")"
     [[ "$b" == "test-no-egress.sh" ]] && continue
-    grep -q "nsenter" "$f" && leak="$leak $b"
+    # 只看**能执行的**行:整行注释里提一句 nsenter 不是逃逸。
+    # 08-10 四审 subdeepseek 抓到:守卫文件头部的强度声明里写了这个词,
+    # N3b 于是把**守卫自己**报成逃逸口(而且那笔 commit 在我全部绿收据之后,
+    # 收据没覆盖到它 —— verify.md 上写着 18/0,HEAD 上其实是 17/1)。
+    grep -vE '^[[:space:]]*#' "$f" | grep -q "nsenter" && leak="$leak $b"
   done
   [[ -z "$leak" ]]
   check "N3b: 只有本判据允许用 nsenter 回宿主(逃逸口:${leak:-无})" $?

@@ -76,7 +76,7 @@ set -uo pipefail
 
 # 判卷面的不变量:**跑判据的进程不许有外网出口**(2026-08-10,track no-egress-judging)。
 # 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
-. "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78   # source 失败=裸跑,必须硬退
 
 # V23/V24 真跑 sub* 躯干,考的是**闸放不放行** —— 闸在启动的瞬间就判完了,
 # 后面那段网络往返与本考卷无关。而 08-10 起判据进程没有外网出口,那一段**必然**失败,
