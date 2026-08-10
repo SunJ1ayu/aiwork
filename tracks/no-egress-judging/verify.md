@@ -9,9 +9,9 @@
 
 ## Mechanical checks
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+- [x] build passes(bash -n / 全部套件可执行)
+- [x] tests pass(总跑 8 套全绿:275/17/ALL/62/79/4/31/18)
+- [x] no secrets / unsafe ops(无凭证改动;守卫只减网络能力,不加)
 
 **机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
 
@@ -36,6 +36,36 @@ runlog: oracle-red3 rc=1 commit=d5ee9a1 dirty=yes at=2026-08-10T07:36:40Z file=t
 - `oracle-red3` 11 红 —— N3a 连**判据自己**都标红了(我写的是 `. "$GUARD"` 变量、
   不是字面路径)。改的是我自己那一行,**没有给自己开豁免**(豁免会腐烂)。
   全部 11 条红在断言上,没有一条炸在报错上。
+
+**实现落地后**:
+
+```
+runlog: oracle-after-impl rc=1 commit=4af6f91 dirty=yes at=2026-08-10T07:42:38Z file=tracks/no-egress-judging/evidence/20260810T074238Z-01-oracle-after-impl.txt
+runlog: oracle-green rc=0 commit=4af6f91 dirty=yes at=2026-08-10T07:48:15Z file=tracks/no-egress-judging/evidence/20260810T074815Z-01-oracle-green.txt
+runlog: full-suite rc=0 commit=4af6f91 dirty=yes at=2026-08-10T07:49:09Z file=tracks/no-egress-judging/evidence/20260810T074909Z-01-full-suite.txt
+runlog: full-suite-fast rc=0 commit=4af6f91 dirty=yes at=2026-08-10T08:08:50Z file=tracks/no-egress-judging/evidence/20260810T080850Z-01-full-suite-fast.txt
+```
+
+- `oracle-after-impl` 12/6 —— **判据抓到实现一个真 bug**:自举时 export 的
+  「试过一次」标记被子进程继承,子进程回到主命名空间就被误判成"自举失败"而拒跑。
+  N1/N2/N7 全红,而 N5 会因为**错误的原因**变绿。⇒ 隔离成功后 unset。
+- `oracle-green` **18/0**。
+- `full-suite` 总跑 8 套全绿,但**耗时 346s**,超过每周 cron 的 300s 超时
+  ⇒ proposal 里「堵住之后自然变快」那条假设**被自己的测量证伪**(见 F6)。
+- `full-suite-fast` 25s→5s 之后 **215s**,8 套全绿,重新落回超时以内。
+
+**这一单真正的验收是"钱"**(判据接不住,只能实测对账):
+
+```
+本次总跑之后 kimi 进程启动: 3
+其中启动即失败(连不出去): 3
+成功建立连接的调用: 0
+```
+
+> ⚠️ 顺带更正我自己定的验收口径:一开始我数的是日志里 `kimi-code starting` 的条数,
+> 那是**进程启动数**,分不出"花了钱"和"被挡住"(它从 172 涨到 175,吓了一跳)。
+> 正确口径是**成功建立连接的次数**:3 次启动全部在 7 秒后死于
+> `provider.connection_error ... auth.kimi.com ... fetch failed`,**零次往返、零额度**。
 
 ## Review
 
