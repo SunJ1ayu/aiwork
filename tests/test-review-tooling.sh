@@ -78,6 +78,13 @@ set -uo pipefail
 # 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh"
 
+# V23/V24 真跑 sub* 躯干,考的是**闸放不放行** —— 闸在启动的瞬间就判完了,
+# 后面那段网络往返与本考卷无关。而 08-10 起判据进程没有外网出口,那一段**必然**失败,
+# 只是失败得慢(node 自己还要重试几秒)。等它没有任何意义:
+# 25s × 7 处 ⇒ 总跑 72s → 346s,超过每周 cron 的 300s 超时并触发 3 次重试。
+# 调小只可能让考卷**误红**(闸没来得及说话),不可能让它误绿 —— 失败方向是安全的。
+GATE_PROBE_TIMEOUT="${GATE_PROBE_TIMEOUT:-5}"
+
 # 从判据自身位置推 bin/,**不写死绝对路径**:执行腿在 worktree 里改了代码,
 # 写死路径会让判据仍去测主仓的文件 = 改了也永远红(2026-08-01 派活前发现)。
 # 可用 REVIEW_BIN 覆盖。
@@ -1518,25 +1525,25 @@ v23_my_review_gate_on_every_review_path() {
     cp "$BIN/$tool" "$b/$tool"
     # ① 约定路径的自审文件不存在 ⇒ 拒跑,且错误信息点名"先写你自己的一遍"
     out="$(cd "$d" && env -u REVIEW_MY_REVIEW REVIEW_NO_MY_REVIEW=0 PANEL_DISPATCH=0 \
-            timeout 25 bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
+            timeout "$GATE_PROBE_TIMEOUT" bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
     check "V23: $tool 没有自审文件 ⇒ 拒跑" $([[ $rc -ne 0 ]]; echo $?)
     grep -q "自己的一遍" <<<"$out"; check "V23: $tool 说清是缺自审(不是别的报错)" $?
 
     # ② 自审文件在**仓内** ⇒ 拒跑(腿会照着我的答案抄)
     printf '我的一遍\n' > "$d/repo/mine.md"
-    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/repo/mine.md" timeout 25 bash "$b/$tool" $args \
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/repo/mine.md" timeout "$GATE_PROBE_TIMEOUT" bash "$b/$tool" $args \
             "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"; rc=$?
     check "V23: $tool 自审文件在仓内 ⇒ 拒跑" $([[ $rc -ne 0 ]]; echo $?)
 
     # ③ 显式退出闸 ⇒ 不再被这道闸拦(会因为别的原因失败,但不许是这一句)
-    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=1 timeout 25 bash "$b/$tool" $args \
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=1 timeout "$GATE_PROBE_TIMEOUT" bash "$b/$tool" $args \
             "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
     if grep -q "自己的一遍" <<<"$out"; then
       bad "V23: $tool REVIEW_NO_MY_REVIEW=1 应当放行这道闸"
     else ok "V23: $tool REVIEW_NO_MY_REVIEW=1 应当放行这道闸"; fi
 
     # ④ panel-review 派发时不许被重复拦(它在自己那层已经查过)
-    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 timeout 25 bash "$b/$tool" $args \
+    out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 timeout "$GATE_PROBE_TIMEOUT" bash "$b/$tool" $args \
             "$d/t.md" "$d/out.log" "$d/repo" --panel-dispatch 2>&1)"
     if grep -q "自己的一遍" <<<"$out"; then
       bad "V23: $tool 在 panel 派发下不许重复拦(否则四审整个派不出去)"
@@ -1551,7 +1558,7 @@ v23_my_review_gate_on_every_review_path() {
   printf '我的一遍\n' > "$d/mine.md"
   cp "$BIN/_my-review-gate.sh" "$b/" 2>/dev/null
   out="$(cd "$d" && PATH="$fb:$PATH" REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/mine.md" \
-          timeout 25 bash "$b/submimo" review "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
+          timeout "$GATE_PROBE_TIMEOUT" bash "$b/submimo" review "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
   grep -qi "realpath" <<<"$out"
   check "V23: realpath 不可用 ⇒ 拒跑并说明(不许静默跳过仓内检查)" $?
   rm -rf "$d"
@@ -1573,13 +1580,13 @@ v24_no_env_backdoor_and_coverage_report() {
     # ① **export 一个环境变量不再能过闸**(四审两腿都点名 PANEL_DISPATCH 是零成本后门:
     #    从 shell 里 export 一次,之后每条命令都自动带着,而且不留痕)
     out="$(cd "$d" && PANEL_DISPATCH=1 REVIEW_NO_MY_REVIEW=0 \
-            timeout 25 bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
+            timeout "$GATE_PROBE_TIMEOUT" bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
     grep -q "自己的一遍" <<<"$out"
     check "V24: $tool export PANEL_DISPATCH=1 **不再**能跳过闸" $?
 
     # ② 只有**显式写在命令行上**的 --panel-dispatch 才放行(不会从 shell 继承)
     out="$(cd "$d" && REVIEW_NO_MY_REVIEW=0 \
-            timeout 25 bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" --panel-dispatch 2>&1)"
+            timeout "$GATE_PROBE_TIMEOUT" bash "$b/$tool" $args "$d/t.md" "$d/out.log" "$d/repo" --panel-dispatch 2>&1)"
     if grep -q "自己的一遍" <<<"$out"; then
       bad "V24: $tool 命令行 --panel-dispatch 应当放行(否则四审派不出去)"
     else ok "V24: $tool 命令行 --panel-dispatch 应当放行(否则四审派不出去)"; fi
