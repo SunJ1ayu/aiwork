@@ -37,6 +37,13 @@ set -uo pipefail
 #   树建在 ${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}/<任务名>-<时间戳>,
 #   分支 delegate/<同名>。**环境变量只为判据能用临时目录**,如实写在这儿,不假装它不存在。
 #
+#   **隔离不是沙箱边界,别把它读成边界**(2026-08-11 真 codex 探针实测,收据在 track 的
+#   evidence/ 里):`-s workspace-write` 的可写范围是它自己向上解析出的"项目根" ——
+#   worktree 的 `.git` 是个文件,于是它一路走到**主仓**,能往主仓写、改主仓的文件;
+#   `/tmp` 也是敞的;只有无关路径才拒。读更是完全不管。
+#   所以隔离买到的是**归因**(腿默认在树里干活 ⇒ 闸① 不再误报我自己、底账精确),
+#   不是"腿被关起来了"。因此:卷宗仍然不许落进仓 ∪ 树,收货时闸① **两棵树都要看**。
+#
 # **二、攻题新鲜度从 mtime 换成内容哈希。** 旧闸问"攻题记录是不是比判卷新",而 worktree
 #   是 checkout 出来的 ⇒ 判卷 mtime 恒新 ⇒ 隔离下 100% 拒发(实测主树 rc=0/树里 rc=2)。
 #   出路只有两条,其中一条是每次 `touch` 攻题记录 —— 那等于把"例行解除一道判卷防线"
@@ -148,6 +155,23 @@ do_receive() {
     echo "     会同时把它当作没改过(这道闸就瞎了):"
     printf '%s\n' "$marked" | sed 's/^/     /'
   fi
+  # 【2026-08-11 探针逼出来的那条,四审两腿都没提】腿**够得着主树**(实测:
+  # workspace-write 把项目根向上解析到主仓,能写)。闸① 改看 worktree 之后,
+  # 主树的判卷文件就没人看了 —— 腿伸手过去改主树的判据,这道闸全绿,
+  # 而我随后**在主树上**跑判据 = 跑的是被改过的考卷。
+  # 只问"主树上有没有**没提交的**判卷动静":我自己的判据修复是提交过的(那正是 A3),
+  # 不许因为补这条又把误报请回来。
+  if [[ -n "$wt" ]]; then
+    local main_dirty
+    main_dirty="$(git -C "$repo" status --porcelain -uall -- "${protect[@]}" 2>/dev/null)"
+    if [[ -n "$main_dirty" ]]; then
+      bad=1
+      echo "  ❌ **主树**(不是隔离树)的判卷路径上有没提交的动静 —— 腿够得着这里:"
+      printf '%s\n' "$main_dirty" | sed 's/^/     /'
+      echo "     (要么是腿伸手过去了,要么是我自己改了判据没提交。两种都得停下来看。)"
+    fi
+  fi
+
   if [[ $bad -ne 0 ]]; then
     echo "  ⇒ 闸① 不过。执行腿的自述一概不作数,先查清楚这些改动是谁写的、为什么。"
     return 1
@@ -342,7 +366,6 @@ TS="$(date +%Y%m%d-%H%M%S)"
 NAME="$(basename "${TASK%.*}")"
 JOB="${NAME}-${TS}"
 WT=""; BRANCH=""; RUNDIR="$REPO"
-_legroot="$_rp"          # "腿能写的树"的根:卷宗不许落进这个前缀下面
 if [[ $ISOLATE -eq 1 ]]; then
   _wtroot_abs="$(realpath -m "$WT_ROOT")"
   [[ "$_wtroot_abs" != "$_rp" ]] || die "worktree 根不能就是被派的仓本身:$WT_ROOT"
@@ -360,31 +383,46 @@ if [[ $ISOLATE -eq 1 ]]; then
   WT="$_wtroot_abs/$JOB"
   BRANCH="delegate/$JOB"
   RUNDIR="$WT"
-  _legroot="$_wtroot_abs"
 fi
 
-# ⑤ 攻题记录不许落进**腿能写的树**:漏洞清单进考场 = 把考卷的洞递给考生
-#    (和 panel-review 的 my-review 闸同源)。
-#    隔离之后这条的对象变了:腿的沙箱是那棵树,主树它写不到、也读不到未跟踪的文件 ——
-#    但**被 git 跟踪的文件会被 checkout 进树**,那条路必须继续堵死。
-_legwhat="被派活的仓里"; [[ $ISOLATE -eq 1 ]] && _legwhat="worktree 根(腿能写的树)里"
+# ⑤ 卷宗(攻题记录/日志/回执)不许落进**腿够得着的地方** = 被派的仓 ∪ worktree 根。
+#    【2026-08-11 探针实测,别再"推理"这件事】我一度把它放宽成"隔离下只管那棵树,
+#    落在主仓里可以",理由是"腿的沙箱就是那棵树"。**真 codex 把这条打掉了**:
+#      · `codex exec -C <worktree> -s workspace-write` **能往主仓写、改主仓的文件** ——
+#        worktree 的 `.git` 是个文件,它把"项目根"一路向上解析到了主仓;
+#        写无关路径才会被拒(`patch rejected: writing outside of the project`),`/tmp` 也是敞的。
+#      · 写沙箱**管不了读**:探针里腿把主仓中一份未跟踪的"秘密攻题记录"原文贴了回来。
+#    收据:tracks/codex-worktree-delegation/evidence/*probe-real-sandbox*
+#    ⇒ 卷宗落主仓 = 腿改得到回执(闸① 自证)+ 读得到攻题记录(考卷的洞递给考生)。
+#    ⇒ **A2 那个死结没解开**:派 aiwork 自己的活,日志/攻题记录必须显式指到 /root/aiwork 之外。
+_forbid=("$_rp"); _legwhat="被派活的仓里"
+if [[ $ISOLATE -eq 1 ]]; then _forbid+=("$_wtroot_abs"); _legwhat="被派活的仓 / worktree 根里"; fi
+_in_forbidden() {  # <绝对路径> → 0 = 落在禁区里
+  local x="$1" f
+  for f in "${_forbid[@]}"; do case "$x/" in "$f"/*) return 0 ;; esac; done
+  return 1
+}
 for _a in "$(realpath "$ATTACK")" "$(realpath -s "$ATTACK")"; do
-  case "$_a/" in
-    "$_legroot"/*) die "攻题记录在${_legwhat}:$_a
-  执行腿会读到它 = 把考卷的洞递给考生。挪出去,例如 /root/aiwork/tasks/<name>-attack.md" ;;
-  esac
-  if [[ $ISOLATE -eq 1 ]]; then
-    case "$_a" in
-      "$_rp"/*)
-        _arel="${_a#$_rp/}"
-        if git -C "$REPO" ls-files --error-unmatch -- "$_arel" >/dev/null 2>&1; then
-          die "攻题记录被 git 跟踪着:$_a
-  隔离树是从基线 checkout 出来的 ⇒ 这份文件会**原样出现在腿的树里**。
-  未跟踪地放在主仓里可以(腿看不见),提交进仓不行。"
-        fi ;;
-    esac
+  if _in_forbidden "$_a"; then
+    die "攻题记录在${_legwhat}:$_a
+  执行腿**读得到**它(实测:写沙箱管不了读)= 把考卷的洞递给考生。
+  挪到仓外,例如 /root/attack-logs/<name>.md;派 aiwork 自己的活时,'仓外'就是 /root/aiwork 之外。"
   fi
 done
+
+# ⑤b 直通参数排在工具自己给的 `-C <树>` `-s workspace-write` **后面**,last-wins ⇒
+#     `-- -C /别处` 或 `-- -s danger-full-access` 能**静默撤销隔离**,而我会以为它隔离着。
+#     只有我自己会传直通参数(是脚枪不是攻击面),但"我以为隔离了、其实没有"正是本单
+#     最不能出的错(四审 subdeepseek)。要传就显式 --no-isolate,别在隔离下偷偷换掉。
+if [[ $ISOLATE -eq 1 && ${#PASSTHRU[@]} -gt 0 ]]; then
+  for _pt in "${PASSTHRU[@]}"; do
+    case "$_pt" in
+      -C|--cd|-s|--sandbox|-C=*|--cd=*|-s=*|--sandbox=*)
+        die "直通参数里有 '$_pt' —— 它排在工具给的 -C/-s 后面,会 last-wins **撤销隔离**,
+  而回执上还写着 isolate=true。要这么跑就显式加 --no-isolate(那样至少不骗人)。" ;;
+    esac
+  done
+fi
 
 # ⑥ 攻题记录必须盖着**当前这版判卷**的哈希
 grep -Fq "$HASH_LINE" "$ATTACK" || die "攻题记录对不上当前这版判卷,已过期:
@@ -397,16 +435,14 @@ grep -Fq "$HASH_LINE" "$ATTACK" || die "攻题记录对不上当前这版判卷,
 LOG="${LOG:-/root/aiwork/logs/delegate-${NAME}-${TS}.log}"
 mkdir -p "$(dirname "$LOG")"
 RECEIPT="${LOG}.receipt.json"
-# 回执/日志**不许落进腿能写的树**(四审 subdeepseek F15 / subkimi F3):它们是闸①的卷宗,
+# 回执/日志同理(四审 subdeepseek F15 / subkimi F3):它们是闸① 的卷宗,
 # 腿能改 head/protect 就等于让闸① 自己给自己开绿灯。考生不许碰卷宗。
-# 隔离之后这条的对象从"仓"换成"树":腿的沙箱是 worktree,主仓它写不到 ——
-# 这正好解开 A2 那个死结(`--repo /root/aiwork` + 默认日志 /root/aiwork/logs/ 从前一律拒发,
-# 于是 aiwork 自己永远派不出活)。**放宽只针对隔离模式**,`--no-isolate` 一个字没松。
 for _l in "$(realpath -m "$LOG")" "$(realpath -m "$RECEIPT")"; do
-  case "$_l/" in
-    "$_legroot"/*) die "日志/回执落在${_legwhat}:$_l
-  执行腿能改它 ⇒ 闸① 变成自证。挪出去(默认就在 /root/aiwork/logs/)。" ;;
-  esac
+  if _in_forbidden "$_l"; then
+    die "日志/回执落在${_legwhat}:$_l
+  执行腿**改得到**它(实测,见上)⇒ 闸① 变成自证。挪出去(默认就在 /root/aiwork/logs/;
+  但派 aiwork 自己的活时那儿也在禁区里,得显式 --log 到 /root/aiwork 之外)。"
+  fi
 done
 HEAD_AT_DISPATCH="$(git -C "$REPO" rev-parse HEAD)"
 
