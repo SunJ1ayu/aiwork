@@ -19,6 +19,7 @@ SUITES=(
   "track-guard|bash|/root/aiwork/tests/test-track-guard.sh"
   "delegate-entry|bash|/root/aiwork/tests/test-delegate-entry.sh"
   "delegate-isolate|bash|/root/aiwork/tests/test-delegate-isolate.sh"
+  "worktree-sweep|bash|/root/aiwork/tests/test-worktree-sweep.sh"
   "hooks-installed|bash|/root/aiwork/tests/test-hooks-installed.sh"
   "runlog|bash|/root/aiwork/tests/test-runlog.sh"
   "no-egress|bash|/root/aiwork/tests/test-no-egress.sh"
