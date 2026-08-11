@@ -163,7 +163,9 @@ _track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <ke
   # 收空之后连轮次目录一起收掉:留个空壳的话,以后每一次归档都会把它当"别人的树"
   # 点一遍名 —— 唠叨的报告和误报的守卫一样,响多了就没人看了。
   # 只用 rmdir(非空会自己拒绝),不 rm -rf。
-  [[ -d "$track_dir" ]] && rmdir "$track_dir" 2>/dev/null
+  # `|| true` 不是装饰:轮次目录里要是还搁着别的东西(不是树),rmdir 会失败,
+  # 而这个脚本是 `set -e` —— 那会让整个归档**一声不吭地死掉**(判据 S9 就是问这个)。
+  [[ -d "$track_dir" ]] && { rmdir "$track_dir" 2>/dev/null || true; }
   return 0
 }
 

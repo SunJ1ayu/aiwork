@@ -250,24 +250,42 @@ EOF
 
 # ---------------------------------------------------------- S8 不许偷偷 --force
 s8_no_force() {
-  echo '[S8] 清理用的是 git worktree remove(不带 --force)—— 第二道免费保险不许拆' 
+  echo '[S8] 树里只剩被 ignore 的东西(生成物)⇒ 照收 —— 这是设计里写明的取舍,钉住它' 
   local d; d="$(mktemp -d)"; local p="$d/proj" root="$d/wt" rc
   make_proj "$p" mytrack
-  local tree; tree="$(make_tree "$p" "$root" mytrack job-1 HEAD)"
-  # 造一个"安全判据看着干净、但 git 自己会拒绝删"的形状:被 ignore 的文件。
-  # `status -uall` 看不见它(设计里写明的取舍),而 `git worktree remove` 不带 --force 会拒。
+  # ⚠️ .gitignore 必须**先提交再建树**:后提交的话树里没有它,junk/ 就成了未跟踪文件,
+  #    干净判据先把树拦下 ⇒ 根本走不到 remove 那一步 ⇒ 这一幕问不出「有没有偷偷 --force」。
+  #    (第一版就是这么写的,变异 W6 全绿才发现 —— 又一处「绿在错误的原因上」。)
   printf 'junk/\n' > "$p/.gitignore"; git -C "$p" add -A; git -C "$p" commit -qm ignore
+  local tree; tree="$(make_tree "$p" "$root" mytrack job-1 HEAD)"
+  # 现在树里有 .gitignore ⇒ junk/ 是**被忽略**的:`status -uall` 看不见它(设计里写明的取舍),
+  # 而 `git worktree remove` 不带 --force 会拒 —— 这才是这一幕要问的那道免费保险。
   mkdir -p "$tree/junk"; printf 'build artifact\n' > "$tree/junk/a.o"
 
   DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/track" archive mytrack "$p" >"$d/o8" 2>&1; rc=$?
-  # 不规定它拦不拦(git 拒了就该报出来),只钉死一件事:**没有偷偷加 --force**
-  if [[ -d "$tree" ]]; then
-    ok "S8: git 拒绝删就留着(没有偷偷 --force 绕过去)"
-    grep -qi "remove\|拒\|失败" "$d/o8"; check "S8: 而且把 git 的拒绝报出来了" $?
-  else
-    bad "S8: 树被删了 —— 说明加了 --force,把 git 那道免费保险拆了"
-    bad "S8: (同上)"
-  fi
+  # 【2026-08-11 实测纠正】我原本以为"被 ignore 的文件会让 git worktree remove 拒绝,
+  #  那是第二道免费保险"。**不成立**:git 只对 modified/untracked 拒,ignored 它连着一起删。
+  #  而干净判据在前面已经把 modified/untracked 全拦下了 ⇒ 正常流程里 git 那道拒绝**够不着**,
+  #  它只在"干净判据本身被拆掉"时才兜底(变异 W1 实测到的正是这一幕)。
+  #  所以这一幕改成钉住**真正会发生的那件事**:生成物不算"别处没有的东西",树照收。
+  check "S8: 树里只有被 ignore 的生成物 ⇒ 归档通过" $([[ $rc -eq 0 ]]; echo $?)
+  check "S8: 树被收掉(生成物删了能长回来,这是设计里写明的取舍)" $([[ ! -d "$tree" ]]; echo $?)
+  rm -rf "$d"
+}
+
+# ------------------------------------------- S9 轮次目录里有别的东西 ⇒ 别把归档搞死
+s9_stray_file_in_track_dir() {
+  echo "[S9] 轮次目录里除了树还有别的东西 ⇒ 收完树照常归档,不许静默死掉"
+  local d; d="$(mktemp -d)"; local p="$d/proj" root="$d/wt" rc
+  make_proj "$p" mytrack
+  local tree; tree="$(make_tree "$p" "$root" mytrack job-1 HEAD)"
+  printf 'someones note\n' > "$root/mytrack/README-not-a-tree.txt"   # 不是树,是块石头
+
+  DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/track" archive mytrack "$p" >"$d/o9" 2>&1; rc=$?
+  check "S9: 归档照常完成(rc=0)" $([[ $rc -eq 0 ]]; echo $?)
+  check "S9: 树收掉了" $([[ ! -d "$tree" ]]; echo $?)
+  check "S9: 那块石头没被删" $([[ -f "$root/mytrack/README-not-a-tree.txt" ]]; echo $?)
+  check "S9: track 归档了" $([[ -d "$p/tracks/archive/mytrack" ]]; echo $?)
   rm -rf "$d"
 }
 
@@ -280,5 +298,6 @@ s5_keep_trees
 s6_cross_repo_and_failclosed
 s7_track_in_path
 s8_no_force
+s9_stray_file_in_track_dir
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
