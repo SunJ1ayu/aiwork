@@ -43,7 +43,8 @@
 
 - [x] T8 P0:`--print-oracle-hash` + 派活时的内容哈希闸(替换 mtime 那段)。
 - [x] T9 `--isolate`(默认开)/`--no-isolate`:建树、分支、拒发条件、dry-run 不建树。
-- [x] T10 卷宗位置规则换成"腿能写的树";把 A2 那句自相矛盾的提示改掉。
+- [x] T10 卷宗位置规则:**先按 design 10.3 放宽成"腿能写的树",四审 + 真沙箱探针证伪后整条撤回** ——
+      最终禁区 = 仓 ∪ worktree 根,A2 的死结没解开(见 verify 的仲裁与 design 10.3 的墓碑)。
 - [x] T11 回执三键 + `--receive` 全面改跑 worktree + 写回 `actual_write_set`。
 - [x] T12 交回打印:集成命令、`create mode 120000` 自查、`worktree remove`、旧树盘点。
 
