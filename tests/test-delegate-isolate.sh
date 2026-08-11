@@ -307,6 +307,12 @@ i_isolate_refusals() {
     $([[ "$(ls -1 "$wt" 2>/dev/null | wc -l)" -eq "$before" ]]; echo $?)
   check "I2: --dry-run 没启动 codex" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
   grep -q "$wt/" "$d/o4"; check "I2: --dry-run 印出**将要**建在哪" $?
+  # 自审 F1:dry-run 也会写回执,而它记的树**从来没建过**。
+  # 拿它去收货时,不许说成"现场没了"——把"没做"说成"丢了"是指错方向的报警器。
+  bash "$BIN/delegate-codex" --receive "$d/e.log.receipt.json" >"$d/o4r" 2>&1; rc=$?
+  check "I2: 拿 --dry-run 的回执收货 ⇒ 非零" $([[ $rc -ne 0 ]]; echo $?)
+  grep -qi "dry-run\|没派过\|没建过" "$d/o4r"
+  check "I2: 而且要说清是「这是 dry-run 的回执,压根没派过活」,不是「现场没了」" $?
 
   # ④ 建树失败 ⇒ 拒发 + 零调用(不许"树没建成但活照派",那会静默退回非隔离)。
   #    确定性的失败注入:先占掉 `delegate` 这个分支名 ⇒ `delegate/<job>` 因 D/F 冲突建不出来。
