@@ -24,6 +24,11 @@ set -uo pipefail
 # 判卷面的不变量:**跑判据的进程不许有外网出口**(2026-08-10,track no-egress-judging)。
 # 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78   # source 失败=裸跑,必须硬退
+# 2026-08-11(track codex-worktree-delegation):派活闸的"攻题记录必须新过判卷"从 mtime
+# 换成**内容哈希**,于是这份套件里每一次派活都得先给攻题记录盖上当前哈希。
+# 本套件判的是**非隔离**那条老路(隔离由 tests/test-delegate-isolate.sh 判),
+# 所以下面每一发都显式带 `--no-isolate`。
+. "$(dirname "${BASH_SOURCE[0]}")/_oracle_hash.sh"
 
 BIN="${DELEGATE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 
@@ -79,7 +84,7 @@ d_refuses_without_evidence() {
   local rc
 
   # ① 完全不给 --attack-log
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --protect tests/oracle.sh >"$d/o1" 2>&1; rc=$?
   check "D1: 没给 --attack-log ⇒ 非零" $([[ $rc -ne 0 ]]; echo $?)
   check "D1: 没给 --attack-log ⇒ codex 零调用" $([[ "$(calls_of "$rec")" -eq 0 ]]; echo $?)
@@ -88,7 +93,7 @@ d_refuses_without_evidence() {
   grep -q -- "--attack-log" "$d/o1"; check "D1: 拒发时点名缺的是 --attack-log" $?
 
   # ② 给了但文件不存在
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/nope.md" --protect tests/oracle.sh >"$d/o2" 2>&1; rc=$?
   check "D1: attack-log 不存在 ⇒ 非零 + 零调用" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
@@ -96,7 +101,7 @@ d_refuses_without_evidence() {
 
   # ③ 存在但是空的("我写了个空文件应付"这条路要堵死)
   : > "$d/empty.md"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/empty.md" --protect tests/oracle.sh >"$d/o3" 2>&1; rc=$?
   check "D1: attack-log 是空文件 ⇒ 非零 + 零调用" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
@@ -104,7 +109,7 @@ d_refuses_without_evidence() {
 
   # ④ 攻题记录放在**仓内** = 把考卷的洞递给考生(和 panel-review 的 my-review 闸同源)
   cp "$d/attack.md" "$repo/attack.md"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$repo/attack.md" --protect tests/oracle.sh >"$d/o4" 2>&1; rc=$?
   check "D1: attack-log 在仓内 ⇒ 非零 + 零调用(漏洞清单不许进考场)" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
@@ -112,21 +117,28 @@ d_refuses_without_evidence() {
   rm -f "$repo/attack.md"
 
   # ⑤ 不给 --protect(守卫的强度只等于这份清单,没清单就没守卫)
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" >"$d/o5" 2>&1; rc=$?
   check "D1: 没给 --protect ⇒ 非零 + 零调用" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
   grep -q -- "--protect" "$d/o5"; check "D1: 拒发时点名缺的是 --protect" $?
 
-  # ⑥ 攻题记录**比判卷文件旧** ⇒ 攻的是上一版考卷,等于没攻(gpt-5.6-sol 双出方案点破的洞:
-  #    我原来只查"非空 + 在仓外",而"攻完之后我又改了 oracle"这条路整条是敞开的)。
-  touch -d '2020-01-01' "$d/attack.md"
-  touch "$repo/tests/oracle.sh"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  # ⑥ 攻题记录必须对得上**当前这版判卷**,否则攻的是上一版考卷,等于没攻
+  #    (gpt-5.6-sol 双出方案点破的洞:我原来只查"非空 + 在仓外",
+  #     而"攻完之后我又改了 oracle"这条路整条是敞开的)。
+  #    2026-08-11 起判据从 **mtime** 换成**内容哈希**(track codex-worktree-delegation A1:
+  #    worktree 是 checkout 出来的,mtime 恒新 ⇒ 那道 mtime 闸让隔离一次活都派不出去)。
+  #    这一幕只钉"没盖当前哈希就拒发";哈希本身的全部性质在 test-delegate-isolate.sh 里判。
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/oracle.sh >"$d/o6" 2>&1; rc=$?
-  check "D1: 攻题记录比判卷还旧 ⇒ 非零 + 零调用(攻的是旧版考卷)" \
+  check "D1: 攻题记录没盖当前判卷的哈希 ⇒ 非零 + 零调用(攻的是旧版考卷)" \
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
-  grep -qi "旧\|过期\|重新攻" "$d/o6"; check "D1: 说清是「攻题记录过期」,不是笼统报错" $?
+  grep -qi "oracle-sha256\|过期\|重新攻" "$d/o6"; check "D1: 说清是「攻题记录过期」,不是笼统报错" $?
+  # 盖上就该放行 —— 少了这一半,一个"永远拒发"的实现也能让上面全绿
+  stamp_hash "$d/attack.md" "$repo" tests/oracle.sh
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/oracle.sh --log "$d/o6b.log" >"$d/o6b" 2>&1; rc=$?
+  check "D1: 盖上当前哈希 ⇒ 放行" $([[ $rc -eq 0 && "$(calls_of "$rec")" -eq 1 ]]; echo $?)
   rm -rf "$d"
 }
 
@@ -139,7 +151,8 @@ d_injects_and_records() {
   printf '攻题记录:第 3 条断言在旧实现上也绿\n' > "$d/attack.md"
   local head_at_dispatch; head_at_dispatch="$(git -C "$repo" rev-parse HEAD)"
   local rc
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/oracle.sh tests/
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/oracle.sh --protect tests/ \
       --log "$d/run.log" >"$d/out" 2>&1; rc=$?
   check "D2: 材料齐 ⇒ rc=0" $([[ $rc -eq 0 ]]; echo $?)
@@ -176,7 +189,8 @@ d_receive_gate() {
   make_fake_codex "$b" "$rec"; make_repo "$repo"
   printf '# 任务书\n干活\n' > "$d/task.md"
   printf '攻题记录:……\n' > "$d/attack.md"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/run.log" >/dev/null 2>&1
   local receipt="$d/run.log.receipt.json" rc
 
@@ -508,7 +522,8 @@ d_gate_blind_spots() {
 
   # ① 沙箱参数必须显式(subkimi F12:丢掉 -s workspace-write / -C 判据照样全绿,
   #    而那等于把腿升成全权限)
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/oracle.sh
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/oracle.sh --log "$d/run.log" >/dev/null 2>&1
   grep -q 'workspace-write' "$rec/argv.1"; check "D4: 命令行显式给 -s workspace-write" $?
   grep -qx -- "-C" "$rec/argv.1" && grep -qx -- "$repo" "$rec/argv.1"
@@ -518,7 +533,8 @@ d_gate_blind_spots() {
   #    追一行,再塞 conftest.py,闸①两臂全空 —— D3④ 那招被绕过)
   printf 'tests/conftest.py\n' > "$repo/.gitignore"
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore 一条"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g1.log" >"$d/g1" 2>&1; rc=$?
   check "D4: 判卷路径下有被 ignore 的东西 ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
   grep -qi "ignore\|忽略" "$d/g1"; check "D4: 说清是被 gitignore 藏住了" $?
@@ -535,16 +551,16 @@ d_gate_blind_spots() {
   printf '__pycache__/\n' > "$repo/.gitignore"
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore pycache"
   mkdir -p "$repo/tests/__pycache__"; printf 'x' > "$repo/tests/__pycache__/o.cpython-312.pyc"
-  touch "$d/attack.md"   # 改过 .gitignore ⇒ 攻题记录要重新变新(那道过期闸是对的,不绕它)
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/   # 改过 .gitignore ⇒ 重新攻一遍再盖哈希(那道过期闸是对的,不绕它)
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g2.log" >"$d/g2" 2>&1; rc=$?
   check "D4: 判卷目录里只有 __pycache__ 被 ignore ⇒ 照发(否则 python 仓永远派不出活)" \
         $([[ $rc -eq 0 ]]; echo $?)
   # 同一份 .gitignore 下,真正会藏东西的文件仍要拒 —— 防止上面那条被写成"全放行"
   printf '__pycache__/\ntests/conftest.py\n' > "$repo/.gitignore"
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "再 ignore conftest"
-  printf 'x\n' > "$repo/tests/conftest.py"; touch "$d/attack.md"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  printf 'x\n' > "$repo/tests/conftest.py"; stamp_hash "$d/attack.md" "$repo" tests/
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g3.log" >"$d/g3" 2>&1; rc=$?
   check "D4: 放行 __pycache__ 之后,被 ignore 的 conftest.py 仍然拒发" \
         $([[ $rc -ne 0 ]]; echo $?)
@@ -558,16 +574,16 @@ d_gate_blind_spots() {
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore 伪缓存目录"
   mkdir -p "$repo/tests/__pycache__-evil"
   printf 'x\n' > "$repo/tests/__pycache__-evil/conftest.py"
-  touch "$d/attack.md"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g4.log" >"$d/g4" 2>&1; rc=$?
   check "D4: 名字里带 __pycache__ 的**伪**缓存目录不算例外,照样拒发" \
         $([[ $rc -ne 0 ]]; echo $?)
   printf '__pycache__/\ntests/x__pycache__conftest.py\n' > "$repo/.gitignore"
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore 伪缓存文件"
   printf 'x\n' > "$repo/tests/x__pycache__conftest.py"
-  touch "$d/attack.md"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g5.log" >"$d/g5" 2>&1; rc=$?
   check "D4: 文件名里带 __pycache__ 也不算例外,照样拒发" \
         $([[ $rc -ne 0 ]]; echo $?)
@@ -578,7 +594,8 @@ d_gate_blind_spots() {
   git -C "$repo" commit -qm "撤掉 ignore2" >/dev/null 2>&1
 
   # ③ 判卷被 skip-worktree/assume-unchanged 标记 ⇒ 闸① 两臂同时失明(subdeepseek F1)
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/s1.log" >/dev/null 2>&1
   git -C "$repo" update-index --skip-worktree tests/oracle.sh
   printf 'echo tampered\n' >> "$repo/tests/oracle.sh"
@@ -591,7 +608,8 @@ d_gate_blind_spots() {
   # 调用数写成"这一次没变",不写累计常数:常数会让"加一幕"顺带改断言,
   # 而改断言正是最容易把闸悄悄放松的动作(2026-08-07 加 __pycache__ 那一幕时撞到)。
   _calls_before="$(calls_of "$rec")"
-  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+  stamp_hash "$d/attack.md" "$repo" tests/
+  env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$repo/inside.log" >"$d/i1" 2>&1; rc=$?
   check "D4: 日志/回执落在仓内 ⇒ 拒发(和攻题记录同源:考生不许碰卷宗)" $([[ $rc -ne 0 ]]; echo $?)
   check "D4: 拒发时 codex 也没被调用" \
