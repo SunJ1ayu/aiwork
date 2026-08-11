@@ -68,9 +68,16 @@ s1_clean_tree_swept() {
   check "S1: 分支也收了" \
     $(! git -C "$p" rev-parse --verify -q refs/heads/delegate/mytrack/job-1 >/dev/null; echo $?)
   check "S1: track 真的归档了" $([[ -d "$p/tracks/archive/mytrack" ]]; echo $?)
-  check "S1: 主仓工作树一字未动" $([[ -z "$(git -C "$p" status --porcelain -uall)" ]]; echo $?)
+  # ⚠️ 这条我第一版写成了「git status 必须全空」,而 `track archive` 本来就会把
+  #    tracks/<name> 搬进 tracks/archive/ ⇒ 主仓必然出现 D/?? 两行。执行腿把这个冲突
+  #    **报回来了、没有自己改判据**(正确行为)。我要问的是"**清理**有没有碰主仓",
+  #    所以改成:tracks/ 之外一个字节都不许变。
+  check "S1: 清理没碰主仓(tracks/ 之外一个字节没变)" \
+    $([[ -z "$(git -C "$p" status --porcelain -uall | grep -v ' tracks/')" ]]; echo $?)
   check "S1: 主仓 HEAD 没动" $([[ "$(git -C "$p" rev-parse HEAD)" == "$head_before" ]]; echo $?)
   grep -q "job-1" "$d/o1"; check "S1: 报告里说了收掉哪棵" $?
+  check "S1: 收空之后连那个轮次目录也收掉(否则以后每次归档都点它一遍名)" \
+    $([[ ! -d "$root/mytrack" ]]; echo $?)
   rm -rf "$d"
 }
 
