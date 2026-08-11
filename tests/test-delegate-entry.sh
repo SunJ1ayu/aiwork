@@ -533,11 +533,15 @@ d_gate_blind_spots() {
   #    追一行,再塞 conftest.py,闸①两臂全空 —— D3④ 那招被绕过)
   printf 'tests/conftest.py\n' > "$repo/.gitignore"
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore 一条"
+  printf 'import pytest\n' > "$repo/tests/conftest.py"   # ← 真造出那个被藏起来的文件
   stamp_hash "$d/attack.md" "$repo" tests/
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/g1.log" >"$d/g1" 2>&1; rc=$?
   check "D4: 判卷路径下有被 ignore 的东西 ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
   grep -qi "ignore\|忽略" "$d/g1"; check "D4: 说清是被 gitignore 藏住了" $?
+  # 收拾干净:留着它的话,下一幕撤掉 .gitignore 后那个 `git add -A` 会把它**提交进仓**,
+  # 于是 ②c 里"被 ignore 的 conftest.py 仍要拒"就问不出来了(tracked 文件不算被藏)。
+  rm -f "$repo/tests/conftest.py"
   git -C "$repo" rm -q --cached .gitignore >/dev/null 2>&1; rm -f "$repo/.gitignore"
   git -C "$repo" commit -qm "撤掉 ignore" >/dev/null 2>&1
 

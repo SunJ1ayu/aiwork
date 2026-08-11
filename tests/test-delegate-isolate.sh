@@ -190,11 +190,12 @@ h_hash_edges() {
   git -C "$repo" reset -q --hard HEAD~1
 
   # ④ protect 指到一个**空目录** ⇒ 文件集为空 = 这道闸没有强度可言 ⇒ 拒发
+  local _c; _c="$(calls_of "$rec")"     # 相对计数:本幕之前已经派成功过,不能写死 0
   mkdir -p "$repo/emptydir"
   $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect emptydir --log "$d/q4.log" >"$d/q4" 2>&1; rc=$?
   check "H2: protect 匹配不到任何文件 ⇒ 拒发(空清单 = 没有闸)" $([[ $rc -ne 0 ]]; echo $?)
-  check "H2: 空清单那次 codex 零调用" $([[ "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  check "H2: 空清单那次 codex 没被启动" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
 
   rm -rf "$d"
 }
@@ -241,6 +242,19 @@ assert r.get("branch"), r.get("branch")
 assert r["head"]==head, r["head"]          # head 就是 base,不另造第二个同义键
 EOF
   check "I1: 回执记下 isolate / worktree / branch(head 就是 base)" $?
+
+  # **连派两发**(树名是秒级时间戳,同一秒派第二次是真会发生的:判据连着跑就是这形状,
+  # 我拒发一次立刻改了再派也是)。不许覆盖上一棵树 —— 覆盖等于丢掉那里面唯一一份改动。
+  printf 'MARKER_第一棵树\n' > "$cdir/keep-me.txt"
+  env PATH="$b:$PATH" DELEGATE_WORKTREE_ROOT="$wt" bash "$BIN/delegate-codex" \
+      --task "$d/task.md" --repo "$repo" --attack-log "$d/attack.md" \
+      --protect tests/ --log "$d/run2.log" >"$d/o2" 2>&1; rc=$?
+  check "I1: 紧接着再派一发 ⇒ rc=0(不许因为撞名就派不出去)" $([[ $rc -eq 0 ]]; echo $?)
+  local cdir2; cdir2="$(c_dir_of "$rec/argv.2")"
+  check "I1: 第二发建的是**另一棵**树" $([[ -n "$cdir2" && "$cdir2" != "$cdir" ]]; echo $?)
+  check "I1: 第一棵树没被顶掉(里面的东西还在)" $([[ -f "$cdir/keep-me.txt" ]]; echo $?)
+  check "I1: 两棵树 git 都认" \
+    $([[ "$(git -C "$repo" worktree list --porcelain | grep -c '^worktree ')" -eq 3 ]]; echo $?)
   rm -rf "$d"
 }
 
@@ -296,13 +310,17 @@ i_isolate_refusals() {
 
   # ④ 建树失败 ⇒ 拒发 + 零调用(不许"树没建成但活照派",那会静默退回非隔离)。
   #    确定性的失败注入:先占掉 `delegate` 这个分支名 ⇒ `delegate/<job>` 因 D/F 冲突建不出来。
-  git -C "$repo" branch delegate
+  #    ⚠️ 注入必须用**干净的仓**:这一幕之前已经成功派过一发,refs/heads/delegate/<job> 就存在了,
+  #    那时 `git branch delegate` 自己会失败 ⇒ 注入根本没生效(我第一版判据就是这么写的,
+  #    它"红"在实现头上,其实错在我的夹具)。
+  local repo3="$d/repo3"; make_repo "$repo3"
+  printf '攻题记录:……\n' > "$d/attack3.md"; stamp_hash "$d/attack3.md" "$repo3" tests/
+  git -C "$repo3" branch delegate
   _c="$(calls_of "$rec")"
-  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
-      --attack-log "$d/attack.md" --protect tests/ --log "$d/f.log" >"$d/o5" 2>&1; rc=$?
+  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo3" \
+      --attack-log "$d/attack3.md" --protect tests/ --log "$d/f.log" >"$d/o5" 2>&1; rc=$?
   check "I2: 建树失败 ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
   check "I2: 建树失败时 codex 一次都没启动" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
-  git -C "$repo" branch -D delegate >/dev/null 2>&1
 
   # ⑤ worktree 落在**仓里**且没被 gitignore ⇒ 拒发(否则主树 status 被它污染,闸③ 底账跟着脏)
   _c="$(calls_of "$rec")"
