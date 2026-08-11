@@ -2,8 +2,9 @@
 
 Multi-model review/execution tooling for the main agent (the frontier model
 driving the session). The full workflow doctrine — when to use what, panel
-protocol, safety rules — lives in `/root/CLAUDE.md` (symlinked as
-`/root/AGENTS.md`); this README only maps the machinery.
+protocol, safety rules — lives in `/root/CLAUDE.md`. `/root/AGENTS.md` is
+deliberately absent so Codex does not automatically load these Claude-specific
+instructions; this README only maps the machinery.
 
 ## Layout
 
@@ -13,6 +14,8 @@ protocol, safety rules — lives in `/root/CLAUDE.md` (symlinked as
 - `templates/` starter task files (`review-task.md`, `fix-task.md`)
 - `tests/` regression oracles for this tooling itself
 - `track/` lightweight change-workflow convention + templates (`bin/track` CLI)
+- `tracks/` the change artifacts themselves (proposal/design/tasks/verify + evidence)
+- `worktrees/` per-job isolated checkouts created by `delegate-codex` (gitignored)
 - `reports/`, `review/`, `mimo-home/`, `quicklook/` project-specific areas
 
 ## Core engine
@@ -41,6 +44,30 @@ protocol, safety rules — lives in `/root/CLAUDE.md` (symlinked as
 All executors: `<tool> review TASK LOG REPO`. Output is evidence for the main
 agent to verify, never a verdict to adopt.
 
+## Delegation entry + judging guards
+
+- `bin/delegate-codex` — the ONE entry for handing implementation work to the
+  codex (GPT) leg, and the mechanical half of receiving gate ①. It refuses to
+  dispatch (codex never starts) unless: an attack-log exists outside the repo,
+  a `--protect` judging list is given, and the attack-log carries the CURRENT
+  `oracle-sha256:` of that judging surface (`--print-oracle-hash` emits the line).
+  **Each job runs in its own git worktree by default** (`--no-isolate` opts out):
+  `worktrees/<task>-<ts>` on branch `delegate/<same>`, created from the HEAD at
+  dispatch. `--receive <receipt>` runs gate ① against that tree (plus a check for
+  uncommitted judging changes in the MAIN tree, which the leg can still reach),
+  records the machine-computed write set into the receipt, and PRINTS the
+  integrate / symlink-check / `worktree remove` commands — it never merges or
+  deletes anything itself.
+  Isolation buys attribution, not confinement: `-s workspace-write` resolves its
+  writable root upward to the main repo (a worktree's `.git` is a file), so case
+  files (attack log, log, receipt) must stay outside `repo ∪ worktrees-root`.
+- `bin/redcheck` — revert-the-implementation red check: puts the impl back to a
+  baseline, rebuilds, reruns the oracle, and REQUIRES red (`--must-fail` pins
+  where the red must land). Restores unconditionally and proves the tree is clean.
+- `bin/runlog` — makes the MACHINE write down what it ran: receipt files under
+  `tracks/<track>/evidence/` plus one line to paste into verify.md.
+- `bin/track-guard` — pre-commit guard for the track conventions.
+
 ## Panel fan-out
 
 - `bin/panel-review TASK [REPO] [LOG_PREFIX]` — convergent: all three
@@ -54,9 +81,15 @@ Both stagger launches and the engine retries 429/5xx with bounded backoff.
 ## Tests (run before trusting any tooling change)
 
 ```bash
-bash /root/aiwork/tests/test-review-tooling.sh   # 41-case oracle, V1..V7
-python3 /root/aiwork/tests/test_submimo_retry.py # 429/5xx retry contract
+bash /root/aiwork/bin/rust-check-review-tooling   # THE runner: every suite below, one summary line
+bash /root/aiwork/bin/rust-check-review-tooling --coverage-only   # just the "who is not covered" report
 ```
+
+The runner is list-driven (`SUITES`) and hard-reds when a `tests/test-*` file is
+NOT in that list — a judging suite nobody runs rots silently. Individual suites
+still run standalone (`bash tests/test-delegate-isolate.sh`); each one execs
+itself into a network namespace first, because **a judging process must have no
+egress** (2026-08-10: an oracle called a paid model and burned the quota).
 
 The oracle is owned by the main agent; employees must never edit it.
 

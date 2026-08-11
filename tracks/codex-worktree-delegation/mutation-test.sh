@@ -31,9 +31,14 @@ for a, b in zip(pairs[::2], pairs[1::2]):
     s = s.replace(a, b)
 open(p, "w", encoding="utf-8").write(s)
 PY
-  local out="$TMP/$name.txt"
+  # 名字直接当文件名会踩坑:M11 的名字里有个 `/`,输出文件压根没写成,
+  # 于是脚本报了"判据没咬住" —— **假报警和假绿一样坏**,而且这次差点让我去改一份没毛病的判据。
+  local out="$TMP/${name//[^A-Za-z0-9_-]/_}.txt"
   bash "$SUITE" > "$out" 2>&1
   restore
+  if [[ ! -s "$out" ]]; then
+    echo "  🔴 [$name] 套件输出是空的 —— 是**这个脚本**坏了,不是判据的事"; FAIL=$((FAIL+1)); return
+  fi
   if grep -qF "FAIL: $want" "$out"; then
     echo "  ✅ [$name] 判据红在该红的地方:$want"
     PASS=$((PASS+1))
@@ -74,13 +79,28 @@ mutate "M5-哈希不排除__pycache__(两道冗余排除一起拆)" \
             return' '        if False:
             return'
 
-mutate "M6-卷宗放宽过头(不查被跟踪的攻题记录)" \
-  "I4: 攻题记录被 git 跟踪 ⇒ 拒发(它会被 checkout 进树)" \
-  'if git -C "$REPO" ls-files --error-unmatch -- "$_arel" >/dev/null 2>&1; then' 'if false; then'
-
 mutate "M7-判卷脏也照派" \
   "I2: 判卷路径有未提交改动 ⇒ 拒发" \
   'if [[ -n "$_dirty_protect" ]]; then' 'if false; then'
+
+# ── 第二轮加的四处(四审 + 真沙箱探针之后新长出来的闸)──────────────────
+mutate "M8-空清单闸删掉" \
+  "H2: protect 匹配不到任何文件 ⇒ 拒发(空清单 = 没有闸)" \
+  '[[ "${_n_files:-0}" -gt 0 ]] || die "--protect 一个文件都没匹配到' \
+  '[[ 1 -gt 0 ]] || die "--protect 一个文件都没匹配到'
+
+mutate "M9-闸①的主树那条臂删掉" \
+  "R1: 腿越界改了**主树**的判卷(未提交)⇒ 闸① 拦下" \
+  '    if [[ -n "$main_dirty" ]]; then' '    if false; then'
+
+mutate "M10-卷宗禁区退回被证伪的放宽(只管树、不管仓)" \
+  "I4: 隔离下日志落在主仓里 ⇒ **照样拒发**(探针实测:腿写得到主仓)" \
+  '_forbid=("$_rp"); _legwhat="被派活的仓里"' '_forbid=(); _legwhat="被派活的仓里"'
+
+mutate "M11-直通参数不再拦 -C/-s" \
+  "I2: 直通参数里带 -C ⇒ 隔离下拒发(它会 last-wins 撤销隔离)" \
+  '      -C|--cd|-s|--sandbox|-C=*|--cd=*|-s=*|--sandbox=*)' \
+  '      -C_never|--cd_never)'
 
 echo "=== 变异测试:$PASS 处被咬住,$FAIL 处漏网 ==="
 [[ -z "$(git status --porcelain -- "$FILE")" ]] || { echo "🔴 收尾没恢复干净"; exit 3; }

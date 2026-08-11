@@ -1,0 +1,4 @@
+# panel-review 花名册(2026-08-11 21:04:48)task=codex-worktree-isolate
+# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。
+# 日志:/root/aiwork/logs/panel-codex-worktree-isolate-20260811-205442.*.log
+submimo=PASS subdeepseek=PASS subglm=off subkimi=FAIL(rc=1)
