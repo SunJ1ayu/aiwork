@@ -201,12 +201,15 @@ s6_cross_repo_and_failclosed() {
     $(git -C "$other" cat-file -e "$(git -C "$t2" rev-parse HEAD)" 2>/dev/null; echo $?)
 
   # 主线判不出来(既没 main 也没 master,也没有 origin/HEAD)⇒ 不许猜"它合过了"
+  # ⚠️ 这一半原来用"别的仓的树"来造 fail-closed,而上面刚把"别的仓"整类降级成不属于本轮
+  #    ⇒ 那样就问不出来了。要问"主线判不出来会怎样",得让**项目自己**没有 main/master。
   local d3; d3="$(mktemp -d)"; local p3="$d3/proj" root3="$d3/wt"
-  make_proj "$p3" t3
-  local weird="$d3/weirdrepo"; mkdir -p "$weird"
-  ( cd "$weird"; git init -q -b odd-name; git config user.email t@t; git config user.name t
-    printf 'q\n' > f.txt; git add -A; git commit -qm init )
-  local t3; t3="$(make_tree "$weird" "$root3" t3 no-mainline HEAD)"
+  mkdir -p "$p3/tracks/t3"
+  ( cd "$p3"; git init -q -b odd-name; git config user.email t@t; git config user.name t
+    printf 'x\n' > README.md
+    printf '# Verify\n- Verdict: PASS\n- 无机器证据:临时仓。\n' > tracks/t3/verify.md
+    git add -A; git commit -qm init )
+  local t3; t3="$(make_tree "$p3" "$root3" t3 no-mainline HEAD)"
   DELEGATE_WORKTREE_ROOT="$root3" bash "$BIN/track" archive t3 "$p3" >"$d3/o" 2>&1; rc=$?
   check "S6: 说不清主线是哪条 ⇒ 拒绝清理(fail closed,不许当它合过了)" $([[ $rc -ne 0 ]]; echo $?)
   check "S6: 那棵树也还在" $([[ -d "$t3" ]]; echo $?)

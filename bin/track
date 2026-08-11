@@ -52,16 +52,27 @@ _wt_default_branch() {  # _wt_default_branch <repo>
   return 1
 }
 
-_track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <keep:0|1>
-  local track="$1" keep="$2" root track_dir tree entry base total=0
+_track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <keep:0|1> <proj>
+  local track="$1" keep="$2" proj_abs="$3" root track_dir tree entry base total=0 tree_repo
   root="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
   [[ -d "$root" ]] || return 0
   track_dir="$root/$track"
 
   local owned=() outsiders=()
+  [[ -n "$proj_abs" ]] && proj_abs="$(realpath -m "$proj_abs")"
   if [[ -d "$track_dir" ]]; then
     for tree in "$track_dir"/*; do
       [[ -d "$tree" ]] || continue
+      # 【四审 subdeepseek 发现 2】归属键光有 track 名不够 —— 两个项目各建一个同名 track、
+      # 共用同一个 worktree 根,A 的归档就会去动 B 的树(干净的删掉、脏的拦死 A)。
+      # 所以"属于本轮"还要求:**这棵树的所属仓,就是正在归档的这个项目**。
+      # 别人的树一律降级成"不属于本轮":只点名,不碰,也不拦我。
+      tree_repo="$(_wt_repo_from_gitfile "$tree" 2>/dev/null || true)"
+      if [[ -n "$proj_abs" && -n "$tree_repo" && "$(realpath -m "$tree_repo")" != "$proj_abs" ]]; then
+        outsiders+=("$tree(别的仓:$tree_repo)")
+        total=$((total+1))
+        continue
+      fi
       owned+=("$tree")
       total=$((total+1))
     done
@@ -143,11 +154,19 @@ _track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <ke
     return 1
   fi
 
-  local record remove_out branch_out
+  local record remove_out branch_out ignored_out
   for record in "${clean_entries[@]}"; do
     IFS=$'\t' read -r tree repo branch <<< "$record"
+    # 【四审 subdeepseek 发现 3】被 ignore 的东西 `status -uall` 看不见,却会跟着树一起被删。
+    # design 原来辩护说"它在主仓里同样会丢" —— **那句不对**:主仓没有任何动作会自动删它,
+    # 而这里有(一个不相干的 `track archive`)。不拦(生成物是常态),但**动手前先说出来**。
+    ignored_out="$(git -C "$tree" status --porcelain -uall --ignored 2>/dev/null | grep "^!!" | cut -c4- || true)"
+    if [[ -n "$ignored_out" ]]; then
+      echo "  ⚠️ 这棵树里被 ignore 的东西会跟着一起删(生成物是常态,但先让你看见):"
+      printf '%s\n' "$ignored_out" | sed 's/^/       /'
+    fi
     if ! remove_out="$(git -C "$repo" worktree remove "$tree" 2>&1)"; then
-      echo "🔴 git worktree remove 拒绝清理:$tree" >&2
+      echo "🔴 git worktree remove 拒绝清理:$tree(注意:排在它前面的树可能已经收掉了)" >&2
       printf '%s\n' "$remove_out" >&2
       return 1
     fi
@@ -233,7 +252,7 @@ case "$cmd" in
       echo "🔴 拒绝归档:机器证据没对齐(见上)。目录留在原地,没有半归档状态。" >&2
       exit 1
     fi
-    _track_archive_sweep_worktrees "$name" "$keep_trees"
+    _track_archive_sweep_worktrees "$name" "$keep_trees" "$proj"
     mkdir -p "$proj/tracks/archive"
     mv "$src" "$proj/tracks/archive/$name"
     echo "archived -> $proj/tracks/archive/$name"
