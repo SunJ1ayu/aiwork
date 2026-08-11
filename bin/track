@@ -68,6 +68,7 @@ _track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <ke
   fi
   for entry in "$root"/*; do
     [[ -d "$entry" ]] || continue
+    [[ -n "$(ls -A "$entry" 2>/dev/null)" ]] || continue   # 空壳不算树,别点它的名
     base="$(basename "$entry")"
     [[ "$base" == "$track" ]] && continue
     outsiders+=("$entry")
@@ -159,6 +160,11 @@ _track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <ke
       fi
     fi
   done
+  # 收空之后连轮次目录一起收掉:留个空壳的话,以后每一次归档都会把它当"别人的树"
+  # 点一遍名 —— 唠叨的报告和误报的守卫一样,响多了就没人看了。
+  # 只用 rmdir(非空会自己拒绝),不 rm -rf。
+  [[ -d "$track_dir" ]] && rmdir "$track_dir" 2>/dev/null
+  return 0
 }
 
 cmd="${1:-}"; shift || true
