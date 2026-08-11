@@ -81,6 +81,14 @@ do_receive() {
   # 读不了老回执 = 把昨天派的活卡死,所以缺了就退回主仓(老行为)。
   wt="$(_rj "$receipt" worktree)"
   branch="$(_rj "$receipt" branch)"
+  # --dry-run 的回执:树从来没建过、活也没派过。**先答这一句**,再去看树在不在 ——
+  # 否则会撞上下面那条"隔离树不在了",把"没做"说成"丢了"(指错方向的报警器);
+  # 更糟的是 dry-run 算出的树名可能**撞上上一发真建的树**,那样它还会一本正经地收货成功。
+  if [[ "$(_rj "$receipt" dry_run)" == "True" ]]; then
+    echo "闸①:这是一份 --dry-run 的回执 —— 没建过树,也没派过活,没什么可收的。" >&2
+    echo "  想真派就去掉 --dry-run 重来一次(会写一份新回执)。" >&2
+    exit 2
+  fi
 
   # 四条臂 + 底账全部跑在**腿真正干活的那棵树**上。隔离之后这棵树里天然只有腿的改动 ——
   # 我在主树上提交的判据修复不再落进闸①(A3),底账也不再混进我自己的改动。
@@ -489,14 +497,14 @@ fi
 # 回执里**不另造 `base` 键**:现有的 `head` 就是建树用的基线,多一个同义键就是第二份账
 # (design 四·2 驳回 registry 的同一条理由:并发度为 1 时磁盘本身就是账)。
 python3 - "$RECEIPT" "$REPO" "$HEAD_AT_DISPATCH" "$ATTACK" "$TASK" "$LOG" "$MODEL" \
-         "$ISOLATE" "$WT" "$BRANCH" "$ORACLE_HASH" "${PROTECT[@]}" <<'PY'
+         "$ISOLATE" "$WT" "$BRANCH" "$ORACLE_HASH" "$DRY" "${PROTECT[@]}" <<'PY'
 import hashlib, json, sys, datetime
-receipt, repo, head, attack, task, log, model, isolate, wt, branch, ohash, *protect = sys.argv[1:]
+receipt, repo, head, attack, task, log, model, isolate, wt, branch, ohash, dry, *protect = sys.argv[1:]
 sha = hashlib.sha256(open(attack, "rb").read()).hexdigest()
 json.dump({
     "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     "repo": repo, "head": head, "protect": protect,
-    "isolate": isolate == "1",
+    "isolate": isolate == "1", "dry_run": dry == "1",
     "worktree": wt or None, "branch": branch or None,
     "oracle_sha256": ohash,
     "attack_log": attack, "attack_log_sha256": sha,
