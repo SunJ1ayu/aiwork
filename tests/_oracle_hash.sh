@@ -21,7 +21,10 @@ oracle_hash() {
   local rels; rels="$(mktemp)"
   local p full
   for p in "$@"; do
-    p="${p%/}"
+    # 实现侧用 python 的 `strip("/")`(剥掉**所有**首尾斜杠);这里原来只剥一个尾斜杠 ⇒
+    # `--protect tests//` 两边算出不同的相对路径 = 判据假红(四审 subdeepseek 指出)。
+    while [[ "$p" == */ ]]; do p="${p%/}"; done
+    while [[ "$p" == /* ]]; do p="${p#/}"; done
     full="$repo/$p"
     if [[ -L "$full" || -f "$full" ]]; then
       case "/$p/" in */__pycache__/*) ;; *) printf '%s\n' "$p" >> "$rels" ;; esac
@@ -40,7 +43,9 @@ oracle_hash() {
     else
       printf '%s\0%s\n' "$rel" "$(sha256sum "$f" | cut -d' ' -f1)" >> "$out"
     fi
-  done < <(sort -u "$rels")
+    # `LC_ALL=C`:实现侧是 python 的 `sorted()`(按码点,UTF-8 下等于字节序),
+    # 而 `sort` 默认按 locale 排 —— 非 ASCII 路径下两边顺序会岔开(同上,判据假红)。
+  done < <(LC_ALL=C sort -u "$rels")
   sha256sum < "$out" | cut -d' ' -f1
   rm -f "$rels" "$out"
 }

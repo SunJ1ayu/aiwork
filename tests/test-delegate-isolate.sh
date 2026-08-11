@@ -189,13 +189,33 @@ h_hash_edges() {
   check "H2: .gitignore 变了 ⇒ 拒发(它是自动进 protect 的,必须进哈希)" $([[ $rc -ne 0 ]]; echo $?)
   git -C "$repo" reset -q --hard HEAD~1
 
-  # ④ protect 指到一个**空目录** ⇒ 文件集为空 = 这道闸没有强度可言 ⇒ 拒发
+  # ④ protect 指到一个**空目录** ⇒ 文件集为空 = 这道闸没有强度可言 ⇒ 拒发。
+  #    ⚠️ 四审 subdeepseek 抓到:这一幕原来**绿在错误的原因上** —— 前面几幕建的 `.gitignore`
+  #    会被自动并进 protect,文件集根本不空,rc≠0 其实来自哈希对不上。
+  #    把 .gitignore 撤掉、并给空清单这一版盖上哈希,让"空清单"成为**唯一**能让它红的理由。
+  git -C "$repo" rm -q --cached .gitignore 2>/dev/null; rm -f "$repo/.gitignore"
+  git -C "$repo" commit -qm "撤掉 .gitignore" >/dev/null 2>&1
   local _c; _c="$(calls_of "$rec")"     # 相对计数:本幕之前已经派成功过,不能写死 0
   mkdir -p "$repo/emptydir"
+  printf 'oracle-sha256: %s\n' "$(oracle_hash "$repo" emptydir)" >> "$d/attack.md"
   $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect emptydir --log "$d/q4.log" >"$d/q4" 2>&1; rc=$?
   check "H2: protect 匹配不到任何文件 ⇒ 拒发(空清单 = 没有闸)" $([[ $rc -ne 0 ]]; echo $?)
   check "H2: 空清单那次 codex 没被启动" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
+
+  # ⑤ 【四审 submimo + subdeepseek 各自独立指到】**哈希只覆盖 protect 清单里的路径本身**:
+  #    链接指向的东西在清单外,就在闸外(改目标的**内容**哈希不变)。
+  #    这是规格选择不是 bug(跟进链接会跑出仓、还会成环),但必须**钉住**,
+  #    免得哪天悄悄变了没人知道;真要覆盖,就把目标一起列进 --protect。
+  ln -s ../src/impl.sh "$repo/tests/lk.sh"
+  git -C "$repo" add -A; git -C "$repo" commit -qm "判据里一个指向仓内实现的链接"
+  local h_before; h_before="$(oracle_hash "$repo" tests/)"
+  printf '#!/bin/bash\necho NEW-changed\n' > "$repo/src/impl.sh"
+  git -C "$repo" commit -qam "改链接**目标**的内容"
+  check "H2: 改符号链接**目标的内容** ⇒ 哈希不变(已知盲区,钉住当前行为)" \
+    $([[ "$(oracle_hash "$repo" tests/)" == "$h_before" ]]; echo $?)
+  check "H2: 把目标也列进 protect ⇒ 哈希就变了(这是覆盖它的办法)" \
+    $([[ "$(oracle_hash "$repo" tests/ src/impl.sh)" != "$h_before" ]]; echo $?)
 
   rm -rf "$d"
 }
@@ -328,6 +348,20 @@ i_isolate_refusals() {
   check "I2: 建树失败 ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
   check "I2: 建树失败时 codex 一次都没启动" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
 
+  # ④b 【四审 subdeepseek】直通参数能**静默撤销隔离**:`-- -C <别处>` / `-- -s <别的沙箱>`
+  #     排在工具自己给的 `-C "$RUNDIR"` `-s workspace-write` **后面**,last-wins。
+  #     只有我自己会传直通参数(是脚枪不是攻击面),但"我以为它隔离了、其实没有"正是
+  #     本单最不能出的错 ⇒ 隔离下直接拒发,想传就显式 --no-isolate。
+  local _c2
+  for _bad in -C -s; do
+    _c2="$(calls_of "$rec")"
+    $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+        --attack-log "$d/attack.md" --protect tests/ --log "$d/p$_bad.log" \
+        -- "$_bad" /tmp >"$d/op$_bad" 2>&1; rc=$?
+    check "I2: 直通参数里带 $_bad ⇒ 隔离下拒发(它会 last-wins 撤销隔离)" $([[ $rc -ne 0 ]]; echo $?)
+    check "I2: 那次零调用($_bad)" $([[ "$(calls_of "$rec")" -eq "$_c2" ]]; echo $?)
+  done
+
   # ⑤ worktree 落在**仓里**且没被 gitignore ⇒ 拒发(否则主树 status 被它污染,闸③ 底账跟着脏)
   _c="$(calls_of "$rec")"
   env PATH="$b:$PATH" DELEGATE_WORKTREE_ROOT="$repo/wtdir" bash "$BIN/delegate-codex" \
@@ -390,31 +424,34 @@ i_case_files() {
   check "I4: 隔离下日志落进 worktree 根 ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
   check "I4: 拒发时零调用" $([[ "$(calls_of "$rec")" -eq 0 ]]; echo $?)
 
-  # ② 隔离下,日志落在**主仓里**(但不在树里)⇒ 放行。
-  #    这正是 A2 那个死结:`--repo /root/aiwork` + 默认日志 `/root/aiwork/logs/` 从前一律拒发,
-  #    于是 aiwork 自己永远派不出活。隔离之后腿写不到主树,这条限制就该只管树。
-  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
-      --attack-log "$d/attack.md" --protect tests/ --log "$repo/main-tree.log" >"$d/o2" 2>&1; rc=$?
-  check "I4: 隔离下日志落在主仓里(树外)⇒ 放行(A2 的死结解开)" $([[ $rc -eq 0 ]]; echo $?)
-
-  # ③ 攻题记录:**未跟踪**地放在主仓里 ⇒ 放行(它不会被 checkout 进树,腿看不见)
-  cp "$d/attack.md" "$repo/attack-untracked.md"
-  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
-      --attack-log "$repo/attack-untracked.md" --protect tests/ --log "$d/c.log" >"$d/o3" 2>&1; rc=$?
-  check "I4: 隔离下攻题记录未跟踪地放在主仓 ⇒ 放行" $([[ $rc -eq 0 ]]; echo $?)
-
-  # ④ 但**被 git 跟踪**的攻题记录 ⇒ 照拒:它会被 checkout 进 worktree = 把考卷的洞递给考生。
-  #    这一幕是"放宽过头"的那条线,少了它,③ 的放宽就把闸整个拆了。
-  git -C "$repo" add attack-untracked.md; git -C "$repo" commit -qm "手滑把攻题记录提交了"
-  stamp_hash "$d/attack.md" "$repo" tests/
-  cp "$d/attack.md" "$repo/attack-untracked.md"
+  # ② 【2026-08-11 探针证伪,原来这里断言的是"放行"】
+  #    我本来把规则放宽成"卷宗只要不在**树**里就行,落在主仓里可以" ——
+  #    理由是"腿的沙箱就是那棵树,主仓它写不到"。**真 codex 探针把这条打掉了**:
+  #    `codex exec -C <worktree> -s workspace-write` 能往**主仓**写文件、改文件
+  #    (它把"项目根"向上解析到了主仓,因为 worktree 的 .git 是个文件),
+  #    只有无关路径才被拒(`writing outside of the project`)。
+  #    ⇒ 卷宗落在主仓 = 腿能改回执/日志 = 闸① 自证。老规则一个字都不能松。
   local _c; _c="$(calls_of "$rec")"
   $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
-      --attack-log "$repo/attack-untracked.md" --protect tests/ --log "$d/e.log" >"$d/o4" 2>&1; rc=$?
-  check "I4: 攻题记录被 git 跟踪 ⇒ 拒发(它会被 checkout 进树)" $([[ $rc -ne 0 ]]; echo $?)
+      --attack-log "$d/attack.md" --protect tests/ --log "$repo/main-tree.log" >"$d/o2" 2>&1; rc=$?
+  check "I4: 隔离下日志落在主仓里 ⇒ **照样拒发**(探针实测:腿写得到主仓)" $([[ $rc -ne 0 ]]; echo $?)
   check "I4: 那次零调用" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
-  git -C "$repo" rm -q --cached attack-untracked.md; rm -f "$repo/attack-untracked.md"
-  git -C "$repo" commit -qm "撤回"
+
+  # ③ 攻题记录放在主仓里 ⇒ 照拒(跟踪不跟踪都一样)。
+  #    探针的另一半:腿**读得到**主仓里未跟踪的文件(写沙箱管不了读)——
+  #    它在报告里把我塞的那份"秘密攻题记录"原文贴了出来。
+  cp "$d/attack.md" "$repo/attack-untracked.md"
+  _c="$(calls_of "$rec")"
+  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$repo/attack-untracked.md" --protect tests/ --log "$d/c.log" >"$d/o3" 2>&1; rc=$?
+  check "I4: 隔离下攻题记录放在主仓(未跟踪)⇒ **照样拒发**(探针实测:腿读得到)" $([[ $rc -ne 0 ]]; echo $?)
+  check "I4: 那次零调用" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
+  rm -f "$repo/attack-untracked.md"
+
+  # ④ 卷宗落进 worktree 根 ⇒ 拒(见 ①);落在两者之外 ⇒ 放行。两边都要有,免得写成"全拒"。
+  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/ok.log" >"$d/o4" 2>&1; rc=$?
+  check "I4: 卷宗在仓外也在树外 ⇒ 放行(不许写成全拒)" $([[ $rc -eq 0 ]]; echo $?)
 
   # ⑤ `--no-isolate` 下老规则一个字不许松:卷宗落在仓里 ⇒ 照拒
   stamp_hash "$d/attack.md" "$repo" tests/
@@ -482,6 +519,17 @@ EOF
   grep -q "tests/oracle.sh" "$d/r5"; check "R1: 老回执下点名的是主仓那个文件" $?
   git -C "$repo" checkout -- tests/oracle.sh
 
+  # ⑤b 【探针逼出来的新洞,两条评审腿都没提】腿**能写到主仓**(实测)。
+  #     闸① 改看那棵树之后,主树的判卷文件就没人看了 —— 腿伸手过去改主树的判据,
+  #     闸① 全绿,而我随后**在主树上**跑判据 = 跑的是被改过的考卷。
+  #     所以隔离下闸① 还要看主树,但只看"**没提交的**动静":
+  #     我自己的判据修复是提交过的(A3 那一幕),不许因为这条又把误报请回来。
+  printf 'echo "腿伸手改了主树的判卷"\n' >> "$repo/tests/oracle.sh"
+  bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r5b" 2>&1; rc=$?
+  check "R1: 腿越界改了**主树**的判卷(未提交)⇒ 闸① 拦下" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "主树\|主仓" "$d/r5b"; check "R1: 说清动静在**主树**那边,不是树里" $?
+  git -C "$repo" checkout -- tests/oracle.sh
+
   # ⑥ 回执里记了树、盘上却没了 ⇒ **exit 2**,不许当"干净"放行
   git -C "$repo" worktree remove --force "$tree"
   bash "$BIN/delegate-codex" --receive "$receipt" >"$d/r6" 2>&1; rc=$?
@@ -511,6 +559,10 @@ r_a3_no_false_positive() {
   ! grep -q "src/other.txt" "$d/r1"
   check "R2: 底账里也没有我在主树上的其它改动(底账只含腿写的)" $?
   git -C "$repo" checkout -- src/other.txt
+  # ⑤b 加了"主树未提交判卷改动也拦"之后,这一条要重新问一遍:
+  # 我**提交过**的判据修复不许被它当成腿的越界(否则 A3 的误报原样回来)。
+  check "R2: 主树上**已提交**的判据修复仍然放行(新加的主树臂不许把误报请回来)" \
+    $([[ $rc -eq 0 ]]; echo $?)
 
   # —— 对照组:同一场景走 `--no-isolate` **必须红**。
   #    少了这一半,"隔离下放行"可能只是因为闸整个瞎了。
