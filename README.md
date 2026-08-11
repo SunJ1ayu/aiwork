@@ -67,6 +67,12 @@ agent to verify, never a verdict to adopt.
 - `bin/runlog` — makes the MACHINE write down what it ran: receipt files under
   `tracks/<track>/evidence/` plus one line to paste into verify.md.
 - `bin/track-guard` — pre-commit guard for the track conventions.
+- `bin/track archive` also SWEEPS the worktrees of the track being archived, but only
+  those that are provably redundant: working tree clean AND their HEAD already an
+  ancestor of the owning repo's default branch. Anything else BLOCKS the archive and is
+  named (`--keep-trees` opts out). Trees belonging to another track, another repo, or to
+  nobody are only listed, never touched — deleting the last copy of work is not
+  symmetric with leaving a few MB on disk.
 
 ## Panel fan-out
 

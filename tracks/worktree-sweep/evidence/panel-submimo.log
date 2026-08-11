@@ -1,0 +1,804 @@
+# submimo review log
+time: 2026-08-11T23:58:30+08:00
+mode: review
+agent: plan
+repo: /root/aiwork
+task: tasks/worktree-sweep-review.md
+model: xiaomi/mimo-v2.5-pro
+
+[0m
+> plan · mimo-v2.5-pro
+[0m
+[0m• [0mUnknown Task
+[0m✗ [0mactor failed
+[91m[1mError: [0mThe actor tool was called with invalid arguments: [
+  {
+    "code": "invalid_type",
+    "expected": "object",
+    "path": [
+      "operation"
+    ],
+    "message": "Invalid input: expected object, received string"
+  }
+].
+Please rewrite the input so it satisfies the expected schema.
+[0m• [0mUnknown Task
+[0m✗ [0mactor failed
+[91m[1mError: [0mThe actor tool was called with invalid arguments: [
+  {
+    "code": "invalid_type",
+    "expected": "object",
+    "path": [
+      "operation"
+    ],
+    "message": "Invalid input: expected object, received string"
+  }
+].
+Please rewrite the input so it satisfies the expected schema.
+[0m• [0mUnknown Task
+[0m✗ [0mactor failed
+[91m[1mError: [0mThe actor tool was called with invalid arguments: [
+  {
+    "code": "invalid_type",
+    "expected": "object",
+    "path": [
+      "operation"
+    ],
+    "message": "Invalid input: expected object, received string"
+  }
+].
+Please rewrite the input so it satisfies the expected schema.
+[0m• [0mExplore bin/track sweep logic[90m Explore Agent[0m
+[0m• [0mExplore delegate-codex --track flag[90m Explore Agent[0m
+[0m• [0mExplore tests and design doc[90m Explore Agent[0m
+[0m✗ [0mglob failed
+[91m[1mError: [0mglob path must be a directory: /root/aiwork/bin/delegate-codex
+[0m→ [0mRead bin/delegate-codex
+I'll start by exploring the directory structure and searching for the `--track` flag across the relevant files.
+[0m→ [0mRead bin/track
+[0m✱ [0mGlob "*"[90m in bin · 23 matches[0m
+[0m✱ [0mGlob "**/sweep*"[90m in . · 0 matches[0m
+[0m✱ [0mGlob "bin/**"[90m in . · 23 matches[0m
+I'll start by reading the test file, the design doc, and listing the directory contents all in parallel.
+[0m→ [0mRead tests/test-worktree-sweep.sh
+[0m→ [0mRead tracks/worktree-sweep
+[0m→ [0mRead tracks/worktree-sweep/design.md
+[0m→ [0mRead bin/_evidence.sh
+[0m✱ [0mGrep "DELEGATE_WORKTREE_ROOT"[90m in . · 38 matches[0m
+[0m✱ [0mGrep "--track"[90m in bin · 3 matches[0m
+Now let me read the sourced `_evidence.sh` and check for related references to `DELEGATE_WORKTREE_ROOT` and the `--track` flag parsing:
+Now let me read the `track` and `track-guard` scripts, plus search for any `--track` references in other bin files.
+[0m✱ [0mGrep "track_dir|_track_archive_sweep"[90m in . · 11 matches[0m
+[0m→ [0mRead bin/track
+[0m→ [0mRead bin/track-guard
+[0m✱ [0mGrep "--track|TRACK|track"[90m in bin · 132 matches[0m
+[0m→ [0mRead tracks/worktree-sweep/evidence
+[0m→ [0mRead tracks/worktree-sweep/mutation-test.sh
+[0m→ [0mRead tracks/worktree-sweep/tasks.md
+Now let me read the mutation test file, the tasks file, and check the evidence directory.
+[0m→ [0mRead tracks/worktree-sweep/verify.md
+[0m→ [0mRead tracks/worktree-sweep/proposal.md
+Let me now read the test file and the relevant parts of `delegate-codex` to understand the full picture:
+[0m→ [0mRead tests/test-worktree-sweep.sh
+[0m→ [0mRead bin/delegate-codex[90m [offset=20, limit=80][0m
+[0m→ [0mRead bin/delegate-codex[90m [offset=270, limit=40][0m
+[0m→ [0mRead tracks/worktree-sweep/evidence/20260811T155639Z-01-mutation-test-r3.txt
+Let me also check the evidence files for context on the mutation test results and the S8 correction.
+[0m→ [0mRead tracks/worktree-sweep/evidence/20260811T155700Z-01-suite-all.txt
+Let me read the section in `delegate-codex` where the worktree is actually created with the `--track` flag influence:
+[0m→ [0mRead bin/delegate-codex[90m [offset=310, limit=120][0m
+[0m→ [0mRead bin/runlog
+[0m→ [0mRead tracks/worktree-sweep/evidence/20260811T155239Z-01-mutation-test.txt
+[0m→ [0mRead bin/runlog
+[0m→ [0mRead bin/_tooling-paths.sh
+Let me also read the `runlog` script and the remaining grep results to complete the picture.
+[0m→ [0mRead tracks/worktree-sweep/evidence/20260811T155159Z-01-redcheck.txt
+[0m→ [0mRead bin/_evidence.sh
+[0m→ [0mRead tracks/worktree-sweep/evidence/20260811T155602Z-01-mutation-test-r2.txt
+[0m→ [0mRead tracks/worktree-sweep/mutation-test.sh
+Now let me read the mutation test and the design doc for complete context:
+[0m✱ [0mGlob "**/*"[90m in tracks/worktree-sweep · 10 matches[0m
+Here is the full analysis.
+
+---
+
+## 1. How `--track` is parsed from CLI args
+
+**File**: `/root/aiwork/bin/delegate-codex`
+
+**Line 271** -- The variable is initialized empty:
+```bash
+TASK=""; REPO=""; ATTACK=""; LOG=""; MODEL="gpt-5.5"; RECEIVE=""; TRACK=""; DRY=0
+```
+
+**Line 281** -- Parsed in the `while`/`case` argument loop:
+```bash
+    --track)      TRACK="${2:-}";   shift 2 ;;
+```
+
+It takes one positional argument (the track name) and stores it in the local variable `TRACK`. The usage line (line 22) documents it as optional:
+```
+#                  [--track NAME] [--model gpt-5.5] [--log PATH] [--no-isolate] [--dry-run] \
+```
+
+---
+
+## 2. How `--track` is passed through to the delegate workflow
+
+The `TRACK` variable influences three things in sequence:
+
+### 2a. Worktree path and branch name (lines 384-391)
+
+When `ISOLATE=1` (the default), `TRACK` controls the **directory nesting** of the worktree and the **branch name**:
+
+```bash
+  if [[ -n "$TRACK" ]]; then
+    WT="$_wtroot_abs/$TRACK/$JOB"
+    BRANCH="delegate/$TRACK/$JOB"
+  else
+    WT="$_wtroot_abs/$JOB"
+    BRANCH="delegate/$JOB"
+  fi
+```
+
+With `--track NAME`, the worktree lands at `<WT_ROOT>/<NAME>/<task>-<timestamp>` and the branch is `delegate/<NAME>/<task>-<timestamp>`. Without it, both are flat (no intermediate directory).
+
+The same branching logic repeats in the **collision-retry loop** (lines 488-489):
+```bash
+    if [[ -n "$TRACK" ]]; then
+      WT="$_wtroot_abs/$TRACK/${JOB}-${_try}"; BRANCH="delegate/$TRACK/${JOB}-${_try}"
+    else
+      WT="$_wtroot_abs/${JOB}-${_try}"; BRANCH="delegate/${JOB}-${_try}"
+    fi
+```
+
+### 2b. Written into the receipt JSON (lines 545-559)
+
+The track name is passed as a positional arg to the Python snippet that writes the receipt, and stored as a top-level key:
+
+```python
+receipt, repo, head, attack, task, log, model, isolate, wt, branch, track, ohash, dry, *protect = sys.argv[1:]
+# ...
+    "track": track or None,
+```
+
+### 2c. Echoed to stdout for the operator (line 563ff)
+
+After the receipt is written, the script prints a summary. The track name is implicitly visible through the worktree path (`$WT`) and branch (`$BRANCH`) lines, which include the track name in their path components when set.
+
+---
+
+## 3. Fallback / auto-detection when `--track` is not provided
+
+**There is no fallback or auto-detection.** The variable `TRACK` is initialized to the empty string on line 271 and is only populated if `--track NAME` is explicitly passed on the command line.
+
+When `TRACK` is empty:
+- The worktree path is flat: `<WT_ROOT>/<task>-<timestamp>` (no track subdirectory).
+- The branch is flat: `delegate/<task>-<timestamp>`.
+- The receipt stores `"track": None` (line 555: `track or None`).
+- The `receive` path (`do_receive`, lines 78-226) reads the `"track"` key from the receipt via `_rj` (line 89 area) but never uses it for any logic -- it only reads `worktree`, `branch`, `head`, `protect`, `repo`, and `dry_run`.
+
+So `--track` is purely a **naming/organizational convention** for grouping worktrees into subdirectories. There is no auto-inference from the task file name, repo state, or any other source.
+
+---
+
+## 4. How the track ID is associated with a worktree path
+
+The association is entirely **path-based**, established at dispatch time and recorded in the receipt:
+
+| Scenario | Worktree path | Branch | Receipt `"track"` |
+|---|---|---|---|
+| `--track foo` | `<WT_ROOT>/foo/<task>-<ts>` | `delegate/foo/<task>-<ts>` | `"foo"` |
+| no `--track` | `<WT_ROOT>/<task>-<ts>` | `delegate/<task>-<ts>` | `null` |
+
+The `WT_ROOT` defaults to `/root/aiwork/worktrees` (line 56):
+```bash
+WT_ROOT="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
+```
+
+This nesting structure has a downstream consumer: the `track archive` command (in `/root/aiwork/bin/track`, line 55-170) has a `_track_archive_sweep_worktrees` function that looks for worktrees under `<WT_ROOT>/<trackname>/` and attempts to clean them up during archival:
+
+```bash
+  root="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
+  track_dir="$root/$track"
+  # ...
+  if [[ -d "$track_dir" ]]; then
+    for tree in "$track_dir"/*; do
+```
+
+This means the `--track` flag in `delegate-codex` and the `track archive <name>` command share the **same convention**: worktrees belonging to a track live under `<WT_ROOT>/<trackname>/`.
+
+---
+
+## 5. Related files in `/root/aiwork/bin/`
+
+| File | Role re: track / delegate-codex |
+|---|---|
+| `/root/aiwork/bin/delegate-codex` (595 lines) | Primary entry point. Parses `--track`, creates worktrees, writes receipts. |
+| `/root/aiwork/bin/track` (260 lines) | Scaffolds `tracks/<name>/` from templates (`track new`), archives them (`track archive`), and sweeps associated worktrees under `<WT_ROOT>/<name>/`. |
+| `/root/aiwork/bin/track-guard` (165 lines) | Pre-commit hook. Enforces that version bumps and tooling changes are associated with a track. Reads `tracks/*/verify.md`. Does **not** parse `--track` from delegate-codex. |
+| `/root/aiwork/bin/runlog` (123 lines) | Runs a command and writes a receipt into `tracks/<track>/evidence/`. Uses its own `-t <track>` flag (line 29) to locate the track directory. |
+| `/root/aiwork/bin/_evidence.sh` (116 lines) | Shared logic for reading/verifying runlog receipt lines in `verify.md`. Used by both `track-guard` and `track archive`. |
+| `/root/aiwork/bin/_tooling-paths.sh` (22 lines) | Defines `is_judging_surface()` -- the list of files whose modification triggers track-guard rule 4. `delegate-codex` is included (line 17: `bin/delegate-*`). |
+
+---
+
+## Summary
+
+- **Parsing**: `--track NAME` is a simple optional CLI flag parsed at line 281, stored in `$TRACK`.
+- **Propagation**: It flows into (a) the worktree directory path and git branch name, and (b) the receipt JSON's `"track"` field.
+- **No fallback**: If omitted, `$TRACK` stays empty; worktrees get a flat path and the receipt stores `null`. There is no auto-detection.
+- **Worktree-track association**: Purely structural -- `<WT_ROOT>/<track>/<job>` vs `<WT_ROOT>/<job>`. The `track archive` command later discovers worktrees by scanning `<WT_ROOT>/<trackname>/`.
+[0m✓ [0mExplore delegate-codex --track flag[90m Explore Agent[0m
+Here is my complete report.
+
+---
+
+## 1. Test File Analysis (`/root/aiwork/tests/test-worktree-sweep.sh`)
+
+### Scenarios Covered (9 tests, S1 through S9)
+
+| Test | Line | Scenario | What it asserts |
+|------|------|----------|-----------------|
+| **S1** | 56-82 | Clean tree + HEAD already on mainline => swept on archive | Worktree removed from disk, git no longer lists it, branch deleted, track archived, **main repo untouched outside `tracks/`**, HEAD unchanged, report mentions the tree, empty track dir removed |
+| **S2** | 85-101 | Dirty tree (untracked file) => blocks archive | Archive fails (rc!=0), tree still on disk, file contents untouched, track NOT archived, report names the tree, report says why (dirty/untracked) |
+| **S3** | 104-125 | Clean tree but commit NOT merged into mainline => blocks archive; after merge => passes | Archive blocked (rc!=0), tree still on disk, commit still exists, report says "not merged". Then after `git merge --no-ff`, archive passes and tree is swept |
+| **S4** | 128-151 | Only this track's trees are swept; other tracks, orphans, handmade trees left alone | Own tree swept, other-track tree untouched (dir + branch), orphan tree untouched, handmade tree untouched, report names all non-owned trees |
+| **S5** | 154-174 | `--keep-trees` flag: dirty tree archived without touching trees; also clean trees stay | Archive passes (rc=0), tree untouched, track archived, report still names the tree. Second sub-test: clean trees also stay under `--keep-trees` |
+| **S6** | 177-205 | Cross-repo tree (belongs to a different git repo) => uses that repo's mainline for the ancestor check; repo with no main/master => fail closed | Unmerged cross-repo tree blocks archive, tree stays. Repo with `odd-name` branch (no main/master) => refuses to clean, tree stays, report explains |
+| **S7** | 208-249 | `delegate-codex --track <name>` puts worktree under `<root>/<track>/` and branch name includes track; without `--track` => old path/branch (backward compat) | With `--track mytrack`: tree under `$root/mytrack/`, receipt has `track:"mytrack"`, branch starts with `delegate/mytrack/`. Without `--track`: tree still under root (not track subdirectory) |
+| **S8** | 252-274 | Tree contains only git-ignored artifacts (build products) => swept (design trade-off) | Archive passes, tree is removed. Comment explains this is a deliberate choice: ignored files are considered regenerable |
+| **S9** | 277-290 | Stray non-tree files in the track directory => archive still completes | Archive passes (rc=0), tree swept, stray file survives, track archived |
+
+### Safety Criteria Coverage
+
+**Criterion 1 (clean status)** -- tested by:
+- S1 (line 111 pre-check: tree is clean, then passes)
+- S2 (lines 85-101: dirty tree blocks archive)
+- S8 (lines 252-274: ignored files do NOT count as dirty -- deliberate design choice)
+
+**Criterion 2 (ancestor check / merged into mainline)** -- tested by:
+- S3 (lines 104-125: clean but unmerged => blocked; merged => passes)
+- S6 (lines 177-205: cross-repo tree uses its own repo's mainline; repo with no identifiable mainline => fail closed)
+
+### `--keep-trees` Flag Coverage
+- S5 (lines 154-174) covers both dirty and clean trees under `--keep-trees`. Two sub-tests verify that the flag means "don't touch any tree" not just "skip dirty ones."
+
+### Non-Owned Trees (Other Tracks / Orphans)
+- S4 (lines 128-151) is the dedicated test. It places four kinds of trees under the same worktree root: (a) own track tree, (b) other track tree, (c) orphan tree under a different subdirectory, (d) a handmade tree with a custom branch name. Only (a) is swept; (b), (c), (d) are untouched but reported.
+
+### S8 Evolution (The `.gitignore` Story)
+
+The S8 test went through a significant correction during real testing:
+
+- **Original design** (design.md line 86-87, and original redcheck at `evidence/20260811T155159Z-01-redcheck.txt` line 71): S8 was titled "no `--force`" -- it tested that `git worktree remove` would refuse to delete a tree with untracked files, proving no `--force` was sneaked in. The original redcheck shows S8 assertions: "git refuses to delete, we leave it" and "we report the git refusal."
+
+- **Real-test discovery** (test file lines 256-269, design.md lines 31-35): When `.gitignore` is committed **before** the worktree is created, ignored files (like `junk/a.o`) are invisible to `git status --porcelain -uall`. The clean-status criterion passes. Then `git worktree remove` (without `--force`) **actually succeeds** on ignored files -- git only refuses on modified/untracked, not ignored. So the "second free insurance" from `git worktree remove` is unreachable in the normal flow (it only fires if the clean-status check itself is broken).
+
+- **Corrected S8** (lines 252-274): Now tests that ignored build artifacts => tree is swept. This is the **intentional design trade-off**: ignored files are considered regenerable. The comment at lines 266-270 explicitly documents the correction.
+
+- **Mutation test consequence**: The original mutation W6 ("sneak in `--force`") was deleted from the mutation suite because it was **unobservable** in normal flow. It was replaced with W6 testing that `rmdir` failure (removing the empty track directory) doesn't silently kill the archive (mutation-test.sh lines 75-82).
+
+### Mutation Tests -- The 7 Mutations
+
+From `/root/aiwork/tracks/worktree-sweep/mutation-test.sh`:
+
+| Mutation | Line | What it breaks | Expected red assertion | Rationale |
+|----------|------|---------------|----------------------|-----------|
+| **W1** | 42-47 | Disables the dirty-tree check (`elif false` replaces `elif [[ -n "$status_out" ]]`) | `S2: 说清卡在哪一条(树里有东西)` | Without the dirty check, dirty tree would pass clean-status, but `git worktree remove` still refuses (untracked files) so archive is still blocked -- but the **reason** changes. The test catches the wrong reason. |
+| **W2** | 49-52 | Disables the ancestor check (`elif false` replaces the `merge-base --is-ancestor` test) | `S3: 归档被拦(rc≠0)` | Without the ancestor check, an unmerged-but-clean tree would be treated as clean and swept. |
+| **W3** | 54-59 | When default branch can't be determined, falls back to `HEAD` instead of failing closed | `S6: 说不清主线是哪条 ⇒ 拒绝清理` | Tests the fail-closed behavior: "can't determine mainline" must refuse, not guess. |
+| **W4** | 64-66 | Removes the "if blocked, refuse archive" gate (`if false` replaces `if [[ "$blocked" -ne 0 ]]`) | `S3: 归档被拦(rc≠0)` | Without this gate, even when the sweep reports trees as blocked, archive would proceed anyway. |
+| **W5** | 68-73 | Treats all trees under the root as owned (removes the "outsider" detection, moves outsiders into `owned`) | `S4: 归档成功` | Would cause other tracks' trees to be swept. The test expects S4 to still pass (which it wouldn't if outsiders are incorrectly claimed). |
+| **W6** | 79-82 | Removes `\|\| true` from `rmdir "$track_dir"`, so `set -e` kills the script on rmdir failure | `S9: 归档照常完成(rc=0)` | If the track directory has stray files, `rmdir` fails; without `|| true`, the archive silently dies. |
+| **W7** | 84-93 | Makes `--keep-trees` only skip when blocked (not always) | `S5: --keep-trees 下连干净的树也不动` | Tests that `--keep-trees` means "don't touch any tree" not "only skip dirty ones." |
+
+**Evolution note**: The original suite had 7 mutations but W6 was different ("sneak in `--force`"). Evidence from `evidence/20260811T155239Z-01-mutation-test.txt` shows the first run had 3 caught, 4 leak (W1, W4, W5, W6 leaked). After three rounds of fixes (r1 -> r2 -> r3), all 7 mutations are caught. The final run (`evidence/20260811T155639Z-01-mutation-test-r3.txt`) shows 7 caught, 0 leaked.
+
+### Gaps and Observations
+
+1. **No test for detached HEAD worktree**: Design.md line 97 mentions "detached HEAD still works with `--is-ancestor`" but there's no dedicated test for it. S1 creates a worktree at HEAD (which happens to be on main), but doesn't test a detached HEAD scenario.
+
+2. **No test for in-flight worktree**: Design.md line 98 mentions "if codex is currently writing to the tree, `status` will be non-empty => blocked." This is implicitly covered by S2's dirty-tree logic but not explicitly tested with a lock or concurrent write scenario.
+
+3. **No test for "no trees at all"**: Design.md line 99-100 mentions that if there are zero trees, nothing should be printed. No test verifies this silence.
+
+4. **No test for branch-deletion failure being non-fatal**: The design (line 36-37) says "if branch can't be deleted, just report it, don't fail." No test covers a scenario where `git branch -d` would refuse (e.g., the branch was rebased and rewritten).
+
+5. **No test for the "multiple trees, one dirty blocks all" scenario**: The design says "one dirty tree blocks the entire archive." S2 tests a single dirty tree. No test has 3 trees where 2 are clean and 1 is dirty -- verifying that the 2 clean ones are also NOT swept.
+
+6. **S7 test is complex and integration-heavy**: It mocks `codex` with a shell script, parses JSON receipts, and exercises `delegate-codex` end-to-end. If the mock drifts from real codex behavior, S7 could give false confidence.
+
+---
+
+## 2. Design Doc Analysis (`/root/aiwork/tracks/worktree-sweep/design.md`)
+
+### Safety Criteria Section (Section I, lines 13-27)
+
+Two criteria that must **both** hold for a tree to be considered "pure garbage":
+
+1. **No unsaved content**: `git -C <tree> status --porcelain -uall` is empty
+2. **Work already in mainline**: `git -C <repo> merge-base --is-ancestor <tree HEAD> <default branch>`
+
+**Deliberately excluded criteria**:
+- **Age** (days since creation): time is irrelevant to "does it contain irreplaceable content"
+- **"Track is archived so it's useless"**: archiving is a judgment about artifacts, not about tree contents
+
+### Cleanup Actions Section (Section II, lines 29-38)
+
+- `git worktree remove <tree>` **without `--force`**
+- **2026-08-11 correction** (lines 31-35): Originally claimed that `git worktree remove` refusing on dirty trees was a "second free insurance." **Partially wrong**: git only refuses on modified/untracked files; it silently deletes ignored files. Since the clean-status criterion already blocks modified/untracked, git's refusal is **unreachable in the normal flow**. Its real value is as a fallback if the clean-status check itself is ever broken (confirmed by mutation W1).
+- `git branch -d` (lowercase `-d`): refuses on unmerged branches -- another free insurance layer. Failure to delete a branch is non-fatal (tree is already gone, branch is "tens of bytes").
+- **Never `rm -rf`**: hard rule, learned from a prior incident (redcheck + `--impl` pointing outside the repo).
+
+### Section III-V (lines 40-102)
+- Cleanup happens at `track archive` as the mandatory hook
+- Ownership is encoded in the path (`<root>/<track>/<job>`), not in a registry (second ledger would drift from disk)
+- Cross-repo: ownership repo is read from `<tree>/.git` gitdir line
+- Un-owned trees (no track) are reported but never deleted
+
+---
+
+## 3. Other Files in `/root/aiwork/tracks/worktree-sweep/`
+
+| File | Path | Description |
+|------|------|-------------|
+| `design.md` | `/root/aiwork/tracks/worktree-sweep/design.md` | Design doc (analyzed above) |
+| `proposal.md` | `/root/aiwork/tracks/worktree-sweep/proposal.md` | Original proposal with problem statement, scope, success criteria |
+| `tasks.md` | `/root/aiwork/tracks/worktree-sweep/tasks.md` | Task breakdown (currently just placeholder `<task 1>`, `<task 2>`) |
+| `verify.md` | `/root/aiwork/tracks/worktree-sweep/verify.md` | Verification checklist template (verdict still `<PASS \| BLOCK \| NEEDS_MORE_INFO>`, not yet filled) |
+| `mutation-test.sh` | `/root/aiwork/tracks/worktree-sweep/mutation-test.sh` | Mutation test script (analyzed above) |
+| `evidence/` | `/root/aiwork/tracks/worktree-sweep/evidence/` | Directory with 5 runlog receipts: redcheck (r1), mutation-test (r1, r2, r3), suite-all |
+
+The evidence directory shows the testing progression:
+- `20260811T155159Z-01-redcheck.txt`: Red check against old implementation -- confirms oracle goes red when implementation lacks sweep (22 pass, 24 fail)
+- `20260811T155239Z-01-mutation-test.txt`: First mutation run -- 3 caught, 4 leaked (W1, W4, W5, W6)
+- `20260811T155602Z-01-mutation-test-r2.txt`: Second run -- 6 caught, 1 leaked (W4)
+- `20260811T155639Z-01-mutation-test-r3.txt`: Final run -- **7 caught, 0 leaked**
+- `20260811T155700Z-01-suite-all.txt`: Incomplete (only 8 lines, no test output visible)
+[0m✓ [0mExplore tests and design doc[90m Explore Agent[0m
+Now I have a complete picture. Here is the full report.
+
+---
+
+## Worktree Sweep Logic — Complete Analysis
+
+### Source Files Involved
+
+| File | Role |
+|---|---|
+| `/root/aiwork/bin/track` (lines 55–170) | Core sweep function `_track_archive_sweep_worktrees` |
+| `/root/aiwork/bin/delegate-codex` (lines 384–390) | `--track` flag parsed, controls worktree placement |
+| `/root/aiwork/bin/_evidence.sh` | Evidence receipt validation, sourced during archive |
+| `/root/aiwork/bin/runlog` (line 29) | Also accepts `--track` for evidence file routing |
+| `/root/aiwork/tests/test-worktree-sweep.sh` | 9-scenario acceptance test suite (S1–S9) |
+| `/root/aiwork/tracks/worktree-sweep/mutation-test.sh` | 7 mutation tests (W1–W7) that break one safety guard each |
+
+---
+
+### 1. The Sweep Function
+
+**`_track_archive_sweep_worktrees`** — `/root/aiwork/bin/track`, lines 55–170.
+
+**Signature (line 55):**
+```bash
+_track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <keep:0|1>
+```
+
+**Parameters:**
+- `$1` = track name (e.g., `mytrack`)
+- `$2` = `keep` flag: `1` = `--keep-trees` (report only, no cleanup), `0` = normal sweep
+
+**Step-by-step flow:**
+
+#### a) Determine worktree root (lines 57–58)
+```bash
+root="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
+[[ -d "$root" ]] || return 0
+```
+If the root directory does not exist, the function silently returns 0 (nothing to sweep).
+
+#### b) Partition into "owned" vs "outsider" trees (lines 61–76)
+
+```bash
+local owned=() outsiders=()
+```
+
+**Owned trees** (lines 62–68): Direct children of `$root/$track/`. These are worktrees created by `delegate-codex --track $track` during this track's lifecycle. Each child directory under `$root/$track/` is added to `owned[]`.
+
+**Outsider trees** (lines 69–76): Every other non-empty subdirectory under `$root/`. These are skipped during cleanup but still "pointed at" in the report. Empty directories are explicitly excluded (line 71):
+```bash
+[[ -n "$(ls -A "$entry" 2>/dev/null)" ]] || continue   # 空壳不算树,别点它的名
+```
+
+If there are zero total entries (owned + outsiders), the function returns early (line 78).
+
+#### c) Point-and-report for outsiders (lines 80–84)
+
+```bash
+echo "worktree-sweep: $root"
+if [[ ${#outsiders[@]} -gt 0 ]]; then
+  echo "  不属于本轮,只点名不触碰:"
+  printf '    %s\n' "${outsiders[@]}"
+fi
+```
+Outsiders are listed to stdout but never touched. This is the "point-and-report" logic.
+
+#### d) Safety criteria for owned trees (lines 92–134)
+
+Each owned tree goes through **two independent checks**:
+
+**Check 1 — Clean git status (lines 97–101):**
+```bash
+if ! status_out="$(git -C "$tree" status --porcelain -uall 2>&1)"; then
+  dirty_reason="干净判据跑不了: $status_out"
+elif [[ -n "$status_out" ]]; then
+  dirty_reason="树里有没保存的改动/未跟踪文件"
+fi
+```
+Runs `git status --porcelain -uall` inside the worktree. If the command itself fails, or if any output is produced (modified files, untracked files), the tree is marked dirty. Note: **ignored files do not count** — `git status -uall` does not report them. This is an intentional design decision (S8 test confirms ignored artifacts are swept).
+
+**Check 2 — HEAD is ancestor of default branch (lines 103–111):**
+```bash
+if ! repo="$(_wt_repo_from_gitfile "$tree")"; then
+  mainline_reason="所属仓判不出来..."
+elif ! head="$(git -C "$tree" rev-parse HEAD 2>&1)"; then
+  mainline_reason="树的 HEAD 读不出来..."
+elif ! mainline="$(_wt_default_branch "$repo")"; then
+  mainline_reason="主线判不出来..."
+elif ! mb_out="$(git -C "$repo" merge-base --is-ancestor "$head" "$mainline" 2>&1)"; then
+  mainline_reason="树的 HEAD 没合进主线 $mainline..."
+fi
+```
+This chain:
+1. Reads `$tree/.git` file to find the owning repo (via `_wt_repo_from_gitfile`, lines 19–37)
+2. Resolves the worktree's HEAD commit
+3. Determines the default branch via `_wt_default_branch` (lines 39–53) — tries `origin/HEAD`, then `main`, then `master`
+4. Runs `git merge-base --is-ancestor "$head" "$mainline"` to confirm HEAD has been merged
+
+**Default branch resolution** (`_wt_default_branch`, lines 39–53):
+```bash
+ref="$(git -C "$repo" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+# fallback to main, then master
+```
+If none of `origin/HEAD`, `main`, `master` resolve, the function returns 1 and the tree is blocked (fail-closed — test S6b confirms this).
+
+**Classification (lines 115–133):**
+- If both checks pass → `"OK"`, tree added to `clean_entries[]`
+- If either fails → `"BLOCK"`, `blocked=1`, detailed diagnostics printed to stdout
+
+#### e) Cleanup or abort (lines 136–169)
+
+**`--keep-trees` path (lines 136–139):**
+```bash
+if [[ "$keep" -eq 1 ]]; then
+  echo "  --keep-trees: 本次只报告,不清理,也不阻断归档。"
+  return 0
+fi
+```
+Returns 0 unconditionally — no cleanup, no archive block.
+
+**Blocked trees path (lines 140–144):**
+```bash
+if [[ "$blocked" -ne 0 ]]; then
+  echo "🔴 拒绝归档:本轮还有不能确认干净的 worktree。" >&2
+  return 1
+fi
+```
+Returns **1**, which causes the archive command to abort (the `mv` on line 238 never runs).
+
+**Actual cleanup of clean entries (lines 146–162):**
+```bash
+for record in "${clean_entries[@]}"; do
+  IFS=$'\t' read -r tree repo branch <<< "$record"
+  if ! remove_out="$(git -C "$repo" worktree remove "$tree" 2>&1)"; then
+    echo "🔴 git worktree remove 拒绝清理:$tree" >&2
+    return 1
+  fi
+  echo "  已收掉: $tree"
+  if [[ -n "$branch" && "$branch" != "HEAD" ]]; then
+    if ! branch_out="$(git -C "$repo" branch -d "$branch" 2>&1); then
+      echo "  ⚠️ 分支删不掉(不影响归档): $branch: ..." 
+    else
+      echo "  已删分支: $branch"
+    fi
+  fi
+done
+```
+
+Key behaviors:
+- `git worktree remove` **without `--force`** — git itself will refuse if there are modified/untracked files (a second safety net, but normally unreachable since the dirty check already blocked those trees)
+- **Branch deletion is non-fatal**: if `git branch -d` fails, it prints a warning but does not abort. The `-d` (not `-D`) flag means git refuses to delete branches with unmerged commits.
+- **Worktree removal IS fatal**: if `git worktree remove` fails, the function returns 1 immediately, aborting the archive.
+
+**Track directory cleanup (line 168):**
+```bash
+[[ -d "$track_dir" ]] && { rmdir "$track_dir" 2>/dev/null || true; }
+```
+After all trees are removed, `rmdir` cleans up the now-empty track directory. The `|| true` is **critical** because:
+- The script runs under `set -e` (line 13)
+- `rmdir` only succeeds on empty directories
+- If stray non-worktree files exist in the track directory, `rmdir` would fail
+- Without `|| true`, this would silently kill the entire archive command (mutation test W6 confirms this)
+
+---
+
+### 2. `--track` Flag Parsing and Worktree Association
+
+**In `delegate-codex`** — `/root/aiwork/bin/delegate-codex`:
+
+**Parsing (line 281):**
+```bash
+--track)      TRACK="${2:-}";   shift 2 ;;
+```
+
+**Usage in worktree path construction (lines 384–390):**
+```bash
+if [[ -n "$TRACK" ]]; then
+  WT="$_wtroot_abs/$TRACK/$JOB"           # e.g., /root/aiwork/worktrees/mytrack/job-20260811-120000
+  BRANCH="delegate/$TRACK/$JOB"           # e.g., delegate/mytrack/job-20260811-120000
+else
+  WT="$_wtroot_abs/$JOB"                  # e.g., /root/aiwork/worktrees/job-20260811-120000
+  BRANCH="delegate/$JOB"                  # e.g., delegate/job-20260811-120000
+fi
+```
+
+Where `JOB="${NAME}-${TS}"` (line 368), `NAME` is the task filename stem, and `TS` is a timestamp.
+
+The `--track` flag controls two things:
+1. **Directory nesting**: `$WT_ROOT/$TRACK/$JOB` instead of `$WT_ROOT/$JOB` — this is how the sweep function later identifies "owned" trees (line 63: `for tree in "$track_dir"/*`)
+2. **Branch naming**: `delegate/$TRACK/$JOB` — the sweep deletes branches matching this pattern
+
+**In `runlog`** — `/root/aiwork/bin/runlog`, line 29:
+```bash
+-t|--track) TRACK="${2:-}"; shift 2 || die "-t 后面要跟 track 名" ;;
+```
+Here `--track` routes evidence files to `tracks/$TRACK/evidence/`. It is required for `runlog`.
+
+---
+
+### 3. Archive Flow Integration
+
+**`track archive`** — `/root/aiwork/bin/track`, lines 198–239:
+
+The archive command runs these steps in order:
+
+1. **Parse `--keep-trees`** (lines 199–205)
+2. **Validate `verify.md` exists and has a real verdict** (lines 214–224) — rejects if missing or still has template placeholder `^-[[:space:]]*Verdict:[[:space:]]*<`
+3. **Evidence check** via `_evidence.sh` (lines 230–235) — `ev_check` validates that receipt lines pasted in verify.md match actual evidence files
+4. **Worktree sweep** (line 236):
+   ```bash
+   _track_archive_sweep_worktrees "$name" "$keep_trees"
+   ```
+   If this returns non-zero (blocked trees), the archive **aborts** — the `mv` on line 238 never executes. The track directory stays in `tracks/$name`, not in `tracks/archive/`.
+5. **Move directory** (lines 237–239):
+   ```bash
+   mkdir -p "$proj/tracks/archive"
+   mv "$src" "$proj/tracks/archive/$name"
+   ```
+
+The sweep is intentionally placed **before** the `mv` — if it blocks, no half-archived state is created.
+
+---
+
+### 4. `set -e` Behavior and Error Handling
+
+The script starts with (line 13):
+```bash
+set -euo pipefail
+```
+
+This means:
+- **`-e`**: Any command returning non-zero kills the script (unless in an `if` condition, `||`, `&&`, or the return value is explicitly tested)
+- **`-u`**: Referencing unset variables is an error
+- **`-o pipefail`**: Pipeline failure propagates
+
+**How errors are handled within the sweep:**
+
+| Operation | Error handling | Why |
+|---|---|---|
+| `git status --porcelain` (line 97) | Wrapped in `if !` — failure sets `dirty_reason`, does not exit | Graceful degradation |
+| `git worktree remove` (line 149) | Wrapped in `if !` — failure prints error and `return 1` | Fatal: abort archive |
+| `git branch -d` (line 156) | Wrapped in `if !` — failure prints warning, continues | Non-fatal: branch deletion is best-effort |
+| `rmdir "$track_dir"` (line 168) | `rmdir ... 2>/dev/null \|\| true` | `|| true` prevents `set -e` from killing the script if the directory is not empty (stray files). Comment on lines 166–167 explicitly explains this. |
+| `_wt_default_branch` (lines 39–53) | Internal `return 1` on failure, caught by caller's `if !` | Fail-closed: unknown default branch → block |
+| `git merge-base --is-ancestor` (line 109) | Wrapped in `if !` — failure sets `mainline_reason` | Graceful: marks tree as blocked |
+
+**Critical `set -e` pitfall documented in the code** (lines 163–167):
+```
+# 只用 rmdir(非空会自己拒绝),不 rm -rf。
+# `|| true` 不是装饰:轮次目录里要是还搁着别的东西(不是树),rmdir 会失败,
+# 而这个脚本是 `set -e` —— 那会让整个归档**一声不吭地死掉**
+```
+Mutation test W6 (lines 79–82 of `mutation-test.sh`) specifically tests this by removing `|| true` and verifying that test S9 fails.
+
+---
+
+### 5. Point-and-Report Logic
+
+**Outsider trees** (lines 69–84):
+- Any directory under `$root/` whose basename is NOT the current track name
+- Listed in output as "不属于本轮,只点名不触碰" (not belonging to this run, only named, not touched)
+- Empty directories are skipped (line 71)
+
+**Blocked owned trees** (lines 118–133):
+- Trees belonging to the current track that fail either safety check
+- Output shows `"BLOCK $tree"` with specific diagnostic for each failed check:
+  - Dirty check: suggests `git -C '$tree' status --porcelain -uall`
+  - Mainline check: suggests either checking merge-base or fixing `origin/HEAD`
+
+**The point-and-report philosophy** is stated in comments (lines 163–164):
+> 留个空壳的话,以后每一次归档都会把它当"别人的树"点一遍名 —— 唠叨的报告和误报的守卫一样,响多了就没人看了。
+
+Translation: leaving an empty shell means every future archive will list it as an outsider — chatty reports and false-alarm guards are equally ignored once they trigger too often.
+
+---
+
+### 6. Auto-Inference When `--track` Is Not Provided
+
+**There is no auto-inference in `track` itself.** The `track` script receives the track name as a positional argument (`$1`), not via `--track`.
+
+**In `delegate-codex`** (lines 384–390), when `--track` is not provided:
+```bash
+if [[ -n "$TRACK" ]]; then
+  WT="$_wtroot_abs/$TRACK/$JOB"
+  BRANCH="delegate/$TRACK/$JOB"
+else
+  WT="$_wtroot_abs/$JOB"          # flat under root, no track nesting
+  BRANCH="delegate/$JOB"
+fi
+```
+
+Without `--track`:
+- The worktree goes directly under `$WT_ROOT/` (no track subdirectory)
+- The branch name is `delegate/$JOB` (no track prefix)
+- The sweep function will **not** find these trees because it only looks at `$root/$track/*`
+- These trees become "outsiders" (pointed at but not swept) when the track is archived
+
+Test S7 (lines 208–248 of `test-worktree-sweep.sh`) explicitly verifies both paths:
+- With `--track mytrack`: tree lands in `$root/mytrack/`, branch is `delegate/mytrack/...`
+- Without `--track`: tree lands in `$root/` directly, **not** under `$root/mytrack/`
+
+**In `runlog`** (line 29), `--track`/`-t` is **required** — the script dies with "缺 -t <track>" if not provided.
+
+---
+
+### Summary of All Key Locations
+
+| Concern | File | Lines |
+|---|---|---|
+| Sweep function | `/root/aiwork/bin/track` | 55–170 |
+| `set -euo pipefail` | `/root/aiwork/bin/track` | 13 |
+| `_wt_repo_from_gitfile` | `/root/aiwork/bin/track` | 19–37 |
+| `_wt_default_branch` | `/root/aiwork/bin/track` | 39–53 |
+| Archive command invoking sweep | `/root/aiwork/bin/track` | 236 |
+| `rmdir || true` safety | `/root/aiwork/bin/track` | 168 |
+| `--track` parsing in delegate-codex | `/root/aiwork/bin/delegate-codex` | 281 |
+| `--track` path construction | `/root/aiwork/bin/delegate-codex` | 384–390 |
+| `--track` in runlog | `/root/aiwork/bin/runlog` | 29 |
+| Acceptance tests (S1–S9) | `/root/aiwork/tests/test-worktree-sweep.sh` | 1–303 |
+| Mutation tests (W1–W7) | `/root/aiwork/tracks/worktree-sweep/mutation-test.sh` | 1–98 |
+| Evidence check sourced by archive | `/root/aiwork/bin/_evidence.sh` | 1–116 |
+[0m✓ [0mExplore bin/track sweep logic[90m Explore Agent[0m
+[0m→ [0mRead bin/track[90m [offset=55, limit=120][0m
+[0m→ [0mRead bin/delegate-codex[90m [offset=380, limit=20][0m
+[0m→ [0mRead tracks/worktree-sweep/design.md
+Let me verify a few critical code sections directly before writing the report.
+[0m→ [0mRead bin/track[90m [limit=55, offset=1][0m
+[0m→ [0mRead bin/track[90m [limit=65, offset=195][0m
+[0m→ [0mRead tests/test-worktree-sweep.sh[90m [limit=30, offset=252][0m
+[0m→ [0mRead tracks/worktree-sweep/mutation-test.sh
+[0m→ [0mRead tests/test-worktree-sweep.sh[90m [limit=55, offset=1][0m
+[0m→ [0mRead tests/test-worktree-sweep.sh[90m [limit=80, offset=55][0m
+[0m→ [0mRead tests/test-worktree-sweep.sh[90m [limit=120, offset=134][0m
+[0m
+[0m← [0mWrite .mimocode/plans/1786463915415-hidden-circuit.md
+Wrote file successfully.
+[0m
+Now I have a thorough understanding of all the code, tests, and design. Let me write the review plan/report.
+[0m→ [0mRead .mimocode/plans/1786463915415-hidden-circuit.md
+**PASS with findings.**
+
+---
+
+## Finding 1 (攻点 1): Auto-inference of `--track` — risk analysis
+
+When `--track` is omitted, `delegate-codex` creates flat worktrees at `$root/$JOB`. These become "outsiders" during sweep — reported but never touched.
+
+**Risk assessment of auto-inference at archive time (reclassify outsiders when exactly 1 active track exists):**
+
+| Scenario | Outcome | Severity |
+|---|---|---|
+| Operator intentionally created a flat worktree (throwaway test) | Auto-inference assigns it → if clean+merged, gets swept | **Medium**: but safety criteria still apply, so only truly-redundant trees deleted |
+| 2+ active tracks exist | Refuse (ambiguous) | **None** |
+| 0 active tracks | Refuse | **None** |
+| Flat worktree from different repo | Safety checks run against *that* repo's mainline → genuinely redundant if passes | **Low** |
+
+**Key insight**: Safety criteria are track-agnostic. A tree is swept iff clean AND HEAD is ancestor of default branch. Track ownership only controls *discovery* (owned vs outsider), not *safety*. So auto-inferencing doesn't bypass any safety gate.
+
+**Worst case**: A genuinely clean+merged flat worktree gets swept when operator wanted to keep it for reference. Impact: loss of a few MB of already-merged content. The asymmetry still holds.
+
+**Recommendation**: Auto-infer at **dispatch time** in `delegate-codex` (not at archive time in `track`), only when exactly 1 active track exists, and print loudly. This makes the operator's intent visible in `ls` from day one. Archive-time inference violates "loud and visible" — the operator never sees the assignment until the tree is already swept.
+
+---
+
+## Finding 2 (攻点 2): Two safety criteria — is there a "both green but still loses" shape?
+
+**One narrow shape exists**: gitignored files.
+
+1. `.gitignore` is committed, operator puts unique content in an ignored path (e.g., `notes/todo.md`)
+2. `git status --porcelain -uall` → empty (ignored files invisible)
+3. HEAD is ancestor of mainline → passes
+4. Tree is swept → content gone
+
+**However**: This is explicitly documented as a deliberate trade-off in `design.md:92-94` and pinned by S8. The design position — "ignored files are regenerable; putting unique content there is a user error equally dangerous in the main repo" — is defensible.
+
+Another shape: `core.filemode=false` or CRLF normalization making `git status` report clean for actually-modified files. This is a git config issue, not a sweep design issue.
+
+**Verdict**: Criteria sufficient for the stated contract.
+
+---
+
+## Finding 3 (攻点 3): `set -e` silent failures — audit
+
+Every fallible command in `_track_archive_sweep_worktrees` (lines 55–170):
+
+| Line | Command | Protected by |
+|---|---|---|
+| 58 | `[[ -d "$root"]] \|\| return 0` | `\|\| return` |
+| 71 | `ls -A "$entry"` | `$()` capture + `2>/dev/null` |
+| 97 | `git status --porcelain` | `if !` |
+| 103 | `_wt_repo_from_gitfile` | `if !` |
+| 105 | `git rev-parse HEAD` | `if !` |
+| 107 | `_wt_default_branch` | `if !` |
+| 109 | `git merge-base --is-ancestor` | `if !` |
+| 113 | `git rev-parse --abbrev-ref HEAD` | `\|\| true` |
+| 149 | `git worktree remove` | `if !` → `return 1` |
+| 156 | `git branch -d` | `if !` → warning, continues |
+| 168 | `rmdir "$track_dir"` | `2>/dev/null \|\| true` (W6 pins this) |
+
+**No additional hazards found.** The `rmdir || true` fix is correctly placed. Every fallible command is guarded. Line 113's `|| true` correctly handles detached HEAD (returns literal `HEAD`, filtered by `!= "HEAD"` check on line 155).
+
+---
+
+## Finding 4 (攻点 4): Tests green for the wrong reason
+
+**Known & fixed**: S8's `.gitignore` timing issue (`test-worktree-sweep.sh:256-258`). Fixed by committing `.gitignore` before creating the worktree.
+
+### 4b. Missing: "multiple owned trees, one dirty blocks all" (Medium)
+
+S2 tests a single dirty tree. S4 tests multiple trees but all pass. **No test verifies that 3 owned trees where 1 is dirty → 0 are swept.** The code at line 140 (`if [[ "$blocked" -ne 0 ]]`) blocks the entire loop, but this isn't pinned. A mutation changing "block all if any blocked" to "block only the dirty ones" would not be caught.
+
+### 4c. `_wt_default_branch` missing `origin/main`/`origin/master` fallback (Medium)
+
+`bin/track:39-53` tries: `origin/HEAD` → local `main` → local `master` → fail.
+
+**Missing**: `origin/main` and `origin/master`. In real cloned repos (not test fixtures created with `git init -b main`), the default branch often exists only as `origin/main` with no local `main`. The function fails → fail-closed → tree blocked → archive refused. Safe but annoying in practice. Tests don't catch this because all fixtures use `git init -b main`.
+
+### 4d. No test for branch-deletion failure (Low)
+
+Line 156's `git branch -d` failure is non-fatal. No test covers a rebased/force-pushed branch where `-d` refuses. Consequence is cosmetic.
+
+### 4e. No test for `git status` command failure (Low)
+
+Line 97: if `git status` itself errors (corrupted `.git`), tree is marked dirty. No test simulates this. Consequence is fail-closed (blocked).
+
+---
+
+## Summary
+
+| # | Finding | Severity | Action |
+|---|---|---|---|
+| 1 | Auto-inference: safe at dispatch time; risky if silent at archive time | Medium | Infer in `delegate-codex`, not in `track` |
+| 2 | Criteria sufficient; gitignored gap documented | None | — |
+| 3 | No `set -e` silent failures remain | None | — |
+| 4b | Missing test: one dirty tree blocks all owned trees | Medium | Add test |
+| 4c | `_wt_default_branch` missing `origin/main` fallback | Medium | Add fallbacks or test |
+| 4d | No test for branch-deletion failure | Low | Optional |
+| 4e | No test for `git status` command failure | Low | Optional |
+
+**Overall: PASS.** Mechanism is sound, fail-closed holds throughout, mutation tests prove each gate is individually necessary. Findings 4b and 4c are the most actionable.
+
+---
+
+**Files reviewed**: `bin/track` (lines 19–170, 198–239), `bin/delegate-codex` (lines 271, 281, 384–390), `tests/test-worktree-sweep.sh` (full), `tracks/worktree-sweep/mutation-test.sh` (full), `tracks/worktree-sweep/design.md` (full).
