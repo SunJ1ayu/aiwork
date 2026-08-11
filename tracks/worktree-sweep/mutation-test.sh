@@ -58,10 +58,11 @@ mutate "W3-主线判不出来就当它合过了(fail open)" \
   '    elif ! mainline="$(_wt_default_branch "$repo")"; then
       mainline="HEAD"'
 
-# W4 同理:S2 那一幕有 git 的拒绝兜底,真正只靠这道闸的是 S3(干净但没合进主线 ——
-# 那种树 git 会痛快地删掉)。
+# W4 同理:S2 那一幕有 git 的拒绝兜底。而"拦不拦"本身只在 S3 观察得到 ——
+# 那棵树因为没合进主线而进不了 clean_entries(所以不会被删),
+# 但少了这道闸,**归档会照常放行** ⇒ 红的是 S3 的第一条,不是"树还在"。
 mutate "W4-blocked 了也照样归档(不拦)" \
-  "S3: **树还在**(里面那个提交是唯一的一份)" \
+  "S3: 归档被拦(rc≠0)" \
   '  if [[ "$blocked" -ne 0 ]]; then' '  if false; then'
 
 mutate "W5-把整个根都当成自己的树扫" \
