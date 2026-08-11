@@ -16,6 +16,151 @@ TEMPLATES="/root/aiwork/track/templates"
 
 usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
+_wt_repo_from_gitfile() {  # _wt_repo_from_gitfile <tree>
+  local tree="$1" line gitdir repo
+  [[ -f "$tree/.git" ]] || return 1
+  IFS= read -r line < "$tree/.git" || return 1
+  [[ "$line" == gitdir:\ * ]] || return 1
+  gitdir="${line#gitdir: }"
+  case "$gitdir" in
+    /*) ;;
+    *) gitdir="$(cd "$tree" && realpath -m "$gitdir")" ;;
+  esac
+  case "$gitdir" in
+    */.git/worktrees/*)
+      repo="${gitdir%%/.git/worktrees/*}"
+      [[ -d "$repo" ]] || return 1
+      printf '%s\n' "$repo"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+_wt_default_branch() {  # _wt_default_branch <repo>
+  local repo="$1" ref
+  ref="$(git -C "$repo" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [[ -n "$ref" ]] && git -C "$repo" rev-parse --verify -q "$ref^{commit}" >/dev/null 2>&1; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
+  for ref in main master; do
+    if git -C "$repo" rev-parse --verify -q "$ref^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$ref"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <keep:0|1>
+  local track="$1" keep="$2" root track_dir tree entry base total=0
+  root="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
+  [[ -d "$root" ]] || return 0
+  track_dir="$root/$track"
+
+  local owned=() outsiders=()
+  if [[ -d "$track_dir" ]]; then
+    for tree in "$track_dir"/*; do
+      [[ -d "$tree" ]] || continue
+      owned+=("$tree")
+      total=$((total+1))
+    done
+  fi
+  for entry in "$root"/*; do
+    [[ -d "$entry" ]] || continue
+    base="$(basename "$entry")"
+    [[ "$base" == "$track" ]] && continue
+    outsiders+=("$entry")
+    total=$((total+1))
+  done
+
+  [[ $total -eq 0 ]] && return 0
+
+  echo "worktree-sweep: $root"
+  if [[ ${#outsiders[@]} -gt 0 ]]; then
+    echo "  不属于本轮,只点名不触碰:"
+    printf '    %s\n' "${outsiders[@]}"
+  fi
+
+  if [[ ${#owned[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "  本轮 worktree:"
+
+  local clean_entries=() blocked=0 status_out repo head mainline branch mb_out
+  local dirty_reason mainline_reason
+  for tree in "${owned[@]}"; do
+    dirty_reason=""; mainline_reason=""; repo=""; head=""; mainline=""; branch=""
+
+    if ! status_out="$(git -C "$tree" status --porcelain -uall 2>&1)"; then
+      dirty_reason="干净判据跑不了: $status_out"
+    elif [[ -n "$status_out" ]]; then
+      dirty_reason="树里有没保存的改动/未跟踪文件"
+    fi
+
+    if ! repo="$(_wt_repo_from_gitfile "$tree")"; then
+      mainline_reason="所属仓判不出来(.git 不是 gitdir: <仓>/.git/worktrees/<名>)"
+    elif ! head="$(git -C "$tree" rev-parse HEAD 2>&1)"; then
+      mainline_reason="树的 HEAD 读不出来: $head"
+    elif ! mainline="$(_wt_default_branch "$repo")"; then
+      mainline_reason="主线判不出来(找不到 origin/HEAD、main、master)"
+    elif ! mb_out="$(git -C "$repo" merge-base --is-ancestor "$head" "$mainline" 2>&1)"; then
+      mainline_reason="树的 HEAD 没合进主线 $mainline${mb_out:+: $mb_out}"
+    fi
+
+    branch="$(git -C "$tree" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+
+    if [[ -z "$dirty_reason" && -z "$mainline_reason" ]]; then
+      echo "    OK  $tree"
+      clean_entries+=("$tree"$'\t'"$repo"$'\t'"$branch")
+    else
+      blocked=1
+      echo "    BLOCK $tree"
+      if [[ -n "$dirty_reason" ]]; then
+        echo "      - 干净判据: $dirty_reason"
+        echo "        下一步: git -C '$tree' status --porcelain -uall"
+      fi
+      if [[ -n "$mainline_reason" ]]; then
+        echo "      - 主线判据: $mainline_reason"
+        if [[ -n "$repo" && -n "$mainline" ]]; then
+          echo "        下一步: git -C '$repo' merge-base --is-ancestor \$(git -C '$tree' rev-parse HEAD) '$mainline'"
+        else
+          echo "        下一步: 修正该仓 origin/HEAD,或明确建出 main/master 后再归档"
+        fi
+      fi
+    fi
+  done
+
+  if [[ "$keep" -eq 1 ]]; then
+    echo "  --keep-trees: 本次只报告,不清理,也不阻断归档。"
+    return 0
+  fi
+  if [[ "$blocked" -ne 0 ]]; then
+    echo "🔴 拒绝归档:本轮还有不能确认干净的 worktree。目录留在原地,没有半归档状态。" >&2
+    echo "   处理后重跑 track archive；确实要保留这些树就显式加 --keep-trees。" >&2
+    return 1
+  fi
+
+  local record remove_out branch_out
+  for record in "${clean_entries[@]}"; do
+    IFS=$'\t' read -r tree repo branch <<< "$record"
+    if ! remove_out="$(git -C "$repo" worktree remove "$tree" 2>&1)"; then
+      echo "🔴 git worktree remove 拒绝清理:$tree" >&2
+      printf '%s\n' "$remove_out" >&2
+      return 1
+    fi
+    echo "  已收掉: $tree"
+    if [[ -n "$branch" && "$branch" != "HEAD" ]]; then
+      if ! branch_out="$(git -C "$repo" branch -d "$branch" 2>&1)"; then
+        echo "  ⚠️ 分支删不掉(不影响归档): $branch: $(printf '%s\n' "$branch_out" | head -n 1)"
+      else
+        echo "  已删分支: $branch"
+      fi
+    fi
+  done
+}
+
 cmd="${1:-}"; shift || true
 
 case "$cmd" in
@@ -43,7 +188,14 @@ case "$cmd" in
     ls -1 "$dir"
     ;;
   archive)
-    name="${1:-}"; proj="${2:-$PWD}"
+    keep_trees=0; archive_args=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --keep-trees) keep_trees=1; shift ;;
+        *) archive_args+=("$1"); shift ;;
+      esac
+    done
+    name="${archive_args[0]:-}"; proj="${archive_args[1]:-$PWD}"
     [ -z "$name" ] && { echo "ERROR: need a track name" >&2; usage 1; }
     src="$proj/tracks/$name"
     [ -d "$src" ] || { echo "ERROR: $src not found" >&2; exit 1; }
@@ -73,6 +225,7 @@ case "$cmd" in
       echo "🔴 拒绝归档:机器证据没对齐(见上)。目录留在原地,没有半归档状态。" >&2
       exit 1
     fi
+    _track_archive_sweep_worktrees "$name" "$keep_trees"
     mkdir -p "$proj/tracks/archive"
     mv "$src" "$proj/tracks/archive/$name"
     echo "archived -> $proj/tracks/archive/$name"

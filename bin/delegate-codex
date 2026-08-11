@@ -19,7 +19,7 @@ set -uo pipefail
 # 用法:
 #   delegate-codex --task TASK.md --repo DIR --attack-log PATH \
 #                  --protect PATH [--protect PATH ...] \
-#                  [--model gpt-5.5] [--log PATH] [--no-isolate] [--dry-run] \
+#                  [--track NAME] [--model gpt-5.5] [--log PATH] [--no-isolate] [--dry-run] \
 #                  [-- <直通 codex 的参数>]
 #   delegate-codex --print-oracle-hash --repo DIR --protect PATH...
 #                  # 攻完题把这一行贴进攻题记录,否则派不出去
@@ -268,7 +268,7 @@ PY
 }
 
 # ── 参数 ────────────────────────────────────────────────────────────────
-TASK=""; REPO=""; ATTACK=""; LOG=""; MODEL="gpt-5.5"; RECEIVE=""; DRY=0
+TASK=""; REPO=""; ATTACK=""; LOG=""; MODEL="gpt-5.5"; RECEIVE=""; TRACK=""; DRY=0
 ISOLATE=1; PRINTHASH=0                 # **默认隔离**(design 九·2 用户拍板)
 PROTECT=(); PASSTHRU=()
 while [[ $# -gt 0 ]]; do
@@ -278,6 +278,7 @@ while [[ $# -gt 0 ]]; do
     --repo)       REPO="${2:-}";   shift 2 ;;
     --attack-log) ATTACK="${2:-}"; shift 2 ;;
     --protect)    [[ -n "${2:-}" ]] || die "--protect 要一个路径"; PROTECT+=("$2"); shift 2 ;;
+    --track)      TRACK="${2:-}";   shift 2 ;;
     --model)      MODEL="${2:-}";  shift 2 ;;
     --log)        LOG="${2:-}";    shift 2 ;;
     --receive)    RECEIVE="${2:-}"; shift 2 ;;
@@ -380,8 +381,13 @@ if [[ $ISOLATE -eq 1 ]]; then
   往 $REPO/.gitignore 里加一行 '$_wtrel/',或用 DELEGATE_WORKTREE_ROOT 指到仓外。"
       ;;
   esac
-  WT="$_wtroot_abs/$JOB"
-  BRANCH="delegate/$JOB"
+  if [[ -n "$TRACK" ]]; then
+    WT="$_wtroot_abs/$TRACK/$JOB"
+    BRANCH="delegate/$TRACK/$JOB"
+  else
+    WT="$_wtroot_abs/$JOB"
+    BRANCH="delegate/$JOB"
+  fi
   RUNDIR="$WT"
 fi
 
@@ -469,7 +475,7 @@ fi
 
 # ⑧ 建树。失败一律**拒发**(不许静默退回非隔离:那会让"我以为它隔离了"变成假象)。
 if [[ $ISOLATE -eq 1 && $DRY -eq 0 ]]; then
-  mkdir -p "$_wtroot_abs" || die "建不了 worktree 根:$_wtroot_abs"
+  mkdir -p "$(dirname "$WT")" || die "建不了 worktree 根:$(dirname "$WT")"
   # 撞名:**绝不覆盖**(覆盖 = 丢掉上一棵树里唯一那份改动),往后挪一个名字。
   # 时间戳是秒级的,而"同一秒派第二次"不是假想 —— 判据连着跑就是这形状,
   # 我自己拒发一次、立刻改了再派也是。这里不引入随机数/登记表:
@@ -479,7 +485,11 @@ if [[ $ISOLATE -eq 1 && $DRY -eq 0 ]]; then
     _try=$((_try+1))
     [[ $_try -le 20 ]] || die "同名任务的树/分支太多了(${JOB}-2..20 全被占着),先收几棵:
     git -C $REPO worktree list"
-    WT="$_wtroot_abs/${JOB}-${_try}"; BRANCH="delegate/${JOB}-${_try}"
+    if [[ -n "$TRACK" ]]; then
+      WT="$_wtroot_abs/$TRACK/${JOB}-${_try}"; BRANCH="delegate/$TRACK/${JOB}-${_try}"
+    else
+      WT="$_wtroot_abs/${JOB}-${_try}"; BRANCH="delegate/${JOB}-${_try}"
+    fi
   done
   _wt_out="$(git -C "$REPO" worktree add -b "$BRANCH" "$WT" "$HEAD_AT_DISPATCH" 2>&1)" || die \
 "建 worktree 失败(codex 一次都没启动):
@@ -533,15 +543,16 @@ fi
 # 回执里**不另造 `base` 键**:现有的 `head` 就是建树用的基线,多一个同义键就是第二份账
 # (design 四·2 驳回 registry 的同一条理由:并发度为 1 时磁盘本身就是账)。
 python3 - "$RECEIPT" "$REPO" "$HEAD_AT_DISPATCH" "$ATTACK" "$TASK" "$LOG" "$MODEL" \
-         "$ISOLATE" "$WT" "$BRANCH" "$ORACLE_HASH" "$DRY" "${PROTECT[@]}" <<'PY'
+         "$ISOLATE" "$WT" "$BRANCH" "$TRACK" "$ORACLE_HASH" "$DRY" "${PROTECT[@]}" <<'PY'
 import hashlib, json, sys, datetime
-receipt, repo, head, attack, task, log, model, isolate, wt, branch, ohash, dry, *protect = sys.argv[1:]
+receipt, repo, head, attack, task, log, model, isolate, wt, branch, track, ohash, dry, *protect = sys.argv[1:]
 sha = hashlib.sha256(open(attack, "rb").read()).hexdigest()
 json.dump({
     "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     "repo": repo, "head": head, "protect": protect,
     "isolate": isolate == "1", "dry_run": dry == "1",
     "worktree": wt or None, "branch": branch or None,
+    "track": track or None,
     "oracle_sha256": ohash,
     "attack_log": attack, "attack_log_sha256": sha,
     "task": task, "log": log, "model": model,
