@@ -96,7 +96,9 @@ s2_dirty_tree_blocks() {
   check "S2: 树里那份唯一的东西一个字节没动" $?
   check "S2: track **没有**被归档(不留半截状态)" $([[ -d "$p/tracks/mytrack" ]]; echo $?)
   grep -q "job-1" "$d/o2"; check "S2: 报告点名是哪棵树" $?
-  grep -qi "没保存\|未提交\|未跟踪\|干净" "$d/o2"; check "S2: 说清卡在哪一条(树里有东西)" $?
+  # 四审 subdeepseek 发现 8:原来 grep 的词里有"干净",而输出模板自带「- 干净判据:」
+  # ⇒ 一个只印标签、不说具体原因的实现也能过。改成只在**真原因**里才会出现的词。
+  grep -qi "没保存\|未提交\|未跟踪" "$d/o2"; check "S2: 说清卡在哪一条(树里有东西)" $?
   rm -rf "$d"
 }
 
@@ -186,9 +188,17 @@ s6_cross_repo_and_failclosed() {
   printf 'unmerged\n' > "$t2/z.txt"
   git -C "$t2" add -A; git -C "$t2" commit -qm "别的仓里没合的活"
 
+  # 【四审 subdeepseek 发现 2 改写这一幕】原来这里断言"跨仓的树也按它自己仓判、判不过就拦"。
+  # 那条规则有个洞:归属键只有 track 名、**不带仓身份** ⇒ 两个项目各建一个同名 track、
+  # 共用同一个 worktree 根时,A 的归档会去动 B 的树(干净的删掉、脏的拦死 A)。
+  # 改成:**属于本轮 = 在 <根>/<track>/ 下,而且树的所属仓就是正在归档的这个项目**;
+  # 别的仓的树一律当"不属于本轮"——只点名,不碰,也不拦。
   DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/track" archive mytrack "$p" >"$d/o6" 2>&1; rc=$?
-  check "S6: 跨仓的树没合进**它自己仓**的主线 ⇒ 拦住" $([[ $rc -ne 0 ]]; echo $?)
-  check "S6: 那棵树还在" $([[ -d "$t2" ]]; echo $?)
+  check "S6: 别的仓的树蹲在我的轮次目录里 ⇒ 不拦我归档" $([[ $rc -eq 0 ]]; echo $?)
+  check "S6: 那棵树一个字节没动(它是别人的)" $([[ -d "$t2" ]]; echo $?)
+  grep -q "from-other-repo" "$d/o6"; check "S6: 但要点名" $?
+  check "S6: 别人仓里那个没合的提交还在" \
+    $(git -C "$other" cat-file -e "$(git -C "$t2" rev-parse HEAD)" 2>/dev/null; echo $?)
 
   # 主线判不出来(既没 main 也没 master,也没有 origin/HEAD)⇒ 不许猜"它合过了"
   local d3; d3="$(mktemp -d)"; local p3="$d3/proj" root3="$d3/wt"
@@ -289,6 +299,71 @@ s9_stray_file_in_track_dir() {
   rm -rf "$d"
 }
 
+# --------------------------------------- S10 归属必须"我亲口说",不许猜也不许忘
+s10_track_must_be_explicit() {
+  echo "[S10] 仓里有 active track 时,派活必须显式说归属(--track 或 --no-track)"
+  local d; d="$(mktemp -d)"; local b="$d/bin" rec="$d/rec" repo="$d/repo" root="$d/wt" rc
+  mkdir -p "$b" "$rec" "$repo/tests" "$repo/tracks/opentrack" "$root"
+  cat > "$b/codex" <<EOF
+#!/usr/bin/env bash
+echo call >> "$rec/calls"
+printf '%s\n' "\$@" > "$rec/argv.\$(wc -l < "$rec/calls" | tr -d ' ')"
+exit 0
+EOF
+  chmod +x "$b/codex"
+  ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
+    printf 'echo ok\n' > tests/oracle.sh; printf 'x\n' > tracks/opentrack/verify.md
+    git add -A; git commit -qm init )
+  printf '# 任务书\n干活\n' > "$d/task.md"; printf '攻题记录\n' > "$d/attack.md"
+  bash "$BIN/delegate-codex" --print-oracle-hash --repo "$repo" --protect tests/ >> "$d/attack.md"
+  local run="env PATH=$b:$PATH DELEGATE_WORKTREE_ROOT=$root"
+
+  # ① 有 active track、两个旗标都没给 ⇒ 拒发(**不许替我猜"那就是它吧"**:
+  #    把"我没说"翻译成"我同意删"和「猜不出主线就当它合过了」是同一个坑)
+  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/a.log" >"$d/oa" 2>&1; rc=$?
+  check "S10: 有 active track 又没说归属 ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
+  check "S10: 拒发时 codex 零调用" $([[ "$(calls_of_s10 "$rec")" -eq 0 ]]; echo $?)
+  grep -q "opentrack" "$d/oa"; check "S10: 把候选的 track 列出来(别让我去猜名字)" $?
+  grep -q -- "--no-track" "$d/oa"; check "S10: 告诉我怎么显式说「这单不挂轮次」" $?
+
+  # ② 显式说不挂 ⇒ 照发,树在根下(老样子)
+  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo" --no-track \
+      --attack-log "$d/attack.md" --protect tests/ --log "$d/b.log" >"$d/ob" 2>&1; rc=$?
+  check "S10: --no-track ⇒ 照发" $([[ $rc -eq 0 ]]; echo $?)
+  local c1; c1="$(awk '$0=="-C"{getline; print; exit}' "$rec/argv.1")"
+  check "S10: --no-track 的树在根下(老路径)" \
+    $([[ "$c1" == "$root/"* && "$c1" != "$root/opentrack/"* ]]; echo $?)
+
+  # ③ 仓里一个 active track 都没有 ⇒ 不啰嗦,照发(别让守卫变成噪音)
+  local repo2="$d/repo2"; mkdir -p "$repo2/tests"
+  ( cd "$repo2"; git init -q -b main; git config user.email t@t; git config user.name t
+    printf 'echo ok\n' > tests/oracle.sh; git add -A; git commit -qm init )
+  printf '攻题记录\n' > "$d/attack2.md"
+  bash "$BIN/delegate-codex" --print-oracle-hash --repo "$repo2" --protect tests/ >> "$d/attack2.md"
+  $run bash "$BIN/delegate-codex" --task "$d/task.md" --repo "$repo2" \
+      --attack-log "$d/attack2.md" --protect tests/ --log "$d/c.log" >"$d/oc" 2>&1; rc=$?
+  check "S10: 仓里没有 active track ⇒ 不要求、照发(守卫不许变噪音)" $([[ $rc -eq 0 ]]; echo $?)
+  rm -rf "$d"
+}
+calls_of_s10() { [[ -f "$1/calls" ]] && wc -l < "$1/calls" | tr -d ' ' || echo 0; }
+
+# --------------------------------------- S11 删之前把"会被一起带走的"说出来
+s11_warn_ignored_before_remove() {
+  echo "[S11] 树里被 ignore 的东西会跟着一起删 ⇒ 动手前必须先把它们列出来"
+  local d; d="$(mktemp -d)"; local p="$d/proj" root="$d/wt" rc
+  make_proj "$p" mytrack
+  printf 'junk/\n' > "$p/.gitignore"; git -C "$p" add -A; git -C "$p" commit -qm ignore
+  local tree; tree="$(make_tree "$p" "$root" mytrack job-1 HEAD)"
+  mkdir -p "$tree/junk"; printf 'MAYBE_THE_ONLY_COPY\n' > "$tree/junk/notes.txt"
+
+  DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/track" archive mytrack "$p" >"$d/o11" 2>&1; rc=$?
+  check "S11: 照收(生成物不算「别处没有的东西」——设计取舍)" $([[ $rc -eq 0 ]]; echo $?)
+  grep -q "junk/notes.txt" "$d/o11"
+  check "S11: **但动手前把会被带走的那些文件逐个列出来**(四审 subdeepseek 发现 3)" $?
+  rm -rf "$d"
+}
+
 echo "=== worktree-sweep oracle ==="
 s1_clean_tree_swept
 s2_dirty_tree_blocks
@@ -299,5 +374,7 @@ s6_cross_repo_and_failclosed
 s7_track_in_path
 s8_no_force
 s9_stray_file_in_track_dir
+s10_track_must_be_explicit
+s11_warn_ignored_before_remove
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
