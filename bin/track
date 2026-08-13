@@ -252,6 +252,16 @@ case "$cmd" in
       echo "🔴 拒绝归档:机器证据没对齐(见上)。目录留在原地,没有半归档状态。" >&2
       exit 1
     fi
+    # 证据寿命要守在归档这一刻:归档是在承诺工件以后还能读,所以会话临时目录引用
+    # 这时必须要么进仓,要么逐行写明「不承重」。放在 worktree sweep 前,是因为 sweep
+    # 可能会清理本轮树;先判叙述证据,避免后续动作掩盖真正的拒绝理由。
+    # shellcheck source=/root/aiwork/bin/_ephemeral-refs.sh
+    . "$(dirname "$0")/_ephemeral-refs.sh" 2>/dev/null || {
+      echo "🔴 找不到 _ephemeral-refs.sh —— 归档检查缺件,拒绝归档(fail closed)" >&2; exit 1; }
+    if ! eph_check "$src" "track archive"; then
+      echo "🔴 拒绝归档:工件引用了会话临时目录(见上)。目录留在原地,没有半归档状态。" >&2
+      exit 1
+    fi
     _track_archive_sweep_worktrees "$name" "$keep_trees" "$proj"
     mkdir -p "$proj/tracks/archive"
     mv "$src" "$proj/tracks/archive/$name"
