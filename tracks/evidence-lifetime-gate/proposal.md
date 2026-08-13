@@ -12,27 +12,27 @@
 
 2026-08-13 收 另一个项目 那单时,用户问了一句「刚刚的 track 工作树收尾了吗」。
 工作树是干净的(没派执行腿),但顺着查下去发现 design.md 的「规划双出」引的是
-`scratchpad/dualplan/codex-plan.log` —— 即 `/tmp/claude-0/-root/<会话id>/scratchpad/`。
+`scratchpad/dualplan/codex-plan.log` —— 即 `/tmp/claude-0/-root/<会话id>/scratchpad/`。 [仓外不承重]
 **那个会话当天已经断了**,工件还在,它引的证据在 /tmp 里等着被清。
 
 ### 这不是孤例 —— 先量后判
 
 扫全机 348 份 track md(aiwork 51 / design-studio 292 / 另一个项目 5),
-**22 份引用了 `/tmp` 或 `scratchpad`**。逐行看,分两类:
+**22 份引用了 `/tmp` 或 `scratchpad`**。逐行看,分两类: [仓外不承重]
 
 **A. 真证据引用(已经死了或迟早死)**
-- `全文在 scratchpad 的 my-review`(**4 处**)—— 主审"读评审腿之前先落盘"的自审。
+- `全文在 scratchpad 的 my-review`(**4 处**)—— 主审"读评审腿之前先落盘"的自审。 [仓外不承重]
   它存在的**全部意义就是证明先后顺序**,现在无法核对 ⇒ 退化成我的一面之词。
-- `scratchpad/probe_turnid.py`、`scratchpad/probe_noop.py` —— 旁边写着
+- `scratchpad/probe_turnid.py`、`scratchpad/probe_noop.py` —— 旁边写着 [仓外不承重]
   「**实测过,不是推演**」,而那个"实测"现在查不到了。
-- `driver = scratchpad/e2e_p6.py` —— e2e 驱动脚本,结果进了 verify 但脚本没进仓。
-- `scratchpad/brief-date.md` —— 规划双出的中立需求书(**与 另一个项目 这次同形**:
+- `driver = scratchpad/e2e_p6.py` —— e2e 驱动脚本,结果进了 verify 但脚本没进仓。 [仓外不承重]
+- `scratchpad/brief-date.md` —— 规划双出的中立需求书(**与 另一个项目 这次同形**: [仓外不承重]
   它是"我没把自己的答案先喂给外部腿"的唯一证明)。
-- `scratchpad/repro_dup_note.py` —— 「我自己复现证实,不是采信它的自述」的那份复现。
+- `scratchpad/repro_dup_note.py` —— 「我自己复现证实,不是采信它的自述」的那份复现。 [仓外不承重]
 
 **B. 只是叙述里提了一嘴(不该拦)**
-- 「`git worktree list` 里还有另一个会话留在 `/tmp/claude-0/…/wt-base`」—— 在描述一棵野树。
-- 日志表格里的 `| 08-06 13:16 | /tmp/tmp.GeK1oSjQNd/repo(建入口时的临时测试仓) |`。
+- 「`git worktree list` 里还有另一个会话留在 `/tmp/claude-0/…/wt-base`」—— 在描述一棵野树。 [仓外不承重]
+- 日志表格里的 `| 08-06 13:16 | /tmp/tmp.GeK1oSjQNd/repo(建入口时的临时测试仓) |`。 [仓外不承重]
 - 另一个项目 design.md 里我自己写的墓碑注释(解释"原路径在 /tmp 下,已搬走")。
 
 **闸必须分得开 A 和 B**,否则它就是噪音 —— 而假报警和假绿一样坏
@@ -59,7 +59,7 @@
 
 ## Non-goals
 
-- **不动 pre-commit**。干活期间引用 scratchpad 是正常的(文件还活着),
+- **不动 pre-commit**。干活期间引用 scratchpad 是正常的(文件还活着), [仓外不承重]
   这条只在"宣布做完"那一刻才成立 —— 与 5b/5c 同样是 archive-mode。
   在提交时也查 = 给活跃工作制造噪音。
 - **不追溯已归档的 51+ 个 track**(它们已经归档,闸够不着;死链已成事实)。

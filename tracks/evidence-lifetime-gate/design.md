@@ -14,9 +14,9 @@
 归档时扫 `tracks/<name>/**/*.md`,命中**会话临时目录**的行 ⇒ 拒绝归档。
 
 - 命中什么(**大小写规则是攻题后收窄的,不是笼统"不敏感"**):
-  - `/tmp/` —— **按字面**。Linux 上 `/TMP/` 本来就不是 `/tmp/`,把它也拦了是无据的误报。
-  - `scratchpad` —— **不分大小写**。它是个**词**不是路径,散文里会写成 `ScratchPad`。
-  - `TMPDIR` —— 认这个**词**即可,从而 `$TMPDIR` / `${TMPDIR}` / `${TMPDIR:-/tmp}` 全覆盖。
+  - `/tmp/` —— **按字面**。Linux 上 `/TMP/` 本来就不是 `/tmp/`,把它也拦了是无据的误报。 [仓外不承重]
+  - `scratchpad` —— **不分大小写**。它是个**词**不是路径,散文里会写成 `ScratchPad`。 [仓外不承重]
+  - `TMPDIR` —— 认这个**词**即可,从而 `$TMPDIR` / `${TMPDIR}` / `${TMPDIR:-/tmp}` 全覆盖。 [仓外不承重]
   > 射程边界(写下来,不假装它防得住):`$(mktemp -d)`、URL 编码 `/tmp%2F`、
   > 经稳定符号链接间接指向临时目录的路径 —— **一律抓不到**。设计上就不 resolve 路径。
 - 放行方式**只有一种**:该行自带 `[仓外不承重]` 标记。
@@ -69,8 +69,8 @@
 
 | # | 名字 | 问什么 | 红检时应该红在 |
 |---|------|--------|----------------|
-| 1 | unmarked_scratchpad_refused | design.md 引 `scratchpad/x.log` ⇒ 拒绝归档 | **目录被搬走了**(不是"命令不存在") |
-| 2 | unmarked_tmp_refused | verify.md 引 `/tmp/claude-0/…` ⇒ 拒绝归档 | 同上 |
+| 1 | unmarked_scratchpad_refused | design.md 引 `scratchpad/x.log` ⇒ 拒绝归档 | **目录被搬走了**(不是"命令不存在") [仓外不承重] |
+| 2 | unmarked_tmp_refused | verify.md 引 `/tmp/claude-0/…` ⇒ 拒绝归档 | 同上 [仓外不承重] |
 | 3 | no_half_archived_state | 被拒后 `tracks/<name>/` **原地还在**、`tracks/archive/<name>` **不存在** | 目录已被搬 |
 | 4 | marked_line_passes | 同一行带 `[仓外不承重]` ⇒ 正常归档 | (不该红,防误报) |
 | 5 | clean_track_passes | 不含临时目录引用 ⇒ 正常归档 | (不该红,防误报) |
@@ -78,7 +78,7 @@
 | 7 | real_receipt_no_false_alarm | verify.md 里粘了**真实形状的收据行** ⇒ 不许因此报警(防误报) | 正常工件被拦 |
 | 8 | message_names_file_and_line | 拒绝信息里含 `文件:行号` 和原文片段 | 报错不可操作 |
 | 9 | fail_closed_without_helper | helper 文件不在 ⇒ 拒绝归档(不是静默放行) | 静默放行 |
-| 10 | archive_only_not_precommit | verify.md 带未标记的 scratchpad 引用时,**pre-commit 照常放行** | 给活跃工作制造噪音 |
+| 10 | archive_only_not_precommit | verify.md 带未标记的 scratchpad 引用时,**pre-commit 照常放行** | 给活跃工作制造噪音 [仓外不承重] |
 
 **红检纪律(今天刚栽过)**:行为断言必须写在"字段/文件存在性"断言**之前**,
 否则红检只红在「helper 不存在」上 —— 那是浅红,等于没红检过。
@@ -91,7 +91,7 @@
 
 1. **闸会不会把"正在活跃的 track"也卡住?** —— 不会,只在 archive 触发;
    但我要在判据里把这件事**锚死**(用例 10),否则以后有人顺手挪进 pre-commit。
-2. **`scratchpad` 这个词会不会误伤?** 会 —— 任何提到这个词的散文都会被要求表态。
+2. **`scratchpad` 这个词会不会误伤?** 会 —— 任何提到这个词的散文都会被要求表态。 [仓外不承重]
    判定:**这是特性不是 bug**。表态成本 = 加 6 个字;而漏掉一条承重引用的成本 = 证据永久失踪。
 3. **标记会不会被滥用成新的"改考卷让自己及格"?** 会,而且这正是我自己最可能干的:
    赶时间时给每行都贴 `[仓外不承重]`。**闸挡不住这个**(和 5a 挡不住蓄意伪造同理)。
@@ -99,7 +99,7 @@
    而它会留在 git diff 里被闸③ 亲读看见。**说清射程,不假装它防得住。**
 4. **helper 缺件时**:必须 fail closed。这条已在用例 9。
 5. **本 track 自己会不会被自己的闸卡住?** —— **会**。这份 design.md 通篇在讲
-   `/tmp` 和 `scratchpad`。**这是最好的第一个真用户**:归档它的时候,
+   `/tmp` 和 `scratchpad`。**这是最好的第一个真用户**:归档它的时候, [仓外不承重]
    闸必须对着我自己的工件响一次,我再逐行贴标记。**新规矩第一次真跑要盯着看**
    ([[aiwork-worktree-sweep-track]] 的教训:它多半会遇到一个旧世界的对象)。
 
@@ -110,17 +110,17 @@
 | # | 它指出的假绿路线 | 为什么原版拦不住 |
 |---|---|---|
 | 1 | 🔴 **把逻辑内联进 `track`、根本不建 helper** | **E9 不是单变量** —— 我同时注入了"缺 helper"和"有危险引用",内联实现靠后者也能拒 |
-| 2 | 🔴 E7 什么都没锚住 | 我造的收据正文**压根不含 `/tmp`**;真 runlog 写绝对 `cwd:`(runlog:91),临时仓下天然是 `/tmp/tmp.xxx` |
+| 2 | 🔴 E7 什么都没锚住 | 我造的收据正文**压根不含 `/tmp`**;真 runlog 写绝对 `cwd:`(runlog:91),临时仓下天然是 `/tmp/tmp.xxx` [仓外不承重] |
 | 3 | 只查 design+verify 两份 | 没有 proposal / tasks / 嵌套 md 的夹具 |
 | 4 | 只报第一条命中就 return | 每幕只有一条未标记的行 |
-| 5 | 完全不查 `/tmp/` | E2 那行同时含 `scratchpad`,**不是单变量** |
-| 6 | 标记只对 `/tmp` 生效、对 `scratchpad` 仍误拒 | 没有"带标记的 scratchpad"正例 |
+| 5 | 完全不查 `/tmp/` | E2 那行同时含 `scratchpad`,**不是单变量** [仓外不承重] |
+| 6 | 标记只对 `/tmp` 生效、对 `scratchpad` 仍误拒 | 没有"带标记的 scratchpad"正例 [仓外不承重] |
 | 7 | 扫整个 `tracks/` 而不是本轮 | 每个夹具只有一个 track |
 | 8 | 行号写死 | 只核对一个预先知道的行号;且 `grep -q "design.md:4"` 是正则,`.` 通配 |
 | 9 | 先 `mv` 再搬回来 / 提前 `mkdir archive` | E3 只查 `archive/t3`,没查父目录 |
 
 另外它逼出一处**规格错**:我把"大小写不敏感"笼统写在三个 token 上,
-但 `/TMP/` 在 Linux 上根本不是 `/tmp/` —— 已按上面收窄。
+但 `/TMP/` 在 Linux 上根本不是 `/tmp/` —— 已按上面收窄。 [仓外不承重]
 
 > 📌 **这一步的价值就摆在这**:9 条真洞、1 处规格错,全部在**派活之前**、
 > 在花掉执行腿和四审的成本之前被抓到。
