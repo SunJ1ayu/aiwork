@@ -310,6 +310,31 @@ EOF
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- E14
+e14_fenced_code_block_is_scanned() {
+  echo "[E14] 围栏代码块里的引用**照样扫**(两条评审腿独立指出的考卷洞)"
+  local d; d="$(mktemp -d)"; local p="$d/proj" out
+  make_proj "$p" t14
+  # 四审 submimo 与 subdeepseek 各自独立指出:原版没有任何一幕锚住"围栏内要不要扫",
+  # 于是「跳过围栏块」的实现能全绿。这一幕把**现行取舍**锁死:围栏内一样算引用。
+  # (取舍本身有代价 —— 给逐字粘贴的终端记录加标记会改动原文;
+  #  design 里已记为已知限制,真被咬到再考虑块级豁免。)
+  cat > "$p/tracks/t14/design.md" <<'MD'
+# Design
+跑判据时的现场:
+
+```
+cmd:  bash tests/x.sh
+cwd:  /tmp/tmp.abc123/proj(仓根)
+```
+MD
+  out="$( cd "$p" && "$BIN/track" archive t14 "$p" 2>&1 )"
+
+  [[ ! -d "$(archived_dir "$p" t14)" ]];  check "围栏内的 /tmp 也要拦" $?
+  grep -q "tmp.abc123" <<< "$out";        check "点名了围栏里的那一行" $?
+  rm -rf "$d"
+}
+
 echo "=== test-evidence-lifetime ==="
 e1_unmarked_scratchpad_refused
 e2_unmarked_tmp_refused
@@ -324,5 +349,6 @@ e10_archive_only_not_precommit
 e11_scans_all_md_including_nested
 e12_scratchpad_case_insensitive
 e13_tmpdir_variable_form
+e14_fenced_code_block_is_scanned
 echo "=== PASS=$PASS FAIL=$FAIL ==="
 [[ "$FAIL" -eq 0 ]]

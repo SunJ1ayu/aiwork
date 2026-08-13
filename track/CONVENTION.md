@@ -44,6 +44,43 @@ runlog -t <track> [-n <slug>] -- <判据命令>     # 退出码原样透传
 一整块闸被整块 SKIP,汇总照印 OK。**汇总会撒谎,细节不会。**
 ⚠️ 强度只到「堵顺手四舍五入」,**堵不住蓄意伪造**(手改收据文件即可)。别高估它。
 
+## Evidence lifetime — the `[仓外不承重]` marker (2026-08-13)
+
+Artifacts live as long as the repo. Session scratch dirs (`/tmp/claude-0/<session>/scratchpad`,
+`$TMPDIR`) die with the session. A prose citation stitches the two together with a
+plain path string that **carries no lifetime guarantee and does not error when it breaks** —
+the sentence still reads fine, so a checkable artifact silently degrades into a self-report.
+Measured 2026-08-13: 22 of 348 track md files carried such a reference; ~9 were load-bearing
+(e.g. "自审全文在 scratchpad 的 my-review" — a file whose whole purpose was proving
+the self-review predated the panel).
+
+`track archive` therefore scans every `*.md` under the track being archived and refuses to
+archive any line mentioning `/tmp/` (literal), `scratchpad` (case-insensitive) or `TMPDIR`
+(word). Two ways forward, and **only these two**:
+
+1. **Move the evidence into the repo** (`evidence/…`) and rewrite the citation to the in-repo
+   path. The correct fix removes the trigger by itself. If the moved file is byte-identical to
+   something already in git, cite the commit instead (`git show <commit>:<path>`) rather than
+   storing a second copy.
+2. **Mark the line `[仓外不承重]`** — per line, never a blanket "I checked" note.
+
+**Semantics of the marker — read this before using it.** It means *"I judged this line to be
+non-load-bearing"*. It is a claim by the author, not a fact the gate verified: pasting it onto
+every line will pass the gate. That is the same acknowledged range limit as 规矩5a
+(which cannot stop a hand-edited receipt either). The only backstop is that the marker lands
+in the git diff, where 闸③ (亲读 diff) can see it. **Marking a load-bearing citation is a
+judgment error, and it is attributable.**
+
+Why archive-time only, never pre-commit: citing scratchpad *while the work is live* is normal —
+the file still exists. The claim only has to hold when you declare the work done. Checking it at
+commit time would be noise on active work, and a noisy guard stops being believed.
+
+Known range limits (do not pretend otherwise): `$(mktemp -d)`, URL-encoded paths, and paths that
+reach a temp dir through a stable symlink are **not** caught — the gate never resolves paths.
+Bare `/tmp` with no trailing slash is not caught either. Fenced code blocks *are* scanned, so a
+pasted terminal transcript containing a temp path needs a marker (which edits the transcript) —
+accepted for now, revisit with a block-level exemption if it actually bites.
+
 ## Commands
 
 ```
