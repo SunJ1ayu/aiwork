@@ -1509,6 +1509,46 @@ EOF
 
 
 # ---------------------------------------------------------------- V23
+# ---------------------------------------------------------------- V25
+# 腿必须起在**自己的会话里**,否则调用者一断线,SIGTERM 打到整个进程组,
+# 还没跑完的腿连同它的结论一起没。08-16 / 08-17 两次断线都栽在这儿,
+# 而每次挨刀的都是 kimi —— **它不是最脆的,是尾巴最长的**(11~18 分钟)。
+#
+# 这条判据问的是"腿的 SID 和调用者的 SID 不一样",不是"脚本里有没有 setsid 这几个字":
+# 后者是在规定代码长什么样,而且改个写法就瞎(今天刚在 design-studio 那边为同一种病
+# 重写过一道闸)。
+v25_legs_run_in_their_own_session() {
+  echo "[V25] 腿起在自己的会话里(断线砍不到还在跑的那条)"
+  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  cp "$BIN/panel-review" "$b/panel-review"
+  printf '# t\n' > "$d/t.md"
+
+  # 假腿:把自己的 SID 写进它那份日志(第 3 个参数)
+  local leg
+  for leg in submimo subdeepseek subglm; do
+    cat > "$b/$leg" <<'EOF'
+#!/usr/bin/env bash
+ps -o sid= -p $$ | tr -d ' ' > "$3"
+exit 0
+EOF
+    chmod +x "$b/$leg"
+  done
+
+  bash "$b/panel-review" --no-my-review "$d/t.md" "$d" "$d/S" >/dev/null 2>&1
+  local mine; mine="$(ps -o sid= -p $$ | tr -d ' ')"
+  for leg in submimo subdeepseek subglm; do
+    local got; got="$(cat "$d/S.$leg.log" 2>/dev/null || echo MISSING)"
+    if [[ "$got" == "MISSING" || -z "$got" ]]; then
+      bad "V25: $leg 没写下自己的 SID(判据自己坏了,不是结论)"
+    elif [[ "$got" == "$mine" ]]; then
+      bad "V25: $leg 和调用者同一个会话($got)⇒ 断线会连它一起砍"
+    else
+      ok "V25: $leg 在自己的会话里(它 $got / 调用者 $mine)"
+    fi
+  done
+  rm -rf "$d"
+}
+
 v23_my_review_gate_on_every_review_path() {
   echo "[V23] 反锚定闸要盖住**每一条评审路径**,不只是 panel-review"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
@@ -1655,5 +1695,6 @@ REVIEW_NO_MY_REVIEW=1 v22_anchor_leak_sees_committed_track
 REVIEW_NO_MY_REVIEW=1 v22_roster_file
 v23_my_review_gate_on_every_review_path
 v24_no_env_backdoor_and_coverage_report
+v25_legs_run_in_their_own_session
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

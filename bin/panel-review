@@ -274,12 +274,15 @@ stagger() {
 # "Reached max turns"). The chat leg is a weaker but live reviewer, so retry there
 # instead of silently shipping a 2-leg panel. The failed agent output is preserved
 # as <log>.agent.log(+.err) so the infra failure stays diagnosable.
+# ⚠ `setsid` 套不到 bash 函数上,所以下面是套在**函数里那两处真正的调用**上:
+#   会话一死,run_leg 这层壳会跟着没(于是回落逻辑不再跑),但**腿自己活着写完日志** ——
+#   要保的正是那份日志。
 run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   local agent="$1" chat="$2" log="$3" err="$4" label="$5" rc
   # --panel-dispatch 走**命令行**,不用环境变量(后者会被 shell 继承 = 随手可按的后门);
   # 而且放在**参数末尾** —— 放开头会把各腿的位置参数整体顶偏一位,
   # 任何按 $3 取日志路径的调用方(判据里的假腿全是这么写的)当场就坏。08-06 实测。
-  "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
+  setsid --wait "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   if [[ $rc -eq 0 || "$agent" == "$chat" ]]; then return $rc; fi
   # agent leg died and a distinct chat leg exists -> keep the evidence, then retry
   [[ -e "$log" ]] && mv -f "$log" "${log%.log}.agent.log"
@@ -287,7 +290,7 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   local agent_rc=$rc   # 底座腿的死因;下面 rc 会被聊天腿的返回码覆盖
   echo "  NOTE: $label agent leg failed (rc=$agent_rc) -> fallback to chat leg;" \
        "agent output kept at ${log%.log}.agent.log(.err)"
-  "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
+  setsid --wait "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   # 横幅写进日志本身,不只印在 stdout:这份结论以后会被单独读到(归档、断线重连),
   # 那时终端上那行 NOTE 早就没了,而一份降级腿的结论长得和健康腿一模一样。
   # 2026-08-03 我就是这样差点按「四审三腿 PASS」给权重,实际只有两腿睁着眼。
@@ -303,7 +306,18 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   return $rc
 }
 
-"$BIN/submimo"  review "$TASK_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" --panel-dispatch >/dev/null 2>"$SUBMIMO_ERR"  &
+# ── 每条腿都起在**自己的会话里**(2026-08-17)────────────────────────────
+# 起因:08-16 和 08-17 两次断线,都砍在四审跑到一半。腿是这个驱动的后台子进程,
+# 整串在调用者的进程组里 ⇒ 会话一死,SIGTERM 打到整组,**谁还没跑完谁全丢**。
+# submimo 三分钟交卷、保住了;kimi 要跑 11~18 分钟,于是每次被砍的都是它 ——
+# **它不是最脆的那条,是尾巴最长的那条**。
+#
+# `setsid --wait` 两头都要:腿进新会话(SIGTERM 够不着),而 setsid 自己仍是本脚本
+# 的子进程 ⇒ 下面的 `wait` 和 rc 语义一个字都不用改。
+# 注意 subkimi 里那套"先写裁决、超时也不亏"的兜底**防不了这个** ——
+# 被 SIGTERM 打死时那段抢救代码根本没机会跑。兜底装在了另一种失败模式上。
+LEG=(setsid --wait)
+"${LEG[@]}" "$BIN/submimo"  review "$TASK_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" --panel-dispatch >/dev/null 2>"$SUBMIMO_ERR"  &
 PID_MIMO=$!
 stagger
 run_leg "$DEEPSEEK_CMD" "$BIN/subdeepseek" "$SUBDEEPSEEK_LOG" "$SUBDEEPSEEK_ERR" subdeepseek &
@@ -317,7 +331,7 @@ fi
 PID_KIMI=""
 if [[ -n "$KIMI_CMD" ]]; then
   stagger
-  "$KIMI_CMD"   review "$TASK_FILE" "$SUBKIMI_LOG"  "$REPO_DIR" --panel-dispatch >/dev/null 2>"$SUBKIMI_ERR"  &
+  "${LEG[@]}" "$KIMI_CMD"   review "$TASK_FILE" "$SUBKIMI_LOG"  "$REPO_DIR" --panel-dispatch >/dev/null 2>"$SUBKIMI_ERR"  &
   PID_KIMI=$!
 fi
 
