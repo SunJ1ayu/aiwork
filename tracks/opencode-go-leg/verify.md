@@ -28,9 +28,38 @@ runlog: green-final rc=0 commit=3256e60 dirty=yes at=2026-08-18T10:16:10Z file=t
 runlog: smoke-after-final rc=0 commit=3256e60 dirty=yes at=2026-08-18T10:21:35Z file=tracks/opencode-go-leg/evidence/20260818T102135Z-01-smoke-after-final.txt
 ```
 
-**跑红的一份都没藏**(5b)。evidence/ 里另有 6 份收敛过程中的收据(smoke-chat-leg 1~3、
-redcheck-three-new、redcheck-default-chat 1~3、green-after-impl、panel-full 的第一次
-094150Z——那次被反锚定闸拦下,理由见下)。全部随本 track 入库(5d)。
+### 跑红的每一份(5b:一份都不许藏)
+
+上面那段原本是散文式的"另有 6 份收敛过程中的收据",**归档闸当场把它拒了** ——
+规矩 5b 要的是每一份红收据的**收据行在场**,不是我的转述。闸是对的:我贴了好看的、
+把红的总结掉了,而红的那几遍才是这一单最值钱的部分。逐份补上,每份一句它红在什么上:
+
+```
+runlog: oracle-after-impl rc=1 commit=cd1c356 dirty=yes at=2026-08-18T07:59:09Z file=tracks/opencode-go-leg/evidence/20260818T075909Z-01-oracle-after-impl.txt
+runlog: smoke-real-endpoint rc=1 commit=b411638 dirty=yes at=2026-08-18T08:14:49Z file=tracks/opencode-go-leg/evidence/20260818T081449Z-01-smoke-real-endpoint.txt
+runlog: smoke-chat-leg rc=1 commit=b411638 dirty=yes at=2026-08-18T08:21:18Z file=tracks/opencode-go-leg/evidence/20260818T082118Z-01-smoke-chat-leg.txt
+runlog: smoke-chat-leg-2 rc=1 commit=b411638 dirty=yes at=2026-08-18T08:23:38Z file=tracks/opencode-go-leg/evidence/20260818T082338Z-01-smoke-chat-leg-2.txt
+runlog: redcheck-three-new rc=1 commit=b411638 dirty=yes at=2026-08-18T08:44:49Z file=tracks/opencode-go-leg/evidence/20260818T084449Z-01-redcheck-three-new.txt
+runlog: redcheck-default-chat rc=1 commit=b411638 dirty=yes at=2026-08-18T08:48:27Z file=tracks/opencode-go-leg/evidence/20260818T084827Z-01-redcheck-default-chat.txt
+runlog: redcheck-default-chat-2 rc=1 commit=b411638 dirty=yes at=2026-08-18T08:52:23Z file=tracks/opencode-go-leg/evidence/20260818T085223Z-01-redcheck-default-chat-2.txt
+runlog: redcheck-default-chat-3 rc=1 commit=b411638 dirty=yes at=2026-08-18T08:56:27Z file=tracks/opencode-go-leg/evidence/20260818T085627Z-01-redcheck-default-chat-3.txt
+runlog: green-after-impl rc=1 commit=66f4d2d dirty=yes at=2026-08-18T09:12:54Z file=tracks/opencode-go-leg/evidence/20260818T091254Z-01-green-after-impl.txt
+runlog: panel-full rc=1 commit=5b250c9 dirty=yes at=2026-08-18T09:41:50Z file=tracks/opencode-go-leg/evidence/20260818T094150Z-01-panel-full.txt
+runlog: green-final rc=1 commit=03a1f49 dirty=yes at=2026-08-18T10:08:00Z file=tracks/opencode-go-leg/evidence/20260818T100800Z-01-green-final.txt
+```
+
+| 收据 | 红在什么上 | 算不算数 |
+|---|---|---|
+| `oracle-after-impl` | 头一版实现之后仍有 2 条红(默认档那两处) | **算** —— 判据在正确地咬 |
+| `smoke-real-endpoint` | 真端点第一次:**404 被 CLI 报成「模型 glm-5.2 不存在」**。地址多了一层 `/v1` | **算** —— 这条红逼出了"base URL 不带 /v1"那条判据 |
+| `smoke-chat-leg` / `-2` | 聊天腿被 Cloudflare **403(code 1010)**,urllib 默认 UA 被按指纹挡 | **算** —— 逼出了 User-Agent 那条判据 |
+| `redcheck-three-new` | 5 红:含两条真红 + **判据自己没跑起来**(stub 用 /dev/tcp 探活,把 `handle_request()` 唯一那次服务用掉了) | **算,但其中 1 条是量具坏了**,已在判据注释里写明 |
+| `redcheck-default-chat` 1/2/3 | 4→3→2 红,是我修**判据自己的 bug** 的过程(第二个坑:拿本节自造的桩去问"请求带没带 UA",问的是空气) | **算** —— 这三份记录的是判据被修好的过程,不是实现被改到及格 |
+| `green-after-impl` | 只剩 1 红:`panel: GLM leg defaults to chat leg` | **算,且是这单最值钱的一条红** —— 我先隔离复现(拿到 CHAT-LEG,实现是对的)才判定是量具坏了(顶部全局 `export PANEL_GLM_LEG=agent` 污染),**没有顺着"改实现迁就判据"走** |
+| `panel-full`(094150Z) | 四审第一次被**反锚定闸**拦下:我那份 my-review 放在了被评审的仓内(这次被审的就是 /root/aiwork 自己),引擎会把它内联进腿的提示词 = 喂标准答案 | **不算判据结果**,是闸正确拦下我。挪到仓外重跑 = 094231Z 那份 rc=0 |
+| `green-final`(100800Z) | 1 红:`subchat -h 不许还写着 bigmodel 端点` | **算,但断言本身写糙了** —— 它把"从智谱 bigmodel 换来"这句沿革句也禁了。已把断言**搬到问得出的地方并加强**(禁主机名 + 正面钉死全址),并重新红检过(3256e60) |
+
+全部随本 track 入库(5d)。
 
 **这两条最值钱**:
 - `green-final` rc=0 是**最后一次编辑之后**那一遍(本机三次栽在"给的绿是过期的")。
