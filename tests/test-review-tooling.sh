@@ -596,8 +596,13 @@ PYEOF
   env -u ZHIPU_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" ZHIPU_AUTH_FILE="$d/auth.json" \
     bash "$b/subglm-agent" review "$d/t.md" "$d/a2.log" "$d" >/dev/null 2>&1; rc=$?
   check "agent auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
-  [[ "$(agentget "$d/a2.json" ANTHROPIC_AUTH_TOKEN)" == "zk-file" ]]
+  # 2026-08-18:env-key 那条路已经换成 x-api-key,**这条 auth-file 路当时被漏掉了**
+  # —— 是判据自己在这儿红了一次才发现的。所以这里不止把变量名跟着改,还补上
+  # "Bearer 那格必须是空的":只改名字的话,两条路各走各的 header 又会看不出来。
+  [[ "$(agentget "$d/a2.json" ANTHROPIC_API_KEY)" == "zk-file" ]]
   check "agent: key loaded from auth file" $?
+  [[ -z "$(agentget "$d/a2.json" ANTHROPIC_AUTH_TOKEN)" ]]
+  check "agent: auth-file 这条路同样不许走 Bearer" $?
 
   # verdict gate: no Conclusion -> non-zero, log still written
   env PATH="$b:$PATH" CAPTURE="$d/a3.json" ZHIPU_API_KEY=zk \
@@ -1499,12 +1504,16 @@ v22_roster_file() {
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
 
-  # 场景一:submimo 绿、subdeepseek 死(rc=5)、GLM 关着(默认)、kimi 绿
+  # 场景一:submimo 绿、subdeepseek 死(rc=5)、**GLM 显式关掉**、kimi 绿
   printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/submimo"
   printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/subkimi"
   printf '#!/bin/bash\necho "boom" >&2\nexit 5\n' > "$pb/subdeepseek"
   chmod +x "$pb/submimo" "$pb/subkimi" "$pb/subdeepseek"
-  env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/R1" >"$d/r1.out" 2>&1
+  # 08-18:这里原本写 `env -u PANEL_GLM_LEG`,靠"默认就是 off"隐式让 GLM 关着 ——
+  # 那天默认翻成 agent,这条判据就跟着红了。它要问的是**关着的腿怎么记账**
+  # (08-05 那笔账),不是"默认开还是关"(那条归 V13 管)。把关法写明,
+  # 别让一条判据挂在一个会漂的默认值上。
+  PANEL_GLM_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/R1" >"$d/r1.out" 2>&1
   [[ -s "$d/R1.roster" ]]; check "V22c: 收尾写出 <prefix>.roster" $?
   grep -q "submimo=PASS" "$d/R1.roster";      check "V22c: 绿腿记 PASS" $?
   grep -q "subdeepseek=FAIL(rc=5)" "$d/R1.roster"; check "V22c: 死腿记 FAIL 且带 rc" $?
