@@ -1,0 +1,76 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    smoke-chat-leg-3
+cmd:     env REVIEW_NO_MY_REVIEW=1 ZHIPU_INCLUDE=bin/subagent bin/subglm review tasks/opencode-go-leg-smoke.md logs/smoke-glm-chat3.log /root/aiwork
+cwd:     /root/aiwork(仓根)
+commit:  b411638
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-18T08:39:55Z
+---------------- 输出开始 ----------------
+## 评审报告
+
+### 问题 1:`AUTH_ENV` 表驱动认证 header 是否改坏了 deepseek 腿?
+
+**结论:未改坏。**
+
+从 `bin/subagent` 完整文件内容可以追溯 `AUTH_ENV` 的完整机制:
+
+**供应商表(第 97-130 行附近):**
+- deepseek: `AUTH_ENV="ANTHROPIC_AUTH_TOKEN"` —— 对应 `Authorization: Bearer` 头
+- zhipu: `AUTH_ENV="ANTHROPIC_API_KEY"` —— 对应 `x-api-key` 头
+
+**环境注入(第 178 行附近):**
+```bash
+env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+    "$AUTH_ENV=$API_KEY" \
+```
+
+逐步推演 deepseek 腿的执行路径:
+1. `env -u ANTHROPIC_API_KEY` → 擦掉父 harness 的真 key(防止劫持)
+2. `env -u ANTHROPIC_AUTH_TOKEN` → 擦掉旧值
+3. `"$AUTH_ENV=$API_KEY"` → 展开为 `ANTHROPIC_AUTH_TOKEN=<deepseek key>` → 重新注入
+
+Claude CLI 看到 `ANTHROPIC_AUTH_TOKEN` 有值、`ANTHROPIC_API_KEY` 无值 → 走 Bearer 认证。这与 deepseek 腿的历史行为一致(注释也印证:"这一格 08-18 才出现 —— 在那之前 Bearer 是硬写在下面注环境那行里的")。表驱动重构只是把原来硬编码的 `ANTHROPIC_AUTH_TOKEN` 提到了供应商表里,deepseek 的值没变。
+
+zhipu 腿则从原来错误地共用 `ANTHROPIC_AUTH_TOKEN`(Bearer)修正为 `ANTHROPIC_API_KEY`(x-api-key),这是修 bug 不是引入 bug。
+
+**差异确实只活在供应商表里**,躯干共用部分(env 注入逻辑)对两条腿是同一份代码,没有 per-provider 分支泄漏到表外。
+
+### 问题 2:`bin/panel-review` GLM 腿默认值从 off 翻回 agent,关掉的能力还在不在?
+
+**结论:无法验证。**
+
+任务明确要求审查 `bin/panel-review` 的默认值改动,但:
+- 供应的 "Included Files" 只有 `bin/subagent`
+- Git Diff(vs HEAD)只含 `bin/subagent` 和 `bin/submimo-review` 的未提交改动
+- `bin/panel-review` 既不在 diff 中,也不在文件内容中
+
+`bin/panel-review` 的改动应该在 `da5d244..HEAD` 的已提交 diff 里,但这段 commit diff 未被供应。我无法确认:
+1. 默认值是否确实从 `off` 改成了 `agent`
+2. 关闭能力(环境变量/配置项/命令行参数)是否仍然存在
+
+### 附加发现
+
+**证据文件显示冒烟测试全部失败(rc=1):**
+
+| 证据文件 | 腿 | 错误 | 原因 |
+|---|---|---|---|
+| `081449Z` | 底座腿(subagent) | `unrecognized_model glm-5.2` | URL 多了 `/v1` → 404 被 CLI 报成"模型不存在" |
+| `082118Z` | 聊天腿(submimo-review) | HTTP 403, error code 1010 | Cloudflare 按浏览器指纹封禁 urllib 默认 UA |
+| `082338Z` | 聊天腿 | HTTP 500 | 服务端内部错误(可能是同一端点不稳定) |
+| `083955Z` | 聊天腿 | 输出为空,无 `runlog:` 结尾行 | 疑似未完成或静默失败 |
+
+未提交的 diff 中的两个修复(URL 去掉 `/v1`、加 `User-Agent`)正是针对前两个错误,修复方向正确。但:
+- 这些修复尚未提交,也未有通过的冒烟证据佐证
+- `083955Z` 证据文件缺少 `runlog:` 收尾行,无法判断最终 rc
+
+**`bin/submimo-review` 的 `os` 导入(LOW):** diff 中新增了 `os.environ.get(...)`,但我没有该文件的完整内容,无法确认 `import os` 是否已存在。若不存在,修复本身会引入 `NameError`。不过证据文件中该脚本能跑起来并返回 HTTP 错误(而非 Python 异常),间接说明 `os` 大概率已导入——但这是在加 UA 行之前跑的。
+
+---
+
+Conclusion: NEEDS_MORE_INFO
+
+**理由:** 问题 1(AUTH_ENV 未改坏 deepseek)可以从供应的 `bin/subagent` 完整内容验证,结论是 PASS。但问题 2 要求审查 `bin/panel-review` 的默认值改动与关闭能力,该文件内容未供应、`da5d244..HEAD` 的 commit diff 也未供应,我无法形成可证伪的判断。需要补充 `bin/panel-review` 的文件内容或 `da5d244..HEAD` 的 commit diff。
+
+[full log written to /root/aiwork/logs/smoke-glm-chat3.log]
+---------------- 输出结束 ----------------
+runlog: smoke-chat-leg-3 rc=0 commit=b411638 dirty=yes at=2026-08-18T08:39:55Z file=tracks/opencode-go-leg/evidence/20260818T083955Z-01-smoke-chat-leg-3.txt
