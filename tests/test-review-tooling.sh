@@ -709,10 +709,13 @@ EOF
   # **必须 env -u**:本文件顶部为了老用例 export 了 PANEL_GLM_LEG=agent,
   # 不摘掉的话这一条问的是那个 export、不是默认档(见顶部那段的 ⚠️)。
   env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1" >/dev/null 2>&1
-  # 08-18:默认从 agent 翻成 chat —— 不是偏好,是 OpenCode Go 的 Anthropic 口
-  # 不做工具格式转换,底座腿带着 Anthropic 形状的 tools 一律 400(见 V26 注释)。
-  # 这条和 V13 里那条问的是同一件事,两处都得改,别只改一处。
-  grep -q CHAT-LEG "$d/P1.subglm.log"; check "panel: GLM leg defaults to chat leg" $?
+  # 2026-08-18 晚:**默认档翻回底座腿**。08-18 白天写成 chat 的理由是
+  # 「底座腿在 OpenCode Go 上必 400」—— 那个事实随 track opencode-agent-base 消失了:
+  # 底座从"借 Claude Code 当壳"换成 opencode CLI 自己,工具形状天然对得上。
+  # **改这条规格的依据不是我想改,是端到端实跑**:subglm-agent 在真端点上自己跑了
+  # git status / git log / Read calc.py / Glob,抓到埋的雷,给出 Conclusion: BLOCK
+  # (收据 smoke-real-leg)。关法(off)和强制聊天腿(chat)两条逃生路都保留。
+  grep -q AGENT-LEG "$d/P1.subglm.log"; check "panel: GLM leg defaults to agent leg" $?
   # 关法和强制走底座腿的能力都还在(哪天 Go 补上转换,靠这条切回去)
   PANEL_GLM_LEG=agent bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1b" >/dev/null 2>&1
   grep -q AGENT-LEG "$d/P1b.subglm.log"; check "panel: PANEL_GLM_LEG=agent 仍能强制走底座腿" $?
@@ -964,15 +967,12 @@ EOF
   chmod +x "$pb/subglm-agent" "$pb/subglm"
   env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G1" >/dev/null 2>&1
   if [[ -e "$d/G1.subglm.log" ]]; then ok "panel: GLM 腿默认开着(OpenCode Go 之后)"; else bad "panel: GLM 腿默认开着(OpenCode Go 之后)"; fi
-  # 默认走**聊天腿**,不是底座腿 —— 这条是被真端点逼出来的,不是偏好:
-  # OpenCode Go 的 Anthropic 口不做工具格式转换(它把请求体直接转发给 OpenAI
-  # 形状的上游),带 Anthropic 形状的 tools 一律 400
-  # 「Missing required input field: 'tools[0].function.name'」。
-  # 而底座腿的全部意义就是自带工具自己读仓库 ⇒ 在这个后端上它起不来。
-  # 08-18 实测三档:无工具 200 / Anthropic 形状工具 400 / OpenAI 形状工具 200。
-  # 哪天 Go 把转换补上,或者换成 opencode 自己的底座,再把这条改回 agent。
-  grep -q "GLM-CHAT-LEG" "$d/G1.subglm.log" 2>/dev/null
-  check "panel: GLM 默认走聊天腿(底座腿在 Go 上会被 400,见注释)" $?
+  # 08-18 白天:默认改聊天腿,因为底座腿借 Claude Code 当壳、在 Go 上必 400。
+  # 08-18 晚:**改回底座腿** —— 底座换成 opencode CLI 自己(track opencode-agent-base),
+  # 400 那个前提没了。依据是端到端实跑:它自己 git status / Read / Glob 抓到埋的雷。
+  # 「换成 opencode 自己的底座就改回 agent」这句话当时就写在旧注释里,现在兑现。
+  grep -q "GLM-AGENT-LEG" "$d/G1.subglm.log" 2>/dev/null
+  check "panel: GLM 默认走底座腿(opencode 底座,自己读仓库)" $?
   PANEL_GLM_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G2" >/dev/null 2>&1
   if [[ -e "$d/G2.subglm.log" ]]; then bad "panel: PANEL_GLM_LEG=off 还能把它关掉"; else ok "panel: PANEL_GLM_LEG=off 还能把它关掉"; fi
   rm -f "$pb/subglm-agent" "$pb/subglm"
@@ -1369,7 +1369,11 @@ echo "AGENT-LEG mode=$1" > "$3"; exit 0
 EOF
     chmod +x "$pb/$leg" "$pb/$leg-agent"
   done
-  PANEL_STAGGER_MAX=0 bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E1" >/dev/null 2>&1
+  # **必须 env -u**:本文件顶部为了老用例 export 了 PANEL_GLM_LEG=agent。
+  # 不摘掉的话这条问的是那个 export、不是默认档 —— 实测它在 panel-explore 默认值
+  # 是 chat 的那段时间里**一直是绿的**(2026-08-18 抓到,今天第三条同形状的瞎断言:
+  # 问"默认是什么"却在被污染的环境里问)。
+  env -u PANEL_GLM_LEG PANEL_STAGGER_MAX=0 bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E1" >/dev/null 2>&1
   for leg in subglm subdeepseek; do
     grep -q AGENT-LEG "$d/E1.$leg.log" 2>/dev/null
     check "V17: panel-explore 的 $leg 默认走底座腿" $?
@@ -2061,11 +2065,11 @@ EOF
   done
   printf 'brief\n' > "$d/brief.md"
   env -u PANEL_GLM_LEG bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E1" >/dev/null 2>&1
-  grep -q "subglm-RAN" "$d/E1.subglm.log" 2>/dev/null
-  check "V27: panel-explore 的 GLM 默认档 = 聊天腿(和 panel-review 一致)" $?
-  PANEL_GLM_LEG=agent bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E2" >/dev/null 2>&1
-  grep -q "subglm-agent-RAN" "$d/E2.subglm.log" 2>/dev/null
-  check "V27: panel-explore 仍能用 PANEL_GLM_LEG=agent 强制走底座腿" $?
+  grep -q "subglm-agent-RAN" "$d/E1.subglm.log" 2>/dev/null
+  check "V27: panel-explore 的 GLM 默认档 = 底座腿(和 panel-review 一致)" $?
+  PANEL_GLM_LEG=chat bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E2" >/dev/null 2>&1
+  grep -q "subglm-RAN" "$d/E2.subglm.log" 2>/dev/null
+  check "V27: panel-explore 仍能用 PANEL_GLM_LEG=chat 强制回落聊天腿" $?
 
   # ── ③ `-h` 不许谎报默认值。这类"只在 -h 时打印"的字符串没人会跑到,
   #    于是它们是仓里最容易变成化石的地方 —— 08-18 四审两条腿都翻出来了。
