@@ -1826,14 +1826,15 @@ PYEOF2
   # ── ④c 聊天腿必须带 User-Agent。urllib 的默认 UA 会被 Cloudflare 前置的端点
   #    403(error code 1010);同一个请求 curl 200 / urllib 403,只差这一行。
   #    这里用**本机 stub 服务**问,不出外网(判据不许有外网出口)。
-  local port=8791
+  # **让内核挑端口**,别写死 8791:端口被占(并发跑 / 上次断线留下的遗孤)⇒ stub 起不来
+  # ⇒ 这条判据误红。08-18 四审两处独立点到这个量具隐患。绑 0 之后把真端口回写出来。
   # stub 服务:绑好端口后自己写一个 ready 文件,**别用 /dev/tcp 探活** ——
   # handle_request() 只服务一次,探活那条连接会把它唯一的那次用掉,
   # 于是真请求撞上"连接被拒",而判据看到的现象是"stub 没收到请求"。
   # (08-18 第一版就是这么写的,红了一轮才看明白是量具自己的问题。)
-  python3 - "$d/ua.json" "$port" "$d/ua.ready" <<'PYUA' &
+  python3 - "$d/ua.json" "$d/ua.port" "$d/ua.ready" <<'PYUA' &
 import http.server, json, sys, pathlib
-out, port, ready = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+out, portfile, ready = sys.argv[1], sys.argv[2], sys.argv[3]
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get('content-length', 0)); self.rfile.read(n)
@@ -1842,13 +1843,15 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.send_header('content-type','application/json')
         self.send_header('content-length', str(len(r))); self.end_headers(); self.wfile.write(r)
     def log_message(self, *a): pass
-srv = http.server.HTTPServer(('127.0.0.1', port), H)
+srv = http.server.HTTPServer(('127.0.0.1', 0), H)
+pathlib.Path(portfile).write_text(str(srv.server_address[1]))
 pathlib.Path(ready).write_text("ok")
 srv.timeout = 60
 srv.handle_request()
 PYUA
   local stubpid=$!
   for _ in $(seq 1 40); do [[ -f "$d/ua.ready" ]] && break; sleep 0.25; done
+  local port; port="$(cat "$d/ua.port" 2>/dev/null)"
   # **必须用真的那条腿**($BIN,不是 $b):$b/submimo-review 是本节自己造的桩,
   #  桩根本不发 HTTP —— 拿桩问"发出去的请求带没带 UA",问的是空气。
   ZHIPU_API_KEY=zk ZHIPU_INCLUDE="$d/t.md" \
@@ -1876,6 +1879,74 @@ PYUA
     bad "V26: 仓里被跟踪的文件不含 API key 形状的字符串"; echo "    (git grep 自己失败 rc=$grc,判据不可用)"
   elif [[ -z "$hits" ]]; then ok "V26: 仓里被跟踪的文件不含 API key 形状的字符串"
   else bad "V26: 仓里被跟踪的文件不含 API key 形状的字符串"; echo "$hits" | head -5 | sed 's/^/    /'; fi
+
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V27
+# 2026-08-18 四审逼出来的三件。前两件是**行为**,第三件是"帮助文本不许谎报"。
+v27_knockon_of_the_backend_switch() {
+  echo "[V27] 换后端的连带面:AUTH_ENV 守卫 / panel-explore 默认档 / -h 不许谎报"
+  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
+  printf '# review this\n' > "$d/t.md"
+
+  # ── ① AUTH_ENV 漏填必须**硬失败**,不许静默注一个空名变量。
+  #    实测(GNU coreutils 9.4):`env '=secret' cmd` **rc=0、不报错**,子进程拿到一个
+  #    名字为空的 `=secret`,而 ANTHROPIC_API_KEY 根本没设 ⇒ 腿活着、每次 401,
+  #    日志上只看得见"模型没回话"。这正是本单要根治的病,表驱动自己却没守卫。
+  #    (08-18 四审有两条腿都断言这里是 fail-closed —— **它们都错了**,我实测的。
+  #     所以这条断言不是抄评审意见,是抄实测。)
+  cp "$BIN/subglm-agent" "$BIN/subagent" "$b/"
+  cat > "$b/claude" <<'EOF'
+#!/usr/bin/env bash
+touch "$CAPTURE"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+EOF
+  chmod +x "$b/claude"
+  # 模拟"新增供应商时忘了填 AUTH_ENV"
+  sed -i 's/^\( *\)AUTH_ENV="ANTHROPIC_API_KEY"/\1AUTH_ENV=""/' "$b/subagent"
+  grep -q 'AUTH_ENV=""' "$b/subagent"
+  check "V27: 前置——挖空 AUTH_ENV 这一刀真的切中了(不然下面三条是在测空气)" $?
+  rm -f "$d/c1.flag"
+  env PATH="$b:$PATH" CAPTURE="$d/c1.flag" ZHIPU_API_KEY=zk \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/c1.log" "$d" >/dev/null 2>"$d/c1.err"; rc=$?
+  [[ $rc -ne 0 ]]
+  check "V27: AUTH_ENV 漏填时硬失败(env 会静默放过,所以守卫必须在我们这边)" $?
+  if [[ -e "$d/c1.flag" ]]; then
+    bad "V27: AUTH_ENV 漏填时 claude 压根没被调起"
+    echo "    (claude 被调起来了 ⇒ 我们把一条注定 401 的腿放出去了)"
+  else ok "V27: AUTH_ENV 漏填时 claude 压根没被调起"; fi
+  grep -qi "AUTH_ENV" "$d/c1.err"
+  check "V27: 报错点名 AUTH_ENV(别让人对着 401 猜)" $?
+
+  # ── ② panel-explore 的 GLM 默认档必须和 panel-review 一致 = 聊天腿。
+  #    底座腿在 Go 上必 400(见 V26/design)⇒ 默认写 agent = 每轮先白撞一次再降级。
+  #    08-18 四审两条腿(kimi / deepseek)独立命中这一处,我自审漏了。
+  local pb="$d/pbin"; mkdir -p "$pb"
+  cp "$BIN/panel-explore" "$pb/"
+  local st
+  for st in submimo subdeepseek subglm subdeepseek-agent subglm-agent; do
+    printf '#!/usr/bin/env bash\necho "%s-RAN" > "$3"; exit 0\n' "$st" > "$pb/$st"
+    chmod +x "$pb/$st"
+  done
+  printf 'brief\n' > "$d/brief.md"
+  env -u PANEL_GLM_LEG bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E1" >/dev/null 2>&1
+  grep -q "subglm-RAN" "$d/E1.subglm.log" 2>/dev/null
+  check "V27: panel-explore 的 GLM 默认档 = 聊天腿(和 panel-review 一致)" $?
+  PANEL_GLM_LEG=agent bash "$pb/panel-explore" "$d/brief.md" "$d" "$d/E2" >/dev/null 2>&1
+  grep -q "subglm-agent-RAN" "$d/E2.subglm.log" 2>/dev/null
+  check "V27: panel-explore 仍能用 PANEL_GLM_LEG=agent 强制走底座腿" $?
+
+  # ── ③ `-h` 不许谎报默认值。这类"只在 -h 时打印"的字符串没人会跑到,
+  #    于是它们是仓里最容易变成化石的地方 —— 08-18 四审两条腿都翻出来了。
+  local h
+  h="$(bash "$BIN/subagent" -h 2>&1)"
+  [[ "$h" != *glm-4.6v* ]];  check "V27: subagent -h 不许还写着 glm-4.6v" $?
+  [[ "$h" == *glm-5.2* ]];   check "V27: subagent -h 要写现在的默认模型 glm-5.2" $?
+  h="$(bash "$BIN/subchat" -h 2>&1)"
+  [[ "$h" != *glm-4.6v* ]];  check "V27: subchat -h 不许还写着 glm-4.6v" $?
+  [[ "$h" != *bigmodel* ]];  check "V27: subchat -h 不许还写着 bigmodel 端点" $?
+  [[ "$h" == *opencode* ]];  check "V27: subchat -h 要写现在的端点(opencode)" $?
 
   rm -rf "$d"
 }
@@ -1913,5 +1984,6 @@ v25_legs_run_in_their_own_session
 # 反锚定闸默认拦一切 review 派发 ⇒ 不带这个前缀,V26 里每一次派发都会被拦,
 # 红的绿的全是空的(2026-08-18 第一版就是这样,红了 16 条没有一条是真问的)。
 REVIEW_NO_MY_REVIEW=1 v26_glm_on_opencode_go
+REVIEW_NO_MY_REVIEW=1 v27_knockon_of_the_backend_switch
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
