@@ -278,6 +278,11 @@ def call_model(prompt: str, timeout: int) -> str:
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # 2026-08-18:urllib 的默认 UA(Python-urllib/3.x)会被 Cloudflare 前置的
+            # 端点直接 403(error code 1010,"按浏览器指纹封禁")。OpenCode Go 就在
+            # Cloudflare 后面 —— 同一个请求 curl 200 / urllib 403,只差这一行。
+            # 这不是绕反爬,是补上一个本来就该有的客户端身份。
+            "User-Agent": os.environ.get("MIMO_USER_AGENT", "aiwork-review/1.0"),
         },
         method="POST",
     )

@@ -95,7 +95,10 @@ case "$PROVIDER" in
     # 旧 key 原样留在 ~/.config/zhipu/auth.json(那是另一家的账,将来充值可切回);
     # 方舟 key 仍在 auth.json.ark-bak。
     DEFAULT_MODEL="glm-5.2"
-    DEFAULT_BASE_URL="https://opencode.ai/zen/go/v1"
+    # **不带尾部 /v1**:claude CLI 自己会补 `/v1/messages`。写成 .../go/v1 会发到
+    # /zen/go/v1/v1/messages(实测 404),而 CLI 把 404 报成"模型不存在",
+    # 于是看起来像模型名错了 —— 实际是地址多了一层。
+    DEFAULT_BASE_URL="https://opencode.ai/zen/go"
     DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"
     # 认证 header 风格:**Go 的 Anthropic 面只认 x-api-key**(= claude 的
     # ANTHROPIC_API_KEY);实测 Authorization: Bearer 直接 401 "Missing API key"。

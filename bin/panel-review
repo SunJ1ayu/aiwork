@@ -16,8 +16,8 @@ Usage:
 Runs all reviewers in parallel on TASK_FILE:
   submimo review  -> <LOG_PREFIX>.submimo.log
   subdeepseek review -> <LOG_PREFIX>.subdeepseek.log
-  subglm review   -> <LOG_PREFIX>.subglm.log   (默认 agent 底座腿,后端 OpenCode Go;
-                                                 PANEL_GLM_LEG=off 关掉)
+  subglm review   -> <LOG_PREFIX>.subglm.log   (默认**聊天腿**,后端 OpenCode Go;
+                                                 PANEL_GLM_LEG=agent 切底座腿 / off 关掉)
   subkimi review  -> <LOG_PREFIX>.subkimi.log   (4th leg, only if installed;
                                                  PANEL_KIMI_LEG=off disables)
 
@@ -111,11 +111,21 @@ mkdir -p "$(dirname "$LOG_PREFIX")"
 # GLM leg selection.
 # 开关史:2026-08-04 智谱账号余额不足(429 / 1113),这条腿每轮只是白等一次超时,
 # 还让"四审"看起来满编、实际三腿 ⇒ 用户拍板「先关掉」,默认 off。
-# **2026-08-18 默认翻回 agent**:后端换成业主的 OpenCode Go 订阅,欠费这个理由消失了。
+# **2026-08-18 默认翻回开着**:后端换成业主的 OpenCode Go 订阅,欠费这个理由消失了。
 # 「默认关着」当初是为欠费立的,不是永久规格 —— 理由没了还留着,四审就永远只有三腿
 # (这条腿已经这样关了两周)。没钱/出故障时的关法仍在:`PANEL_GLM_LEG=off`。
-# 取值:agent = 底座腿(自己读仓库,默认);chat = 聊天腿(空 diff 会瞎);off = 不派发。
-GLM_LEG="${PANEL_GLM_LEG:-agent}"
+#
+# **默认档是 chat(聊天腿),不是 agent** —— 这不是偏好,是后端逼出来的:
+# OpenCode Go 的 Anthropic 面**不做工具格式转换**(它把请求体直接转发给 OpenAI 形状的
+# 上游),带 Anthropic 形状的 tools 一律 400「Missing required input field:
+# 'tools[0].function.name'」。08-18 实测三档:无工具 200 / Anthropic 形状工具 400 /
+# OpenAI 形状工具 200。而底座腿的全部意义就是自带工具自己读仓库 ⇒ 在这个后端上它起不来,
+# 默认写 agent 只会每轮回落一次(或者更糟:看起来在跑、其实每次都 400)。
+# 代价要认:聊天腿看不见仓库,只看得见 diff ⇒ **派它时记得带 PANEL_INCLUDE**
+# (下面第 207 行那条 HINT 就是干这个的,默认走 chat 之后它会常亮)。
+# 哪天 Go 把格式转换补上、或换成 opencode 自己的底座,把这里改回 agent 即可。
+# 取值:chat = 聊天腿(默认);agent = 底座腿(自己读仓库,本后端上会 400);off = 不派发。
+GLM_LEG="${PANEL_GLM_LEG:-chat}"
 GLM_CMD=""
 if [[ "$GLM_LEG" == "off" ]]; then
   GLM_CMD=""                      # 关着:不派发、不报 rc
