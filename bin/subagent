@@ -176,9 +176,19 @@ fi
 case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
 
+# 能力清单按底座给:**不许宣称一个它没有的工具**。opencode 底座没有 shell/git
+# (bash 整个关了),照抄旧句子的话模型会白花几轮去发现自己没有 —— 08-18 真跑时
+# 这条腿当场把那句话顶了回来。
+if [[ "$AGENT_BASE" == "opencode" ]]; then
+  TOOLS_SENTENCE="Read, Glob, Grep - note there is NO shell and NO git in this harness"
+  TOOLS_SENTENCE_X=" - note there is NO shell and NO git in this harness"
+else
+  TOOLS_SENTENCE="Read, Glob, Grep, and read-only git commands"
+  TOOLS_SENTENCE_X=", and read-only git commands"
+fi
 REVIEW_PROMPT="You are an independent code reviewer running inside a read-only harness.
-Explore the repository yourself with the tools you have (Read, Glob, Grep, and
-read-only git commands). Do not take the task's claims at face value - verify
+Explore the repository yourself with the tools you have
+(${TOOLS_SENTENCE}). Do not take the task's claims at face value - verify
 them against the actual files.
 
 Report findings with file:line references and a severity each. You MUST end
@@ -188,7 +198,7 @@ Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 --- REVIEW TASK ---
 $(cat "$TASK_FILE")"
 
-EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent design-exploration agent running inside a read-only harness. Explore the repository yourself with the tools you have (Read, Glob, Grep, and read-only git commands) when the codebase matters to the brief. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
+EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent design-exploration agent running inside a read-only harness. Explore the repository yourself with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}) when the codebase matters to the brief. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
 
 Rules:
 - Propose exactly ONE concrete direction. Do NOT hedge across multiple options or output a menu.
@@ -239,7 +249,12 @@ ERR_FILE="$(mktemp)"
   fi
   echo "repo: $REPO_DIR"
   echo "task: $TASK_FILE"
-  echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep + 只读 git),不依赖别人喂 diff。"
+  if [[ "$AGENT_BASE" == "opencode" ]]; then
+    echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep),不依赖别人喂 diff。"
+    echo "      **没有 shell / 没有 git**(白名单挡不住 git 自己的参数,整个关掉了)。"
+  else
+    echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep + 只读 git),不依赖别人喂 diff。"
+  fi
   echo
 } > "$LOG_FILE"
 

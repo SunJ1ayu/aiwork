@@ -712,8 +712,9 @@ EOF
 echo "AGENT-LEG" > "$3"; exit 0
 EOF
   chmod +x "$pb/subglm" "$pb/subglm-agent"
-  # **必须 env -u**:本文件顶部为了老用例 export 了 PANEL_GLM_LEG=agent,
-  # 不摘掉的话这一条问的是那个 export、不是默认档(见顶部那段的 ⚠️)。
+  # **保留 env -u**:顶部那行 export 08-18 已经删掉了,但这条问的是"默认档是什么",
+  # 摘干净环境再问是它自己该负的责任 —— 不依赖"外面正好没设"(那等于把正确性
+  # 寄托在别处不变上)。
   env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1" >/dev/null 2>&1
   # 2026-08-18 晚:**默认档翻回底座腿**。08-18 白天写成 chat 的理由是
   # 「底座腿在 OpenCode Go 上必 400」—— 那个事实随 track opencode-agent-base 消失了:
@@ -1377,7 +1378,8 @@ echo "AGENT-LEG mode=$1" > "$3"; exit 0
 EOF
     chmod +x "$pb/$leg" "$pb/$leg-agent"
   done
-  # **必须 env -u**:本文件顶部为了老用例 export 了 PANEL_GLM_LEG=agent。
+  # **保留 env -u**:顶部那行 export 08-18 已删;问默认档的断言自己摘环境,
+  # 不依赖"外面正好没设"。
   # 不摘掉的话这条问的是那个 export、不是默认档 —— 实测它在 panel-explore 默认值
   # 是 chat 的那段时间里**一直是绿的**(2026-08-18 抓到,今天第三条同形状的瞎断言:
   # 问"默认是什么"却在被污染的环境里问)。
