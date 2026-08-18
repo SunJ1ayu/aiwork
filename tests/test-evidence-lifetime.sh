@@ -310,6 +310,28 @@ EOF
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- E13b
+e13b_tmpdir_word_in_prose_is_not_a_reference() {
+  echo "[E13b] 散文里提到 TMPDIR 这个**名字**不算引用(2026-08-18:这条闸指错过门)"
+  local d; d="$(mktemp -d)"; local p="$d/proj"
+  make_proj "$p" t13b
+  # 这三行是 design-studio 那道临时目录泄漏闸的真实工件措辞。它们说的是**机制**
+  # (闸把被测命令跑在一块隔离的台面上),没有任何一处指向仓外的证据文件。
+  # 闸原来按词边界认 TMPDIR,把它们全拦下,而它给的唯一逃生口是标 [仓外不承重] ——
+  # 那句话在这里是假的:**照标就等于教人对着闸撒谎才能归档**。
+  # 误报和假绿一样坏:一道天天喊狼来了的闸,人会开始整段跳过它。
+  cat > "$p/tracks/t13b/design.md" <<'EOF'
+# Design
+- 判据跑在隔离的 TMPDIR 里,跑完必须剩 0 个,否则红
+- 把一条命令跑在空的临时台面上(`TMPDIR/TMP/TEMP` 三个都指过去),跑完数台面上剩几个
+EOF
+  ( cd "$p" && "$BIN/track" archive t13b "$p" ) >/dev/null 2>&1
+
+  [[ -d "$(archived_dir "$p" t13b)" ]];   check "散文提名字不许拦(否则是误报)" $?
+  [[ ! -d "$(active_dir "$p" t13b)" ]];   check "归档真的发生了" $?
+  rm -rf "$d"
+}
+
 # ---------------------------------------------------------------- E14
 e14_fenced_code_block_is_scanned() {
   echo "[E14] 围栏代码块里的引用**照样扫**(两条评审腿独立指出的考卷洞)"
@@ -349,6 +371,7 @@ e10_archive_only_not_precommit
 e11_scans_all_md_including_nested
 e12_scratchpad_case_insensitive
 e13_tmpdir_variable_form
+e13b_tmpdir_word_in_prose_is_not_a_reference
 e14_fenced_code_block_is_scanned
 echo "=== PASS=$PASS FAIL=$FAIL ==="
 [[ "$FAIL" -eq 0 ]]
