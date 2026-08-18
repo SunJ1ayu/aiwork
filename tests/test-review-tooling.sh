@@ -2438,6 +2438,20 @@ EOF
     echo "    (stub 没被调到 ⇒ 测空气)"
   fi
 
+  # ①b **未提交的改动也要看得见**。腿现在没有 shell 了,以前它能自己 `git diff` 看工作区;
+  #    如果我们只喂 `base...HEAD`(三点),未提交的部分对它就是隐形的 —— 而派活现场
+  #    经常是"改完还没提交就先送审"。用两点 `git diff <base>`(base 对工作区)才全。
+  printf 'def add(a,b):\n    return a/b\n' > "$repo/calc.py"
+  env PATH="$b:$PATH" CAPTURE="$d/c3.json" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE="$base" \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c3.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/c3.json" ]]; then
+    stdin_of "$d/c3.json" | grep -q "return a/b"
+    check "V29: 未提交的改动也进了 diff 段(腿没有 shell,看不见就是真看不见)" $?
+  else
+    bad "V29: 未提交的改动也进了 diff 段(腿没有 shell,看不见就是真看不见)"
+  fi
+  git -C "$repo" checkout -- calc.py 2>/dev/null
+
   # ② 没给 PANEL_DIFF_BASE ⇒ 不许硬塞一段空 diff 冒充有内容
   env -u PANEL_DIFF_BASE PATH="$b:$PATH" CAPTURE="$d/c2.json" DEEPSEEK_API_KEY=dk \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c2.log" "$repo" >/dev/null 2>&1
