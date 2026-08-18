@@ -1334,8 +1334,10 @@ sys.exit(0 if sys.argv[2] in blob else 1)" "$1" "$2"; }
     local goff; goff="$(occfg "$gcfg" tools_off)"
     [[ " $goff " == *" write "* && " $goff " == *" edit "* ]]
     check "V17: subglm-agent explore 仍无写工具(配置里 write/edit 关着)" $?
-    [[ "$(occfg "$gcfg" bash_perm)" == *'"*": "deny"'* ]]
-    check "V17: subglm-agent explore 的 bash 仍是白名单(* deny)" $?
+    # 08-18 晚随四审收紧:bash 从"白名单"变成整个关掉(白名单挡不住 git 自己的参数,
+    # 见 V28 那条的原委)。这里跟着收紧 —— 换模式不许把只读锁放松,而"锁"的定义变严了。
+    [[ " $goff " == *" bash "* ]]
+    check "V17: subglm-agent explore 下 bash 也是关的(换模式不许放松只读锁)" $?
   else
     bad "V17: subglm-agent explore 仍无写工具(配置里 write/edit 关着)"
     bad "V17: subglm-agent explore 的 bash 仍是白名单(* deny)"

@@ -151,7 +151,13 @@ fi
 
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
-command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
+# 查**这条腿真正要用的那个**:opencode 底座不依赖 claude(四审两条腿独立点到 ——
+# claude 没装而 opencode 装了会被误杀,反过来会跑到 opencode run 才报误导性的 rc=127)。
+if [[ "$AGENT_BASE" == "opencode" ]]; then
+  command -v opencode >/dev/null 2>&1 || die "opencode CLI not found on PATH"
+else
+  command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
+fi
 
 if [[ -z "$API_KEY" ]]; then
   [[ -f "$AUTH_FILE" ]] || die "auth file not found: $AUTH_FILE (set ${PREFIX}_API_KEY or create it as {\"key\":\"...\"})"
@@ -226,7 +232,11 @@ ERR_FILE="$(mktemp)"
   else
     echo "base_url: $BASE_URL"
   fi
-  echo "model: $MODEL"
+  if [[ "$AGENT_BASE" == "opencode" ]]; then
+    echo "model: $OC_PROVIDER/$OC_MODEL_ID"   # 完整 id;裸名字在调用时并不存在
+  else
+    echo "model: $MODEL"
+  fi
   echo "repo: $REPO_DIR"
   echo "task: $TASK_FILE"
   echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep + 只读 git),不依赖别人喂 diff。"
@@ -239,21 +249,30 @@ if [[ "$AGENT_BASE" == "opencode" ]]; then
   # 配置**每次重写**:这份配置就是只读锁本身,不许留隔夜残留(判据查的也是它)。
   # HOME 换成隔离目录 —— 否则会写进 /root/.config/opencode,污染我自己那份真配置。
   OC_HOME="${OPENCODE_REVIEW_HOME:-$HOME/.cache/aiwork/opencode-review-home}"
+  # umask 077:配置文件**创建即 600**。先 644 再 chmod 会留一个窗口,中断在中间
+  # 就是一个人人可读的 key 文件。key 走 **env 不走 argv** —— argv 在进程存续期间
+  # `ps` 就看得见(四审 subdeepseek F3)。
+  umask 077
   mkdir -p "$OC_HOME/.config/opencode"
-  python3 - "$OC_HOME/.config/opencode/opencode.json" \
-           "$OC_PROVIDER" "$OC_MODEL_ID" "$OC_BASE_URL" "$API_KEY" "$OC_AGENT" "$MAX_TURNS" <<'PYOC'
-import json, sys
-cfgpath, prov, model, base, key, agent, steps = sys.argv[1:8]
+  OC_KEY="$API_KEY" python3 - "$OC_HOME/.config/opencode/opencode.json" \
+           "$OC_PROVIDER" "$OC_MODEL_ID" "$OC_BASE_URL" "$OC_AGENT" "$MAX_TURNS" <<'PYOC'
+import json, os, sys
+cfgpath, prov, model, base, agent, steps = sys.argv[1:7]
+key = os.environ["OC_KEY"]
 # 只读锁:写工具全关。bash 留着 —— 底座腿的价值就是自己读仓库,只读 git 是其中一半;
 # 但它必须是**白名单**:`*` deny + 只放行只读 git。实测这是真闸(模型真去调、被 harness
 # 拦回),而且 `git log && echo x > f` 这种链式绕法也拒得掉(它解析命令,不是傻前缀匹配)。
+# **bash 整个关掉。** 08-18 四审推翻了上一版(那版留着 bash + 只读 git 白名单):
+# `git diff --output=<path>` 能写任意文件,`git diff --no-index <仓外文件> /dev/null`
+# 能把任意可读文件全文打进 stdout ⇒ 进腿日志 ⇒ 恶意仓可以让它把订阅 key 印出来。
+# 两条我都实测复现过。这些 diff 选项在 git log -p / git show 上一样吃,还有 --ext-diff
+# 之类口子 —— **对 git 这么灵活的程序做命令行白名单本身就不成立**,不是模式写得不够细。
+# 代价认下来:这条腿看不了 git 历史/diff;它的核心价值(自己读仓库)由 read/glob/grep 提供。
 tools = {"write": False, "edit": False, "patch": False, "task": False,
          "todowrite": False, "webfetch": False, "websearch": False, "skill": False,
-         "read": True, "glob": True, "grep": True, "bash": True}
-perm = {"edit": "deny", "write": "deny",
-        "bash": {"*": "deny",
-                 "git diff*": "allow", "git log*": "allow",
-                 "git status*": "allow", "git show*": "allow"}}
+         "bash": False,
+         "read": True, "glob": True, "grep": True}
+perm = {"edit": "deny", "write": "deny", "bash": "deny"}
 cfg = {"$schema": "https://opencode.ai/config.json",
        "provider": {prov: {"npm": "@ai-sdk/openai-compatible",
                            "name": "OpenCode Go (subscription)",
@@ -280,6 +299,14 @@ PYOC
   #   12 分钟、一次模型调用都没发,而日志头已经写好、从外面看像"正在跑"。
   # ⚠️ **rc 信不得**:实测 opencode 余额不足时把错误打在 stdout 上、退出码仍是 0。
   # 这条腿的死活由下面那道裁决 gate 判,rc 只当补充信号。
+  #
+  # 工具轨迹(读了哪些文件、跑了哪些命令)opencode 打在 **stderr** 上。把它并进日志:
+  # 四审时我读的是腿的日志,"它到底看没看"正是底座腿最该被看见的东西 ——
+  # 只落在 runlog 收据里等于没有(claude 那条腿的渲染日志一直带轨迹,不许换底座就丢)。
+  if [[ -s "$ERR_FILE" ]]; then
+    { echo; echo "---- 工具轨迹(底座 stderr)----"; \
+      sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' "$ERR_FILE"; } >> "$LOG_FILE"
+  fi
 else
 # 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,
 # 否则它会盖过供应商 token。提示词走 stdin:--allowedTools/--disallowedTools 是变长
