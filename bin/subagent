@@ -80,17 +80,28 @@ case "$PROVIDER" in
     # 它 07-21 撞过 40、08-03 撞过 80 —— 两次的修法都是翻倍,那是修数字。
     # 200 是从 56 轮/单文件外推的,不是拍的;下次要动请拿新的 turns 实测来动。
     DEFAULT_MAX_TURNS=200
+    # 认证 header 风格:DeepSeek 的 Anthropic 面走 Authorization: Bearer。
+    # (这一格 08-18 才出现 —— 在那之前 Bearer 是硬写在下面注环境那行里的,
+    #  于是"换个后端"会静默变成"换个后端但认证方式没跟着换"。)
+    AUTH_ENV="ANTHROPIC_AUTH_TOKEN"
     ;;
   zhipu)
     PREFIX="ZHIPU"; LABEL="subglm-agent"
     # GLM 后端沿革:bigmodel(1113 余额不足)→ 百炼(429)→ 火山方舟(07-17,Anthropic
-    # 面只有 /api/coding 且要 CodingPlan 订阅)→ **07-25 切回智谱开放平台**:方舟账号的
-    # glm-5-2 触发 SetLimitExceeded(安全体验模式限额,工具侧无解),而方舟上没有
-    # glm-4.6 系。bigmodel 的 Anthropic 面 = /api/anthropic,不要订阅,实测 glm-4.6v 可用。
-    # 方舟 key 备份在 auth.json.ark-bak。
-    DEFAULT_MODEL="glm-4.6v"
-    DEFAULT_BASE_URL="https://open.bigmodel.cn/api/anthropic"
-    DEFAULT_AUTH_FILE="$HOME/.config/zhipu/auth.json"
+    # 面只有 /api/coding 且要 CodingPlan 订阅)→ 07-25 切回智谱开放平台 bigmodel
+    # → **2026-08-18 换到 OpenCode Go**(业主的 $10/月订阅)。
+    # 换的理由不是端点更好,是 bigmodel 那把 key 欠费:这条腿 08-04 起默认关着,
+    # "四审"实际只有三腿、已经两周。Go 的 Anthropic 面 = /zen/go/v1。
+    # 旧 key 原样留在 ~/.config/zhipu/auth.json(那是另一家的账,将来充值可切回);
+    # 方舟 key 仍在 auth.json.ark-bak。
+    DEFAULT_MODEL="glm-5.2"
+    DEFAULT_BASE_URL="https://opencode.ai/zen/go/v1"
+    DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"
+    # 认证 header 风格:**Go 的 Anthropic 面只认 x-api-key**(= claude 的
+    # ANTHROPIC_API_KEY);实测 Authorization: Bearer 直接 401 "Missing API key"。
+    # 这一格是这次换后端的真 bug 面:key 传对了、header 传错了,腿照样是死的,
+    # 而日志上只看得见"模型没回话"。
+    AUTH_ENV="ANTHROPIC_API_KEY"
     # 保持这条腿的**历史值 40**。合并躯干时我一度把它统一成 80,等于在没有任何
     # glm 轮次实测的情况下把它的单次预算翻倍 —— 顺手统一别人的预算不是重构。
     # 要改请先跑一次真腿、拿 turns 说话(日志末尾那行现在会告诉你)。
@@ -186,8 +197,8 @@ ERR_FILE="$(mktemp)"
 RC=0
 (
   cd "$REPO_DIR"
-  printf '%s\n' "$PROMPT" | env -u ANTHROPIC_API_KEY \
-    ANTHROPIC_AUTH_TOKEN="$API_KEY" \
+  printf '%s\n' "$PROMPT" | env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+    "$AUTH_ENV=$API_KEY" \
     ANTHROPIC_BASE_URL="$BASE_URL" \
     ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \

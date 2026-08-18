@@ -86,15 +86,17 @@ case "$PROVIDER" in
   zhipu)
     PREFIX="ZHIPU"
     # GLM 后端沿革:bigmodel(余额不足 1113)→ 百炼(429)→ 火山方舟(07-17)
-    # → **07-25 切回智谱开放平台 bigmodel**:方舟账号的 glm-5-2 触发
-    # SetLimitExceeded(安全体验模式限额,重试无用、工具侧修不了),而方舟上
-    # 根本没有 glm-4.6 系;bigmodel 那把 key 实测 glm-4.6v / glm-4.5-air 可用
-    # (glm-4.6、glm-5 仍报 1113)。方舟 key 备份在 auth.json.ark-bak。
-    DEFAULT_MODEL="glm-4.6v"   # 07-25:bigmodel 上这把 key 能用的最强一档
-                               # (glm-4.6/glm-5 报 1113 余额不足,glm-4.5-air 可作降级)
+    # → 07-25 切回智谱开放平台 bigmodel → **2026-08-18 换到 OpenCode Go**
+    # (业主的 $10/月订阅)。理由是 bigmodel 那把 key 欠费,不是端点更好。
+    # 方舟 key 仍在 auth.json.ark-bak,智谱 key 仍在 ~/.config/zhipu/auth.json。
+    #
+    # 注意这是**聊天腿**(空 diff 会瞎),默认腿是底座腿 subglm-agent;
+    # 它走 OpenAI 兼容面,认证仍是 Authorization: Bearer(和底座腿那边的
+    # x-api-key 不是一回事 —— 两个面的规矩不同,别顺手统一)。
+    DEFAULT_MODEL="glm-5.2"
     ENDPOINT_ENV_VAR="MIMO_CHAT_COMPLETIONS_URL"  # exact URL, engine appends nothing
-    ENDPOINT="${ZHIPU_CHAT_COMPLETIONS_URL:-https://open.bigmodel.cn/api/paas/v4/chat/completions}"
-    DEFAULT_AUTH_FILE="$HOME/.config/zhipu/auth.json"
+    ENDPOINT="${ZHIPU_CHAT_COMPLETIONS_URL:-https://opencode.ai/zen/go/v1/chat/completions}"
+    DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"
     LABEL="subglm-review"
     ;;
   *) die "unknown provider: $PROVIDER (supported: deepseek, zhipu)" ;;

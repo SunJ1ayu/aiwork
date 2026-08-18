@@ -16,8 +16,8 @@ Usage:
 Runs all reviewers in parallel on TASK_FILE:
   submimo review  -> <LOG_PREFIX>.submimo.log
   subdeepseek review -> <LOG_PREFIX>.subdeepseek.log
-  subglm review   -> <LOG_PREFIX>.subglm.log   (**默认 off**,欠费期间不白等;
-                                                 PANEL_GLM_LEG=agent 开回来)
+  subglm review   -> <LOG_PREFIX>.subglm.log   (默认 agent 底座腿,后端 OpenCode Go;
+                                                 PANEL_GLM_LEG=off 关掉)
   subkimi review  -> <LOG_PREFIX>.subkimi.log   (4th leg, only if installed;
                                                  PANEL_KIMI_LEG=off disables)
 
@@ -109,11 +109,13 @@ LOG_PREFIX="${3:-/root/aiwork/logs/panel-${TASKNAME}-${TS}}"
 mkdir -p "$(dirname "$LOG_PREFIX")"
 
 # GLM leg selection.
-# **默认 off(2026-08-04)**:智谱账号余额不足(429 / 1113),这条腿每轮都只会
-# 白等一次超时,还会让"四审"看起来满编、实际三腿。用户拍板「先关掉,等我重置了再开」。
-# 充值之后开回来:`PANEL_GLM_LEG=agent`(或把下面这行默认值改回 agent)。
-# 其余取值不变:agent = 底座腿(自己读仓库,推荐);chat = 聊天腿(空 diff 会瞎)。
-GLM_LEG="${PANEL_GLM_LEG:-off}"
+# 开关史:2026-08-04 智谱账号余额不足(429 / 1113),这条腿每轮只是白等一次超时,
+# 还让"四审"看起来满编、实际三腿 ⇒ 用户拍板「先关掉」,默认 off。
+# **2026-08-18 默认翻回 agent**:后端换成业主的 OpenCode Go 订阅,欠费这个理由消失了。
+# 「默认关着」当初是为欠费立的,不是永久规格 —— 理由没了还留着,四审就永远只有三腿
+# (这条腿已经这样关了两周)。没钱/出故障时的关法仍在:`PANEL_GLM_LEG=off`。
+# 取值:agent = 底座腿(自己读仓库,默认);chat = 聊天腿(空 diff 会瞎);off = 不派发。
+GLM_LEG="${PANEL_GLM_LEG:-agent}"
 GLM_CMD=""
 if [[ "$GLM_LEG" == "off" ]]; then
   GLM_CMD=""                      # 关着:不派发、不报 rc
@@ -364,7 +366,7 @@ if [[ -n "$HEAD_BEFORE" && -n "$HEAD_AFTER" && "$HEAD_BEFORE" != "$HEAD_AFTER" ]
 fi
 
 GLM_REPORT=" subglm rc=$RC_GLM"
-[[ -z "$GLM_CMD" ]] && GLM_REPORT=" subglm=off(PANEL_GLM_LEG=agent 开回来)"
+[[ -z "$GLM_CMD" ]] && GLM_REPORT=" subglm=off(是有人显式设了 PANEL_GLM_LEG=off)"
 if [[ -n "$KIMI_CMD" ]]; then
   echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK $GLM_REPORT  subkimi rc=$RC_KIMI"
 else
