@@ -97,11 +97,15 @@ case "$PROVIDER" in
     # "四审"实际只有三腿、已经两周。Go 的 Anthropic 面 = /zen/go/v1。
     # 旧 key 原样留在 ~/.config/zhipu/auth.json(那是另一家的账,将来充值可切回);
     # 方舟 key 仍在 auth.json.ark-bak。
-    DEFAULT_MODEL="glm-5.2"
+    # ⚠️ 下面这两个是**休眠值**:GLM 腿现在走 opencode 底座(见下面 AGENT_BASE),
+    # 它用的是 OC_MODEL_ID / OC_BASE_URL,**不是这两个**。留着是为了将来切回 claude 底座
+    # 时不用重新考古 —— 但别照着改它们然后指望有反应(改了没反应是最耗时的一类 bug)。
+    DEFAULT_MODEL="glm-5.2"                        # 休眠:claude 底座才读
     # **不带尾部 /v1**:claude CLI 自己会补 `/v1/messages`。写成 .../go/v1 会发到
     # /zen/go/v1/v1/messages(实测 404),而 CLI 把 404 报成"模型不存在",
     # 于是看起来像模型名错了 —— 实际是地址多了一层。
-    DEFAULT_BASE_URL="https://opencode.ai/zen/go"
+    # (opencode 走 OpenAI 兼容面,要的反而是**完整的** .../zen/go/v1,见 OC_BASE_URL。)
+    DEFAULT_BASE_URL="https://opencode.ai/zen/go"  # 休眠:claude 底座才读
     DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"
     # 认证 header 风格:**Go 的 Anthropic 面只认 x-api-key**(= claude 的
     # ANTHROPIC_API_KEY);实测 Authorization: Bearer 直接 401 "Missing API key"。
@@ -215,7 +219,13 @@ ERR_FILE="$(mktemp)"
   else
     echo "mode: $MODE (agent base: claude-code headless -> $PROVIDER)"
   fi
-  echo "base_url: $BASE_URL"
+  # 印**实际在用的**那个:$BASE_URL 是 claude 底座那条路的值,opencode 这条路不用它
+  # (供应商表里它作为休眠值留着,供将来切回)。取证材料不许印一个没在用的地址。
+  if [[ "$AGENT_BASE" == "opencode" ]]; then
+    echo "base_url: $OC_BASE_URL"
+  else
+    echo "base_url: $BASE_URL"
+  fi
   echo "model: $MODEL"
   echo "repo: $REPO_DIR"
   echo "task: $TASK_FILE"
@@ -264,7 +274,10 @@ PYOC
     cd "$REPO_DIR"
     HOME="$OC_HOME" timeout "$TIMEOUT_SECONDS" opencode run \
       --dir "$REPO_DIR" --agent "$OC_AGENT" -m "$OC_PROVIDER/$OC_MODEL_ID" "$PROMPT"
-  ) 2>"$ERR_FILE" | sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' >> "$LOG_FILE" || RC=$?
+  ) < /dev/null 2>"$ERR_FILE" | sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' >> "$LOG_FILE" || RC=$?
+  # ↑ **`< /dev/null` 不是可有可无的整洁**:opencode 在 stdin 是一个还开着的管道时
+  #   会一直等输入。2026-08-18 实测:直接跑正常,一经 runlog(走 tee 管道)就挂死
+  #   12 分钟、一次模型调用都没发,而日志头已经写好、从外面看像"正在跑"。
   # ⚠️ **rc 信不得**:实测 opencode 余额不足时把错误打在 stdout 上、退出码仍是 0。
   # 这条腿的死活由下面那道裁决 gate 判,rc 只当补充信号。
 else
