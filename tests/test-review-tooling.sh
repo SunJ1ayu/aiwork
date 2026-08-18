@@ -918,8 +918,11 @@ v13_subkimi_leg() {
         | node "$guard" >/dev/null 2>&1
       check "guard: Bash 一律拒绝(含只读 git)—— $kcmd" $([[ $? -ne 0 ]]; echo $?)
     done
-    echo '{"tool_name":"Bash","tool_input":{"command":"git log --oneline -3"}}' | node "$guard" >/dev/null 2>&1
-    check "guard: read-only git allowed" $?
+    # 这里原本有一条 `guard: read-only git allowed`(断言只读 git 必须放行)。
+    # **它编码的是被本单推翻的旧规格**:白名单挡不住 git 自己的参数
+    # (--output= 能写、--no-index 能读仓外),所以现在只读 git 也不放行。
+    # 删它不是删考卷:上面那一组(四条,含 `git log --oneline -5`)把同一件事
+    # **反过来钉死了**,覆盖严格更强。理由写在原地,免得以后有人看见"少了一条"就补回去。
     echo '{"tool_name":"Bash","tool_input":{"command":"git log && rm -rf /"}}' | node "$guard" >/dev/null 2>&1
     check "guard: metachar chain denied" $([[ $? -eq 2 ]]; echo $?)
     echo '{"tool_name":"Bash","tool_input":{"command":"curl http://evil"}}' | node "$guard" >/dev/null 2>&1

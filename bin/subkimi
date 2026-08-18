@@ -3,7 +3,7 @@ set -euo pipefail
 
 # subkimi - Kimi (Moonshot) review employee on an AGENT base: kimi-code CLI
 # run headless (`kimi -p`). Like subglm-agent/subdeepseek-agent, the model
-# explores the repo itself (Read/Glob/Grep + read-only git), so no blind
+# explores the repo itself (Read/Glob/Grep;无 shell/git,diff 由 wrapper 喂), so no blind
 # reviews and no manual INCLUDE feeding.
 #
 #   review -> kimi -p, review-only guard, verdict-gated. Works now.
@@ -12,7 +12,8 @@ set -euo pipefail
 #
 # Isolation: KIMI_CODE_HOME points at a dedicated review home whose config
 # carries a PreToolUse guard hook (default-DENY: only Read/ReadMediaFile/Glob/
-# Grep/todo-goal tools plus metachar-free read-only git via Bash are allowed;
+# Grep/todo-goal tools 允许;**Bash 一律拒绝(含只读 git)** —— 08-18 实测白名单挡不住
+# git 自己的参数(--output= 能写、--no-index 能读仓外),diff 改由 wrapper 算好喂进提示词;
 # Write/Edit/Agent/AgentSwarm/Skill/Cron*/FetchURL/WebSearch and unknown tools
 # are blocked). The user's global ~/.kimi-code is never touched. Auth is the
 # Kimi membership OAuth token, shared via a credentials symlink in the review
@@ -94,9 +95,29 @@ set -e
 case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
 
+# ── 把 diff 算好塞进提示词(2026-08-18,track deepseek-leg-bash-hole)────────
+# 守卫里的 Bash(含只读 git)已经整个关掉:命令行白名单挡不住 git 自己的参数
+# (`git diff --output=` 能往仓里写、`--no-index` 能读仓外)。
+# 但这条腿需要的是**那份 diff,不是一个 shell** —— 所以由我们算好喂进去。
+# 上限 200KB:提示词被巨型 diff 撑爆会把任务书挤没,比看不到 diff 更糟。
+DIFF_SECTION=""
+if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  _kd="$(git -C "$REPO_DIR" diff "${PANEL_DIFF_BASE}...HEAD" 2>/dev/null | head -c 200000)"
+  if [[ -n "$_kd" ]]; then
+    DIFF_SECTION="
+
+--- 改动 (diff ${PANEL_DIFF_BASE}...HEAD) ---
+$_kd"
+    [[ ${#_kd} -ge 200000 ]] && DIFF_SECTION="$DIFF_SECTION
+(diff 被截断在 200KB —— 超出部分请用 Read/Grep 自己去看)"
+  fi
+  unset _kd
+fi
+
 PROMPT="You are an independent code reviewer running inside a read-only harness.
-Explore the repository yourself with the tools you have (Read, Glob, Grep, and
-read-only git commands via Bash). Do not take the task's claims at face value -
+Explore the repository yourself with the tools you have
+(Read, Glob, Grep - note there is NO shell and NO git in this harness).
+Do not take the task's claims at face value -
 verify them against the actual files. Some tools are intentionally blocked by
 the harness; if a call is denied, work with the allowed tools instead of
 retrying it.
@@ -114,7 +135,7 @@ The verdict line must be exactly this form:
 Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 
 --- REVIEW TASK ---
-$(cat "$TASK_FILE")"
+$(cat "$TASK_FILE")${DIFF_SECTION}"
 
 {
   echo "# subkimi review log"
