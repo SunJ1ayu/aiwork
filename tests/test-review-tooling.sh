@@ -2244,6 +2244,21 @@ EOF
   grep -q "opencode.ai/zen/go/v1" "$d/g9.log" 2>/dev/null
   check "V28: 日志头印实际在用的 base URL(不是 claude 那条路的休眠值)" $?
 
+  # ── ⑪ 工具轨迹必须落进**腿自己的日志**,不能只落在收据里。
+  #    opencode 把 "它读了哪些文件/跑了哪些命令" 打在 stderr 上;四审时我读的是
+  #    腿的日志,而"它到底看没看"正是我最需要在那儿看到的东西
+  #    (claude 那条腿的日志一直是有轨迹的,换底座不许把这个能力弄丢)。
+  cat > "$b/opencode" <<'EOF'
+#!/usr/bin/env bash
+echo "TOOL-TRACE-Read calc.py" >&2
+echo "Conclusion: PASS"
+EOF
+  chmod +x "$b/opencode"
+  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g11.log" "$d" >/dev/null 2>&1
+  grep -q "TOOL-TRACE-Read calc.py" "$d/g11.log" 2>/dev/null
+  check "V28: 工具轨迹落进腿自己的日志(四审读的是它,不是收据)" $?
+
   # ── ⑧ key 不许进配置以外的地方,更不许进仓(仓那条 V26 ⑤ 已经在查,这里查日志)
   if grep -rq "zk" "$d/g1.log" 2>/dev/null; then
     bad "V28: key 不许出现在日志里"
