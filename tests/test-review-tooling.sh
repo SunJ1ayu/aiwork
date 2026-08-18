@@ -898,6 +898,26 @@ v13_subkimi_leg() {
     check "guard: Write denied (rc=2)" $([[ $? -eq 2 ]]; echo $?)
     echo '{"tool_name":"Read","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: Read allowed (rc=0)" $?
+
+    # 2026-08-18 晚(track deepseek-leg-bash-hole):**Bash 整个不许再放行**。
+    # 原守卫是"禁元字符 + 放行 ^git (diff|log|show|...)"的正则前缀白名单。
+    # 我直接拿这个守卫跑了四条命令,结果:
+    #   git diff --output=pwned.txt HEAD                     → **放行**(能往仓里写)
+    #   git diff --no-index <仓外的 key 文件> /dev/null       → **放行**(能读仓外并打进日志)
+    #   git log --oneline -5                                  → 放行
+    #   rm -rf x                                              → 拦下
+    # 前两条都不含元字符、又匹配 ^git\s+diff ⇒ 白名单挡不住 git 自己的参数,
+    # 而且这个守卫比 claude 那层更弱(没有路径感知)。
+    # 和另外两条底座腿同一个处置:**不留 Bash**,diff 由我们算好喂进提示词。
+    local kcmd
+    for kcmd in "git diff --output=pwned.txt HEAD" \
+                "git diff --no-index /root/.config/opencode-go/auth.json /dev/null" \
+                "git log --oneline -5" \
+                "rm -rf x"; do
+      echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$kcmd\"}}" \
+        | node "$guard" >/dev/null 2>&1
+      check "guard: Bash 一律拒绝(含只读 git)—— $kcmd" $([[ $? -ne 0 ]]; echo $?)
+    done
     echo '{"tool_name":"Bash","tool_input":{"command":"git log --oneline -3"}}' | node "$guard" >/dev/null 2>&1
     check "guard: read-only git allowed" $?
     echo '{"tool_name":"Bash","tool_input":{"command":"git log && rm -rf /"}}' | node "$guard" >/dev/null 2>&1
