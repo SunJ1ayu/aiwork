@@ -89,10 +89,16 @@ GATE_PROBE_TIMEOUT="${GATE_PROBE_TIMEOUT:-5}"
 # 写死路径会让判据仍去测主仓的文件 = 改了也永远红(2026-08-01 派活前发现)。
 # 可用 REVIEW_BIN 覆盖。
 BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
-# 2026-08-04:GLM 腿默认改成 off(智谱欠费,见 bin/panel-review 里的理由)。
-# 下面的老用例问的是**这条腿的行为**(回落、失败留证、rc 语义……),不是"它默不默认开",
-# 所以统一在这里把腿显式打开 —— 断言一条不删、一条不弱。
-# 只有"默认关不关"那两条用 `env -u PANEL_GLM_LEG` 在干净环境里问。
+# 2026-08-04:GLM 腿默认改成 off(智谱欠费)。**2026-08-18 那个理由消失了**:后端换成
+# OpenCode Go,默认档现在是 chat(聊天腿)—— 见 bin/panel-review 里的完整理由。
+# 这个 export 保留,但它现在的意义变了:不是"把关着的腿打开",而是**让老用例不受默认档
+# 变动影响**。下面的老用例问的是**这条腿的行为**(回落、失败留证、rc 语义……),
+# 不是"它默认走哪一档",所以统一在这里显式钉死 —— 断言一条不删、一条不弱。
+#
+# ⚠️ 代价:任何问"**默认**是什么"的断言,**必须自己 `env -u PANEL_GLM_LEG`**,
+# 否则它是在这个被污染的环境里问默认值 —— 问不到,而且失败方向不安全:
+# 断言写对了照样红(08-18 实测栽在这:V13 那条改成问 chat 之后红了,
+# 我差点去怀疑实现,复现出来才发现是量具自己瞎了)。
 export PANEL_GLM_LEG=agent
 # 2026-08-06:反锚定闸(review 模式要求主 agent 先落盘自己那一遍)新上线,而**下面的老用例
 # 问的是各条腿自己的行为**(端点、模型、工具白名单、轮次上限……),不是这道闸。
@@ -627,7 +633,7 @@ PYEOF
   check "agent: fix refused" $([[ $rc -ne 0 ]]; echo $?)
   bash "$b/subglm-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
 
-  # panel-review leg selection: default=agent, PANEL_GLM_LEG=chat, missing agent
+  # panel-review leg selection: default=chat, PANEL_GLM_LEG=agent/chat, missing agent
   local pb="$d/panelbin"; mkdir -p "$pb"
   cp "$BIN/panel-review" "$pb/panel-review"
   for stubname in submimo subdeepseek; do
@@ -646,7 +652,9 @@ EOF
 echo "AGENT-LEG" > "$3"; exit 0
 EOF
   chmod +x "$pb/subglm" "$pb/subglm-agent"
-  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1" >/dev/null 2>&1
+  # **必须 env -u**:本文件顶部为了老用例 export 了 PANEL_GLM_LEG=agent,
+  # 不摘掉的话这一条问的是那个 export、不是默认档(见顶部那段的 ⚠️)。
+  env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1" >/dev/null 2>&1
   # 08-18:默认从 agent 翻成 chat —— 不是偏好,是 OpenCode Go 的 Anthropic 口
   # 不做工具格式转换,底座腿带着 Anthropic 形状的 tools 一律 400(见 V26 注释)。
   # 这条和 V13 里那条问的是同一件事,两处都得改,别只改一处。
