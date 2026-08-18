@@ -655,7 +655,38 @@ PYEOF
   argvhas "$d/a1.json" "--disallowedTools"; check "agent: --disallowedTools present" $?
   argvhas "$d/a1.json" "Write";             check "agent: Write explicitly disallowed" $?
   argvhas "$d/a1.json" "Agent";             check "agent: subagent tool (Agent) disallowed" $?
-  argvhas "$d/a1.json" "Bash(git diff:*)";  check "agent: Bash limited to git read-only patterns" $?
+  # 2026-08-18 晚收紧(track deepseek-leg-bash-hole):**allowlist 里不许再有任何 Bash**。
+  # 实测:`Bash(git diff:*)` 放行了 `git diff --output=<仓内文件> HEAD`,文件真写出来了
+  # ⇒ 评审腿能往被评审的仓里写 ⇒ **能写 tests/,也就是能动判据**。
+  # (claude 这层守卫本身比前缀匹配聪明:它按路径拦住了 /dev/null 那类仓外访问,
+  #  连 GNU diff / touch / rm 都拦;但它不管"写在工作目录内"的写。)
+  # 顺带实测更正:pwd / ls / cat 这些**不在 allowlist 里的命令照样跑** ⇒
+  # 这层是"拦危险的"不是"只放行列出的",把它当白名单理解是错的 —— 更没法靠黑名单补。
+  if python3 -c "
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+i=a.index('--allowedTools'); rest=a[i+1:]
+j=[k for k,x in enumerate(rest) if x.startswith('--')]
+seg=rest[:j[0]] if j else rest
+sys.exit(0 if any(t.startswith('Bash') for t in seg) else 1)" "$d/a1.json" 2>/dev/null; then
+    bad "agent: allowlist 里不许有 Bash(它放行了 git diff --output= 这种写)"
+  else
+    ok  "agent: allowlist 里不许有 Bash(它放行了 git diff --output= 这种写)"
+  fi
+  # 只在 **disallowedTools 那一段**里找。用 argvhas(整个 argv 找子串)会匹配到
+  # allowlist 里的 `Bash(git diff:*)` ⇒ 在 Bash 根本没被禁的时候也报绿
+  # (08-18 我第一版就是这么写的,今天第六条假绿)。
+  if python3 -c "
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+i=a.index('--disallowedTools'); rest=a[i+1:]
+j=[k for k,x in enumerate(rest) if x.startswith('--')]
+seg=rest[:j[0]] if j else rest
+sys.exit(0 if 'Bash' in seg else 1)" "$d/a1.json" 2>/dev/null; then
+    ok  "agent: Bash 明确列进 disallowedTools"
+  else
+    bad "agent: Bash 明确列进 disallowedTools"
+  fi
   argvhas "$d/a1.json" "--model sonnet";    check "agent: --model sonnet (mapped slot)" $?
   argvhas "$d/a1.json" "--setting-sources project"; check "agent: user settings not loaded" $?
   argvhas "$d/a1.json" "--max-turns";       check "agent: turn cap present" $?
@@ -2340,6 +2371,69 @@ EOF
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V29
+# 2026-08-18 晚,track deepseek-leg-bash-hole。两条底座腿的 Bash 都关掉之后,
+# 它们看不了 git 历史/差异了 —— 但**它们需要的是那份 diff,不是一个 shell**。
+# 所以给底座腿补上"把 diff 算好塞进提示词"(聊天腿一直是这么拿 diff 的,底座腿反而没有)。
+v29_agent_legs_get_the_diff() {
+  echo "[V29] 底座腿拿得到 diff(Bash 关掉之后,diff 由我们算好喂进去)"
+  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"
+  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  cat > "$b/claude" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import json,os,sys
+open(os.environ['CAPTURE'],'w').write(json.dumps({'stdin': sys.stdin.read()}))"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+EOF
+  chmod +x "$b/claude"
+  printf '# t\n' > "$d/t.md"
+  # 造一个有历史的真仓:base 一版、HEAD 一版
+  local repo="$d/repo"; mkdir -p "$repo"
+  ( cd "$repo" && git init -q . \
+    && printf 'def add(a,b):\n    return a+b\n' > calc.py \
+    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base \
+    && printf 'def add(a,b):\n    return a-b\n' > calc.py \
+    && git add -A && git -c user.email=t@t -c user.name=t commit -qm head ) >/dev/null 2>&1
+  local base; base="$(git -C "$repo" rev-parse HEAD~1)"
+
+  local stdin_of; stdin_of() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['stdin'])" "$1"; }
+
+  # ① 给了 PANEL_DIFF_BASE ⇒ 提示词里必须真的带着那段 diff
+  env PATH="$b:$PATH" CAPTURE="$d/c1.json" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE="$base" \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c1.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/c1.json" ]]; then
+    stdin_of "$d/c1.json" | grep -q "return a-b"
+    check "V29: 给了 PANEL_DIFF_BASE 时,diff 正文进了提示词" $?
+    stdin_of "$d/c1.json" | grep -q -- "--- 改动 (diff)"
+    check "V29: diff 有自己的段头(别和任务书糊在一起)" $?
+  else
+    bad "V29: 给了 PANEL_DIFF_BASE 时,diff 正文进了提示词"
+    bad "V29: diff 有自己的段头(别和任务书糊在一起)"
+    echo "    (stub 没被调到 ⇒ 测空气)"
+  fi
+
+  # ② 没给 PANEL_DIFF_BASE ⇒ 不许硬塞一段空 diff 冒充有内容
+  env -u PANEL_DIFF_BASE PATH="$b:$PATH" CAPTURE="$d/c2.json" DEEPSEEK_API_KEY=dk \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c2.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/c2.json" ]]; then
+    stdin_of "$d/c2.json" | grep -q -- "--- 改动 (diff)"
+    check "V29: 没给基线时不硬塞空 diff 段" $([[ $? -ne 0 ]] && echo 0 || echo 1)
+  else
+    bad "V29: 没给基线时不硬塞空 diff 段"
+  fi
+
+  # ③ 提示词不许再宣称有 git(两条底座现在都没 shell 了)
+  if [[ -f "$d/c1.json" ]] && stdin_of "$d/c1.json" | grep -q "read-only git"; then
+    bad "V29: claude 底座的提示词也不许再宣称有只读 git"
+  elif [[ -f "$d/c1.json" ]]; then
+    ok  "V29: claude 底座的提示词也不许再宣称有只读 git"
+  else
+    bad "V29: claude 底座的提示词也不许再宣称有只读 git"
+  fi
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -2375,5 +2469,6 @@ v25_legs_run_in_their_own_session
 REVIEW_NO_MY_REVIEW=1 v26_glm_on_opencode_go
 REVIEW_NO_MY_REVIEW=1 v27_knockon_of_the_backend_switch
 REVIEW_NO_MY_REVIEW=1 v28_glm_on_opencode_base
+REVIEW_NO_MY_REVIEW=1 v29_agent_legs_get_the_diff
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
