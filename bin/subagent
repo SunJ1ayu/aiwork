@@ -218,11 +218,11 @@ Smallest first step: <the first concrete thing to build to validate this>}"
 # 上限 200KB:提示词被一份巨型 diff 撑爆,比看不到 diff 更糟(会把任务书挤没)。
 DIFF_SECTION=""
 if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  _d="$(git -C "$REPO_DIR" diff "${PANEL_DIFF_BASE}...HEAD" 2>/dev/null | head -c 200000)"
+  _d="$(git -C "$REPO_DIR" diff "${PANEL_DIFF_BASE}" 2>/dev/null | head -c 200000)"
   if [[ -n "$_d" ]]; then
     DIFF_SECTION="
 
---- 改动 (diff ${PANEL_DIFF_BASE}...HEAD) ---
+--- 改动 (diff ${PANEL_DIFF_BASE} → 工作区,含未提交) ---
 $_d"
     [[ ${#_d} -ge 200000 ]] && DIFF_SECTION="$DIFF_SECTION
 (diff 被截断在 200KB —— 超出部分请用 Read/Grep 自己去看)"
