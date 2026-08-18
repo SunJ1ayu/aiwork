@@ -559,7 +559,10 @@ PYEOF
   check "agent: zhipu 走 x-api-key(ANTHROPIC_API_KEY)拿 ZHIPU_API_KEY" $?
   [[ -z "$(agentget "$d/a1.json" ANTHROPIC_AUTH_TOKEN)" ]]
   check "agent: zhipu 不许再走 Bearer(AUTH_TOKEN 必须是空的,否则 401)" $?
-  [[ "$(agentget "$d/a1.json" ANTHROPIC_BASE_URL)" == "https://opencode.ai/zen/go/v1" ]]
+  # **不带尾部 /v1** —— claude CLI 自己会补 /v1/messages。写成 .../go/v1 会打到
+  # /zen/go/v1/v1/messages(实测 404),而 CLI 把这个 404 报成「模型不存在」。
+  # 08-18 我在这个坑里查了半天模型名。(第三处写死同一个地址:改一个地方不够。)
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_BASE_URL)" == "https://opencode.ai/zen/go" ]]
   check "agent: default Anthropic-compatible base URL (OpenCode Go)" $?
   [[ "$(agentget "$d/a1.json" ANTHROPIC_DEFAULT_SONNET_MODEL)" == "glm-4.6" ]]
   check "agent: sonnet slot mapped to ZHIPU_MODEL" $?
@@ -644,7 +647,13 @@ echo "AGENT-LEG" > "$3"; exit 0
 EOF
   chmod +x "$pb/subglm" "$pb/subglm-agent"
   bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1" >/dev/null 2>&1
-  grep -q AGENT-LEG "$d/P1.subglm.log"; check "panel: GLM leg defaults to agent" $?
+  # 08-18:默认从 agent 翻成 chat —— 不是偏好,是 OpenCode Go 的 Anthropic 口
+  # 不做工具格式转换,底座腿带着 Anthropic 形状的 tools 一律 400(见 V26 注释)。
+  # 这条和 V13 里那条问的是同一件事,两处都得改,别只改一处。
+  grep -q CHAT-LEG "$d/P1.subglm.log"; check "panel: GLM leg defaults to chat leg" $?
+  # 关法和强制走底座腿的能力都还在(哪天 Go 补上转换,靠这条切回去)
+  PANEL_GLM_LEG=agent bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1b" >/dev/null 2>&1
+  grep -q AGENT-LEG "$d/P1b.subglm.log"; check "panel: PANEL_GLM_LEG=agent 仍能强制走底座腿" $?
   PANEL_GLM_LEG=chat bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P2" >/dev/null 2>&1
   grep -q CHAT-LEG "$d/P2.subglm.log"; check "panel: PANEL_GLM_LEG=chat forces chat leg" $?
   rm -f "$pb/subglm-agent"
@@ -886,15 +895,25 @@ EOF
 #!/usr/bin/env bash
 echo "GLM-AGENT-LEG" > "$3"; exit 0
 EOF
-  chmod +x "$pb/subglm-agent"
+  cat > "$pb/subglm" <<'EOF'
+#!/usr/bin/env bash
+echo "GLM-CHAT-LEG" > "$3"; exit 0
+EOF
+  chmod +x "$pb/subglm-agent" "$pb/subglm"
   env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G1" >/dev/null 2>&1
   if [[ -e "$d/G1.subglm.log" ]]; then ok "panel: GLM 腿默认开着(OpenCode Go 之后)"; else bad "panel: GLM 腿默认开着(OpenCode Go 之后)"; fi
-  # 而且默认走的是**底座腿**(自己读仓库),不是只看得见 diff 的聊天腿
-  grep -q "GLM-AGENT-LEG" "$d/G1.subglm.log" 2>/dev/null
-  check "panel: GLM 默认走底座腿 subglm-agent(不是蒙眼聊天腿)" $?
+  # 默认走**聊天腿**,不是底座腿 —— 这条是被真端点逼出来的,不是偏好:
+  # OpenCode Go 的 Anthropic 口不做工具格式转换(它把请求体直接转发给 OpenAI
+  # 形状的上游),带 Anthropic 形状的 tools 一律 400
+  # 「Missing required input field: 'tools[0].function.name'」。
+  # 而底座腿的全部意义就是自带工具自己读仓库 ⇒ 在这个后端上它起不来。
+  # 08-18 实测三档:无工具 200 / Anthropic 形状工具 400 / OpenAI 形状工具 200。
+  # 哪天 Go 把转换补上,或者换成 opencode 自己的底座,再把这条改回 agent。
+  grep -q "GLM-CHAT-LEG" "$d/G1.subglm.log" 2>/dev/null
+  check "panel: GLM 默认走聊天腿(底座腿在 Go 上会被 400,见注释)" $?
   PANEL_GLM_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G2" >/dev/null 2>&1
   if [[ -e "$d/G2.subglm.log" ]]; then bad "panel: PANEL_GLM_LEG=off 还能把它关掉"; else ok "panel: PANEL_GLM_LEG=off 还能把它关掉"; fi
-  rm -f "$pb/subglm-agent"
+  rm -f "$pb/subglm-agent" "$pb/subglm"
 
   # exit semantics: 3 classic legs fail + kimi passes -> evidence exists -> rc=0
   for stubname in submimo subdeepseek subglm; do
@@ -1784,6 +1803,57 @@ PYEOF2
     bad "V26: OpenCode Go key 文件就位($authf)"
     bad "V26: key 文件权限 600"
     bad "V26: key 文件里是一把像样的 key"
+  fi
+
+  # ── ④b base URL 不许以 /v1 结尾。claude CLI 自己会补 `/v1/messages`,
+  #    写成 .../go/v1 会发到 /zen/go/v1/v1/messages(实测 404),而 CLI 把这个 404
+  #    报成「模型 glm-5.2 不存在」—— 一个地址 bug 伪装成模型名 bug,08-18 真栽过。
+  local bu
+  bu="$(get "$d/m1.json" ANTHROPIC_BASE_URL)"
+  [[ "$bu" != */v1 ]]
+  check "V26: 底座腿 base URL 不许以 /v1 结尾(CLI 会自己补,否则 404 伪装成模型名错)" $?
+  [[ "$bu" == "https://opencode.ai/zen/go" ]]
+  check "V26: 底座腿 base URL 就是 opencode.ai/zen/go" $?
+
+  # ── ④c 聊天腿必须带 User-Agent。urllib 的默认 UA 会被 Cloudflare 前置的端点
+  #    403(error code 1010);同一个请求 curl 200 / urllib 403,只差这一行。
+  #    这里用**本机 stub 服务**问,不出外网(判据不许有外网出口)。
+  local port=8791
+  # stub 服务:绑好端口后自己写一个 ready 文件,**别用 /dev/tcp 探活** ——
+  # handle_request() 只服务一次,探活那条连接会把它唯一的那次用掉,
+  # 于是真请求撞上"连接被拒",而判据看到的现象是"stub 没收到请求"。
+  # (08-18 第一版就是这么写的,红了一轮才看明白是量具自己的问题。)
+  python3 - "$d/ua.json" "$port" "$d/ua.ready" <<'PYUA' &
+import http.server, json, sys, pathlib
+out, port, ready = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get('content-length', 0)); self.rfile.read(n)
+        json.dump({"ua": self.headers.get("User-Agent")}, open(out, "w"))
+        r = json.dumps({"choices":[{"message":{"content":"stub\nConclusion: PASS"}}]}).encode()
+        self.send_response(200); self.send_header('content-type','application/json')
+        self.send_header('content-length', str(len(r))); self.end_headers(); self.wfile.write(r)
+    def log_message(self, *a): pass
+srv = http.server.HTTPServer(('127.0.0.1', port), H)
+pathlib.Path(ready).write_text("ok")
+srv.timeout = 60
+srv.handle_request()
+PYUA
+  local stubpid=$!
+  for _ in $(seq 1 40); do [[ -f "$d/ua.ready" ]] && break; sleep 0.25; done
+  # **必须用真的那条腿**($BIN,不是 $b):$b/submimo-review 是本节自己造的桩,
+  #  桩根本不发 HTTP —— 拿桩问"发出去的请求带没带 UA",问的是空气。
+  ZHIPU_API_KEY=zk ZHIPU_INCLUDE="$d/t.md" \
+    ZHIPU_CHAT_COMPLETIONS_URL="http://127.0.0.1:$port/v1/chat/completions" \
+    bash "$BIN/subglm" review "$d/t.md" "$d/ua.log" "$d" >/dev/null 2>&1
+  wait $stubpid 2>/dev/null
+  if [[ -f "$d/ua.json" ]]; then
+    local ua; ua="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('ua') or '')" "$d/ua.json")"
+    [[ -n "$ua" && "$ua" != Python-urllib* ]]
+    check "V26: 聊天腿带自己的 User-Agent(urllib 默认 UA 会被 Cloudflare 403)" $?
+  else
+    bad "V26: 聊天腿带自己的 User-Agent(urllib 默认 UA 会被 Cloudflare 403)"
+    echo "    (stub 没收到请求 —— 判据自己没跑起来,不许当成绿)"
   fi
 
   # ── ⑤ key 绝不许进仓:被跟踪的文件里不许有 API key 形状的字符串。
