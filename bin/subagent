@@ -84,6 +84,9 @@ case "$PROVIDER" in
     # (这一格 08-18 才出现 —— 在那之前 Bearer 是硬写在下面注环境那行里的,
     #  于是"换个后端"会静默变成"换个后端但认证方式没跟着换"。)
     AUTH_ENV="ANTHROPIC_AUTH_TOKEN"
+    # 底座:借 Claude Code 当壳。DeepSeek 的 Anthropic 面**做**工具格式转换,
+    # 所以这条路对它是通的(GLM 那格 08-18 换走的原因正是 Go 那边不转换)。
+    AGENT_BASE="claude"
     ;;
   zhipu)
     PREFIX="ZHIPU"; LABEL="subglm-agent"
@@ -104,7 +107,23 @@ case "$PROVIDER" in
     # ANTHROPIC_API_KEY);实测 Authorization: Bearer 直接 401 "Missing API key"。
     # 这一格是这次换后端的真 bug 面:key 传对了、header 传错了,腿照样是死的,
     # 而日志上只看得见"模型没回话"。
-    AUTH_ENV="ANTHROPIC_API_KEY"
+    AUTH_ENV="ANTHROPIC_API_KEY"   # (只在 claude 底座下有意义,留着供将来切回)
+    # ── 底座:**opencode CLI 自己**(2026-08-18,track opencode-agent-base)────────
+    # 为什么不再借 Claude Code 当壳:Go 的 Anthropic 面**不做工具格式转换**,
+    # 带 Anthropic 形状的 tools 一律 400 ⇒ 借壳这条路上这条腿根本起不来,
+    # 只能退化成看不见仓库的聊天腿。而 opencode 自己就是个 agent 底座,
+    # 工具形状天然对得上 —— 和 subkimi 用原生 kimi-code、submimo 用官方 MiMoCode
+    # 是同一个形状,不是新腿,是同一条腿换底座。
+    AGENT_BASE="opencode"
+    # provider 必须自定义指到**订阅端点**:opencode 默认的 provider 走按量付费网关,
+    # 实测直接 `Insufficient balance`(订阅和按量是两笔账)。
+    OC_PROVIDER="go"
+    OC_MODEL_ID="glm-5.2"
+    OC_BASE_URL="https://opencode.ai/zen/go/v1"
+    # 我们自配的只读 agent。**绝不用 opencode 内置的 `plan` 档**:它自称
+    # "禁掉所有编辑工具",而解析出来的配置是 write/edit/bash 全开 + 权限 `*` allow;
+    # 实测它两次不写文件(含一次话术攻击)靠的都是**模型自觉**,不是闸。
+    OC_AGENT="aiwork-review"
     # 保持这条腿的**历史值 40**。合并躯干时我一度把它统一成 80,等于在没有任何
     # glm 轮次实测的情况下把它的单次预算翻倍 —— 顺手统一别人的预算不是重构。
     # 要改请先跑一次真腿、拿 turns 说话(日志末尾那行现在会告诉你)。
@@ -191,7 +210,11 @@ ERR_FILE="$(mktemp)"
 {
   echo "# $LABEL $MODE log"
   echo "time: $(date -Iseconds)"
-  echo "mode: $MODE (agent base: claude-code headless -> $PROVIDER)"
+  if [[ "$AGENT_BASE" == "opencode" ]]; then
+    echo "mode: $MODE (agent base: opencode CLI headless -> $PROVIDER)"
+  else
+    echo "mode: $MODE (agent base: claude-code headless -> $PROVIDER)"
+  fi
   echo "base_url: $BASE_URL"
   echo "model: $MODEL"
   echo "repo: $REPO_DIR"
@@ -200,10 +223,54 @@ ERR_FILE="$(mktemp)"
   echo
 } > "$LOG_FILE"
 
+RC=0
+if [[ "$AGENT_BASE" == "opencode" ]]; then
+  # ── opencode 底座 ───────────────────────────────────────────────────────────
+  # 配置**每次重写**:这份配置就是只读锁本身,不许留隔夜残留(判据查的也是它)。
+  # HOME 换成隔离目录 —— 否则会写进 /root/.config/opencode,污染我自己那份真配置。
+  OC_HOME="${OPENCODE_REVIEW_HOME:-$HOME/.cache/aiwork/opencode-review-home}"
+  mkdir -p "$OC_HOME/.config/opencode"
+  python3 - "$OC_HOME/.config/opencode/opencode.json" \
+           "$OC_PROVIDER" "$OC_MODEL_ID" "$OC_BASE_URL" "$API_KEY" "$OC_AGENT" "$MAX_TURNS" <<'PYOC'
+import json, sys
+cfgpath, prov, model, base, key, agent, steps = sys.argv[1:8]
+# 只读锁:写工具全关。bash 留着 —— 底座腿的价值就是自己读仓库,只读 git 是其中一半;
+# 但它必须是**白名单**:`*` deny + 只放行只读 git。实测这是真闸(模型真去调、被 harness
+# 拦回),而且 `git log && echo x > f` 这种链式绕法也拒得掉(它解析命令,不是傻前缀匹配)。
+tools = {"write": False, "edit": False, "patch": False, "task": False,
+         "todowrite": False, "webfetch": False, "websearch": False, "skill": False,
+         "read": True, "glob": True, "grep": True, "bash": True}
+perm = {"edit": "deny", "write": "deny",
+        "bash": {"*": "deny",
+                 "git diff*": "allow", "git log*": "allow",
+                 "git status*": "allow", "git show*": "allow"}}
+cfg = {"$schema": "https://opencode.ai/config.json",
+       "provider": {prov: {"npm": "@ai-sdk/openai-compatible",
+                           "name": "OpenCode Go (subscription)",
+                           "options": {"baseURL": base, "apiKey": key},
+                           "models": {model: {}}}},
+       "agent": {agent: {"description": "aiwork read-only review leg",
+                         "mode": "primary", "model": prov + "/" + model,
+                         # 轮次上限:供应商表里那个历史值,换底座也得跟着搬。
+                         # opencode 没有 --max-turns 这类命令行开关,只有配置里这个
+                         # `steps`(schema 里 maxSteps 已标废弃,别用那个名字)。
+                         # 没有它,这条腿在 opencode 上就只剩挂钟超时兜着 = 上限丢了。
+                         "steps": int(steps),
+                         "tools": tools, "permission": perm}}}
+json.dump(cfg, open(cfgpath, "w"), indent=2)
+PYOC
+  chmod 600 "$OC_HOME/.config/opencode/opencode.json"   # 配置里含 key
+  (
+    cd "$REPO_DIR"
+    HOME="$OC_HOME" timeout "$TIMEOUT_SECONDS" opencode run \
+      --dir "$REPO_DIR" --agent "$OC_AGENT" -m "$OC_PROVIDER/$OC_MODEL_ID" "$PROMPT"
+  ) 2>"$ERR_FILE" | sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' >> "$LOG_FILE" || RC=$?
+  # ⚠️ **rc 信不得**:实测 opencode 余额不足时把错误打在 stdout 上、退出码仍是 0。
+  # 这条腿的死活由下面那道裁决 gate 判,rc 只当补充信号。
+else
 # 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,
 # 否则它会盖过供应商 token。提示词走 stdin:--allowedTools/--disallowedTools 是变长
 # 参数,尾随的位置参数会被当成又一个工具名吞掉。
-RC=0
 (
   cd "$REPO_DIR"
   printf '%s\n' "$PROMPT" | env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
@@ -265,13 +332,15 @@ footer.append(f"(原始 stream-json:{stream})")
 with open(log, "a", encoding="utf-8") as fh:
     fh.write(body + "\n" + "\n".join(footer) + "\n")
 PY
+fi
 
 if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
 
 if [[ $RC -ne 0 ]]; then
-  [[ $RC -eq 124 ]] && die "claude timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)"
-  die "claude exited rc=$RC (partial work kept in $LOG_FILE)"
+  _BASE_CMD="claude"; [[ "$AGENT_BASE" == "opencode" ]] && _BASE_CMD="opencode"
+  [[ $RC -eq 124 ]] && die "$_BASE_CMD timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)"
+  die "$_BASE_CMD exited rc=$RC (partial work kept in $LOG_FILE)"
 fi
 
 if [[ "$MODE" == "review" ]]; then
