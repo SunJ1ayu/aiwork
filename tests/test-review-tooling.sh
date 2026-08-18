@@ -2405,7 +2405,9 @@ EOF
   if [[ -f "$d/c1.json" ]]; then
     stdin_of "$d/c1.json" | grep -q "return a-b"
     check "V29: 给了 PANEL_DIFF_BASE 时,diff 正文进了提示词" $?
-    stdin_of "$d/c1.json" | grep -q -- "--- 改动 (diff)"
+    # 段头带基线号,所以按**前缀**匹配(第一版我写死了 "(diff)" 这个字面,
+    # 而真段头是 "(diff <基线>...HEAD)" ⇒ 断言错、实现对,红了一轮)。
+    stdin_of "$d/c1.json" | grep -q -- "--- 改动 (diff "
     check "V29: diff 有自己的段头(别和任务书糊在一起)" $?
   else
     bad "V29: 给了 PANEL_DIFF_BASE 时,diff 正文进了提示词"
@@ -2417,7 +2419,7 @@ EOF
   env -u PANEL_DIFF_BASE PATH="$b:$PATH" CAPTURE="$d/c2.json" DEEPSEEK_API_KEY=dk \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c2.log" "$repo" >/dev/null 2>&1
   if [[ -f "$d/c2.json" ]]; then
-    stdin_of "$d/c2.json" | grep -q -- "--- 改动 (diff)"
+    stdin_of "$d/c2.json" | grep -q -- "--- 改动 (diff "
     check "V29: 没给基线时不硬塞空 diff 段" $([[ $? -ne 0 ]] && echo 0 || echo 1)
   else
     bad "V29: 没给基线时不硬塞空 diff 段"

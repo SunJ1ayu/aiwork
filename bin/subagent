@@ -179,13 +179,10 @@ mkdir -p "$(dirname "$LOG_FILE")"
 # 能力清单按底座给:**不许宣称一个它没有的工具**。opencode 底座没有 shell/git
 # (bash 整个关了),照抄旧句子的话模型会白花几轮去发现自己没有 —— 08-18 真跑时
 # 这条腿当场把那句话顶了回来。
-if [[ "$AGENT_BASE" == "opencode" ]]; then
-  TOOLS_SENTENCE="Read, Glob, Grep - note there is NO shell and NO git in this harness"
-  TOOLS_SENTENCE_X=" - note there is NO shell and NO git in this harness"
-else
-  TOOLS_SENTENCE="Read, Glob, Grep, and read-only git commands"
-  TOOLS_SENTENCE_X=", and read-only git commands"
-fi
+# 2026-08-18 晚起**两个底座都没有 shell/git**(track deepseek-leg-bash-hole:
+# claude 壳那条也被证实能靠 `git diff --output=` 往仓里写)。所以清单只有一份。
+TOOLS_SENTENCE="Read, Glob, Grep - note there is NO shell and NO git in this harness"
+TOOLS_SENTENCE_X=" - note there is NO shell and NO git in this harness"
 REVIEW_PROMPT="You are an independent code reviewer running inside a read-only harness.
 Explore the repository yourself with the tools you have
 (${TOOLS_SENTENCE}). Do not take the task's claims at face value - verify
@@ -215,13 +212,31 @@ Sacrifices: <what it gives up; when it is the wrong choice>
 Blind spots in the brief: <what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen>
 Smallest first step: <the first concrete thing to build to validate this>}"
 
+# ── 把 diff 算好塞进提示词 ─────────────────────────────────────────────────
+# 底座腿的 Bash 关掉之后它看不了 git 了 —— 但**它需要的是那份 diff,不是一个 shell**。
+# 聊天腿一直是这么拿 diff 的(引擎替它算),底座腿以前靠自己跑 git,现在由这里补上。
+# 上限 200KB:提示词被一份巨型 diff 撑爆,比看不到 diff 更糟(会把任务书挤没)。
+DIFF_SECTION=""
+if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  _d="$(git -C "$REPO_DIR" diff "${PANEL_DIFF_BASE}...HEAD" 2>/dev/null | head -c 200000)"
+  if [[ -n "$_d" ]]; then
+    DIFF_SECTION="
+
+--- 改动 (diff ${PANEL_DIFF_BASE}...HEAD) ---
+$_d"
+    [[ ${#_d} -ge 200000 ]] && DIFF_SECTION="$DIFF_SECTION
+(diff 被截断在 200KB —— 超出部分请用 Read/Grep 自己去看)"
+  fi
+  unset _d
+fi
+
 if [[ "$MODE" == "explore" ]]; then
   PROMPT="${EXPLORE_SYSTEM_PROMPT}
 
 --- DESIGN BRIEF ---
-$(cat "$TASK_FILE")"
+$(cat "$TASK_FILE")${DIFF_SECTION}"
 else
-  PROMPT="$REVIEW_PROMPT"
+  PROMPT="${REVIEW_PROMPT}${DIFF_SECTION}"
 fi
 
 STREAM_FILE="${LOG_FILE%.log}.stream.jsonl"
@@ -249,11 +264,11 @@ ERR_FILE="$(mktemp)"
   fi
   echo "repo: $REPO_DIR"
   echo "task: $TASK_FILE"
-  if [[ "$AGENT_BASE" == "opencode" ]]; then
-    echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep),不依赖别人喂 diff。"
-    echo "      **没有 shell / 没有 git**(白名单挡不住 git 自己的参数,整个关掉了)。"
-  else
-    echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep + 只读 git),不依赖别人喂 diff。"
+  echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep)。"
+  echo "      **没有 shell / 没有 git**:命令行白名单挡不住 git 自己的参数"
+  echo "      (--output= 能往仓里写),两个底座都整个关掉了。"
+  if [[ -n "${PANEL_DIFF_BASE:-}" ]]; then
+    echo "      改动的 diff 已算好放进提示词(基线 $PANEL_DIFF_BASE)。"
   fi
   echo
 } > "$LOG_FILE"
@@ -339,8 +354,8 @@ else
       --setting-sources project \
       --max-turns "$MAX_TURNS" \
       --output-format stream-json --verbose \
-      --allowedTools Read Glob Grep "Bash(git diff:*)" "Bash(git log:*)" "Bash(git status:*)" \
-      --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent
+      --allowedTools Read Glob Grep \
+      --disallowedTools Bash Write Edit NotebookEdit WebFetch WebSearch Task Agent
 ) > "$STREAM_FILE" 2>"$ERR_FILE" || RC=$?
 
 # 渲染:把 stream-json 还原成人能读的日志。**撞上限/超时也要渲染** —— 那正是这条
