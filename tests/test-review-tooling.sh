@@ -2230,6 +2230,23 @@ EOF
   if [[ -f "$d/oc4.txt" ]]; then bad "V28: deepseek 腿不许被顺手改成 opencode 底座"
   else ok "V28: deepseek 腿不许被顺手改成 opencode 底座"; fi
 
+  # ── ⑮ **提示词不许宣称一个它没有的工具**。bash 关掉之后,原提示词还写着
+  #    「Read, Glob, Grep, and read-only git commands」、日志的"视野"行也还写着"只读 git"
+  #    ⇒ 我们在给模型喂一份假的能力清单。08-18 真跑时这条腿当场把它顶回来了:
+  #    "The task's premise that I have 'read-only git commands' is incorrect."
+  #    它为此白花了几轮去发现自己没有 —— 假的能力清单比少写一句更贵。
+  #    ⚠️ 写法:**先要求日志存在**。我第一版把这条插在了生成日志的那个用例之前,
+  #    文件不存在 ⇒ grep 找不到 ⇒ 走 else 报绿(今天第五条假绿,同一个形状:
+  #    "不含某串"的否定断言在输入缺席时会假绿)。
+  if [[ ! -s "$d/g1.log" ]]; then
+    bad "V28: opencode 底座的提示词/视野行不许再宣称有只读 git"
+    echo "    (日志不存在 ⇒ 这条在测空气,不许当绿)"
+  elif grep -qE "read-only git|只读 git" "$d/g1.log"; then
+    bad "V28: opencode 底座的提示词/视野行不许再宣称有只读 git"
+  else
+    ok  "V28: opencode 底座的提示词/视野行不许再宣称有只读 git"
+  fi
+
   # ── ⑫ 二进制存在性检查要查**这条腿真正要用的那个**。原来无条件查 claude:
   #    opencode 底座不依赖 claude ⇒ claude 没装而 opencode 装了,腿被误杀;
   #    反过来则放行到 `opencode run` 才报一个误导性的 rc=127。
