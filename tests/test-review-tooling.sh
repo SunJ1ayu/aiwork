@@ -1962,6 +1962,137 @@ EOF
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V28
+# 2026-08-18 track opencode-agent-base:GLM 腿的底座从「借 Claude Code 当壳」换成
+# **opencode CLI 自己**,好让它重新能自己读仓库(Go 的 Anthropic 面不做工具格式转换,
+# 借壳那条路带工具必 400)。这一组问的全是**机械事实**,不打网(判据不许有外网出口):
+# 用 PATH 上的 stub opencode 截获 argv + 它生成的配置。
+v28_glm_on_opencode_base() {
+  echo "[V28] GLM 腿改用 opencode 底座:调谁、只读锁、配置隔离、裁决 gate"
+  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
+  printf '# review this\n' > "$d/t.md"
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  local ochome="$d/ochome"
+
+  # stub:两个底座都放上,看它到底调哪个(自述不作数,查 argv)
+  cat > "$b/opencode" <<'EOF'
+#!/usr/bin/env bash
+{ printf '%s\n' "ARGV: $*"; printf '%s\n' "HOME: $HOME"; } > "$CAPTURE"
+echo "stub reviewer output"
+echo "Conclusion: PASS"
+EOF
+  cat > "$b/claude" <<'EOF'
+#!/usr/bin/env bash
+echo "CLAUDE-WAS-CALLED" > "$CAPTURE_CLAUDE"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+EOF
+  chmod +x "$b/opencode" "$b/claude"
+
+  rm -f "$d/oc.txt" "$d/claude.txt"
+  env PATH="$b:$PATH" CAPTURE="$d/oc.txt" CAPTURE_CLAUDE="$d/claude.txt" \
+    OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g1.log" "$d" >/dev/null 2>"$d/g1.err"; rc=$?
+
+  # ── ① 调的是 opencode,不是 claude
+  [[ -f "$d/oc.txt" ]]; check "V28: GLM 腿调起的是 opencode 底座" $?
+  if [[ -f "$d/claude.txt" ]]; then
+    bad "V28: GLM 腿不许再调 claude 壳"
+    echo "    (claude 被调起来了 ⇒ 底座没换成,或者换了一半)"
+  else ok "V28: GLM 腿不许再调 claude 壳"; fi
+
+  # ── ② 模型走订阅那个 provider(默认 provider 是按量付费,实测 Insufficient balance)
+  grep -q -- "go/glm-5.2" "$d/oc.txt" 2>/dev/null
+  check "V28: 模型是 go/glm-5.2(订阅 provider,不是默认按量付费那个)" $?
+  grep -q -- "--agent" "$d/oc.txt" 2>/dev/null
+  check "V28: 显式指定 --agent(不许吃 opencode 的默认档)" $?
+  # **不许用内置 plan 档**:实测它自称"禁掉所有编辑工具",而解析出来的配置是
+  # write/edit/bash 全开 + 权限 * allow ⇒ 它的只读靠模型自觉,不是闸。
+  grep -qE -- "--agent[= ]+plan" "$d/oc.txt" 2>/dev/null
+  check "V28: 不许用内置 plan 档当只读保证(它是模型自觉,不是机械锁)" $([[ $? -ne 0 ]]; echo $?)
+
+  # ── ③ 配置隔离:HOME 必须被换掉,否则污染 /root/.config/opencode(我的真配置)
+  grep -q "^HOME: $ochome" "$d/oc.txt" 2>/dev/null
+  check "V28: 跑 opencode 时 HOME 换成隔离目录(不许碰真实 HOME)" $?
+
+  # ── ④ 只读锁**机械成立**:生成的配置里写工具必须是 false
+  local cfg="$ochome/.config/opencode/opencode.json"
+  if [[ ! -f "$cfg" ]]; then
+    bad "V28: 生成了隔离配置文件"
+    echo "    (没有配置 ⇒ 下面几条只读断言全是在测空气)"
+  else
+    ok "V28: 生成了隔离配置文件"
+    local off; off="$(python3 - "$cfg" <<'PYCFG'
+import json,sys
+c=json.load(open(sys.argv[1]))
+ag=list(c.get("agent",{}).values())
+t=ag[0].get("tools",{}) if ag else {}
+print(" ".join(sorted(k for k,v in t.items() if v is False)))
+PYCFG
+)"
+    local w
+    for w in write edit patch task webfetch websearch skill; do
+      [[ " $off " == *" $w "* ]]
+      check "V28: 只读锁——配置里 $w 关掉了" $?
+    done
+    # bash 留着(要跑只读 git),但必须是白名单:* deny + 只放行只读 git
+    python3 - "$cfg" <<'PYCFG'
+import json,sys
+c=json.load(open(sys.argv[1]))
+ag=list(c.get("agent",{}).values())
+perm=(ag[0].get("permission") or {}) if ag else {}
+bash=perm.get("bash")
+ok = isinstance(bash,dict) and bash.get("*")=="deny" and any(
+    k.startswith("git ") and v=="allow" for k,v in bash.items())
+sys.exit(0 if ok else 1)
+PYCFG
+    check "V28: bash 是白名单(* deny + 只放行只读 git),不是敞开" $?
+  fi
+
+  # ── ⑤ 裁决 gate 必须硬:**opencode 报错也 rc=0**(实测:余额不足那次错误打在
+  #    stdout 上、退出码仍是 0)⇒ 判活只能靠裁决行,不能靠 rc。
+  cat > "$b/opencode" <<'EOF'
+#!/usr/bin/env bash
+echo "Error: Insufficient balance. Manage your billing here: https://opencode.ai/..."
+exit 0
+EOF
+  chmod +x "$b/opencode"
+  env PATH="$b:$PATH" CAPTURE="$d/oc2.txt" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g2.log" "$d" >/dev/null 2>"$d/g2.err"; rc=$?
+  [[ $rc -ne 0 ]]
+  check "V28: opencode 没给裁决行时必须硬失败(它报错也 rc=0,信不得)" $?
+
+  # ── ⑥ 没 key 时硬失败,且底座压根没被调起
+  rm -f "$d/oc3.txt"
+  local fakehome="$d/home"; mkdir -p "$fakehome"
+  env -u ZHIPU_API_KEY -u ZHIPU_AUTH_FILE PATH="$b:$PATH" CAPTURE="$d/oc3.txt" \
+    OPENCODE_REVIEW_HOME="$ochome" HOME="$fakehome" \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g3.log" "$d" >/dev/null 2>"$d/g3.err"; rc=$?
+  [[ $rc -ne 0 ]]; check "V28: 没 key 时硬失败" $?
+  if [[ -f "$d/oc3.txt" ]]; then bad "V28: 没 key 时 opencode 压根没被调起"
+  else ok "V28: 没 key 时 opencode 压根没被调起"; fi
+
+  # ── ⑦ deepseek 腿一个字没被串味:它仍走 claude 壳
+  cat > "$b/opencode" <<'EOF'
+#!/usr/bin/env bash
+{ printf '%s\n' "ARGV: $*"; } > "$CAPTURE"; echo "Conclusion: PASS"
+EOF
+  chmod +x "$b/opencode"
+  rm -f "$d/oc4.txt" "$d/claude4.txt"
+  env PATH="$b:$PATH" CAPTURE="$d/oc4.txt" CAPTURE_CLAUDE="$d/claude4.txt" \
+    DEEPSEEK_API_KEY=dk bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds.log" "$d" >/dev/null 2>&1
+  [[ -f "$d/claude4.txt" ]]
+  check "V28: deepseek 腿仍走 claude 壳(换底座不许串味到隔壁)" $?
+  if [[ -f "$d/oc4.txt" ]]; then bad "V28: deepseek 腿不许被顺手改成 opencode 底座"
+  else ok "V28: deepseek 腿不许被顺手改成 opencode 底座"; fi
+
+  # ── ⑧ key 不许进配置以外的地方,更不许进仓(仓那条 V26 ⑤ 已经在查,这里查日志)
+  if grep -rq "zk" "$d/g1.log" 2>/dev/null; then
+    bad "V28: key 不许出现在日志里"
+  else ok "V28: key 不许出现在日志里"; fi
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -1996,5 +2127,6 @@ v25_legs_run_in_their_own_session
 # 红的绿的全是空的(2026-08-18 第一版就是这样,红了 16 条没有一条是真问的)。
 REVIEW_NO_MY_REVIEW=1 v26_glm_on_opencode_go
 REVIEW_NO_MY_REVIEW=1 v27_knockon_of_the_backend_switch
+REVIEW_NO_MY_REVIEW=1 v28_glm_on_opencode_base
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
