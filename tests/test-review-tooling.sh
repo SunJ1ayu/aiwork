@@ -1945,8 +1945,19 @@ EOF
   [[ "$h" == *glm-5.2* ]];   check "V27: subagent -h 要写现在的默认模型 glm-5.2" $?
   h="$(bash "$BIN/subchat" -h 2>&1)"
   [[ "$h" != *glm-4.6v* ]];  check "V27: subchat -h 不许还写着 glm-4.6v" $?
-  [[ "$h" != *bigmodel* ]];  check "V27: subchat -h 不许还写着 bigmodel 端点" $?
-  [[ "$h" == *opencode* ]];  check "V27: subchat -h 要写现在的端点(opencode)" $?
+  # 08-18 收口时把这条**搬到问得出的地方**:原版禁的是字符串 "bigmodel",
+  # 但它连"2026-08-18 从智谱 bigmodel 换来"这种**沿革句**一起禁了 —— 而沿革句正是
+  # 本机要求留的账。真正的危险是**主机名以"当前默认端点"的身份出现**,禁词禁不到这件事。
+  # 改后更强:连 deepseek 那一格的旧主机名一起禁,且下一条正面钉死默认端点是什么。
+  # (改题面不是放水的通行证:改完重新红检过 —— 把旧 URL 塞回去,这条必须红。)
+  [[ "$h" != *open.bigmodel.cn* ]]
+  check "V27: subchat -h 里不许再出现 bigmodel 的主机名(沿革句里提名字可以)" $?
+  [[ "$h" == *opencode.ai/zen/go/v1/chat/completions* ]]
+  check "V27: subchat -h 正面写出当前默认端点全址" $?
+  # (原本这里还有一条 `[[ "$h" == *opencode* ]]`。**红检当场证明它是瞎的**:
+  #  把旧 bigmodel 端点塞回去之后它照样绿 —— 它匹配到的是 auth 路径里的
+  #  `~/.config/opencode-go/auth.json`,而不是端点。它被上面那条"全址"断言严格覆盖,
+  #  所以删掉而不是留着凑数:一条永远绿的断言比没有更坏,它会让人以为这里有防线。)
 
   rm -rf "$d"
 }
