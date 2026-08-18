@@ -1,0 +1,65 @@
+# Design: opencode-go-leg
+
+- Change: opencode-go-leg
+- Status: draft
+- 规划双出: 不适用(不是新写面:换的是供应商表里三个默认值 + 一格 header 风格)
+
+## 官方底座调研(业主点名要查的那一步)
+
+**结论:GLM 没有官方 agent 底座可包,现有的壳已经是官方推荐路径。**
+
+- 智谱官方仓 `MetaGLM/glm-cc` 的自述就是「把 GLM 接进 Claude Code 这类 vibe coding
+  工具」⇒ 官方给的路子就是**拿 Claude Code 当壳换端点**,和 `subglm-agent` 现在做的一样;
+- `@z_ai/zai-cli` 是通用工具箱(chat/media/parse/search),不是编码 agent 底座;
+  `@z_ai/coding-helper` / `chelper` 是"管别人家编码工具"的助手,也不是底座;
+- npm/GitHub(zai-org / THUDM / MetaGLM)里没有 kimi-code 那种一等公民 CLI;
+- 而且这把 key 是 **OpenCode Go 的**,不是 z.ai 的 —— 就算有官方 CLI,它认的是
+  z.ai 账号,吃不下这把 key。
+
+## Approach
+
+只动供应商表(差异只准活在那里):
+
+| | 旧(bigmodel) | 新(OpenCode Go) |
+|---|---|---|
+| 底座腿端点 | `open.bigmodel.cn/api/anthropic` | `https://opencode.ai/zen/go/v1` |
+| 聊天腿端点 | `open.bigmodel.cn/api/paas/v4/chat/completions` | `https://opencode.ai/zen/go/v1/chat/completions` |
+| 默认模型 | `glm-4.6v` | `glm-5.2` |
+| key 文件 | `~/.config/zhipu/auth.json` | `~/.config/opencode-go/auth.json` |
+| 认证 header | `ANTHROPIC_AUTH_TOKEN`(Bearer) | **`ANTHROPIC_API_KEY`(x-api-key)** |
+
+`panel-review` 的 GLM 腿默认值 `off` → `agent`(08-04 关它的理由是欠费,理由没了)。
+
+## Key trade-offs / risks
+
+- **认证 header 是这单的真 bug**:Go 的 Anthropic 面只认 x-api-key,实测 Bearer 回
+  401 `Missing API key`。躯干原本硬写着 `ANTHROPIC_AUTH_TOKEN=` ⇒ 光换端点/key 会得到
+  一条"活着但永远不回话"的腿。所以表里新增一格 `AUTH_ENV`,deepseek 保持 Bearer。
+- **共用躯干的串味风险**:`subagent`/`subchat` 同时服务 deepseek。判据里专门有一组
+  "deepseek 一个字没被改"的断言(本机记过账:合并躯干那次我顺手把 GLM 的轮次上限翻了倍)。
+- **key 落盘**:新 key 存 `~/.config/opencode-go/auth.json`(600),仓外;判据查
+  "仓里被跟踪的文件不许出现 API key 形状的字符串"。
+- 旧 `~/.config/zhipu/auth.json` 原样留着(它是另一家的账,将来充值可切回)。
+
+## Alternatives considered
+
+- **包一条 opencode CLI 的新腿**(我的第一版):被业主否掉三次 —— 会变成第五条腿、
+  换掉壳、且和"额度过期的那条腿"这个真问题无关。已回滚(装的 opencode 卸掉)。
+- **把 key 塞进 `~/.config/zhipu/auth.json`**:文件名会撒谎(那是智谱的账),
+  本机反复吃过"同一件事写在两个地方/名字与内容对不上"的亏。
+
+## Test strategy (oracle)
+
+`tests/test-review-tooling.sh`:V8/V9/V13 的旧断言随规格翻新(端点、header 风格、
+panel 默认开关),新增 **V26** 专问三件 V8/V9 问不出来的事:①header 风格表驱动、
+②deepseek 没被顺手改、③key 落位且不进仓。判据全用 stub(**判据不许有外网出口**),
+真端点的连通性由 verify 里的 runlog 冒烟收据承担。
+
+**这个 oracle 能被什么骗过?**
+
+- stub 只能证明"我们注了什么环境变量",证明不了**真端点会不会认**。头一版判据
+  就是这么绿着而 Bearer 是死的 ⇒ 必须配一次**真跑**(subglm-agent 打真端点、
+  拿到真裁决行)才算数;这是 verify 里那条 runlog 收据存在的唯一理由。
+- 判据自己会瞎:V26 第一版忘了 `REVIEW_NO_MY_REVIEW=1`,反锚定闸把每次派发都拦掉,
+  16 条红全是空的、还混着两条假绿。**红检要看"基线那几条是不是绿的"**(deepseek
+  那组),不是看总数红没红。

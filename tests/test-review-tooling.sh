@@ -451,8 +451,11 @@ PYEOF
     ZHIPU_API_KEY=zk-dummy ZHIPU_MODEL=glm-custom ZHIPU_TIMEOUT=123 \
     bash "$b/subchat" zhipu review "$d/t.md" "$d/o2.log" "$d" >/dev/null 2>&1; rc=$?
   check "subchat zhipu review exits 0" $([[ $rc -eq 0 ]]; echo $?)
-  [[ "$(envget "$d/c2.json" MIMO_CHAT_COMPLETIONS_URL)" == "https://open.bigmodel.cn/api/paas/v4/chat/completions" ]]
-  check "zhipu: exact MIMO_CHAT_COMPLETIONS_URL default" $?
+  # 2026-08-18:后端从智谱开放平台 bigmodel 换到 **OpenCode Go**(业主的 $10/月订阅)。
+  # 改这条老断言不是放水:bigmodel 那把 key 已欠费,这条腿 08-04 起默认关着 ——
+  # 断言的是"默认端点必须是**当前真正在付费的那一个**",规格换了,断言跟着换。
+  [[ "$(envget "$d/c2.json" MIMO_CHAT_COMPLETIONS_URL)" == "https://opencode.ai/zen/go/v1/chat/completions" ]]
+  check "zhipu: exact MIMO_CHAT_COMPLETIONS_URL default (OpenCode Go)" $?
   [[ "$(envget "$d/c2.json" MIMO_MODEL)" == "glm-custom" ]]
   check "zhipu: ZHIPU_MODEL override honored" $?
   [[ "$(envget "$d/c2.json" REVIEW_LABEL)" == "subglm-review" ]]
@@ -547,14 +550,23 @@ PYEOF
     ZHIPU_API_KEY=zk-env ZHIPU_MODEL=glm-4.6 \
     bash "$b/subglm-agent" review "$d/t.md" "$d/a1.log" "$d" >/dev/null 2>&1; rc=$?
   check "agent review (env key) exits 0" $([[ $rc -eq 0 ]]; echo $?)
-  [[ "$(agentget "$d/a1.json" ANTHROPIC_AUTH_TOKEN)" == "zk-env" ]]
-  check "agent: AUTH_TOKEN from ZHIPU_API_KEY" $?
-  [[ "$(agentget "$d/a1.json" ANTHROPIC_BASE_URL)" == "https://open.bigmodel.cn/api/anthropic" ]]
-  check "agent: default Anthropic-compatible base URL" $?
+  # 2026-08-18 后端换成 OpenCode Go 之后,**认证 header 也换了**:
+  # Go 的 Anthropic 面只认 x-api-key(= claude 的 ANTHROPIC_API_KEY),
+  # 实测 Authorization: Bearer(= ANTHROPIC_AUTH_TOKEN)直接 401 "Missing API key"。
+  # 所以这里断言的是**表驱动的 header 风格**,不是"key 有没有传进去":
+  # 传对了 key、传错了 header,腿一样是死的,而日志上看起来只是"模型没回话"。
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" == "zk-env" ]]
+  check "agent: zhipu 走 x-api-key(ANTHROPIC_API_KEY)拿 ZHIPU_API_KEY" $?
+  [[ -z "$(agentget "$d/a1.json" ANTHROPIC_AUTH_TOKEN)" ]]
+  check "agent: zhipu 不许再走 Bearer(AUTH_TOKEN 必须是空的,否则 401)" $?
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_BASE_URL)" == "https://opencode.ai/zen/go/v1" ]]
+  check "agent: default Anthropic-compatible base URL (OpenCode Go)" $?
   [[ "$(agentget "$d/a1.json" ANTHROPIC_DEFAULT_SONNET_MODEL)" == "glm-4.6" ]]
   check "agent: sonnet slot mapped to ZHIPU_MODEL" $?
-  [[ -z "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" ]]
-  check "agent: stray ANTHROPIC_API_KEY scrubbed" $?
+  # 父 harness 那把真 Anthropic key 绝不许活着进子进程(它现在和我们的 key 抢同一格,
+  # 所以断言从"必须是空"改成"必须是我们的、绝不是父进程那把")。
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" != "real-anthropic-key" ]]
+  check "agent: 父进程的真 ANTHROPIC_API_KEY 被擦掉(没漏进腿里)" $?
   grep -q "Conclusion: PASS" "$d/a1.log"; check "agent: review text lands in log" $?
   # the task content must reach claude via STDIN (a trailing positional prompt
   # would be swallowed by the variadic --disallowedTools list)
@@ -860,14 +872,24 @@ EOF
   PANEL_KIMI_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K2" >/dev/null 2>&1
   if [[ -e "$d/K2.subkimi.log" ]]; then bad "panel: PANEL_KIMI_LEG=off skips kimi"; else ok "panel: PANEL_KIMI_LEG=off skips kimi"; fi
 
-  # 2026-08-04:智谱账号余额不足(429/1113),每轮四审都白等它超时一次。
-  # 用户拍板「先关掉,等我重置了再开」⇒ GLM 腿要能像 kimi 一样被关,而且
-  # **默认就是关的**(不是靠每次记得加环境变量 —— 那正是自述型开关的老毛病)。
-  # 充值后打开的方式:PANEL_GLM_LEG=agent(或把脚本里的默认值改回 agent)。
+  # GLM 腿的开关史:2026-08-04 智谱账号余额不足(429/1113),每轮四审都白等它一次超时,
+  # 业主拍板「先关掉」⇒ 默认 off。**08-18 后端换成 OpenCode Go 订阅,欠费这个理由消失了**,
+  # 所以默认翻回 on ——「默认关着」当初是为欠费立的,不是永久规格;理由没了还留着,
+  # 四审就永远只有三腿(这条腿已经关了两周)。关它的开关必须还在(PANEL_GLM_LEG=off),
+  # 否则下次没钱又得改代码。
+  cat > "$pb/subglm-agent" <<'EOF'
+#!/usr/bin/env bash
+echo "GLM-AGENT-LEG" > "$3"; exit 0
+EOF
+  chmod +x "$pb/subglm-agent"
   env -u PANEL_GLM_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G1" >/dev/null 2>&1
-  if [[ -e "$d/G1.subglm.log" ]]; then bad "panel: GLM 腿默认关闭(欠费期间不白等)"; else ok "panel: GLM 腿默认关闭(欠费期间不白等)"; fi
-  PANEL_GLM_LEG=agent bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G2" >/dev/null 2>&1
-  if [[ -e "$d/G2.subglm.log" ]]; then ok "panel: PANEL_GLM_LEG=agent 能把它开回来"; else bad "panel: PANEL_GLM_LEG=agent 能把它开回来"; fi
+  if [[ -e "$d/G1.subglm.log" ]]; then ok "panel: GLM 腿默认开着(OpenCode Go 之后)"; else bad "panel: GLM 腿默认开着(OpenCode Go 之后)"; fi
+  # 而且默认走的是**底座腿**(自己读仓库),不是只看得见 diff 的聊天腿
+  grep -q "GLM-AGENT-LEG" "$d/G1.subglm.log" 2>/dev/null
+  check "panel: GLM 默认走底座腿 subglm-agent(不是蒙眼聊天腿)" $?
+  PANEL_GLM_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/G2" >/dev/null 2>&1
+  if [[ -e "$d/G2.subglm.log" ]]; then bad "panel: PANEL_GLM_LEG=off 还能把它关掉"; else ok "panel: PANEL_GLM_LEG=off 还能把它关掉"; fi
+  rm -f "$pb/subglm-agent"
 
   # exit semantics: 3 classic legs fail + kimi passes -> evidence exists -> rc=0
   for stubname in submimo subdeepseek subglm; do
@@ -1666,6 +1688,111 @@ v24_no_env_backdoor_and_coverage_report() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V26
+# GLM 腿换后端:智谱开放平台 bigmodel(欠费,08-04 起默认关着)→ **OpenCode Go**
+# ($10/月订阅,业主 2026-08-18 买的)。壳一个字没换,换的是端点/key/模型。
+#
+# 这一节问的是 V8/V9 问不出来的三件事:
+#   ① **认证 header 风格是表驱动的**。Go 的 Anthropic 面只认 x-api-key;
+#      我们的壳一直注的是 ANTHROPIC_AUTH_TOKEN(=Bearer),实测 401 "Missing API key"。
+#      传对 key、传错 header ⇒ 腿是死的,而日志上只看得见"模型没回话"。
+#   ② **只换这条腿**。同一份躯干(subagent/subchat)服务着 deepseek,
+#      "顺手统一"是本机记过账的老毛病(合并躯干那次我一度把 GLM 的轮次上限翻了倍)。
+#   ③ **key 不许进仓**。新 key 落在 ~/.config/opencode-go/auth.json,
+#      仓里任何被跟踪的文件都不许出现 API key 形状的字符串。
+v26_glm_on_opencode_go() {
+  echo "[V26] GLM 腿改挂 OpenCode Go:端点/认证风格/模型/key 落位,且不碰 deepseek"
+  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" \
+     "$BIN/subchat" "$BIN/subglm" "$BIN/subdeepseek" "$b/"
+  cat > "$b/claude" <<'PYEOF2'
+#!/usr/bin/env python3
+import sys, os, json
+out = {"env": {k: os.environ.get(k) for k in
+               ["ANTHROPIC_AUTH_TOKEN","ANTHROPIC_BASE_URL","ANTHROPIC_API_KEY",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL"]}}
+open(os.environ["CAPTURE"], "w").write(json.dumps(out))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "stub\nConclusion: PASS"}]}}))
+PYEOF2
+  chmod +x "$b/claude"
+  cat > "$b/submimo-review" <<'PYEOF2'
+import sys, os, json
+keys = ["MIMO_API_KEY","MIMO_BASE_URL","MIMO_CHAT_COMPLETIONS_URL","MIMO_MODEL"]
+open(os.environ["CAPTURE"], "w").write(json.dumps({"env": {k: os.environ.get(k) for k in keys}}))
+PYEOF2
+  printf '# review this\n' > "$d/t.md"
+  get() { python3 -c "import json,sys;v=json.load(open(sys.argv[1]))['env'].get(sys.argv[2]);print('' if v is None else v)" "$1" "$2"; }
+
+  # ── ① 默认模型:两条形态都必须是 glm-5.2(Go 上这把 key 能用的旗舰档)
+  env PATH="$b:$PATH" CAPTURE="$d/m1.json" ZHIPU_API_KEY=zk \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/m1.log" "$d" >/dev/null 2>&1
+  [[ "$(get "$d/m1.json" ANTHROPIC_DEFAULT_SONNET_MODEL)" == "glm-5.2" ]]
+  check "V26: 底座腿默认模型 glm-5.2" $?
+  env PATH="$b:$PATH" CAPTURE="$d/m2.json" ZHIPU_API_KEY=zk \
+    bash "$b/subglm" review "$d/t.md" "$d/m2.log" "$d" >/dev/null 2>&1
+  [[ "$(get "$d/m2.json" MIMO_MODEL)" == "glm-5.2" ]]
+  check "V26: 聊天腿默认模型 glm-5.2" $?
+
+  # ── ② 默认 key 文件搬到 ~/.config/opencode-go/(旧的 zhipu/auth.json 是另一家的账)
+  #    用假 HOME 跑:没 key 时它必须**点名新路径**并且**在调 claude 之前就死**。
+  local fakehome="$d/home"; mkdir -p "$fakehome"
+  rm -f "$d/h1.json"
+  env -u ZHIPU_API_KEY -u ZHIPU_AUTH_FILE PATH="$b:$PATH" CAPTURE="$d/h1.json" HOME="$fakehome" \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/h1.log" "$d" >/dev/null 2>"$d/h1.err"; rc=$?
+  check "V26: 底座腿没 key 时硬失败" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "opencode-go/auth.json" "$d/h1.err"
+  check "V26: 底座腿默认 key 文件 = ~/.config/opencode-go/auth.json" $?
+  if [[ -e "$d/h1.json" ]]; then bad "V26: 没 key 时 claude 压根没被调起"; else ok "V26: 没 key 时 claude 压根没被调起"; fi
+  env -u ZHIPU_API_KEY -u ZHIPU_AUTH_FILE PATH="$b:$PATH" CAPTURE="$d/h2.json" HOME="$fakehome" \
+    bash "$b/subglm" review "$d/t.md" "$d/h2.log" "$d" >/dev/null 2>"$d/h2.err"; rc=$?
+  check "V26: 聊天腿没 key 时硬失败" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q "opencode-go/auth.json" "$d/h2.err"
+  check "V26: 聊天腿默认 key 文件 = ~/.config/opencode-go/auth.json" $?
+
+  # ── ③ deepseek 腿一个字都没被顺手改(同一份躯干,差异只准活在供应商表里)
+  env PATH="$b:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY=dk \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d" >/dev/null 2>&1
+  [[ "$(get "$d/ds1.json" ANTHROPIC_BASE_URL)" == "https://api.deepseek.com/anthropic" ]]
+  check "V26: deepseek 底座腿端点没被顺手改" $?
+  [[ "$(get "$d/ds1.json" ANTHROPIC_AUTH_TOKEN)" == "dk" ]]
+  check "V26: deepseek 仍走 Bearer(AUTH_TOKEN),没被 GLM 的 header 风格串味" $?
+  [[ -z "$(get "$d/ds1.json" ANTHROPIC_API_KEY)" ]]
+  check "V26: deepseek 那格 x-api-key 保持空" $?
+  env PATH="$b:$PATH" CAPTURE="$d/ds2.json" DEEPSEEK_API_KEY=dk \
+    bash "$b/subdeepseek" review "$d/t.md" "$d/ds2.log" "$d" >/dev/null 2>&1
+  [[ "$(get "$d/ds2.json" MIMO_BASE_URL)" == "https://api.deepseek.com" ]]
+  check "V26: deepseek 聊天腿端点没被顺手改" $?
+
+  # ── ④ 机上真 key 落位:文件在、只有属主读得了、是合法 JSON 且 key 非空
+  local authf="$HOME/.config/opencode-go/auth.json"
+  if [[ -f "$authf" ]]; then
+    ok "V26: OpenCode Go key 文件就位($authf)"
+    [[ "$(stat -c '%a' "$authf")" == "600" ]]
+    check "V26: key 文件权限 600" $?
+    python3 -c "import json,sys;k=json.load(open(sys.argv[1])).get('key','');sys.exit(0 if k.startswith('sk-') and len(k)>32 else 1)" "$authf"
+    check "V26: key 文件里是一把像样的 key" $?
+  else
+    bad "V26: OpenCode Go key 文件就位($authf)"
+    bad "V26: key 文件权限 600"
+    bad "V26: key 文件里是一把像样的 key"
+  fi
+
+  # ── ⑤ key 绝不许进仓:被跟踪的文件里不许有 API key 形状的字符串。
+  #    这里故意**不写出那把真 key**(判据自己会变成泄漏点),只查形状。
+  #    不给任何文件开豁免 —— 判据自己是最可能被粘进真 key 的那个文件,而这条正则
+  #    实测不会匹配到它自身(方括号不在字符集里)。豁免白给,却正好豁免掉高危文件。
+  local repo="/root/aiwork" hits grc
+  hits="$(git -C "$repo" grep -nIE 'sk-[A-Za-z0-9_-]{40,}' -- .)"; grc=$?
+  # git grep: 0=有命中 1=无命中 其它=它自己坏了。坏了必须红,不许静默报绿
+  #(本机记过账:闸在自己跑不起来的时候报绿,比不装这道闸更坏)。
+  if [[ $grc -gt 1 ]]; then
+    bad "V26: 仓里被跟踪的文件不含 API key 形状的字符串"; echo "    (git grep 自己失败 rc=$grc,判据不可用)"
+  elif [[ -z "$hits" ]]; then ok "V26: 仓里被跟踪的文件不含 API key 形状的字符串"
+  else bad "V26: 仓里被跟踪的文件不含 API key 形状的字符串"; echo "$hits" | head -5 | sed 's/^/    /'; fi
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -1696,5 +1823,8 @@ REVIEW_NO_MY_REVIEW=1 v22_roster_file
 v23_my_review_gate_on_every_review_path
 v24_no_env_backdoor_and_coverage_report
 v25_legs_run_in_their_own_session
+# 反锚定闸默认拦一切 review 派发 ⇒ 不带这个前缀,V26 里每一次派发都会被拦,
+# 红的绿的全是空的(2026-08-18 第一版就是这样,红了 16 条没有一条是真问的)。
+REVIEW_NO_MY_REVIEW=1 v26_glm_on_opencode_go
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
