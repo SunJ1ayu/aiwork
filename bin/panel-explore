@@ -66,11 +66,14 @@ SUBMIMO_ERR="${SUBMIMO_LOG}.err"
 SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
 SUBGLM_ERR="${SUBGLM_LOG}.err"
 
-# GLM/DeepSeek leg selection mirrors panel-review: agent base is the default
-# when installed; PANEL_*_LEG=chat forces the chat leg; absent agent auto-falls
+# GLM/DeepSeek leg selection mirrors panel-review. DeepSeek 默认底座腿;
+# **GLM 默认聊天腿**(2026-08-18):它的后端换成了 OpenCode Go,而 Go 的 Anthropic 面
+# 不做工具格式转换,底座腿带 Anthropic 形状的 tools 一律 400 ⇒ 默认写 agent 只会
+# 每轮先白撞一次再降级。理由全文在 bin/panel-review 的同一处注释里。
+# PANEL_*_LEG=agent 强制走底座腿(哪天 Go 补上转换就靠它切回来);absent agent auto-falls
 # back to chat. Agent legs read the repo themselves, chat legs only see the
 # prompt/diff context supplied by their own wrapper.
-GLM_LEG="${PANEL_GLM_LEG:-agent}"
+GLM_LEG="${PANEL_GLM_LEG:-chat}"
 if [[ "$GLM_LEG" == "agent" && -x "$BIN/subglm-agent" ]]; then
   GLM_CMD="$BIN/subglm-agent"
 else

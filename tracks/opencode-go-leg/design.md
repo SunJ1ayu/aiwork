@@ -22,13 +22,37 @@
 
 | | 旧(bigmodel) | 新(OpenCode Go) |
 |---|---|---|
-| 底座腿端点 | `open.bigmodel.cn/api/anthropic` | `https://opencode.ai/zen/go/v1` |
+| 底座腿端点 | `open.bigmodel.cn/api/anthropic` | `https://opencode.ai/zen/go` **(不带 `/v1`)** |
 | 聊天腿端点 | `open.bigmodel.cn/api/paas/v4/chat/completions` | `https://opencode.ai/zen/go/v1/chat/completions` |
 | 默认模型 | `glm-4.6v` | `glm-5.2` |
 | key 文件 | `~/.config/zhipu/auth.json` | `~/.config/opencode-go/auth.json` |
 | 认证 header | `ANTHROPIC_AUTH_TOKEN`(Bearer) | **`ANTHROPIC_API_KEY`(x-api-key)** |
 
-`panel-review` 的 GLM 腿默认值 `off` → `agent`(08-04 关它的理由是欠费,理由没了)。
+`panel-review` 的 GLM 腿默认值 `off` → **`chat`**(08-04 关它的理由是欠费,理由没了)。
+
+## 实测把规格改了两处(08-18,写在这儿免得设计和实现各说各话)
+
+上面那张表是**动手前**写的。真打端点之后有两处被证伪,代码已按实测走:
+
+1. **底座腿 base URL 不带尾部 `/v1`**。claude CLI 自己会补 `/v1/messages`,
+   写成 `.../go/v1` 会打到 `/zen/go/v1/v1/messages`(404);更坑的是 CLI 把这个 404
+   报成「模型 glm-5.2 不存在」—— **地址 bug 伪装成模型名 bug**,我照着"模型名错"
+   查了半天。(聊天腿那一格仍是 `.../zen/go/v1/chat/completions`,那是完整路径,没错。)
+2. **panel 的 GLM 腿默认档是 `chat`(聊天腿),不是 `agent`**。OpenCode Go 的
+   Anthropic 面**不做工具格式转换**(请求体直接转发给 OpenAI 形状的上游),带
+   Anthropic 形状的 tools 一律 400「Missing required input field:
+   'tools[0].function.name'」。实测三档:无工具 200 / Anthropic 形状工具 400 /
+   OpenAI 形状工具 200。而底座腿的全部意义就是自带工具自己读仓库 ⇒ **在这个后端上
+   它起不来**,默认写 agent 只会每轮白撞一次 400。
+   `PANEL_GLM_LEG=agent` 强制切回的能力保留:哪天 Go 补上格式转换,一个环境变量就切回去。
+
+**认下来的代价**:聊天腿看不见仓库、只看得见 diff ⇒ 派它时要带 `PANEL_INCLUDE`。
+panel-review 里那条 `HINT: chat leg in play and PANEL_INCLUDE is empty` 默认走 chat 之后
+会常亮,正好当提醒。(**不写行号** —— 上一版这里写了「第 207 行」,而它当时就已经是 221 行。)
+这不是无代价的等价替换,是"能用的腿"换掉"跑不起来的腿"。
+
+3. 还有一处不改规格但值得记:**聊天腿必须带 User-Agent**。urllib 的默认 UA
+   被 Cloudflare 前置的端点 403(error code 1010),同一个请求 curl 200 / urllib 403。
 
 ## Key trade-offs / risks
 

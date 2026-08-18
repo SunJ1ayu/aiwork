@@ -40,7 +40,7 @@ Usage:
 
 Providers (thin shims in parentheses; callers normally use the shim):
   deepseek  (subdeepseek-agent)  default deepseek-v4-flash, env DEEPSEEK_*
-  zhipu     (subglm-agent)       default glm-4.6v,          env ZHIPU_*
+  zhipu     (subglm-agent)       default glm-5.2,           env ZHIPU_*
 
 Environment (PREFIX = DEEPSEEK | ZHIPU):
   <PREFIX>_MODEL          model id
@@ -136,6 +136,12 @@ if [[ -z "$API_KEY" ]]; then
     || die "could not read 'key' from $AUTH_FILE"
 fi
 [[ -n "$API_KEY" ]] || die "empty ${PREFIX}_API_KEY"
+# 供应商表必须填 AUTH_ENV(认证 header 风格)。**这条守卫非有不可**:
+# 实测 GNU coreutils 9.4,`env '=key' cmd` 会 **rc=0、不报错**,子进程拿到一个
+# 名字为空的 `=key`,而真正的认证变量一个都没设 ⇒ 腿活着、每次 401,日志上只看得见
+# "模型没回话"。也就是说 env 的失败方向是**静默放过**,守卫只能长在我们这边。
+# (2026-08-18 四审:有两条评审腿都断言这里 fail-closed —— 实测证明它们都错了。)
+[[ -n "${AUTH_ENV:-}" ]] || die "供应商表里 $PROVIDER 这一格没填 AUTH_ENV（认证 header 风格）；不填的话认证头会被静默丢掉、这条腿每次 401 而日志只显示模型没回话"
 
 # 绝对日志路径:agent 以 cwd = REPO_DIR 运行
 case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac

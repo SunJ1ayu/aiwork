@@ -32,7 +32,7 @@ Usage:
 
 Providers (usually invoked via their shims):
   deepseek   (shim: subdeepseek)  default model deepseek-v4-flash, env DEEPSEEK_*
-  zhipu      (shim: subglm)    default model glm-4.6v,          env ZHIPU_*
+  zhipu      (shim: subglm)    default model glm-5.2,           env ZHIPU_*
 
 Runs the provider's model as a read-only review sub-agent over an OpenAI-
 compatible chat-completions endpoint. Automatically attaches `git diff` of
@@ -43,13 +43,13 @@ Environment (PREFIX = DEEPSEEK or ZHIPU):
   <PREFIX>_TIMEOUT    optional, seconds before timeout (default 900)
   <PREFIX>_API_KEY    optional, overrides the key read from the auth file
   <PREFIX>_AUTH_FILE  optional, JSON {"key":"..."}
-                      (default ~/.config/deepseek/auth.json | ~/.config/zhipu/auth.json)
+                      (default ~/.config/deepseek/auth.json | ~/.config/opencode-go/auth.json)
   <PREFIX>_INCLUDE    optional, file/glob to also include (repeatable via spaces)
   DEEPSEEK_API_BASE   optional, base URL (default https://api.deepseek.com)
   ZHIPU_CHAT_COMPLETIONS_URL optional, exact endpoint (passed as exact URL, not a base)
-                      (default https://open.bigmodel.cn/api/paas/v4/chat/completions,
-                      智谱开放平台 bigmodel, OpenAI-compatible;07-25 从火山方舟切回来 ——
-                      方舟账号 glm-5-2 触发 SetLimitExceeded,且方舟上没有 glm-4.6 系)
+                      (default https://opencode.ai/zen/go/v1/chat/completions,
+                      OpenCode Go, OpenAI-compatible;2026-08-18 从智谱 bigmodel 换来 ——
+                      bigmodel 那把 key 欠费,这条腿因此默认关了两周)
   PANEL_DIFF_BASE     optional, git rev; diff becomes merge-base(base,HEAD)->worktree
                       (default: HEAD->worktree, i.e. staged + unstaged)
 
@@ -90,7 +90,9 @@ case "$PROVIDER" in
     # (业主的 $10/月订阅)。理由是 bigmodel 那把 key 欠费,不是端点更好。
     # 方舟 key 仍在 auth.json.ark-bak,智谱 key 仍在 ~/.config/zhipu/auth.json。
     #
-    # 注意这是**聊天腿**(空 diff 会瞎),默认腿是底座腿 subglm-agent;
+    # 注意这是**聊天腿**(空 diff 会瞎)。**2026-08-18 起它就是 GLM 的默认腿** ——
+    # 底座腿在 Go 上会 400(Go 不做工具格式转换),理由全文在 bin/panel-review 里。
+    # 所以派它时记得带 ZHIPU_INCLUDE / PANEL_INCLUDE,否则它只看得见增量 diff。
     # 它走 OpenAI 兼容面,认证仍是 Authorization: Bearer(和底座腿那边的
     # x-api-key 不是一回事 —— 两个面的规矩不同,别顺手统一)。
     DEFAULT_MODEL="glm-5.2"
