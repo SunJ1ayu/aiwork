@@ -103,6 +103,8 @@ oc_stub() {   # $1 = 要放桩的 bin 目录
   cat > "$1/opencode" <<'OCSTUB'
 #!/usr/bin/env bash
 [[ -n "${CAPTURE:-}" ]] && printf '%s\0' "$@" > "$CAPTURE"
+# stdin 是什么 —— 这条是被真事故逼出来的,见 V28 ⑨
+[[ -n "${CAPTURE_STDIN:-}" ]] && readlink /proc/self/fd/0 > "$CAPTURE_STDIN" 2>/dev/null
 echo "stub reviewer"
 echo "${STUB_OC_OUT:-Conclusion: PASS}"
 OCSTUB
@@ -2212,6 +2214,35 @@ EOF
   check "V28: deepseek 腿仍走 claude 壳(换底座不许串味到隔壁)" $?
   if [[ -f "$d/oc4.txt" ]]; then bad "V28: deepseek 腿不许被顺手改成 opencode 底座"
   else ok "V28: deepseek 腿不许被顺手改成 opencode 底座"; fi
+
+  # ── ⑨ **stdin 必须接到 /dev/null**。2026-08-18 真事故:opencode 在 stdin 是
+  #    一个还开着的管道时会**一直等输入**——在 runlog(经 tee 管道)下这条腿挂死了
+  #    12 分钟、一次模型调用都没发,而日志头已经写好了,看起来"正在跑"。
+  #    直接跑不挂、经管道就挂 ⇒ 这种 bug 只在真派活时出现,判据必须钉死它。
+  cat > "$b/opencode" <<'EOF'
+#!/usr/bin/env bash
+[[ -n "${CAPTURE_STDIN:-}" ]] && readlink /proc/self/fd/0 > "$CAPTURE_STDIN" 2>/dev/null
+echo "Conclusion: PASS"
+EOF
+  chmod +x "$b/opencode"
+  rm -f "$d/stdin.txt"
+  # 故意把 stdin 接成一个**开着的管道**,模拟 runlog 那种现场
+  ( sleep 30 ) | env PATH="$b:$PATH" CAPTURE_STDIN="$d/stdin.txt" \
+      OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+      bash "$b/subglm-agent" review "$d/t.md" "$d/g9.log" "$d" >/dev/null 2>&1
+  if [[ -f "$d/stdin.txt" ]]; then
+    grep -q "^/dev/null$" "$d/stdin.txt"
+    check "V28: 底座的 stdin 接到 /dev/null(否则管道下它会一直等输入)" $?
+  else
+    bad "V28: 底座的 stdin 接到 /dev/null(否则管道下它会一直等输入)"
+    echo "    (桩没被调到 ⇒ 测空气)"
+  fi
+
+  # ── ⑩ 日志头印的 base URL 必须是**实际在用的那个**。供应商表里还留着 claude 底座
+  #    的休眠值(.../zen/go,不带 /v1),日志头照抄它 = 取证材料自己撒谎:
+  #    以后有人拿这份日志查"到底打的哪个端点"会被带偏。
+  grep -q "opencode.ai/zen/go/v1" "$d/g9.log" 2>/dev/null
+  check "V28: 日志头印实际在用的 base URL(不是 claude 那条路的休眠值)" $?
 
   # ── ⑧ key 不许进配置以外的地方,更不许进仓(仓那条 V26 ⑤ 已经在查,这里查日志)
   if grep -rq "zk" "$d/g1.log" 2>/dev/null; then
