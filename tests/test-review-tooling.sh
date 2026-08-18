@@ -78,6 +78,51 @@ set -uo pipefail
 # 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78   # source 失败=裸跑,必须硬退
 
+# **判据里绝不许调到真的 opencode 底座**(2026-08-18,track opencode-agent-base)。
+# 起因:GLM 腿的底座换成 opencode CLI 之后,所有跑 subglm-agent 的老用例(V9/V21/V23…)
+# 都会去调**真**的 opencode。断网闸(上面那行)保证了它出不去、不花钱,但症状不是
+# 立刻失败,而是**每处干等 900 秒超时**,判据整体被拖死。
+# 修法不是去补那几个调用点 —— 补完第 10 个还会漏。这里放一层**兜底桩**:
+# 真 opencode 一旦被判据碰到就**立刻响亮失败**,把"谁没给桩"当场点名。
+# 需要行为的用例照旧在自己的 $b 里放桩(PATH 里排在这层前面),不受影响。
+_OC_FLOOR="$(mktemp -d)"
+cat > "$_OC_FLOOR/opencode" <<'OCFLOOR'
+#!/usr/bin/env bash
+echo "判据里调到了**真的** opencode 底座:$* " >&2
+echo "  这条用例跑了 opencode 底座的腿却没给它桩 —— 补一个桩,别让判据去碰真底座。" >&2
+exit 97
+OCFLOOR
+chmod +x "$_OC_FLOOR/opencode"
+export PATH="$_OC_FLOOR:$PATH"
+
+# opencode 底座腿的共用夹具(2026-08-18)。GLM 腿换底座之后,"它被怎么约束的"
+# 不在 claude 的命令行参数里了,而在**它生成的那份配置**里 —— 下面几组
+# (V17/V21/V26/V28)都要读同一份东西,所以夹具只写一份。
+# 桩把 argv 抄下来(opencode 的提示词走位置参数,不像 claude 走 stdin)。
+oc_stub() {   # $1 = 要放桩的 bin 目录
+  cat > "$1/opencode" <<'OCSTUB'
+#!/usr/bin/env bash
+[[ -n "${CAPTURE:-}" ]] && printf '%s\0' "$@" > "$CAPTURE"
+echo "stub reviewer"
+echo "${STUB_OC_OUT:-Conclusion: PASS}"
+OCSTUB
+  chmod +x "$1/opencode"
+}
+# 读它生成的配置:occfg <配置路径> model|steps|baseURL|tools_off|bash_perm
+occfg() {
+  python3 - "$1" "$2" <<'OCCFG'
+import json, sys
+c = json.load(open(sys.argv[1])); q = sys.argv[2]
+a = list(c["agent"].values())[0]; pv = list(c["provider"].values())[0]
+if   q == "model":     print(a.get("model"))
+elif q == "steps":     print(a.get("steps"))
+elif q == "baseURL":   print(pv["options"]["baseURL"])
+elif q == "tools_off": print(" ".join(sorted(k for k, v in a.get("tools", {}).items() if v is False)))
+elif q == "bash_perm": print(json.dumps((a.get("permission") or {}).get("bash"), sort_keys=True))
+OCCFG
+}
+
+
 # V23/V24 真跑 sub* 躯干,考的是**闸放不放行** —— 闸在启动的瞬间就判完了,
 # 后面那段网络往返与本考卷无关。而 08-10 起判据进程没有外网出口,那一段**必然**失败,
 # 只是失败得慢(node 自己还要重试几秒)。等它没有任何意义:
@@ -524,12 +569,18 @@ PYEOF
 }
 
 # ---------------------------------------------------------------- V9
-v9_subglm_agent() {
-  echo "[V9] subglm-agent: claude-shell env injection, read-only tools, verdict gate"
+v9_claude_shell_base() {
+  echo "[V9] claude 壳底座(subdeepseek-agent):env 注入、只读工具、裁决 gate"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
-  # subglm-agent 是瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
-  cp "$BIN/subglm-agent" "$BIN/subagent" "$b/"
-  # stub claude: record argv + the env subglm-agent must (and must not) inject,
+  # 2026-08-18 **这一组从 GLM 腿挪到 DeepSeek 腿**:GLM 的底座换成了 opencode CLI
+  # (track opencode-agent-base),它已经不走 claude 壳,再拿它测 claude 壳就是
+  # 拿错车验错路 —— 而且会去调真 opencode 干等 900 秒。
+  # 这一组问的是**claude 壳这条底座本身**(env 注入、工具白名单、裁决 gate),
+  # 它对 deepseek 仍然完全有效,断言一条不删、一条不弱。GLM 那条底座由 V28 问。
+  # (本函数末尾那段 panel 选腿用例里的 subglm 桩保持不动:那里造的是桩,不碰真底座。)
+  # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
+  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
   cat > "$b/claude" <<'PYEOF'
 #!/usr/bin/env python3
@@ -553,25 +604,26 @@ PYEOF
 
   # env-key path: token, base url, model mapping, API_KEY scrubbed
   env PATH="$b:$PATH" CAPTURE="$d/a1.json" ANTHROPIC_API_KEY=real-anthropic-key \
-    ZHIPU_API_KEY=zk-env ZHIPU_MODEL=glm-4.6 \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/a1.log" "$d" >/dev/null 2>&1; rc=$?
+    DEEPSEEK_API_KEY=dk-env DEEPSEEK_MODEL=ds-test-model \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a1.log" "$d" >/dev/null 2>&1; rc=$?
   check "agent review (env key) exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18 后端换成 OpenCode Go 之后,**认证 header 也换了**:
-  # Go 的 Anthropic 面只认 x-api-key(= claude 的 ANTHROPIC_API_KEY),
-  # 实测 Authorization: Bearer(= ANTHROPIC_AUTH_TOKEN)直接 401 "Missing API key"。
+  # deepseek 的 Anthropic 面走 Authorization: Bearer(= ANTHROPIC_AUTH_TOKEN)。
+  # 这和 GLM 那格(x-api-key)**故意相反** —— 差异只准活在供应商表里,
+  # 两格各自被钉死,谁被顺手统一了这里就红。
   # 所以这里断言的是**表驱动的 header 风格**,不是"key 有没有传进去":
   # 传对了 key、传错了 header,腿一样是死的,而日志上看起来只是"模型没回话"。
-  [[ "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" == "zk-env" ]]
-  check "agent: zhipu 走 x-api-key(ANTHROPIC_API_KEY)拿 ZHIPU_API_KEY" $?
-  [[ -z "$(agentget "$d/a1.json" ANTHROPIC_AUTH_TOKEN)" ]]
-  check "agent: zhipu 不许再走 Bearer(AUTH_TOKEN 必须是空的,否则 401)" $?
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_AUTH_TOKEN)" == "dk-env" ]]
+  check "agent: deepseek 走 Bearer(ANTHROPIC_AUTH_TOKEN)拿 DEEPSEEK_API_KEY" $?
+  [[ -z "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" ]]
+  check "agent: deepseek 那格 x-api-key 必须是空的(别被 GLM 的风格串味)" $?
   # **不带尾部 /v1** —— claude CLI 自己会补 /v1/messages。写成 .../go/v1 会打到
   # /zen/go/v1/v1/messages(实测 404),而 CLI 把这个 404 报成「模型不存在」。
   # 08-18 我在这个坑里查了半天模型名。(第三处写死同一个地址:改一个地方不够。)
-  [[ "$(agentget "$d/a1.json" ANTHROPIC_BASE_URL)" == "https://opencode.ai/zen/go" ]]
-  check "agent: default Anthropic-compatible base URL (OpenCode Go)" $?
-  [[ "$(agentget "$d/a1.json" ANTHROPIC_DEFAULT_SONNET_MODEL)" == "glm-4.6" ]]
-  check "agent: sonnet slot mapped to ZHIPU_MODEL" $?
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_BASE_URL)" == "https://api.deepseek.com/anthropic" ]]
+  check "agent: default Anthropic-compatible base URL (DeepSeek)" $?
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_DEFAULT_SONNET_MODEL)" == "ds-test-model" ]]
+  check "agent: sonnet slot mapped to DEEPSEEK_MODEL" $?
   # 父 harness 那把真 Anthropic key 绝不许活着进子进程(它现在和我们的 key 抢同一格,
   # 所以断言从"必须是空"改成"必须是我们的、绝不是父进程那把")。
   [[ "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" != "real-anthropic-key" ]]
@@ -601,37 +653,37 @@ PYEOF
   argvhas "$d/a1.json" "--max-turns";       check "agent: turn cap present" $?
 
   # auth-file fallback
-  printf '{"key":"zk-file"}' > "$d/auth.json"
-  env -u ZHIPU_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" ZHIPU_AUTH_FILE="$d/auth.json" \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/a2.log" "$d" >/dev/null 2>&1; rc=$?
+  printf '{"key":"dk-file"}' > "$d/auth.json"
+  env -u DEEPSEEK_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" DEEPSEEK_AUTH_FILE="$d/auth.json" \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2.log" "$d" >/dev/null 2>&1; rc=$?
   check "agent auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18:env-key 那条路已经换成 x-api-key,**这条 auth-file 路当时被漏掉了**
   # —— 是判据自己在这儿红了一次才发现的。所以这里不止把变量名跟着改,还补上
   # "Bearer 那格必须是空的":只改名字的话,两条路各走各的 header 又会看不出来。
-  [[ "$(agentget "$d/a2.json" ANTHROPIC_API_KEY)" == "zk-file" ]]
+  [[ "$(agentget "$d/a2.json" ANTHROPIC_AUTH_TOKEN)" == "dk-file" ]]
   check "agent: key loaded from auth file" $?
-  [[ -z "$(agentget "$d/a2.json" ANTHROPIC_AUTH_TOKEN)" ]]
-  check "agent: auth-file 这条路同样不许走 Bearer" $?
+  [[ -z "$(agentget "$d/a2.json" ANTHROPIC_API_KEY)" ]]
+  check "agent: auth-file 这条路的 header 风格也必须对(两条路各走各的会看不出来)" $?
 
   # verdict gate: no Conclusion -> non-zero, log still written
-  env PATH="$b:$PATH" CAPTURE="$d/a3.json" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" CAPTURE="$d/a3.json" DEEPSEEK_API_KEY=dk \
     STUB_REVIEW_OUT="looks fine to me" \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/a3.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3.log" "$d" >/dev/null 2>&1; rc=$?
   check "agent: verdict-less output exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
   [[ -f "$d/a3.log" ]]; check "agent: log still written on verdict miss" $?
 
   # verdict gate: Chinese 「结论：PASS」 (full-width colon) accepted — the drift
   # that bit subdeepseek twice (Track B + client-tools)
-  env PATH="$b:$PATH" CAPTURE="$d/a3b.json" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" CAPTURE="$d/a3b.json" DEEPSEEK_API_KEY=dk \
     STUB_REVIEW_OUT=$'review body\n结论：PASS' \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/a3b.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3b.log" "$d" >/dev/null 2>&1; rc=$?
   check "agent: Chinese 结论+full-width colon accepted" $([[ $rc -eq 0 ]]; echo $?)
 
   # fix refused; -h ok
-  env PATH="$b:$PATH" CAPTURE="$d/a4.json" ZHIPU_API_KEY=zk \
-    bash "$b/subglm-agent" fix "$d/t.md" "$d/a4.log" "$d" >/dev/null 2>&1; rc=$?
+  env PATH="$b:$PATH" CAPTURE="$d/a4.json" DEEPSEEK_API_KEY=dk \
+    bash "$b/subdeepseek-agent" fix "$d/t.md" "$d/a4.log" "$d" >/dev/null 2>&1; rc=$?
   check "agent: fix refused" $([[ $rc -ne 0 ]]; echo $?)
-  bash "$b/subglm-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
+  bash "$b/subdeepseek-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
 
   # panel-review leg selection: default=chat, PANEL_GLM_LEG=agent/chat, missing agent
   local pb="$d/panelbin"; mkdir -p "$pb"
@@ -1209,8 +1261,11 @@ PYEOF
   stdin_has() { python3 -c "import json,sys;o=json.load(open(sys.argv[1]));sys.exit(0 if sys.argv[2] in o.get('stdin','') else 1)" "$1" "$2"; }
 
   # ---- ① explore 模式必须被接受,且不套裁决闸(输出里没有 Conclusion 也得 rc=0)
-  for leg in subglm subdeepseek; do
-    local keyenv=(ZHIPU_API_KEY=zk); [[ "$leg" == subdeepseek ]] && keyenv=(DEEPSEEK_API_KEY=dk)
+  # 2026-08-18:**这一圈只剩 deepseek**。GLM 换成 opencode 底座之后,它的提示词走位置
+  # 参数、约束住在生成的配置里,claude 那套 argv/stdin 断言对它整块问错了对象。
+  # GLM 的同名五件事在下面 ①b 用 opencode 的形状重问 —— **一件都没少**。
+  for leg in subdeepseek; do
+    local keyenv=(DEEPSEEK_API_KEY=dk)
     env PATH="$b:$PATH" CAPTURE="$d/$leg.e1.json" "${keyenv[@]}" \
       bash "$b/$leg-agent" explore "$d/brief.md" "$d/$leg.e1.log" "$d" >/dev/null 2>&1; rc=$?
     check "V17: $leg-agent 接受 explore 模式且无裁决输出仍 rc=0" $([[ $rc -eq 0 ]]; echo $?)
@@ -1239,12 +1294,59 @@ PYEOF
     check "V17: $leg-agent review 无裁决仍判失败(闸没被放松)" $([[ $rc -ne 0 ]]; echo $?)
   done
 
+  # ---- ①b GLM 腿(opencode 底座)的同五件事,用它自己的形状问
+  oc_stub "$b"
+  local ge="$d/ochome17"
+  argv_has() { python3 -c "
+import sys
+blob=open(sys.argv[1],'rb').read().decode('utf-8','replace')
+sys.exit(0 if sys.argv[2] in blob else 1)" "$1" "$2"; }
+  env PATH="$b:$PATH" CAPTURE="$d/glm.e1.argv" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk \
+    STUB_OC_OUT="Direction: 单一看法" \
+    bash "$b/subglm-agent" explore "$d/brief.md" "$d/glm.e1.log" "$d" >/dev/null 2>&1; rc=$?
+  check "V17: subglm-agent(opencode 底座)接受 explore 且无裁决输出仍 rc=0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ -s "$d/glm.e1.log" ]]; check "V17: subglm-agent explore 写出了日志" $?
+  if [[ -f "$d/glm.e1.argv" ]]; then
+    argv_has "$d/glm.e1.argv" "Direction"
+    check "V17: subglm-agent explore 提示词带发散格式(Direction)" $?
+    # 否定断言的老坑:捕获文件不存在时它会假绿,所以先要求 brief 确实在里面
+    if argv_has "$d/glm.e1.argv" "开放设计分叉" && ! argv_has "$d/glm.e1.argv" "Conclusion: PASS"; then
+      ok  "V17: subglm-agent explore 提示词不再索要裁决行"
+    else
+      bad "V17: subglm-agent explore 提示词不再索要裁决行"
+    fi
+  else
+    bad "V17: subglm-agent explore 提示词带发散格式(Direction)"
+    bad "V17: subglm-agent explore 提示词不再索要裁决行"
+    echo "    (opencode 桩没被调到 ⇒ 这两条在测空气)"
+  fi
+  # 换模式 ≠ 换权限:explore 下只读锁一个字都不许松
+  local gcfg="$ge/.config/opencode/opencode.json"
+  if [[ -f "$gcfg" ]]; then
+    local goff; goff="$(occfg "$gcfg" tools_off)"
+    [[ " $goff " == *" write "* && " $goff " == *" edit "* ]]
+    check "V17: subglm-agent explore 仍无写工具(配置里 write/edit 关着)" $?
+    [[ "$(occfg "$gcfg" bash_perm)" == *'"*": "deny"'* ]]
+    check "V17: subglm-agent explore 的 bash 仍是白名单(* deny)" $?
+  else
+    bad "V17: subglm-agent explore 仍无写工具(配置里 write/edit 关着)"
+    bad "V17: subglm-agent explore 的 bash 仍是白名单(* deny)"
+  fi
+  # review 模式的裁决闸不许被放松(opencode 报错也 rc=0,这道闸是唯一的活口)
+  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk STUB_OC_OUT="看着还行" \
+    bash "$b/subglm-agent" review "$d/brief.md" "$d/glm.r1.log" "$d" >/dev/null 2>&1; rc=$?
+  check "V17: subglm-agent review 无裁决仍判失败(闸没被放松)" $([[ $rc -ne 0 ]]; echo $?)
+
   # ---- ⑤ 发散的系统提示词必须真的送达底座腿(单一真相源:panel-explore 导出它)
-  env PATH="$b:$PATH" CAPTURE="$d/sysp.json" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" CAPTURE="$d/sysp.argv" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk \
     REVIEW_SYSTEM_PROMPT="ANGLE_NOT_CONSENSUS_MARKER" \
     bash "$b/subglm-agent" explore "$d/brief.md" "$d/sysp.log" "$d" >/dev/null 2>&1
-  stdin_has "$d/sysp.json" "ANGLE_NOT_CONSENSUS_MARKER"
-  check "V17: REVIEW_SYSTEM_PROMPT 送达底座腿(发散指令不丢)" $?
+  if [[ -f "$d/sysp.argv" ]]; then
+    argv_has "$d/sysp.argv" "ANGLE_NOT_CONSENSUS_MARKER"
+    check "V17: REVIEW_SYSTEM_PROMPT 送达底座腿(发散指令不丢)" $?
+  else
+    bad "V17: REVIEW_SYSTEM_PROMPT 送达底座腿(发散指令不丢)"
+  fi
 
   # ---- ⑥ panel-explore 选腿:默认底座 / 可强制回落 / 缺底座自动回落 / 模式必须是 explore
   local pb="$d/panelbin"; mkdir -p "$pb"
@@ -1439,10 +1541,22 @@ CAPEOF
   chmod +x "$ab/claude"
   printf '# t\n' > "$d/t.md"
   capturing_turns() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];print(a[a.index('--max-turns')+1])" "$1"; }
-  env PATH="$ab:$PATH" CAPTURE="$d/z.json" ZHIPU_API_KEY=zk \
+  # 2026-08-18:GLM 换成 opencode 底座之后,上限不在 claude 的 --max-turns 里了,
+  # 而在 opencode 配置的 `steps` 字段(schema 里 maxSteps 已标废弃)。
+  # **这条断言必须跟着搬家,不能跟着消失** —— 它当初就是为了"我合并躯干时把 GLM 的
+  # 预算顺手翻倍"立的;换底座把上限弄丢,是同一种病的新形态。
+  oc_stub "$ab"
+  local zochome="$d/ochome21"
+  env PATH="$ab:$PATH" OPENCODE_REVIEW_HOME="$zochome" ZHIPU_API_KEY=zk \
     bash "$ab/subglm-agent" review "$d/t.md" "$d/z.log" "$d/repo" >/dev/null 2>&1
-  [[ "$(capturing_turns "$d/z.json")" -eq 40 ]]
-  check "V21: zhipu 默认轮次上限仍是历史值 40(合并躯干不许顺手改别人的预算)" $?
+  local zcfg="$zochome/.config/opencode/opencode.json"
+  if [[ -f "$zcfg" ]]; then
+    [[ "$(occfg "$zcfg" steps)" == "40" ]]
+    check "V21: zhipu 默认轮次上限仍是历史值 40(换底座不许把上限弄丢)" $?
+  else
+    bad "V21: zhipu 默认轮次上限仍是历史值 40(换底座不许把上限弄丢)"
+    echo "    (没生成 opencode 配置 ⇒ 这条是在测空气)"
+  fi
   env PATH="$ab:$PATH" CAPTURE="$d/s.json" DEEPSEEK_API_KEY=dk \
     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/s.log" "$d/repo" >/dev/null 2>&1
   # deepseek 的上限是**凭测量**定的:08-03 实测一个只看单文件的琐碎任务就用掉 56 轮
@@ -1760,10 +1874,20 @@ PYEOF2
   get() { python3 -c "import json,sys;v=json.load(open(sys.argv[1]))['env'].get(sys.argv[2]);print('' if v is None else v)" "$1" "$2"; }
 
   # ── ① 默认模型:两条形态都必须是 glm-5.2(Go 上这把 key 能用的旗舰档)
-  env PATH="$b:$PATH" CAPTURE="$d/m1.json" ZHIPU_API_KEY=zk \
+  # 2026-08-18:底座腿改跑 opencode ⇒ "默认模型是什么"要去它生成的配置里问,
+  # claude 那套 ANTHROPIC_DEFAULT_*_MODEL 对这条腿已经不再生效(供应商表里那几个
+  # claude 专用值留着是为了将来切回,**不是活路径**,所以不许再拿它们当断言对象)。
+  oc_stub "$b"
+  local m1home="$d/ochome26"
+  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$m1home" ZHIPU_API_KEY=zk \
     bash "$b/subglm-agent" review "$d/t.md" "$d/m1.log" "$d" >/dev/null 2>&1
-  [[ "$(get "$d/m1.json" ANTHROPIC_DEFAULT_SONNET_MODEL)" == "glm-5.2" ]]
-  check "V26: 底座腿默认模型 glm-5.2" $?
+  local m1cfg="$m1home/.config/opencode/opencode.json"
+  if [[ -f "$m1cfg" ]]; then
+    [[ "$(occfg "$m1cfg" model)" == "go/glm-5.2" ]]
+    check "V26: 底座腿默认模型 glm-5.2(在 opencode 配置里)" $?
+  else
+    bad "V26: 底座腿默认模型 glm-5.2(在 opencode 配置里)"; echo "    (没生成配置 ⇒ 测空气)"
+  fi
   env PATH="$b:$PATH" CAPTURE="$d/m2.json" ZHIPU_API_KEY=zk \
     bash "$b/subglm" review "$d/t.md" "$d/m2.log" "$d" >/dev/null 2>&1
   [[ "$(get "$d/m2.json" MIMO_MODEL)" == "glm-5.2" ]]
@@ -1816,12 +1940,16 @@ PYEOF2
   # ── ④b base URL 不许以 /v1 结尾。claude CLI 自己会补 `/v1/messages`,
   #    写成 .../go/v1 会发到 /zen/go/v1/v1/messages(实测 404),而 CLI 把这个 404
   #    报成「模型 glm-5.2 不存在」—— 一个地址 bug 伪装成模型名 bug,08-18 真栽过。
-  local bu
-  bu="$(get "$d/m1.json" ANTHROPIC_BASE_URL)"
-  [[ "$bu" != */v1 ]]
-  check "V26: 底座腿 base URL 不许以 /v1 结尾(CLI 会自己补,否则 404 伪装成模型名错)" $?
-  [[ "$bu" == "https://opencode.ai/zen/go" ]]
-  check "V26: 底座腿 base URL 就是 opencode.ai/zen/go" $?
+  # 08-18 晚:底座换成 opencode 之后,**这两条问的东西整个变了**。
+  # 旧规格(不带 /v1)是给 claude 壳的:claude CLI 自己会补 /v1/messages。
+  # opencode 走的是 OpenAI 兼容面,要的是**完整的** .../zen/go/v1。
+  # 所以不是放宽,是换了被问的对象;claude 壳那条规格由 deepseek 那格继续守着(V9)。
+  if [[ -f "$m1cfg" ]]; then
+    [[ "$(occfg "$m1cfg" baseURL)" == "https://opencode.ai/zen/go/v1" ]]
+    check "V26: 底座腿 base URL = opencode.ai/zen/go/v1(OpenAI 兼容面要完整路径)" $?
+  else
+    bad "V26: 底座腿 base URL = opencode.ai/zen/go/v1(OpenAI 兼容面要完整路径)"
+  fi
 
   # ── ④c 聊天腿必须带 User-Agent。urllib 的默认 UA 会被 Cloudflare 前置的端点
   #    403(error code 1010);同一个请求 curl 200 / urllib 403,只差这一行。
@@ -2103,7 +2231,7 @@ REVIEW_NO_MY_REVIEW=1 v5_diff_scope
 REVIEW_NO_MY_REVIEW=1 v6_truncation
 REVIEW_NO_MY_REVIEW=1 v7_blind_warning
 REVIEW_NO_MY_REVIEW=1 v8_subchat_provider_table
-REVIEW_NO_MY_REVIEW=1 v9_subglm_agent
+REVIEW_NO_MY_REVIEW=1 v9_claude_shell_base
 REVIEW_NO_MY_REVIEW=1 v10_git_stderr_isolation
 REVIEW_NO_MY_REVIEW=1 v11_panel_gates
 REVIEW_NO_MY_REVIEW=1 v12_gate_default_on
