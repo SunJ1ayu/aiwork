@@ -115,19 +115,20 @@ mkdir -p "$(dirname "$LOG_PREFIX")"
 # 「默认关着」当初是为欠费立的,不是永久规格 —— 理由没了还留着,四审就永远只有三腿
 # (这条腿已经这样关了两周)。没钱/出故障时的关法仍在:`PANEL_GLM_LEG=off`。
 #
-# **默认档是 chat(聊天腿),不是 agent** —— 这不是偏好,是后端逼出来的:
-# OpenCode Go 的 Anthropic 面**不做工具格式转换**(它把请求体直接转发给 OpenAI 形状的
-# 上游),带 Anthropic 形状的 tools 一律 400「Missing required input field:
-# 'tools[0].function.name'」。08-18 实测三档:无工具 200 / Anthropic 形状工具 400 /
-# OpenAI 形状工具 200。而底座腿的全部意义就是自带工具自己读仓库 ⇒ 在这个后端上它起不来,
-# 默认写 agent 只会每轮回落一次(或者更糟:看起来在跑、其实每次都 400)。
-# 代价要认:聊天腿看不见仓库,只看得见 diff ⇒ **派它时记得带 PANEL_INCLUDE**
-# (下面那条 `HINT: chat leg in play and PANEL_INCLUDE is empty` 就是干这个的,
-#  默认走 chat 之后它会常亮)。**这里不写行号**:上一版写了"第 207 行",而我加的
-#  注释自己就把它推到了 221 行 —— 写下的那一刻就是错的。行号不是身份。
-# 哪天 Go 把格式转换补上、或换成 opencode 自己的底座,把这里改回 agent 即可。
-# 取值:chat = 聊天腿(默认);agent = 底座腿(自己读仓库,本后端上会 400);off = 不派发。
-GLM_LEG="${PANEL_GLM_LEG:-chat}"
+# **默认档 = agent(底座腿,自己读仓库)。** 这一格 08-18 一天之内翻了两次,
+# 两次都是被事实推的,记下来免得下次又当成偏好来回改:
+#   白天:后端换到 OpenCode Go,而底座腿当时是**借 Claude Code 当壳**的;
+#         Go 的 Anthropic 面不做工具格式转换,带 Anthropic 形状的 tools 一律 400
+#         (实测三档:无工具 200 / Anthropic 形状 400 / OpenAI 形状 200)⇒ 只能默认 chat。
+#   晚上:**底座换成 opencode CLI 自己**(track opencode-agent-base),工具形状天然对得上
+#         ⇒ 400 这个前提没了,默认档翻回 agent。端到端实跑为证:它自己跑 git status /
+#         Read / Glob,抓到埋的雷并给出裁决行。
+# 底座腿的价值就是自己读仓库、不靠别人喂 diff;聊天腿看不见仓库,派它要带 PANEL_INCLUDE
+# (下面那条 `HINT: chat leg in play and PANEL_INCLUDE is empty` 就是提醒这件事的)。
+# **这里不写行号**:上一版写了"第 207 行",而我加的注释自己就把它推到了 221 行 ——
+# 写下的那一刻就是错的。行号不是身份。
+# 取值:agent = 底座腿(默认);chat = 聊天腿(只看得见喂给它的东西);off = 不派发。
+GLM_LEG="${PANEL_GLM_LEG:-agent}"
 GLM_CMD=""
 if [[ "$GLM_LEG" == "off" ]]; then
   GLM_CMD=""                      # 关着:不派发、不报 rc
