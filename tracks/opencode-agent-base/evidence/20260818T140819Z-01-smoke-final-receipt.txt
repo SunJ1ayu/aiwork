@@ -1,0 +1,15 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    smoke-final-receipt
+cmd:     env REVIEW_NO_MY_REVIEW=1 bin/subglm-agent review /tmp/claude-0/-root/a49225b2-227b-445c-b0c2-7fea859fcb3b/scratchpad/ocrepo-task.md /root/aiwork/logs/smoke-final.log /tmp/claude-0/-root/a49225b2-227b-445c-b0c2-7fea859fcb3b/scratchpad/ocrepo
+cwd:     /root/aiwork(仓根)
+commit:  0916670
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-18T14:08:19Z
+---------------- 输出开始 ----------------
+[0m
+> aiwork-review · glm-5.2
+[0m
+[0m→ [0mRead .
+[0m→ [0mRead calc.py
+---------------- 输出结束 ----------------
+runlog: smoke-final-receipt rc=0 commit=0916670 dirty=yes at=2026-08-18T14:08:19Z file=tracks/opencode-agent-base/evidence/20260818T140819Z-01-smoke-final-receipt.txt
