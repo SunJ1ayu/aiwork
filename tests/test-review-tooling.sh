@@ -2174,18 +2174,21 @@ PYCFG
       [[ " $off " == *" $w "* ]]
       check "V28: 只读锁——配置里 $w 关掉了" $?
     done
-    # bash 留着(要跑只读 git),但必须是白名单:* deny + 只放行只读 git
-    python3 - "$cfg" <<'PYCFG'
-import json,sys
-c=json.load(open(sys.argv[1]))
-ag=list(c.get("agent",{}).values())
-perm=(ag[0].get("permission") or {}) if ag else {}
-bash=perm.get("bash")
-ok = isinstance(bash,dict) and bash.get("*")=="deny" and any(
-    k.startswith("git ") and v=="allow" for k,v in bash.items())
-sys.exit(0 if ok else 1)
-PYCFG
-    check "V28: bash 是白名单(* deny + 只放行只读 git),不是敞开" $?
+    # **bash 整个关掉。** 这条 08-18 晚上被四审推翻重写过一次,原委必须留着:
+    # 原版是"bash 留着跑只读 git,但白名单 `*` deny + 只放行 git diff/log/status/show",
+    # 我还在注释里写了"这是真闸"。**四审(subdeepseek BLOCK,kimi/glm 各自也点到)证明
+    # 那个保证是假的,我亲手复现了两条**:
+    #   写:`git diff --output=<path>`  —— git 自己的文档化选项,写出任意文件(实测成功)
+    #   读:`git diff --no-index <仓外文件> /dev/null` —— 把任意可读文件全文打进 stdout,
+    #       而 stdout 会进腿日志 ⇒ 一个恶意仓可以让这条腿把订阅 key 印出来(实测成功)
+    # 而且这些 diff 选项在 `git log -p` / `git show` 上同样吃 ⇒ 逐个拉黑是打地鼠;
+    # 还有 `--ext-diff` + 仓内配置这类口子。**结论:对 git 这么灵活的程序做命令行
+    # 白名单本身就不成立**,不是模式写得不够细。所以不留 bash。
+    # 代价认下来:这条腿看不了 git 历史/diff,但它的核心价值(自己读仓库)由
+    # read/glob/grep 提供,一条没丢。
+    local off2; off2="$(occfg "$cfg" tools_off)"
+    [[ " $off2 " == *" bash "* ]]
+    check "V28: bash 整个关掉(命令行白名单挡不住 git 自己的参数,实测可写可读仓外)" $?
   fi
 
   # ── ⑤ 裁决 gate 必须硬:**opencode 报错也 rc=0**(实测:余额不足那次错误打在
@@ -2224,6 +2227,45 @@ EOF
   check "V28: deepseek 腿仍走 claude 壳(换底座不许串味到隔壁)" $?
   if [[ -f "$d/oc4.txt" ]]; then bad "V28: deepseek 腿不许被顺手改成 opencode 底座"
   else ok "V28: deepseek 腿不许被顺手改成 opencode 底座"; fi
+
+  # ── ⑫ 二进制存在性检查要查**这条腿真正要用的那个**。原来无条件查 claude:
+  #    opencode 底座不依赖 claude ⇒ claude 没装而 opencode 装了,腿被误杀;
+  #    反过来则放行到 `opencode run` 才报一个误导性的 rc=127。
+  #    (四审两条腿独立点到:subdeepseek F2 / subglm MEDIUM。)
+  local nb="$d/nobin"; mkdir -p "$nb"
+  cp "$BIN/subglm-agent" "$BIN/subagent" "$nb/"
+  oc_stub "$nb"        # 只有 opencode,**没有 claude**
+  env PATH="$nb:/usr/bin:/bin" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+    bash "$nb/subglm-agent" review "$d/t.md" "$d/g12.log" "$d" >/dev/null 2>"$d/g12.err"; rc=$?
+  [[ $rc -eq 0 ]]
+  check "V28: 机器上没装 claude 也不影响 opencode 底座的腿" $?
+
+  # ── ⑬ 日志头印**完整**模型 id(带 provider 前缀),别印一个调用时并不存在的名字
+  grep -q "^model: go/glm-5.2$" "$d/g12.log" 2>/dev/null
+  check "V28: 日志头印完整模型 id go/glm-5.2(不是裸 glm-5.2)" $?
+
+  # ── ⑭ key 不许经命令行传给写配置那步(进程存续期间 ps 看得见),
+  #    且配置文件**创建即 600**,不许先 644 再 chmod(中断在中间会留下可读的 key 文件)。
+  # 写法注意:**别用 `check "..." $([[ $? -ne 0 ]]; echo $?)`** —— 命令替换里的 $?
+  # 不是上一条 grep 的退出码。08-18 我就是这么写的,结果这条在 key 明明还走 argv 时
+  # 报绿(今天第四条假绿,前三条都是"问默认档却在被污染的环境里问")。
+  # 两次写错的教训都留着:
+  #  ① 别用 `check "..." $([[ $? -ne 0 ]]; echo $?)` —— 命令替换里的 $? 不是上一条的退出码;
+  #  ② 别用单行 grep 找 argv —— `python3 - \` 的参数在**续行**上,单行永远匹配不到
+  #     (这条断言因此连报两次假绿)。所以这里取 `python3 -` 到 heredoc 标记之间的
+  #     **整段 argv 文本**再看有没有 key。
+  python3 - "$BIN/subagent" <<'PYARGV'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"python3 -\s(.*?)<<'PYOC'", src, re.S)
+sys.exit(2 if not m else (1 if "API_KEY" in m.group(1) else 0))
+PYARGV
+  rc=$?
+  if   [[ $rc -eq 0 ]]; then ok  "V28: key 不经 argv 传给写配置那步(ps 看得见)"
+  elif [[ $rc -eq 1 ]]; then bad "V28: key 不经 argv 传给写配置那步(ps 看得见)"
+  else bad "V28: key 不经 argv 传给写配置那步(ps 看得见)"; echo "    (找不到那段 argv ⇒ 判据自己坏了,不许当绿)"; fi
+  grep -q "umask 077" "$BIN/subagent"
+  check "V28: 写配置前设 umask 077(创建即 600,没有 644 窗口)" $?
 
   # ── ⑨ **stdin 必须接到 /dev/null**。2026-08-18 真事故:opencode 在 stdin 是
   #    一个还开着的管道时会**一直等输入**——在 runlog(经 tee 管道)下这条腿挂死了
