@@ -9,6 +9,14 @@ _GATE="$(dirname "$0")/_my-review-gate.sh"
 . "$_GATE"
 gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 
+# 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
+# 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
+# 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
+_RHG="$(dirname "$0")/_review-home-guard.sh"
+[ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh   # 脚本被拷到别处跑时的家
+[ -f "$_RHG" ] || { echo "submimo: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_RHG"
+
 DEFAULT_MODEL="xiaomi/mimo-v2.5-pro"
 
 usage() {
@@ -149,7 +157,10 @@ command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: m
 # ⚠️ `fix` 模式**不走这里**:那是执行腿,写代码是它的本职,继续用内置 `build` 档。
 REVIEW_AGENT="aiwork-review"
 MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$HOME/.cache/aiwork/mimo-review-home}"
+# 运行期 home 不许在被评审的仓里(共享闸)。**只管 review**:`fix` 是执行腿,
+# 仓对它本来就是可写的,这道闸拦它没有意义 —— "加一道防线顺手拆掉另一道"是本仓的老账。
 if [[ "$MODE" != "fix" ]]; then
+  review_home_guard mimo "$MIMO_CFG_HOME" "$REPO_DIR" MIMO_REVIEW_HOME || exit 1
   # 配置**每次重写**:它就是那把锁,不许留隔夜残留(判据查的也是它)。
   umask 077
   mkdir -p "$MIMO_CFG_HOME/mimocode"

@@ -32,6 +32,14 @@ _GATE="$(dirname "$0")/_my-review-gate.sh"
 . "$_GATE"
 gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 
+# 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
+# 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
+# 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
+_RHG="$(dirname "$0")/_review-home-guard.sh"
+[ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh   # 脚本被拷到别处跑时的家
+[ -f "$_RHG" ] || { echo "subkimi: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_RHG"
+
 # 运行期 home **必须在被评审的仓外面**(track repo-write-audit,2026-08-19 第二轮)。
 # 原默认是 `/root/aiwork/kimi-review-home` —— 仓内。腿进只读仓之后 kimi 的 logger
 # 当场 EROFS、腿起不来。另两条腿的运行期目录早就在 ~/.cache/aiwork/ 下,
@@ -54,7 +62,9 @@ Environment:
                     kimi-code/kimi-for-coding = K2.7 coding-tuned, also available)
   KIMI_TIMEOUT      optional, seconds before timeout (default 1500; 07-27 取证:
                     900 不够,时间花在长推理而非自读仓库)
-  KIMI_REVIEW_HOME  optional, default /root/aiwork/kimi-review-home
+  KIMI_REVIEW_HOME  optional, default $HOME/.cache/aiwork/kimi-review-home
+                    (仓内的 kimi-review-home/ 只是**种子**,不是运行期 home ——
+                     运行期 home 落在被评审的仓里会被拒跑,见 _review-home-guard.sh)
 
 Examples:
   subkimi review /root/aiwork/tasks/001-review.md /root/aiwork/logs/001-review.log /path/to/repo
@@ -92,23 +102,37 @@ if [[ -z "${KIMI_REVIEW_HOME:-}" && -d "$KIMI_SEED_HOME" ]]; then
   for _h in "$KIMI_SEED_HOME"/hooks/*; do
     [[ -f "$_h" ]] && cp -f "$_h" "$REVIEW_HOME/hooks/" 2>/dev/null || true
   done
+  # hook 命令里的路径也得跟着搬(第二轮四审 subdeepseek F2):种子里写的是
+  # `node /root/aiwork/kimi-review-home/hooks/guard.mjs` —— 仓内那一份。不改的话
+  # 上面辛辛苦苦同步过来的 guard 副本**是死代码**,真正被执行的还是仓内那份,
+  # 而仓在只读挂载下(还随时可能被换掉),"运行期 home 自包含"就是句假话。
+  # 老账:同一件事写两处、只更新一处。
+  KIMI_RUNTIME_HOME="$REVIEW_HOME" python3 - "$REVIEW_HOME/config.toml" <<'PYHOOK' || true
+import os, re, sys
+p = sys.argv[1]
+home = os.environ["KIMI_RUNTIME_HOME"].rstrip("/")
+try:
+    s = open(p).read()
+except OSError:
+    sys.exit(0)
+s2 = re.sub(r'(command\s*=\s*"node )[^"]*/hooks/guard\.mjs"',
+            lambda m: m.group(1) + home + '/hooks/guard.mjs"', s)
+if s2 != s:
+    tmp = p + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(s2)
+    os.replace(tmp, p)      # 原子改名:别让并发的另一条腿读到半截 config
+PYHOOK
 fi
 
 # 自省开关:让 wrapper 自己把解析结果打出来,判据据此断言(**查工件不查自述**,
 # 别让判据去 grep 源码里的默认值 —— 那查的是我写了什么,不是它算出了什么)。
 if [[ -n "${REVIEW_PRINT_HOME:-}" ]]; then printf '%s\n' "$REVIEW_HOME"; exit 0; fi
 
-# 落在被评审的仓里 ⇒ **拒跑并说清楚**。不拒的话腿会去撞底座那句
-# "storage write failed: unrecognized I/O error" —— 谁看了都想不到是只读挂载,
-# 而花名册记的 FAIL(rc=1) 跟"额度耗尽"长得一模一样。2026-08-19 真 panel 撞过一次。
-_RH_REAL="$(cd "$REVIEW_HOME" 2>/dev/null && pwd -P || printf '%s' "$REVIEW_HOME")"
-_RD_REAL="$(cd "$REPO_DIR"   2>/dev/null && pwd -P || printf '%s' "$REPO_DIR")"
-case "$_RH_REAL" in
-  "$_RD_REAL"|"$_RD_REAL"/*)
-    die "运行期 home 在**被评审的仓内**($_RH_REAL):评审腿的仓是只读的,底座在那儿
-      写状态会当场 EROFS、腿起不来,而错误信息看不出是只读挂载。放到仓外,例如
-      KIMI_REVIEW_HOME=\$HOME/.cache/aiwork/kimi-review-home" ;;
-esac
+# 落在被评审的仓里 ⇒ **拒跑并说清楚**(共享实现,三条腿同一句话)。
+# 这里原本是 kimi 自己的一份内联检查 —— 第二轮四审点名:另两条腿的
+# OPENCODE_REVIEW_HOME / MIMO_REVIEW_HOME 一样指得进仓里,而只有 kimi 有这道检查。
+review_home_guard kimi "$REVIEW_HOME" "$REPO_DIR" KIMI_REVIEW_HOME || exit 1
 
 # ── 只读仓(track repo-write-audit,2026-08-19)────────────────────────────────
 # 评审腿在**仓是只读的** mount namespace 里跑:腿的能力一个字没改(照样

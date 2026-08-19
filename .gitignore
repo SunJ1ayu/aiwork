@@ -16,6 +16,11 @@ kimi-review-home/*
 kimi-review-home/hooks/*
 !kimi-review-home/hooks/guard.mjs
 !kimi-review-home/hooks/probe.sh
+# 2026-08-19 补:上面那次只补了 hooks/,漏了**决定 hooks 挂不挂**的那个开关。
+# `config.toml` 里的 `[[hooks]] command = "node …/guard.mjs"` 才是防线的接线;
+# 它不入库 ⇒ 被改了不留痕,闸③ 亲读 diff 也照不到 —— 同一个坑补了一半。
+# (里面没有凭证:api_key 是空串,oauth 只写"存哪儿"、真凭证在 credentials/ 下,那个仍不入库。)
+!kimi-review-home/config.toml
 
 # 日志是流水,不入库;但 oracle 哈希存档是安全工件,留下
 logs/*

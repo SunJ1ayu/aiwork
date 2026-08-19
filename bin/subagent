@@ -30,6 +30,14 @@ _GATE="$(dirname "$0")/_my-review-gate.sh"
 . "$_GATE"
 gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 
+# 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
+# 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
+# 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
+_RHG="$(dirname "$0")/_review-home-guard.sh"
+[ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh   # 脚本被拷到别处跑时的家
+[ -f "$_RHG" ] || { echo "subagent: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_RHG"
+
 BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
@@ -287,6 +295,9 @@ if [[ "$AGENT_BASE" == "opencode" ]]; then
   # 配置**每次重写**:这份配置就是只读锁本身,不许留隔夜残留(判据查的也是它)。
   # HOME 换成隔离目录 —— 否则会写进 /root/.config/opencode,污染我自己那份真配置。
   OC_HOME="${OPENCODE_REVIEW_HOME:-$HOME/.cache/aiwork/opencode-review-home}"
+  # 运行期 HOME 不许在被评审的仓里(共享闸)—— 底座在只读仓里写状态会当场 EROFS,
+  # 而报出来的错看不出是自家防线干的。默认值在仓外不等于这条路被挡住了。
+  review_home_guard opencode "$OC_HOME" "$REPO_DIR" OPENCODE_REVIEW_HOME || exit 1
   # umask 077:配置文件**创建即 600**。先 644 再 chmod 会留一个窗口,中断在中间
   # 就是一个人人可读的 key 文件。key 走 **env 不走 argv** —— argv 在进程存续期间
   # `ps` 就看得见(四审 subdeepseek F3)。
