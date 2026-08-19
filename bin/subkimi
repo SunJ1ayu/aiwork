@@ -3,7 +3,7 @@ set -euo pipefail
 
 # subkimi - Kimi (Moonshot) review employee on an AGENT base: kimi-code CLI
 # run headless (`kimi -p`). Like subglm-agent/subdeepseek-agent, the model
-# explores the repo itself (Read/Glob/Grep;无 shell/git,diff 由 wrapper 喂), so no blind
+# explores the repo itself (Read/Glob/Grep + 只读 git via Bash), so no blind
 # reviews and no manual INCLUDE feeding.
 #
 #   review -> kimi -p, review-only guard, verdict-gated. Works now.
@@ -12,8 +12,11 @@ set -euo pipefail
 #
 # Isolation: KIMI_CODE_HOME points at a dedicated review home whose config
 # carries a PreToolUse guard hook (default-DENY: only Read/ReadMediaFile/Glob/
-# Grep/todo-goal tools 允许;**Bash 一律拒绝(含只读 git)** —— 08-18 实测白名单挡不住
-# git 自己的参数(--output= 能写、--no-index 能读仓外),diff 改由 wrapper 算好喂进提示词;
+# Grep/todo-goal tools 允许;**Bash 只放行只读 git**(git diff/log/show/status…),
+# 元字符链和非 git 命令一律拒。08-18 实测这个白名单挡不住 git 自己的参数
+# (--output= 能写、--no-index 能读仓外)—— 那两条是**明账**,防线在 track
+# repo-write-audit;白名单留着是因为它挡得住**误伤**(08-19 实证:没有白名单的那两条腿
+# 当场去 cat 仓外文件、跑判据,而这条腿被守卫拦了 7 次);
 # Write/Edit/Agent/AgentSwarm/Skill/Cron*/FetchURL/WebSearch and unknown tools
 # are blocked). The user's global ~/.kimi-code is never touched. Auth is the
 # Kimi membership OAuth token, shared via a credentials symlink in the review

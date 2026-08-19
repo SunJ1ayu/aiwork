@@ -33,3 +33,9 @@ __pycache__/
 # 07 月那次 worktree 事故就是链接被 merge 带回主仓覆盖了真目录。
 node_modules
 out
+
+# 评审腿的运行期产物(2026-08-19 第三轮四审 subdeepseek #7 抓到:`.mimocode/plans/`
+# 已经有 9 份入库了 —— 它们正是"腿往被评审的仓里写文件"的实物证据)。
+# 已入库的那几份用 `git rm --cached` 撤出,盘上留着;历史里也还查得到
+# (`git show <commit>:.mimocode/plans/<file>`),证据不会丢。
+.mimocode
