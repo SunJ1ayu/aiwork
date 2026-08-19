@@ -141,8 +141,12 @@ tools = {"write": False, "edit": False, "patch": False, "task": False,
          "change_directory": False, "history": False, "plan_exit": False,
          "question": False, "todowrite": False, "todoread": False, "invalid": False,
          "bash": True, "read": True, "glob": True, "grep": True}
+# bash 是白名单不是全放开(三条腿一个规格,理由见 bin/subagent 里那段实跑账)。
 perm = {"write": "deny", "edit": "deny", "patch": "deny", "task": "deny",
-        "webfetch": "deny", "external_directory": "deny"}
+        "webfetch": "deny", "external_directory": "deny",
+        "bash": {"*": "deny",
+                 "git diff*": "allow", "git log*": "allow",
+                 "git status*": "allow", "git show*": "allow"}}
 cfg = {"agent": {agent: {"description": "aiwork read-only review leg",
                          "mode": "primary", "tools": tools, "permission": perm}}}
 json.dump(cfg, open(cfgpath, "w"), indent=2)

@@ -298,7 +298,14 @@ tools = {"write": False, "edit": False, "patch": False, "task": False,
          "todowrite": False, "webfetch": False, "websearch": False, "skill": False,
          "bash": True,
          "read": True, "glob": True, "grep": True}
-perm = {"edit": "deny", "write": "deny"}
+# bash 是**白名单**,不是全放开。08-19 第二轮四审实跑的账:裸放开之后腿
+# `cat` 了仓外文件、还跑了 `bash tests/test-review-tooling.sh`(547 秒后自己挂掉,
+# 留下一批真 mimo 遗孤)。白名单挡不住 `git diff --output=` 那种精巧绕法(那条账在
+# track repo-write-audit),但**挡得住误伤**,而腿顺手跑判据正是误伤的典型形态。
+perm = {"edit": "deny", "write": "deny",
+        "bash": {"*": "deny",
+                 "git diff*": "allow", "git log*": "allow",
+                 "git status*": "allow", "git show*": "allow"}}
 cfg = {"$schema": "https://opencode.ai/config.json",
        "provider": {prov: {"npm": "@ai-sdk/openai-compatible",
                            "name": "OpenCode Go (subscription)",
@@ -350,7 +357,8 @@ else
       --setting-sources project \
       --max-turns "$MAX_TURNS" \
       --output-format stream-json --verbose \
-      --allowedTools Read Glob Grep Bash \
+      --allowedTools Read Glob Grep "Bash(git diff:*)" "Bash(git log:*)" \
+                     "Bash(git status:*)" "Bash(git show:*)" \
       --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent
 ) > "$STREAM_FILE" 2>"$ERR_FILE" || RC=$?
 
