@@ -3417,7 +3417,7 @@ v40_second_panel_findings() {
              "argv 零写口:submimo" "argv 零写口:subkimi" \
              "home 在仓内拒跑:opencode 腿" "home 在仓内拒跑:mimo 腿" \
              "home 在仓内拒跑:kimi 腿" "三条腿说的是同一件事" \
-             "--rw 仓根 ⇒ 拒跑" "--rw 仓根 ⇒ 命令没跑" \
+             "--rw 仓根 ⇒ 拒跑" "--rw 仓根 ⇒ 命令没跑" "--rw 仓根 ⇒ 说得出是配错了" \
              "gitdir 静默没挂上 ⇒ 拒跑" "自检不漏 EROFS 到 stderr" \
              "usage 的默认值和真实解析一致" "hook 指向运行期 home" \
              "种子 config.toml 在版本控制里"; do
@@ -3516,6 +3516,18 @@ RECORD
   check "V40③: --rw 指到仓根 ⇒ **拒跑**(fail-closed,不再只是警告)" $?
   [[ ! -e "$repo/ROOTRW_LEAK" ]]
   check "V40③: --rw 指到仓根时命令**根本没跑**(拒跑不是跑完再抱怨)" $?
+  # ③c 这条是**变异测试逼出来的**(2026-08-19 收口):把 die 改回"只警告",上面两条
+  #    照样绿 —— 因为整仓开闸之后,挂完自检会发现仓可写、照样拒跑。行为对了,
+  #    **可它给的理由是错的**:自检说的是"挂载没有真的生效",而真因是 `--rw` 配到了仓根。
+  #    误诊在这一单里是有前科的(kimi 的 EROFS 被读成额度耗尽、花名册记 FAIL)。
+  #    ⇒ 钉死:拒绝必须发生在**挂载之前的预检**,而且**同一行**里说得出是仓根配错了。
+  #    夹具把 unshare 打成必败:预检拒绝根本不该走到那一步。
+  local nb="$d/nounshare"; mkdir -p "$nb"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$nb/unshare"; chmod +x "$nb/unshare"
+  local preout prerc
+  preout="$(PATH="$nb:$PATH" "$BIN/ro-repo-exec" --rw "$repo" "$repo" -- bash -c 'echo hi' 2>&1)"; prerc=$?
+  [[ $prerc -ne 0 ]] && grep -qE '仓根.*(拒跑|拒绝)' <<<"$preout"
+  check "V40③: 拒绝发生在挂载**之前**,且说得出是 --rw 配到了仓根(不是让自检去误诊)" $?
 
   # ── ④ gitdir 的挂载静默没生效(rc=0 但什么都没做)⇒ 自检必须逮住 ─────────────
   local wt="$d/wt" realmount; realmount="$(command -v mount)"
