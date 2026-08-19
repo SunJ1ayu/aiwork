@@ -21,7 +21,10 @@ Usage:
 Runs official MiMoCode CLI as a bounded executor.
 
 Modes:
-  review   Read-only review. Uses MiMoCode plan agent.
+  review   Read-only review. Uses a self-built `aiwork-review` agent
+           (write ports off, read-only git via bash) — **NOT** the built-in
+           `plan` agent: 2026-08-19 实测它自称 Disallows all edit tools,
+           实际 bash/write/edit/task 全开 + 权限 `*` allow。
   explore  Read-only divergent design pass: propose ONE direction from this
            model's angle + flag blind spots in the brief. Used by panel-explore.
   fix      Small scoped code changes. Uses MiMoCode build agent.
@@ -131,7 +134,7 @@ if [[ "$MODE" != "fix" ]]; then
   umask 077
   mkdir -p "$MIMO_CFG_HOME/mimocode"
   python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$REVIEW_AGENT" <<'PYCFG'
-import json, sys
+import json, os, sys
 cfgpath, agent = sys.argv[1:3]
 # 默认拒绝的姿态:除了 read/glob/grep/bash,能关的全关。
 # 名字是 `mimo debug agent` 解析出来的全集 —— 关不掉的会在判据里露出来。
@@ -149,7 +152,16 @@ perm = {"write": "deny", "edit": "deny", "patch": "deny", "task": "deny",
                  "git status*": "allow", "git show*": "allow"}}
 cfg = {"agent": {agent: {"description": "aiwork read-only review leg",
                          "mode": "primary", "tools": tools, "permission": perm}}}
-json.dump(cfg, open(cfgpath, "w"), indent=2)
+# **原子落盘**(2026-08-19,第三轮四审 subkimi 抓到):直接 `open(cfgpath,"w")`
+# 是 truncate 之后逐步写 —— 两个 agent 并发跑 review 时共享同一份配置
+# (MIMO_REVIEW_HOME 没设时都落在 $HOME/.cache/aiwork/mimo-review-home),
+# 另一边可能读到半截 JSON。窗口小,但**失败形态没验过**:mimo 解析不了这份配置
+# 会不会回退到内置 plan 档(写口全开的那个,本单整单就是在推翻它)—— 不去猜它,
+# 直接把窗口关掉。tmp 由上面的 umask 077 保证也是 600,replace 是 POSIX 原子改名。
+tmpath = cfgpath + ".tmp"
+with open(tmpath, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+os.replace(tmpath, cfgpath)
 PYCFG
   chmod 600 "$MIMO_CFG_HOME/mimocode/mimocode.json"
 fi
