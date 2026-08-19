@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# ro-repo-exec —— 把一条命令放进"被评审的仓是只读的"那个 mount namespace 里跑。
+# (2026-08-19,track repo-write-audit)
+#
+#   ro-repo-exec [--rw <路径>]... <仓根> -- <命令...>
+#
+# 为什么存在:评审腿有能力写被评审的仓,而且**挡不住** —— `git diff --output=<path>`
+# 就能写文件,对 git 这么灵活的程序做命令行白名单本身不成立(08-18 亲手复现)。
+# 08-18 我的第一反应是把腿的 bash 整个关掉,四审推翻了:关掉的代价是腿静默起不来,
+# 而 panel 照常出结论 —— **比"腿可能写个文件"危险得多**。
+#
+# 这里走第三条路:**腿的能力一个字不改,把仓变成只读的。**
+# 真探针(tracks/repo-write-audit/evidence/)测过:只读工作树上
+# `git status/diff/log/show/rev-parse/blame/diff HEAD~1` 七条全 rc=0,脏改动照常看得见,
+# 与可写状态逐条对照**差异为零**;而 `touch` / `git diff --output=` / 改 `tests/` 全部失败。
+#
+# ⚠️ **fail-closed 是这个工具的全部意义**:挂不上就拒跑(退出 78),
+# 绝不许静默降级成"在可写的仓里跑" —— 那样一切看起来完全正常,而防线根本不在。
+# 安静的失败比响亮的失败贵得多,这台机器为这条记过好几笔账。
+#
+# 它照不到:仓**外**的写(HOME 等)。也不防**有动机的对手**(namespace 里的 root
+# 可以自己 remount)—— 这一单的对面是误伤和提示注入,不是对手,前提写在 proposal 里。
+set -uo pipefail
+
+die() { printf 'ro-repo-exec: %s\n' "$*" >&2; exit 78; }
+
+RW=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rw) [[ $# -ge 2 ]] || die "--rw 后面要跟路径"; RW+=("$2"); shift 2 ;;
+    --)   shift; break ;;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 0 ;;
+    *)    break ;;
+  esac
+done
+
+[[ $# -ge 1 ]] || die "用法:ro-repo-exec [--rw <路径>]... <仓根> -- <命令...>"
+REPO="$1"; shift
+[[ "${1:-}" == "--" ]] && shift
+[[ $# -ge 1 ]] || die '-- 后面要有命令'
+[[ -d "$REPO" ]] || die "仓根不存在:$REPO"
+command -v unshare >/dev/null 2>&1 || die "机器上没有 unshare,建不了 mount namespace ⇒ 拒绝在可写的仓里跑腿"
+
+# realpath 化:挂载点必须是真路径,否则符号链接会让 remount 落在别处
+REPO="$(cd "$REPO" && pwd -P)" || die "仓根解析不了:$REPO"
+
+# --rw 的路径逐个检查:不存在就拒跑(而不是"挂不上就算了" —— 那正是静默降级)
+_rw_list=""
+for p in ${RW+"${RW[@]}"}; do
+  [[ -d "$p" ]] || die "--rw 指的目录不存在:$p(要写的地方得先存在,否则腿写日志时才炸)"
+  p="$(cd "$p" && pwd -P)"
+  case "$p" in
+    "$REPO"|"$REPO"/*) : ;;
+    *) die "--rw 只对仓内路径有意义,这个在仓外:$p" ;;
+  esac
+  _rw_list+="$p"$'\n'
+done
+
+# 「挂上了没有」必须有实证,不能靠退出码猜:命令自己也可能返回 78。
+# 标记文件落在仓外(仓在 namespace 里是只读的,仓外照常可写)。
+MARK="$(mktemp)" || die "建不了标记文件"
+trap 'rm -f "$MARK"' EXIT
+
+RO_REPO="$REPO" RO_RW="$_rw_list" RO_MARK="$MARK" unshare -m /usr/bin/env bash -c '
+  set -uo pipefail
+  fail() { printf "ro-repo-exec: %s\n" "$*" >&2; exit 78; }
+  # 不传播回父 namespace —— 少了这一步,主机的仓会被一起挂成只读。
+  mount --make-rprivate / 2>/dev/null || fail "mount --make-rprivate / 失败(需要 CAP_SYS_ADMIN)"
+  mount --bind "$RO_REPO" "$RO_REPO"          || fail "bind 仓失败:$RO_REPO"
+  mount -o remount,ro,bind "$RO_REPO"         || fail "把仓 remount 成只读失败:$RO_REPO"
+  # 写口白名单:整仓只读之后,把这几处单独开回可写(腿日志就在仓内 logs/,
+  # 写不了 = 这道防线把腿弄死了,而"腿静默起不来"正是 08-18 那次的病)。
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    mount --bind "$p" "$p"                    || fail "bind 写口失败:$p"
+    mount -o remount,rw,bind "$p"             || fail "把写口 remount 成可写失败:$p"
+  done <<< "$RO_RW"
+  # 挂载**全部**成功之后才落标记,然后才 exec —— 顺序不能反。
+  printf OK > "$RO_MARK" 2>/dev/null || fail "落不下标记文件:$RO_MARK"
+  exec "$@"
+' bash "$@"
+rc=$?
+
+# 标记是空的 ⇒ 根本没挂上(unshare 不可用、没权限、mount 被拒……)。
+# 这时**绝不许**把 rc 当成命令的结果透传出去,更不许重跑一遍"不挂载版" ——
+# 静默降级正是这道防线唯一会死的方式。
+if [[ ! -s "$MARK" ]]; then
+  printf 'ro-repo-exec: 没能把仓挂成只读 —— unshare/mount 这一步就失败了(rc=%s)。\n' "$rc" >&2
+  printf 'ro-repo-exec: **拒绝**在可写的仓里跑评审腿(fail-closed:宁可不跑,不要假装有防线)。\n' >&2
+  printf 'ro-repo-exec: 仓=%s;先查 unshare 能不能用、以及有没有 CAP_SYS_ADMIN。\n' "$REPO" >&2
+  exit 78
+fi
+# 挂上了 ⇒ 命令自己的退出码原样透传(78 也照传,谁的错谁背)。
+exit $rc
