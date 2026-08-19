@@ -3633,7 +3633,7 @@ v41_oracle_never_executes_its_own_comments() {
 # 危险:双引号内(python3 -c "…" 的块正是这种)/ 裸露的 / 没加引号的 heredoc 内
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
-n = len(src); i = 0; st = 'N'; hd = None; hits = []
+n = len(src); i = 0; st = 'N'; hd = None; hits = []; dstart = 0; pend = []
 while i < n:
     c = src[i]
     if hd is not None:
@@ -3653,16 +3653,24 @@ while i < n:
     elif st == 'S':
         st = 'N' if c == "'" else 'S'; i += 1
     elif st == 'D':
+        # `…` 一律报:现代 shell 里没人拿它做有意的命令替换($( ) 早就取代了),实测 0 误报。
+        # $( ) 不能一律报 —— "$(cmd)" 是正常写法(本文件就有 155 处)。判别靠**跨行**:
+        # 跨行的双引号串在 shell 里基本只有一种用途 —— 喂一整段代码/文本(python3 -c "…"),
+        # 那里面的 $( ) 和反引号一样会被真执行。08-19 实测:$(touch X) 真把文件写出来了。
         if c == '\\': i += 2
-        elif c == '"': st = 'N'; i += 1
+        elif c == '"':
+            if src.count('\n', dstart, i) > 0: hits.extend(pend)
+            pend = []; st = 'N'; i += 1
         elif c == '`': hits.append(src.count('\n', 0, i) + 1); i += 1
+        elif src.startswith('$(', i):
+            pend.append(src.count('\n', 0, i) + 1); i += 2
         else: i += 1
     else:
         if c == '\\': i += 2
         elif c == '#' and (i == 0 or src[i-1] in ' \t\n'):
             j = src.find('\n', i); i = n if j < 0 else j
         elif c == "'": st = 'S'; i += 1
-        elif c == '"': st = 'D'; i += 1
+        elif c == '"': st = 'D'; dstart = i; pend = []; i += 1
         elif src.startswith('<<', i):
             m = re.match(r"<<-?\s*('([^']+)'|\"([^\"]+)\"|([A-Za-z_]\w*))", src[i:i+64])
             if m:
@@ -3730,6 +3738,19 @@ UNQ_FIXTURE
   python3 "$lint" "$d/unquoted.sh" >/dev/null 2>&1
   [[ $? -eq 1 ]]
   check "V41④: 没加引号的 heredoc 里的反引号也会执行,同样要报" $?
+
+  # ⑤ $( ) 和反引号同罪 —— V41 第一版只查反引号,是**半瞎的闸**。
+  # 08-19 自审实测:python3 -c "…" 的注释里写 $(touch X),X **真被创建出来**了
+  # (比反引号那次更狠 —— 那次是 `git diff --output=` 被 git 拒了才没落地)。
+  cat > "$d/dollar.sh" <<'DOLLAR_FIXTURE'
+python3 -c "
+import sys
+# 这句注释里的 $(id) 会被 shell 真执行
+sys.exit(0)"
+DOLLAR_FIXTURE
+  python3 "$lint" "$d/dollar.sh" >/dev/null 2>&1
+  [[ $? -eq 1 ]]
+  check "V41⑤: 跨行双引号块里的 \$( ) 也要报(和反引号同罪,第一版漏了这一整类)" $?
 
   rm -rf "$d"
 }
