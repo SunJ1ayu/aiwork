@@ -86,9 +86,15 @@ set -uo pipefail
 # 真 opencode 一旦被判据碰到就**立刻响亮失败**,把"谁没给桩"当场点名。
 # 需要行为的用例照旧在自己的 $b 里放桩(PATH 里排在这层前面),不受影响。
 _OC_FLOOR="$(mktemp -d)"
-cat > "$_OC_FLOOR/opencode" <<'OCFLOOR'
+_REAL_OC_BIN="$(command -v opencode 2>/dev/null || true)"
+cat > "$_OC_FLOOR/opencode" <<OCFLOOR
 #!/usr/bin/env bash
-echo "判据里调到了**真的** opencode 底座:$* " >&2
+# \`opencode debug ...\` 放行给真二进制(同 mimo 那条的理由):本地解析、不调模型,
+# 而 V28 靠 \`opencode debug config\` 取证只读锁 —— 拿桩验锁等于验我自己写了什么。
+if [[ "\${1:-}" == "debug" && -n "$_REAL_OC_BIN" ]]; then
+  exec "$_REAL_OC_BIN" "\$@"
+fi
+echo "判据里调到了**真的** opencode 底座:\$*" >&2
 echo "  这条用例跑了 opencode 底座的腿却没给它桩 —— 补一个桩,别让判据去碰真底座。" >&2
 exit 97
 OCFLOOR
@@ -730,12 +736,27 @@ a=json.load(open(sys.argv[1]))['argv']
 i=a.index('--allowedTools'); rest=a[i+1:]
 j=[k for k,x in enumerate(rest) if x.startswith('--')]
 seg=rest[:j[0]] if j else rest
-bare=[t for t in seg if t=='Bash']
-sys.exit(0 if not bare else 1)" "$d/a1.json" 2>/dev/null; then
+# 裸 `Bash` 固然不行;`Bash(git:*)` 这种**整个 git 都放行**的也不行 ——
+# 它把 `git diff --output=` 之外还顺带放行了 git 的写子命令(commit/checkout/clean…)。
+# 要求每一项都钉到具体的只读子命令。
+ok_pat = ('git diff', 'git log', 'git status', 'git show', 'git blame',
+          'git shortlog', 'git rev-parse', 'git ls-files', 'git describe')
+bad = [t for t in seg if t.startswith('Bash')
+       and not any(t.startswith('Bash(' + p) for p in ok_pat)]
+sys.exit(0 if not bad else 1)" "$d/a1.json" 2>/dev/null; then
     ok  "agent: Bash 是**带 pattern 的白名单**,不许裸放开(四审实跑:腿跑了判据)"
   else
     bad "agent: Bash 是**带 pattern 的白名单**,不许裸放开(四审实跑:腿跑了判据)"
   fi
+
+  # **能力清单要说实话**(四审 subdeepseek 指出:V28⑮ 只钉了 opencode 腿,claude 壳这条漏了)。
+  # 这条钉的不是方向,是"清单和实际能力必须一致" —— 两个方向都出过事:
+  # 08-18 宣称了没有的工具(腿当场顶回来、白花几轮)、08-19 瞒着有的(腿不会去用)。
+  python3 -c "
+import json,sys
+sys.exit(0 if 'read-only git' in json.load(open(sys.argv[1])).get('stdin','') else 1)" \
+    "$d/a1.json" 2>/dev/null
+  check "agent: 提示词如实写明有只读 git(清单和实际能力必须一致)" $?
 
   # **写口仍然全禁** —— 这几样评审腿本来就不需要,关掉是零成本的,和 Bash 完全不同。
   if python3 -c "
@@ -1047,6 +1068,11 @@ PYEOF
   check "subkimi: review exits 0" $([[ $rc -eq 0 ]]; echo $?)
   [[ "$(kimiget "$d/k1.json" KIMI_CODE_HOME)" == "$rh" ]]
   check "subkimi: KIMI_CODE_HOME points at review home" $?
+  python3 -c "
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+sys.exit(0 if any('read-only git' in str(x) for x in a) else 1)" "$d/k1.json" 2>/dev/null
+  check "subkimi: 提示词如实写明有只读 git(同 V9/V28⑮ 的规格)" $?
   [[ "$(kimiget "$d/k1.json" KIMI_CODE_NO_AUTO_UPDATE)" == "1" ]]
   check "subkimi: auto-update disabled" $?
   grep -q 'Conclusion: PASS' "$d/k1.log"; check "subkimi: verdict recorded in log" $?
@@ -2341,16 +2367,25 @@ PYCFG
     [[ " $off2 " != *" bash "* ]]
     check "V28: **bash 留着**(腿要能自己读 git;关掉的代价见上,已被推翻)" $?
     # 但**必须是白名单**,不许 `tools.bash=True` 之后就完全放开(见 V9 那段的实跑账)。
-    python3 - "$cfg" <<'PYW' 2>/dev/null
-import json, sys
-cfg = json.load(open(sys.argv[1]))
-agent = list(cfg.get("agent", {}).values())[0]
-b = agent.get("permission", {}).get("bash")
-ok = isinstance(b, dict) and b.get("*") == "deny" and any(
-    k.startswith("git ") and v == "allow" for k, v in b.items())
-sys.exit(0 if ok else 1)
-PYW
-    check "V28: bash 是只读 git 白名单(\`*\` deny + git 只读放行),不是完全放开" $?
+    # **让 opencode 自己解析**,不查我写进去的那份 JSON(四审 subdeepseek 指出:
+    # 查自己写的 = 验我写了什么,而 plan 档骗过我的正是"写的和解析出来的不一样")。
+    # `opencode debug config` 是本地解析,兜底桩为它放行了真二进制。
+    if [[ -n "${_REAL_OC_BIN:-}" ]]; then
+      HOME="$(dirname "$(dirname "$(dirname "$cfg")")")" timeout 60 "$_REAL_OC_BIN" debug config 2>/dev/null \
+        | python3 -c "
+import json,sys
+try: c=json.load(sys.stdin)
+except Exception: sys.exit(1)
+ag=c.get('agent',{}).get('aiwork-review',{})
+b=ag.get('permission',{}).get('bash')
+ok=isinstance(b,dict) and b.get('*')=='deny' and any(
+    k.startswith('git ') and v=='allow' for k,v in b.items())
+sys.exit(0 if ok else 1)"
+      check "V28: bash 白名单 —— **opencode 自己解析出来**的 permission(不是查我写的 JSON)" $?
+    else
+      bad "V28: bash 白名单 —— opencode 自己解析出来的 permission"
+      echo "    (机器上没有 opencode,这条取证跑不了)"
+    fi
     # 写口仍然全关 —— 零成本,不跟着 bash 一起放
     [[ " $off2 " == *" write "* && " $off2 " == *" edit "* && " $off2 " == *" task "* ]]
     check "V28: 写口仍全关(write/edit/task)—— 零成本,不跟着 bash 一起放" $?
@@ -2556,11 +2591,17 @@ v33_submimo_review_leg_is_read_only() {
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
 
   # stub mimo:只落 argv(查它到底用哪个档),不碰真底座
+  # stub 要落**自己的环境**,不只是 argv —— `env HOME=x cmd` 的赋值进的是子进程环境,
+  # **永远不进 cmd 的 argv**。第一版我查 argv 里有没有 `HOME=`,于是那条断言
+  # 即使实现真换了 HOME 也照样绿(结构上永远绿,是四审 subdeepseek 抓到的)。
   cat > "$b/mimo" <<'EOF'
 #!/usr/bin/env bash
 python3 -c "
 import os,sys,json
-json.dump({'argv':sys.argv[1:]},open(os.environ['CAPTURE'],'w'))" "$@"
+json.dump({'argv':sys.argv[1:],
+           'HOME':os.environ.get('HOME'),
+           'XDG_CONFIG_HOME':os.environ.get('XDG_CONFIG_HOME')},
+          open(os.environ['CAPTURE'],'w'))" "$@"
 echo "stub review output"; echo "Conclusion: PASS"
 EOF
   chmod +x "$b/mimo"
@@ -2697,13 +2738,24 @@ print('OK' if all(t.get(k) for k in ('read','glob','grep')) else 'MISSING')" 2>/
   #    一起换掉,腿当场没法认证,而失败形态是"模型没回话",查起来像模型问题。
   #    这条钉的是"隔离别把腿弄死"。
   if [[ -f "$d/c_review" ]]; then
-    python3 -c "
-import json,sys
-a=json.load(open(sys.argv[1]))['argv']
-sys.exit(0 if not any(x.startswith('HOME=') for x in a) else 1)" "$d/c_review" 2>/dev/null
-    check "V33: 隔离不许换 HOME(那会把 mimo 的凭证一起换掉)" $?
+    # 查腿进程**实际拿到的** HOME —— 必须还是调用者的 HOME。
+    HOME_NOW="$HOME" python3 -c "
+import json,os,sys
+o=json.load(open(sys.argv[1]))
+sys.exit(0 if o.get('HOME')==os.environ['HOME_NOW'] else 1)" "$d/c_review" 2>/dev/null
+    check "V33: 隔离不许换 HOME(换了会把 mimo 的凭证一起带走 ⇒ 腿只会'没回话')" $?
+    # 正面:配置隔离必须真的发生(否则上一条用"什么都不隔离"也能绿)
+    # 断言腿拿到的 XDG_CONFIG_HOME 就是我们指定的隔离目录。
+    # (第一版这里漏了 `import os` ⇒ 红在 NameError 上 —— "红在 TypeError 上
+    #  等于没红检过",本仓记过的形状,我又犯一次。)
+    WANT="$mhome" python3 -c "
+import json,os,sys
+o=json.load(open(sys.argv[1]))
+sys.exit(0 if o.get('XDG_CONFIG_HOME')==os.environ['WANT'] else 1)" "$d/c_review" 2>/dev/null
+    check "V33: 配置确实被隔离到我们指定的 XDG_CONFIG_HOME(不是什么都没做)" $?
   else
-    bad "V33: 隔离不许换 HOME(那会把 mimo 的凭证一起换掉)"
+    bad "V33: 隔离不许换 HOME(换了会把 mimo 的凭证一起带走 ⇒ 腿只会'没回话')"
+    bad "V33: 配置确实被隔离到 XDG_CONFIG_HOME(不是什么都没做)"
   fi
 
   # ── ⑤ 配置每次重写(它就是锁本身,不许留隔夜残留)
