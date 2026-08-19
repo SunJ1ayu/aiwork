@@ -3280,6 +3280,91 @@ v38_leg_runtime_home_outside_repo() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V39
+# 只读挂载的两个**结构性盲区**(2026-08-19 四审抓的,我都复现过)。
+#
+# ① **linked worktree 的 git 元数据在挂载外面**(subdeepseek F3)。
+#    worktree 里的 `.git` 只是个指针文件,真正的 refs/index/objects 住在主仓的
+#    `.git/worktrees/<name>` 里 —— 只 bind 仓根**盖不到它**。实测:腿在只读的
+#    worktree 里照样 `git commit --allow-empty` 和 `git tag` 成功,**主仓的 git
+#    状态被改了**。被推翻的 strace 方案当初明确计划保护 `--git-common-dir`,
+#    只读方案漏了(`proposal.md`)。aiwork 自己就有 worktree 基础设施 ⇒ 不是理论。
+#
+# ② **挂载"成功"了但没生效,没有任何东西会发现**(submimo 的结构盲区那条)。
+#    现在只看 mount 的退出码:每条都 rc=0 就落标记、然后 exec。可 rc=0 不等于
+#    仓真的只读了 —— 而这正是**最贵的失败形态**:腿照跑、结论照出、一切看起来正常。
+#    本仓已有的做法是「每次都实测一次」(`tests/_no-egress.sh` 就是在 namespace 里
+#    真的 connect 一次,而不是相信 unshare 有效)。这里照搬:挂完**真写一次**,
+#    写得进去就拒跑。
+v39_readonly_blind_spots() {
+  echo "[V39] 只读挂载的两个盲区:worktree 的 git 目录 / 挂载没生效"
+  local d; d="$(mktemp -d)"
+  local repo="$d/repo"; mkdir -p "$repo"
+  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
+
+  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    local t
+    for t in "worktree:工作树写不了" "worktree:git commit 写不进主仓" \
+             "worktree:git tag 写不进主仓" "对照组:worktree 的读能力没被削" \
+             "挂载没生效 ⇒ 拒跑" "挂载没生效时命令根本没跑" \
+             "对照组:挂载真生效时照常跑"; do
+      bad "V39: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
+    done
+    rm -rf "$d"; return
+  fi
+
+  # ── ① linked worktree
+  local wt="$d/wt"
+  ( cd "$repo" && git worktree add -q "$wt" -b probe-wt ) >/dev/null 2>&1
+  if [[ -d "$wt" ]]; then
+    "$BIN/ro-repo-exec" "$wt" -- bash -c 'touch "$1/PWNED"' _ "$wt" >/dev/null 2>&1
+    [[ ! -e "$wt/PWNED" ]]
+    check "V39: worktree —— 工作树本身写不了" $?
+
+    local before after
+    before="$(git -C "$repo" rev-parse probe-wt 2>/dev/null)"
+    "$BIN/ro-repo-exec" "$wt" -- bash -c \
+      'cd "$1" && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m "腿写的"' \
+      _ "$wt" >/dev/null 2>&1
+    after="$(git -C "$repo" rev-parse probe-wt 2>/dev/null)"
+    [[ "$before" == "$after" ]]
+    check "V39: worktree —— git commit 改不动主仓的 git 状态(真 git 目录在仓外)" $?
+
+    "$BIN/ro-repo-exec" "$wt" -- bash -c 'cd "$1" && git tag PWNED_TAG' _ "$wt" >/dev/null 2>&1
+    ! git -C "$repo" tag | grep -qx PWNED_TAG
+    check "V39: worktree —— git tag 也写不进去" $?
+
+    # 对照组:读能力一条不能少(不然"挡住了"可能只是把 git 整个弄坏了)
+    local ro_fail=0 c
+    for c in "git -C $wt status --short" "git -C $wt log --oneline -1" "git -C $wt diff --stat"; do
+      "$BIN/ro-repo-exec" "$wt" -- bash -c "$c" >/dev/null 2>&1 || ro_fail=$((ro_fail+1))
+    done
+    [[ $ro_fail -eq 0 ]]
+    check "V39: worktree —— 对照组:三条读命令仍全通(挡的是写,不是把 git 弄坏)" $?
+  else
+    bad "V39: worktree —— 夹具没建出 worktree(前置不满足)"
+  fi
+
+  # ── ② 挂载"成功"但没生效:注入一个 rc=0 却什么都不做的假 mount
+  local fb="$d/fakemount"; mkdir -p "$fb"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fb/mount"; chmod +x "$fb/mount"
+  local out
+  rm -f "$repo/LEAKED2"
+  out="$(PATH="$fb:$PATH" "$BIN/ro-repo-exec" "$repo" -- bash -c 'touch "$1/LEAKED2"' _ "$repo" 2>&1)"
+  [[ ! -e "$repo/LEAKED2" ]]
+  check "V39: 挂载没生效(假 mount 全 rc=0)⇒ 命令**根本没跑**,仓没被写" $?
+  grep -qiE '没有真的只读|自检|仍然可写|not read-only' <<<"$out"
+  check "V39: 挂载没生效时说得出是自检发现的(不是含糊的 78)" $?
+
+  # 对照组:真挂载时不许被这条自检误杀
+  "$BIN/ro-repo-exec" "$repo" -- bash -c 'echo ok' >/dev/null 2>&1
+  check "V39: 对照组 —— 挂载真生效时照常跑(自检不许误杀)" $?
+
+  ( cd "$repo" && git worktree remove --force "$wt" ) >/dev/null 2>&1
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -3320,5 +3405,6 @@ v35_legs_run_in_readonly_repo
 v36_wrappers_actually_use_readonly_repo
 v37_wrappers_open_no_write_hole
 v38_leg_runtime_home_outside_repo
+v39_readonly_blind_spots
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
