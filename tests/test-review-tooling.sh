@@ -2897,6 +2897,21 @@ v35_legs_run_in_readonly_repo() {
   [[ $? -ne 0 && ! -e "$repo/STILL_RO" ]]
   check "V35: 开了 logs/ 之后仓的其余部分**仍然只读**(不是整仓开闸)" $?
 
+  # ── ③b 参数写错必须**拒跑**(2026-08-19 真探针撞出来的:我把 `--rw` 写到了仓根
+  #    后面,工具没吭声,反而把 `--rw` 当成命令 exec 了 —— "把误用当命令跑"
+  #    同样是静默降级,而且它伪装成"跑起来了")。
+  local badout badrc
+  badout="$("$BIN/ro-repo-exec" "$repo" --rw "$repo/logs" -- bash -c 'echo hi' 2>&1)"; badrc=$?
+  [[ $badrc -ne 0 ]]
+  check "V36/V35: 选项写在仓根后面 ⇒ 拒跑(不许把 --rw 当命令执行)" $?
+  # 必须是 **ro-repo-exec 自己**说的话。第一版只 grep `--`,而它把 `--rw` 当命令
+  # exec 时 bash 报的 `exec: --: invalid option` 里正好有 `--` ⇒ 那条断言把
+  # "执行失败"读成了"主动拒绝"。**报错来自谁**,和报没报一样重要。
+  grep -q 'ro-repo-exec:' <<<"$badout"
+  check "V36/V35: 拒跑是 ro-repo-exec 自己说的(不是 bash exec 失败的副产品)" $?
+  ! grep -qi 'invalid option' <<<"$badout"
+  check "V36/V35: 不许把 --rw 当命令 exec(静默降级伪装成"跑起来了")" $?
+
   # ── ④ fail-closed:挂不上就**拒跑**,绝不许静默降级成"可写地跑"。
   #    08-18 刚栽过:两条评审腿把 fail-closed 判反,`env '=key'` rc=0 静默放过
   #    ⇒ 腿活着但永远 401。安静的失败比响亮的失败贵得多。
@@ -2910,6 +2925,100 @@ v35_legs_run_in_readonly_repo() {
   check "V35: 挂不上时命令**根本没跑**(降级跑=白读了只读两个字)" $?
   grep -qiE 'unshare|namespace|只读|拒绝' <<<"$out"
   check "V35: 拒跑时说清是什么挂了(不说清 = 下次没人查得动)" $?
+
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V36
+# 工具做好了**没接上**就是白做 —— 本仓记过这笔账("给防线加构件却没把构件放进防线")。
+# V35 测的是 `ro-repo-exec` 这件工具本身;V36 测的是**三条 wrapper 真的用了它**,
+# 而且是端到端测:让假模型在腿里**真的去写仓**,断言它写不进去。
+#
+# 夹具刻意用真实布局(repo 子目录 + repo/logs/),因为 `--rw` 开的是**日志目录**:
+# 真跑时日志在 `<仓>/logs/` ⇒ 只有 logs 可写;而判据里别处的老夹具日志就落在仓根,
+# 那等于整仓可写 —— 那些老夹具因此不受这道防线影响(它们测的是别的东西)。
+v36_wrappers_actually_use_readonly_repo() {
+  echo "[V36] 三条 wrapper 真的把腿放进只读仓里跑(端到端:让假模型去写)"
+  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local repo="$d/repo"; mkdir -p "$repo/logs"
+  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
+  printf '# t\n' > "$d/t.md"
+
+  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    local t
+    for t in "subdeepseek-agent 的腿写不了仓" "submimo review 的腿写不了仓" \
+             "subkimi 的腿写不了仓" "submimo **fix** 仍然写得动(执行腿不许被连累)" \
+             "腿在只读下仍然正常出结论(防线没把腿弄死)"; do
+      bad "V36: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
+    done
+    rm -rf "$d"; return
+  fi
+
+  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+
+  # 一个假模型:进来第一件事就是**试着写被评审的仓**,把结果落到仓外的记事本上。
+  # 落点必须在仓外 —— 落仓内的话它自己就被挡了,那就分不清"挡住了"和"没跑"。
+  _mk_pwn_stub() {  # $1 = stub 路径
+    cat > "$1" <<'PWN'
+#!/usr/bin/env bash
+if touch "$PWN_REPO/PWNED_BY_LEG" 2>/dev/null; then echo WROTE > "$PWN_OUT"; else echo BLOCKED > "$PWN_OUT"; fi
+# claude 壳要 stream-json;别的腿吃纯文本。两种都吐,谁读谁的。
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+echo "Conclusion: PASS"
+PWN
+    chmod +x "$1"
+  }
+  _mk_pwn_stub "$b/claude"; _mk_pwn_stub "$b/mimo"; _mk_pwn_stub "$b/kimi"
+
+  local rc
+  # ── ① claude 壳(subdeepseek-agent / subglm-agent 共用躯干 subagent)
+  rm -f "$d/o1" "$repo/PWNED_BY_LEG"
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1" CAPTURE="$d/c1.json" \
+    DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l1.log" "$repo" >/dev/null 2>&1; rc=$?
+  [[ "$(cat "$d/o1" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]; local r1=$?
+  # ⚠️ rc 先存变量再取文案:`check "…$(cat …)" $?` 里那个命令替换会**在 $? 求值之前**
+  # 跑掉,把退出码覆盖成 cat 的 0 ⇒ 断言永远绿。2026-08-19 第一版就是这样,
+  # 五条假绿(其中一条文案自己写着 WROTE 却 PASS)。本仓"管道吃 rc"记过四次,
+  # 这是同一族的第五次,换了个壳:**命令替换吃 rc**。
+  local seen1; seen1="$(cat "$d/o1" 2>/dev/null || echo 没跑)"
+  check "V36: subdeepseek-agent 的腿写不了仓(假模型真的试过了:$seen1)" $r1
+  [[ $rc -eq 0 ]]
+  check "V36: 腿在只读下仍然正常出结论(防线没把腿弄死 —— 08-18 就是死在这)" $?
+
+  # ── ② submimo review
+  rm -f "$d/o2" "$repo/PWNED_BY_LEG"
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
+  [[ "$(cat "$d/o2" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]; local r2=$?
+  local seen2; seen2="$(cat "$d/o2" 2>/dev/null || echo 没跑)"
+  check "V36: submimo review 的腿写不了仓(假模型真的试过了:$seen2)" $r2
+
+  # ── ③ subkimi
+  # subkimi 要一份 review home 才肯派发(config.toml + 守卫 + 凭证),照 V13 的建法。
+  # 第一版没建 ⇒ 它在调 kimi **之前**就退了,断言红在"没跑"上 —— 那不是防线的功劳,
+  # 是夹具的洞。**红也要红在该红的地方**,本仓为这条记过账。
+  local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
+  printf 'default_model = "x"\n' > "$rh/config.toml"
+  printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
+  echo '{}' > "$rh/credentials/kimi-code.json"
+  rm -f "$d/o3" "$repo/PWNED_BY_LEG"
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" KIMI_REVIEW_HOME="$rh" REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subkimi" review "$d/t.md" "$repo/logs/l3.log" "$repo" >/dev/null 2>&1
+  [[ "$(cat "$d/o3" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]; local r3=$?
+  local seen3; seen3="$(cat "$d/o3" 2>/dev/null || echo 没跑)"
+  check "V36: subkimi 的腿写不了仓(假模型真的试过了:$seen3)" $r3
+
+  # ── ④ **对照组:fix 一个字都不许被连累**。submimo fix 是执行腿,写代码是它的本职;
+  #    "加一道防线顺手拆掉另一道"是本仓记过的账(V33 里有同款对照)。
+  rm -f "$d/o4" "$repo/PWNED_BY_LEG"
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/submimo" fix --no-oracle "$d/t.md" "$repo/logs/l4.log" "$repo" >/dev/null 2>&1
+  [[ "$(cat "$d/o4" 2>/dev/null)" == "WROTE" ]]; local r4=$?
+  local seen4; seen4="$(cat "$d/o4" 2>/dev/null || echo 没跑)"
+  check "V36: submimo **fix** 仍然写得动(假模型真的试过了:$seen4)" $r4
+  rm -f "$repo/PWNED_BY_LEG"
 
   rm -rf "$d"
 }
@@ -2951,5 +3060,6 @@ REVIEW_NO_MY_REVIEW=1 v27_knockon_of_the_backend_switch
 REVIEW_NO_MY_REVIEW=1 v28_glm_on_opencode_base
 REVIEW_NO_MY_REVIEW=1 v33_submimo_review_leg_is_read_only
 v35_legs_run_in_readonly_repo
+v36_wrappers_actually_use_readonly_repo
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
