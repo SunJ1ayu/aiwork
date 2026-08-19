@@ -693,6 +693,29 @@ sys.exit(0 if 'Bash' in seg else 1)" "$d/a1.json" 2>/dev/null; then
   else
     ok  "agent: Bash 不许再列进 disallowedTools(腿要能读 git)"
   fi
+  # **Bash 必须是只读 git 白名单,不许裸放开。**
+  # 2026-08-19 四审实跑抓到的(判据抓不到 —— 判据里的腿是 stub,stub 不会真去执行):
+  # 我第一版恢复时写成裸 `Bash`,结果 subdeepseek 腿当场
+  #   ① `cat` 了一个仓外文件;
+  #   ② 跑了 `timeout 300 bash tests/test-review-tooling.sh` —— **它去跑判据了**,
+  #      547 秒后 error_during_execution,一句裁决都没给出来,还留下一批真 mimo 遗孤。
+  # 同一次运行里 kimi 腿(白名单保留着)被守卫拦了 7 次、全程在认真核查。
+  # ⇒ 白名单挡不住精巧绕过(`git diff --output=` 照样过),但**它挡得住误伤**,
+  #   而"腿顺手跑个判据"正是误伤的典型形态。我拆它时只想着它挡不住什么,
+  #   没想过它挡住的是别的东西。
+  if python3 -c "
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+i=a.index('--allowedTools'); rest=a[i+1:]
+j=[k for k,x in enumerate(rest) if x.startswith('--')]
+seg=rest[:j[0]] if j else rest
+bare=[t for t in seg if t=='Bash']
+sys.exit(0 if not bare else 1)" "$d/a1.json" 2>/dev/null; then
+    ok  "agent: Bash 是**带 pattern 的白名单**,不许裸放开(四审实跑:腿跑了判据)"
+  else
+    bad "agent: Bash 是**带 pattern 的白名单**,不许裸放开(四审实跑:腿跑了判据)"
+  fi
+
   # **写口仍然全禁** —— 这几样评审腿本来就不需要,关掉是零成本的,和 Bash 完全不同。
   if python3 -c "
 import json,sys
@@ -2296,6 +2319,17 @@ PYCFG
     local off2; off2="$(occfg "$cfg" tools_off)"
     [[ " $off2 " != *" bash "* ]]
     check "V28: **bash 留着**(腿要能自己读 git;关掉的代价见上,已被推翻)" $?
+    # 但**必须是白名单**,不许 `tools.bash=True` 之后就完全放开(见 V9 那段的实跑账)。
+    python3 - "$cfg" <<'PYW' 2>/dev/null
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+agent = list(cfg.get("agent", {}).values())[0]
+b = agent.get("permission", {}).get("bash")
+ok = isinstance(b, dict) and b.get("*") == "deny" and any(
+    k.startswith("git ") and v == "allow" for k, v in b.items())
+sys.exit(0 if ok else 1)
+PYW
+    check "V28: bash 是只读 git 白名单(\`*\` deny + git 只读放行),不是完全放开" $?
     # 写口仍然全关 —— 零成本,不跟着 bash 一起放
     [[ " $off2 " == *" write "* && " $off2 " == *" edit "* && " $off2 " == *" task "* ]]
     check "V28: 写口仍全关(write/edit/task)—— 零成本,不跟着 bash 一起放" $?
@@ -2605,6 +2639,18 @@ t=json.load(sys.stdin).get('tools',{})
 print('ON' if t.get('bash') else 'OFF')" 2>/dev/null)"
       [[ "$bashon" == "ON" ]]
       check "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)" $?
+
+      # bash 同样必须是白名单(三条腿一个规格)。用 mimo 自己解析出来的 permission 判。
+      local bwl
+      bwl="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
+import json,sys
+ps=json.load(sys.stdin).get('permission',[])
+bs=[p for p in ps if p.get('permission')=='bash']
+deny_all=any(p.get('pattern')=='*' and p.get('action')=='deny' for p in bs)
+git_ok=any(str(p.get('pattern','')).startswith('git ') and p.get('action')=='allow' for p in bs)
+print('OK' if (deny_all and git_ok) else 'NO')" 2>/dev/null)"
+      [[ "$bwl" == "OK" ]]
+      check "V33: bash 是只读 git 白名单(* deny + git 放行),不是完全放开" $?
 
       local keep
       keep="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
