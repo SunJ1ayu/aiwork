@@ -92,7 +92,28 @@ echo "判据里调到了**真的** opencode 底座:$* " >&2
 echo "  这条用例跑了 opencode 底座的腿却没给它桩 —— 补一个桩,别让判据去碰真底座。" >&2
 exit 97
 OCFLOOR
-chmod +x "$_OC_FLOOR/opencode"
+# **mimo 也要一层**(2026-08-19)。08-18 给 opencode 立了这道地板,`mimo` 漏了 ——
+# 同一份清单漏一个。实测代价:跑一次判据留下 5 组真 mimo 进程,每组挂在 900 秒
+# timeout 上;判据自己先结束,它们成了遗孤继续占内存(这台机器只有 1935MB,
+# 而"内存不够 ⇒ 判据随机红"是本机记过的账)。
+# 发现过程也值得记:第二轮四审里评审腿自己跑了 `bash tests/test-review-tooling.sh`,
+# 于是同一个洞被放大了一轮 —— 我一开始判成"腿的问题",两边其实都成立。
+_REAL_MIMO_BIN="$(command -v mimo 2>/dev/null || true)"
+cat > "$_OC_FLOOR/mimo" <<MIMOFLOOR
+#!/usr/bin/env bash
+# **`mimo debug ...` 放行给真二进制**:它是本地解析(不调模型、不花钱、不留遗孤),
+# 而 V33 正是靠 \`mimo debug agent\` 取证只读锁 —— 查工件不查自述,那条不能拿桩糊弄
+# (拿桩验锁 = 验我自己写了什么,而 plan 档骗过我的正好是"写的和解析出来的不一样")。
+# 挡的只有 \`mimo run\` 这类真跑。
+if [[ "\${1:-}" == "debug" && -n "$_REAL_MIMO_BIN" ]]; then
+  exec "$_REAL_MIMO_BIN" "\$@"
+fi
+echo "判据里调到了**真的** mimo 底座:\$*" >&2
+echo "  这条用例跑了 submimo 却没给它桩 —— 补一个桩,别让判据去碰真底座。" >&2
+echo "  (真底座会挂在 900 秒 timeout 上,判据结束后变成遗孤继续占内存。)" >&2
+exit 97
+MIMOFLOOR
+chmod +x "$_OC_FLOOR/opencode" "$_OC_FLOOR/mimo"
 export PATH="$_OC_FLOOR:$PATH"
 
 # opencode 底座腿的共用夹具(2026-08-18)。GLM 腿换底座之后,"它被怎么约束的"
