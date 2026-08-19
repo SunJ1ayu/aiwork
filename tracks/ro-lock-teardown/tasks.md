@@ -12,12 +12,12 @@
 
 ## S1 判据先行(单独 commit)
 
-- [ ] S1a O1:副本包含 committed/modified/staged/deleted/untracked，排除 ignored，Git 元数据独立
-- [ ] S1b O2:假腿写副本成功、写原仓失败，源仓内容/status/refs 不变
-- [ ] S1c O3:两条并行假腿路径不同且互不可见
-- [ ] S1d O4:三底座允许非 git 本地命令，Write/Edit/Task 仍关闭
-- [ ] S1e O5:helper/挂载失败时模型调用计数为 0
-- [ ] S1f 保存红收据；oracle commit 不含实现
+- [x] S1a O1:副本包含 committed/modified/staged/deleted/untracked，排除 ignored，Git 元数据独立
+- [x] S1b O2:假腿写副本成功、写原仓失败，源仓内容/status/refs 不变
+- [x] S1c O3:两条并行假腿路径不同且互不可见
+- [x] S1d O4:三底座允许非 git 本地命令，Write/Edit/Task 仍关闭
+- [x] S1e O5:helper/挂载失败时模型调用计数为 0
+- [x] S1f 保存红收据；oracle commit 不含实现
 
 ## S2 独立 review workspace
 

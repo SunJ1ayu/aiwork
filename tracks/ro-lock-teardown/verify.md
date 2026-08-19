@@ -20,11 +20,16 @@ runlog -t ro-lock-teardown -- <判据命令>
 ```
 
 ```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
+runlog: oracle-red rc=1 commit=d20372b dirty=yes at=2026-08-19T15:11:30Z file=tracks/ro-lock-teardown/evidence/20260819T151130Z-01-oracle-red.txt
+runlog: capabilities-red rc=1 commit=d20372b dirty=yes at=2026-08-19T15:11:42Z file=tracks/ro-lock-teardown/evidence/20260819T151142Z-01-capabilities-red.txt
 ```
+
+红检归因:
+
+- `oracle-red`:helper 尚不存在，且 wrapper 忽略故障 helper 后仍调用假模型，5/5 按预期红。
+- `capabilities-red`:目标红点覆盖 Claude 裸 Bash、OpenCode/MiMo 整项 Bash、Kimi 本地测试命令、
+  能力提示词和四条 wrapper 的“副本可写/原仓只读”。同一收据另含当前受限沙箱禁止本地 socket
+  造成的旧 HTTP 夹具红；它们不冒充本单 oracle，最终全量绿在允许本地 namespace/socket 的环境取证。
 
 ## Review
 

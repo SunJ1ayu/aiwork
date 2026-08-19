@@ -731,38 +731,21 @@ sys.exit(0 if 'Bash' in seg else 1)" "$d/a1.json" 2>/dev/null; then
   else
     ok  "agent: Bash 不许再列进 disallowedTools(腿要能读 git)"
   fi
-  # **Bash 必须是只读 git 白名单,不许裸放开。**
-  # 2026-08-19 四审实跑抓到的(判据抓不到 —— 判据里的腿是 stub,stub 不会真去执行):
-  # 我第一版恢复时写成裸 `Bash`,结果 subdeepseek 腿当场
-  #   ① `cat` 了一个仓外文件;
-  #   ② 跑了 `timeout 300 bash tests/test-review-tooling.sh` —— **它去跑判据了**,
-  #      547 秒后 error_during_execution,一句裁决都没给出来,还留下一批真 mimo 遗孤。
-  # 同一次运行里 kimi 腿(白名单保留着)被守卫拦了 7 次、全程在认真核查。
-  # ⇒ 白名单挡不住精巧绕过(`git diff --output=` 照样过),但**它挡得住误伤**,
-  #   而"腿顺手跑个判据"正是误伤的典型形态。我拆它时只想着它挡不住什么,
-  #   没想过它挡住的是别的东西。
-  # 这块用加引号 heredoc 喂,**不写成 `python3 -c "…"`**:双引号里的反引号会被
-  # shell 当成命令替换真去执行 —— 08-19 实证,下面那句讲 `git diff --output=`
-  # 危险的注释,自己被 shell 跑了一遍(空文件名被 git 拒了才没写成)。V41 机械查这件事。
-  if python3 - "$d/a1.json" 2>/dev/null <<'PY_ALLOWLIST'
+  # review 现在跑在**可写副本**里,原仓另由 ro-repo-exec 物理保护。Bash 的职责
+  # 不再只是读 git:腿要能跑 tests/lint/build,这些命令产生的缓存也只落进副本。
+  # 所以这里要求裸 Bash 能力；Write/Edit/Task 仍由下面的独立断言关闭。
+  if python3 - "$d/a1.json" 2>/dev/null <<'PY_LOCAL_BASH'
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
 i=a.index('--allowedTools'); rest=a[i+1:]
 j=[k for k,x in enumerate(rest) if x.startswith('--')]
 seg=rest[:j[0]] if j else rest
-# 裸 `Bash` 固然不行;`Bash(git:*)` 这种**整个 git 都放行**的也不行 ——
-# 它把 `git diff --output=` 之外还顺带放行了 git 的写子命令(commit/checkout/clean…)。
-# 要求每一项都钉到具体的只读子命令。
-ok_pat = ('git diff', 'git log', 'git status', 'git show', 'git blame',
-          'git shortlog', 'git rev-parse', 'git ls-files', 'git describe')
-bad = [t for t in seg if t.startswith('Bash')
-       and not any(t.startswith('Bash(' + p) for p in ok_pat)]
-sys.exit(0 if not bad else 1)
-PY_ALLOWLIST
+sys.exit(0 if 'Bash' in seg else 1)
+PY_LOCAL_BASH
   then
-    ok  "agent: Bash 是**带 pattern 的白名单**,不许裸放开(四审实跑:腿跑了判据)"
+    ok  "agent: 裸 Bash 可用(腿在副本里可跑 tests/lint/build)"
   else
-    bad "agent: Bash 是**带 pattern 的白名单**,不许裸放开(四审实跑:腿跑了判据)"
+    bad "agent: 裸 Bash 可用(腿在副本里可跑 tests/lint/build)"
   fi
 
   # **能力清单要说实话**(四审 subdeepseek 指出:V28⑮ 只钉了 opencode 腿,claude 壳这条漏了)。
@@ -770,9 +753,9 @@ PY_ALLOWLIST
   # 08-18 宣称了没有的工具(腿当场顶回来、白花几轮)、08-19 瞒着有的(腿不会去用)。
   python3 -c "
 import json,sys
-sys.exit(0 if 'read-only git' in json.load(open(sys.argv[1])).get('stdin','') else 1)" \
+sys.exit(0 if 'tests' in json.load(open(sys.argv[1])).get('stdin','') and 'Bash' in json.load(open(sys.argv[1])).get('stdin','') else 1)" \
     "$d/a1.json" 2>/dev/null
-  check "agent: 提示词如实写明有只读 git(清单和实际能力必须一致)" $?
+  check "agent: 提示词如实写明可用 Bash 做本地诊断/测试" $?
 
   # **写口仍然全禁** —— 这几样评审腿本来就不需要,关掉是零成本的,和 Bash 完全不同。
   if python3 -c "
@@ -1011,49 +994,16 @@ v13_subkimi_leg() {
     echo '{"tool_name":"Read","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: Read allowed (rc=0)" $?
 
-    # ⚠️ 这一格 08-18 收紧过、08-19 又放回来,两次的理由都留着,别再来回翻:
-    #
-    # 08-18 我把 Bash 整个禁掉。**事实依据仍然成立**(我拿这个守卫真跑过):
-    #   git diff --output=pwned.txt HEAD                → **放行**(能往仓里写)
-    #   git diff --no-index <仓外 key 文件> /dev/null    → **放行**(能读仓外并打进日志)
-    #   rm -rf x                                        → 拦下
-    # 也就是说:这个正则前缀白名单**挡不住 git 自己的参数**。
-    #
-    # 08-19 业主推翻的是从那个事实推出的**结论**。禁掉 Bash 之后腿读不了 git,
-    # 主 agent 得算好 diff 喂进去,那条链上长出 E2BIG、SIGPIPE 静默暴毙、基线静默变瞎,
-    # 最坏形态是**腿根本没跑起来而 panel 照常出结论**。而评审腿没有"改判据让自己
-    # 及格"的动机(那是执行腿的威胁模型)⇒ 对面是误伤,不是有动机的对手。
-    #
-    # 所以现在的规格是:**白名单留着,但只当它是防误伤的,不当它是防对手的。**
-    # 它确实挡得住误伤的典型形态(rm、元字符链、非 git 命令);挡不住的那两条
-    # (--output= / --no-index)交给**跑完的写审计**(track repo-write-audit)。
-    # 下面这组断言因此按"挡误伤"来钉,不按"挡对手"来钉。
+    # 腿现在在独立可写副本里执行，源仓由外层 ro-repo-exec 承重。Bash 不再
+    # 假装是一张能兜住 git 参数面的安全白名单；测试、lint、build、解释器和
+    # 它们的缓存都允许落在副本。工具级 Write/Edit/Agent 仍是独立禁口。
     local kcmd
-    for kcmd in "rm -rf x" \
-                "curl http://evil" \
-                "git log && rm -rf /"; do
+    for kcmd in "bash tests/probe.sh" \
+                "python3 -m pytest -q" \
+                "git diff HEAD"; do
       echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$kcmd\"}}" \
         | node "$guard" >/dev/null 2>&1
-      check "guard: 误伤形态照旧拦下 —— $kcmd" $([[ $? -ne 0 ]]; echo $?)
-    done
-    # **正向**:只读 git 必须放行 —— 腿要能自己看历史和差异。
-    # (这条 08-18 被我删过,理由是"编码了被推翻的旧规格";08-19 它又成了对的规格。
-    #  留个记号:同一条断言两天内被删又被加回来,说明当时删它的那个判断是错的。)
-    for kcmd in "git log --oneline -5" \
-                "git diff HEAD" \
-                "git show --stat HEAD"; do
-      echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$kcmd\"}}" \
-        | node "$guard" >/dev/null 2>&1
-      check "guard: 只读 git 放行(腿得能自己读仓库)—— $kcmd" $?
-    done
-    # **已知挡不住、且明知故留**:这两条不是判据的洞,是写下来的账。
-    # 它们的防线在 repo-write-audit(还没上线)。断言写成"记录现状",红了说明
-    # 守卫行为变了,那时要回来重新判断,而不是默默接受。
-    for kcmd in "git diff --output=pwned.txt HEAD" \
-                "git diff --no-index /etc/hostname /dev/null"; do
-      echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$kcmd\"}}" \
-        | node "$guard" >/dev/null 2>&1
-      check "guard: 现状记录 —— 白名单挡不住这条(防线在 repo-write-audit)—— $kcmd" $?
+      check "guard: 副本内本地 Bash 放行 —— $kcmd" $?
     done
     echo '{"tool_name":"SomeFutureTool","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: unknown tool denied (default-deny)" $([[ $? -eq 2 ]]; echo $?)
@@ -1092,8 +1042,8 @@ PYEOF
   python3 -c "
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
-sys.exit(0 if any('read-only git' in str(x) for x in a) else 1)" "$d/k1.json" 2>/dev/null
-  check "subkimi: 提示词如实写明有只读 git(同 V9/V28⑮ 的规格)" $?
+sys.exit(0 if any('tests' in str(x) and 'Bash' in str(x) for x in a) else 1)" "$d/k1.json" 2>/dev/null
+  check "subkimi: 提示词如实写明 Bash 可跑本地诊断/测试" $?
   [[ "$(kimiget "$d/k1.json" KIMI_CODE_NO_AUTO_UPDATE)" == "1" ]]
   check "subkimi: auto-update disabled" $?
   grep -q 'Conclusion: PASS' "$d/k1.log"; check "subkimi: verdict recorded in log" $?
@@ -2412,10 +2362,8 @@ PYCFG
     local off2; off2="$(occfg "$cfg" tools_off)"
     [[ " $off2 " != *" bash "* ]]
     check "V28: **bash 留着**(腿要能自己读 git;关掉的代价见上,已被推翻)" $?
-    # 但**必须是白名单**,不许 `tools.bash=True` 之后就完全放开(见 V9 那段的实跑账)。
-    # **让 opencode 自己解析**,不查我写进去的那份 JSON(四审 subdeepseek 指出:
-    # 查自己写的 = 验我写了什么,而 plan 档骗过我的正是"写的和解析出来的不一样")。
-    # `opencode debug config` 是本地解析,兜底桩为它放行了真二进制。
+    # **让 opencode 自己解析**，确认 Bash 是整项 allow；不是查我们写进去的 JSON。
+    # 真正的写边界已移到“原仓只读 + 每腿可丢弃副本”，这里要让测试/build 真能跑。
     if [[ -n "${_REAL_OC_BIN:-}" ]]; then
       HOME="$(dirname "$(dirname "$(dirname "$cfg")")")" timeout 60 "$_REAL_OC_BIN" debug config 2>/dev/null \
         | python3 -c "
@@ -2424,12 +2372,10 @@ try: c=json.load(sys.stdin)
 except Exception: sys.exit(1)
 ag=c.get('agent',{}).get('aiwork-review',{})
 b=ag.get('permission',{}).get('bash')
-ok=isinstance(b,dict) and b.get('*')=='deny' and any(
-    k.startswith('git ') and v=='allow' for k,v in b.items())
-sys.exit(0 if ok else 1)"
-      check "V28: bash 白名单 —— **opencode 自己解析出来**的 permission(不是查我写的 JSON)" $?
+sys.exit(0 if b == 'allow' else 1)"
+      check "V28: 本地 Bash 整项 allow —— **opencode 自己解析出来**的 permission" $?
     else
-      bad "V28: bash 白名单 —— opencode 自己解析出来的 permission"
+      bad "V28: 本地 Bash 整项 allow —— opencode 自己解析出来的 permission"
       echo "    (机器上没有 opencode,这条取证跑不了)"
     fi
     # 写口仍然全关 —— 零成本,不跟着 bash 一起放
@@ -2482,16 +2428,16 @@ EOF
   #    ⚠️ 写法:**先要求日志存在**。我第一版把这条插在了生成日志的那个用例之前,
   #    文件不存在 ⇒ grep 找不到 ⇒ 走 else 报绿(今天第五条假绿,同一个形状:
   #    "不含某串"的否定断言在输入缺席时会假绿)。
-  #    08-19 反转:bash 放回来了 ⇒ 能力清单要说**它有**只读 git。
+  #    ro-lock-teardown 再推进一步:bash 在可写副本里可跑本地诊断/测试，能力清单也要直说。
   #    这条钉的不是某个方向,是"清单和实际能力必须一致" —— 两个方向上都出过事:
   #    宣称了没有的(08-18,腿顶回来白花几轮)、瞒着有的(腿不会去用,白扔一半能力)。
   if [[ ! -s "$d/g1.log" ]]; then
-    bad "V28: opencode 底座的视野行要如实写明有只读 git"
+    bad "V28: opencode 底座的视野行要如实写明 Bash 可跑本地测试"
     echo "    (日志不存在 ⇒ 这条在测空气,不许当绿)"
-  elif grep -qE "read-only git|只读 git" "$d/g1.log"; then
-    ok  "V28: opencode 底座的视野行要如实写明有只读 git"
+  elif grep -qE "Bash.*(test|测试)|本地.*(test|测试)" "$d/g1.log"; then
+    ok  "V28: opencode 底座的视野行要如实写明 Bash 可跑本地测试"
   else
-    bad "V28: opencode 底座的视野行要如实写明有只读 git"
+    bad "V28: opencode 底座的视野行要如实写明 Bash 可跑本地测试"
   fi
 
   # ── ⑫ 二进制存在性检查要查**这条腿真正要用的那个**。原来无条件查 claude:
@@ -2751,17 +2697,18 @@ print('ON' if t.get('bash') else 'OFF')" 2>/dev/null)"
       [[ "$bashon" == "ON" ]]
       check "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)" $?
 
-      # bash 同样必须是白名单(三条腿一个规格)。用 mimo 自己解析出来的 permission 判。
+      # Bash 在副本中整项放开，才能运行项目自己的测试/build。用 mimo 自己解析
+      # 出来的 permission 判，不拿生成 JSON 的自述冒充真实能力。
       local bwl
       bwl="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
 import json,sys
 ps=json.load(sys.stdin).get('permission',[])
 bs=[p for p in ps if p.get('permission')=='bash']
+local_ok=any(p.get('pattern')=='*' and p.get('action')=='allow' for p in bs)
 deny_all=any(p.get('pattern')=='*' and p.get('action')=='deny' for p in bs)
-git_ok=any(str(p.get('pattern','')).startswith('git ') and p.get('action')=='allow' for p in bs)
-print('OK' if (deny_all and git_ok) else 'NO')" 2>/dev/null)"
+print('OK' if (local_ok and not deny_all) else 'NO')" 2>/dev/null)"
       [[ "$bwl" == "OK" ]]
-      check "V33: bash 是只读 git 白名单(* deny + git 放行),不是完全放开" $?
+      check "V33: Bash 整项 allow(副本内可跑 tests/lint/build)" $?
 
       local keep
       keep="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
@@ -2997,26 +2944,23 @@ v35_legs_run_in_readonly_repo() {
 
 # ---------------------------------------------------------------- V36
 # 工具做好了**没接上**就是白做 —— 本仓记过这笔账("给防线加构件却没把构件放进防线")。
-# V35 测的是 `ro-repo-exec` 这件工具本身;V36 测的是**三条 wrapper 真的用了它**,
-# 而且是端到端测:让假模型在腿里**真的去写仓**,断言它写不进去。
-#
-# 夹具刻意用真实布局(repo 子目录 + repo/logs/),因为 `--rw` 开的是**日志目录**:
-# 真跑时日志在 `<仓>/logs/` ⇒ 只有 logs 可写;而判据里别处的老夹具日志就落在仓根,
-# 那等于整仓可写 —— 那些老夹具因此不受这道防线影响(它们测的是别的东西)。
+# V35 测 `ro-repo-exec` 自身；V36 端到端测四条 review 路径都把模型放进独立
+# **可写副本**，同时仍把 SOURCE_REPO 挂成只读。两边必须在同一次假模型调用里
+# 各写一次，避免“模型没启动”或“只测了一边”的假绿。
 v36_wrappers_actually_use_readonly_repo() {
-  echo "[V36] 三条 wrapper 真的把腿放进只读仓里跑(端到端:让假模型去写)"
+  echo "[V36] 四条 review 路径在可写副本运行，原仓保持物理只读"
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
-  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
+  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && printf '/logs/\n' > .gitignore && git add -A \
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
   printf '# t\n' > "$d/t.md"
 
   if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local t
-    for t in "subdeepseek-agent 的腿写不了仓" "subglm-agent(opencode 底座)的腿写不了仓" \
-             "submimo review 的腿写不了仓" \
-             "subkimi 的腿写不了仓" "submimo **fix** 仍然写得动(执行腿不许被连累)" \
+    for t in "subdeepseek-agent 副本可写/原仓只读" "subglm-agent 副本可写/原仓只读" \
+             "submimo review 副本可写/原仓只读" \
+             "subkimi 副本可写/原仓只读" "submimo **fix** 仍然直接写原仓(执行腿不许被连累)" \
              "腿在只读下仍然正常出结论(防线没把腿弄死)"; do
       bad "V36: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
     done
@@ -3025,13 +2969,22 @@ v36_wrappers_actually_use_readonly_repo() {
 
   cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
+  cp "$BIN/_review-workspace.sh" "$b/" 2>/dev/null || true
 
-  # 一个假模型:进来第一件事就是**试着写被评审的仓**,把结果落到仓外的记事本上。
-  # 落点必须在仓外 —— 落仓内的话它自己就被挡了,那就分不清"挡住了"和"没跑"。
+  # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
+  # SOURCE_REPO 写必须失败。结果落仓外，副本退出即删也仍有可核对的记录。
   _mk_pwn_stub() {  # $1 = stub 路径
     cat > "$1" <<'PWN'
 #!/usr/bin/env bash
-if touch "$PWN_REPO/PWNED_BY_LEG" 2>/dev/null; then echo WROTE > "$PWN_OUT"; else echo BLOCKED > "$PWN_OUT"; fi
+target="$PWD"; prev=""
+for arg in "$@"; do
+  [[ "$prev" == "--dir" ]] && target="$arg"
+  prev="$arg"
+done
+work=BLOCKED; source=BLOCKED
+touch "$target/PWNED_IN_WORKSPACE" 2>/dev/null && work=WROTE
+touch "$PWN_REPO/PWNED_IN_SOURCE" 2>/dev/null && source=WROTE
+printf 'repo=%s\nwork=%s\nsource=%s\n' "$target" "$work" "$source" > "$PWN_OUT"
 # claude 壳要 stream-json;别的腿吃纯文本。两种都吐,谁读谁的。
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
 echo "Conclusion: PASS"
@@ -3045,17 +2998,20 @@ PWN
   # ── ① claude 壳(subdeepseek-agent)
   # ⚠️ 这行原本写的是"subdeepseek-agent / subglm-agent 共用躯干 subagent",
   #    于是只测了一条腿就收工。**"共用躯干"不等于"共用路径"** —— 见 ①b。
-  rm -f "$d/o1" "$repo/PWNED_BY_LEG"
+  rm -f "$d/o1" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1" CAPTURE="$d/c1.json" \
     DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l1.log" "$repo" >/dev/null 2>&1; rc=$?
-  [[ "$(cat "$d/o1" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]; local r1=$?
+  grep -q '^work=WROTE$' "$d/o1" 2>/dev/null \
+    && grep -q '^source=BLOCKED$' "$d/o1" 2>/dev/null \
+    && [[ "$(sed -n 's/^repo=//p' "$d/o1")" != "$repo" ]] \
+    && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r1=$?
   # ⚠️ rc 先存变量再取文案:`check "…$(cat …)" $?` 里那个命令替换会**在 $? 求值之前**
   # 跑掉,把退出码覆盖成 cat 的 0 ⇒ 断言永远绿。2026-08-19 第一版就是这样,
   # 五条假绿(其中一条文案自己写着 WROTE 却 PASS)。本仓"管道吃 rc"记过四次,
   # 这是同一族的第五次,换了个壳:**命令替换吃 rc**。
   local seen1; seen1="$(cat "$d/o1" 2>/dev/null || echo 没跑)"
-  check "V36: subdeepseek-agent 的腿写不了仓(假模型真的试过了:$seen1)" $r1
+  check "V36: subdeepseek-agent 副本可写、原仓只读(假模型双向试写:$seen1)" $r1
   [[ $rc -eq 0 ]]
   check "V36: 腿在只读下仍然正常出结论(防线没把腿弄死 —— 08-18 就是死在这)" $?
 
@@ -3067,23 +3023,29 @@ PWN
   # 本仓的老账「守卫要守对门」,这次是**守卫自己守错了门**;
   # 也是「给防线加构件却没把构件放进防线」的同一形状,而 V36 正是为防它而写的。
   local ochome="$d/ochome"; mkdir -p "$ochome"
-  rm -f "$d/o1b" "$repo/PWNED_BY_LEG"
+  rm -f "$d/o1b" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1b" \
     OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk REVIEW_NO_MY_REVIEW=1 \
     bash "$b/subglm-agent" review "$d/t.md" "$repo/logs/l1b.log" "$repo" >/dev/null 2>&1; rc=$?
-  [[ "$(cat "$d/o1b" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]; local r1b=$?
+  grep -q '^work=WROTE$' "$d/o1b" 2>/dev/null \
+    && grep -q '^source=BLOCKED$' "$d/o1b" 2>/dev/null \
+    && [[ "$(sed -n 's/^repo=//p' "$d/o1b")" != "$repo" ]] \
+    && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r1b=$?
   local seen1b; seen1b="$(cat "$d/o1b" 2>/dev/null || echo 没跑)"
-  check "V36: subglm-agent(**opencode 底座**)的腿写不了仓(假模型真的试过了:$seen1b)" $r1b
+  check "V36: subglm-agent(opencode)副本可写、原仓只读(双向试写:$seen1b)" $r1b
   [[ $rc -eq 0 ]]
   check "V36: opencode 底座的腿在只读下仍然正常出结论" $?
 
   # ── ② submimo review
-  rm -f "$d/o2" "$repo/PWNED_BY_LEG"
+  rm -f "$d/o2" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" REVIEW_NO_MY_REVIEW=1 \
     bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
-  [[ "$(cat "$d/o2" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]; local r2=$?
+  grep -q '^work=WROTE$' "$d/o2" 2>/dev/null \
+    && grep -q '^source=BLOCKED$' "$d/o2" 2>/dev/null \
+    && [[ "$(sed -n 's/^repo=//p' "$d/o2")" != "$repo" ]] \
+    && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r2=$?
   local seen2; seen2="$(cat "$d/o2" 2>/dev/null || echo 没跑)"
-  check "V36: submimo review 的腿写不了仓(假模型真的试过了:$seen2)" $r2
+  check "V36: submimo review 副本可写、原仓只读(双向试写:$seen2)" $r2
 
   # ── ③ subkimi
   # subkimi 要一份 review home 才肯派发(config.toml + 守卫 + 凭证),照 V13 的建法。
@@ -3093,22 +3055,27 @@ PWN
   printf 'default_model = "x"\n' > "$rh/config.toml"
   printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
   echo '{}' > "$rh/credentials/kimi-code.json"
-  rm -f "$d/o3" "$repo/PWNED_BY_LEG"
+  rm -f "$d/o3" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" KIMI_REVIEW_HOME="$rh" REVIEW_NO_MY_REVIEW=1 \
     bash "$b/subkimi" review "$d/t.md" "$repo/logs/l3.log" "$repo" >/dev/null 2>&1
-  [[ "$(cat "$d/o3" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]; local r3=$?
+  grep -q '^work=WROTE$' "$d/o3" 2>/dev/null \
+    && grep -q '^source=BLOCKED$' "$d/o3" 2>/dev/null \
+    && [[ "$(sed -n 's/^repo=//p' "$d/o3")" != "$repo" ]] \
+    && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r3=$?
   local seen3; seen3="$(cat "$d/o3" 2>/dev/null || echo 没跑)"
-  check "V36: subkimi 的腿写不了仓(假模型真的试过了:$seen3)" $r3
+  check "V36: subkimi 副本可写、原仓只读(双向试写:$seen3)" $r3
 
   # ── ④ **对照组:fix 一个字都不许被连累**。submimo fix 是执行腿,写代码是它的本职;
   #    "加一道防线顺手拆掉另一道"是本仓记过的账(V33 里有同款对照)。
-  rm -f "$d/o4" "$repo/PWNED_BY_LEG"
+  rm -f "$d/o4" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" REVIEW_NO_MY_REVIEW=1 \
     bash "$b/submimo" fix --no-oracle "$d/t.md" "$repo/logs/l4.log" "$repo" >/dev/null 2>&1
-  [[ "$(cat "$d/o4" 2>/dev/null)" == "WROTE" ]]; local r4=$?
+  grep -q '^work=WROTE$' "$d/o4" 2>/dev/null \
+    && grep -q '^source=WROTE$' "$d/o4" 2>/dev/null \
+    && [[ "$(sed -n 's/^repo=//p' "$d/o4")" == "$repo" ]]; local r4=$?
   local seen4; seen4="$(cat "$d/o4" 2>/dev/null || echo 没跑)"
-  check "V36: submimo **fix** 仍然写得动(假模型真的试过了:$seen4)" $r4
-  rm -f "$repo/PWNED_BY_LEG"
+  check "V36: submimo **fix** 仍直接写原仓(执行腿不许被 review 隔离连累:$seen4)" $r4
+  rm -f "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
 
   rm -rf "$d"
 }
