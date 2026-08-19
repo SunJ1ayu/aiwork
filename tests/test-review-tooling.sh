@@ -2807,6 +2807,113 @@ PYATOM
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V35
+# 评审腿在**只读的仓**里跑(track repo-write-audit,2026-08-19)。
+#
+# 为什么是"只读挂载"而不是"事后审计":08-18 我发现腿能写被评审的仓
+# (`git diff --output=<path>` 挡不住),第一反应是把 bash 整个关掉 —— 四审推翻了,
+# 关掉的代价是腿静默起不来。第二版方案是 strace 写审计(检测),而**真探针**证明
+# 更简单的一条路成立:把仓 ro bind 进腿自己的 mount namespace,
+# **腿的读能力一条不少**(status/diff/log/show/rev-parse/blame 全 rc=0,
+# 与可写状态逐条对照无差异),而写口物理消失。收据在
+# tracks/repo-write-audit/evidence/(probe-readonly-mount / -v2 / probe-logs-writable)。
+#
+# ⚠️ 这道防线**最危险的失败形态是安静的**:挂载没生效时腿照跑、结论照出、
+# 一切看起来完全正常。所以下面每一条正面断言前都先钉**前置锚**(证明确实进了
+# 只读 namespace),否则整组是在测空气。
+v35_legs_run_in_readonly_repo() {
+  echo "[V35] 评审腿在只读的仓里跑(写口物理消失,读能力一条不少)"
+  local d; d="$(mktemp -d)"
+  local repo="$d/repo"; mkdir -p "$repo/logs" "$repo/bin" "$repo/tests"
+  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && printf 'y\n' > tests/oracle.sh \
+    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
+  # 制造脏工作树:腿要评的正是未提交的改动(真跑时 panel 全是 dirty=yes)
+  printf 'dirty\n' >> "$repo/a.txt"
+
+  # **依赖缺失一律拒跑,不静默跳过**(先例:V23 的 realpath)。
+  # 而且这里有一个更阴的坑,第一版就踩了:`ro-repo-exec` 不存在时,
+  # "写仓失败"这类断言会**全部假绿** —— 命令根本没跑,当然写不进去。
+  # 11 条里有 6 条这样绿了(2026-08-19 红检当场照出来,我自己看 PASS 数发现的)。
+  # ⇒ 前置不满足就把**每一条**都判红,一条都不许留在"看起来绿"的状态。
+  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    local why="机器上没有 unshare"
+    [[ -x "$BIN/ro-repo-exec" ]] || why="$BIN/ro-repo-exec 不存在或不可执行"
+    local t
+    for t in "锚 —— ro-repo-exec 确实把命令送进了只读仓" \
+             "腿写不了仓内新文件" "\`git diff --output=\` 写不进去" \
+             "腿改不了 tests/" "只读下六条读命令全通" "对照组 —— 可写状态下失败数相同" \
+             "--rw 开的口子真能写" "开了 logs/ 之后仓的其余部分仍然只读" \
+             "unshare 挂不上 ⇒ 非零退出" "挂不上时命令根本没跑" "拒跑时说清是什么挂了"; do
+      bad "V35: $t(前置不满足:$why)"
+    done
+    rm -rf "$d"; return
+  fi
+
+  # ── 前置锚:确认 ro-repo-exec 真的把我们送进了只读 namespace。
+  #    这条不成立的话,下面"写失败"全是假绿(在可写树上写失败才是怪事)。
+  local anchor
+  anchor="$("$BIN/ro-repo-exec" "$repo" -- bash -c 'touch "$1/anchor" 2>&1 || echo BLOCKED' _ "$repo" 2>/dev/null)"
+  [[ "$anchor" == *BLOCKED* ]]
+  check "V35: 锚 —— ro-repo-exec 确实把命令送进了只读仓(不然下面全是测空气)" $?
+
+  # ── ① 写口:两条都必须失败,其中第二条正是 08-18 判定"白名单不成立"的那个绕过
+  # ⚠️ 每条写口断言都要**先证明命令真的跑过了**(往仓外落一个标记,仓外是可写的)。
+  # 只断言"写失败"的话,工具不存在/exec 失败也能让它绿 —— 那是**没跑**冒充**被挡住**。
+  rm -f "$d/ran1"
+  "$BIN/ro-repo-exec" "$repo" -- bash -c 'echo ran > "$2"; touch "$1/PWNED"' _ "$repo" "$d/ran1" >/dev/null 2>&1
+  [[ -s "$d/ran1" && ! -e "$repo/PWNED" ]]
+  check "V35: 腿写不了仓内新文件(且命令确实跑过、仓里真的没多出东西)" $?
+
+  rm -f "$d/ran3"
+  "$BIN/ro-repo-exec" "$repo" -- bash -c 'echo ran > "$2"; git -C "$1" diff --output="$1/PWNED2" HEAD' \
+    _ "$repo" "$d/ran3" >/dev/null 2>&1
+  [[ -s "$d/ran3" && ! -e "$repo/PWNED2" ]]
+  check "V35: \`git diff --output=\` 写不进去(08-18 那条已知绕过被物理挡死)" $?
+
+  rm -f "$d/ran2"
+  "$BIN/ro-repo-exec" "$repo" -- bash -c 'echo ran > "$2"; echo x >> "$1/tests/oracle.sh"' _ "$repo" "$d/ran2" >/dev/null 2>&1
+  [[ -s "$d/ran2" ]] && ! grep -q '^x$' "$repo/tests/oracle.sh"
+  check "V35: 腿改不了 tests/(命令跑过了,但判据一个字没变 —— 这条是整单的理由)" $?
+
+  # ── ② 读能力一条都不许少 + **对照组**(同样命令在没挂载时也全 0 ⇒ 差异只来自只读)
+  local ro_fail=0 rw_fail=0 c
+  for c in "git -C $repo status --short" "git -C $repo diff --stat" \
+           "git -C $repo log --oneline -1" "git -C $repo show --stat HEAD" \
+           "git -C $repo rev-parse HEAD" "git -C $repo blame -L1,1 a.txt"; do
+    "$BIN/ro-repo-exec" "$repo" -- bash -c "$c" >/dev/null 2>&1 || ro_fail=$((ro_fail+1))
+    bash -c "$c" >/dev/null 2>&1 || rw_fail=$((rw_fail+1))
+  done
+  [[ $ro_fail -eq 0 ]]
+  check "V35: 只读下六条读命令全通(读能力没被削)" $?
+  [[ $ro_fail -eq $rw_fail ]]
+  check "V35: 对照组 —— 可写状态下失败数相同(差异只许来自只读:ro=$ro_fail rw=$rw_fail)" $?
+
+  # ── ③ 写口白名单:--rw 指定的目录必须真能写(腿日志就在仓内 logs/,
+  #    写不了 = 这道防线把腿弄死了,而"腿静默起不来"正是 08-18 那次的病)
+  "$BIN/ro-repo-exec" --rw "$repo/logs" "$repo" -- bash -c 'echo hi > "$1/logs/leg.log"' _ "$repo" >/dev/null 2>&1
+  [[ $? -eq 0 && -s "$repo/logs/leg.log" ]]
+  check "V35: --rw 开的口子真能写(腿日志在仓内 logs/)" $?
+  "$BIN/ro-repo-exec" --rw "$repo/logs" "$repo" -- bash -c 'touch "$1/STILL_RO"' _ "$repo" >/dev/null 2>&1
+  [[ $? -ne 0 && ! -e "$repo/STILL_RO" ]]
+  check "V35: 开了 logs/ 之后仓的其余部分**仍然只读**(不是整仓开闸)" $?
+
+  # ── ④ fail-closed:挂不上就**拒跑**,绝不许静默降级成"可写地跑"。
+  #    08-18 刚栽过:两条评审腿把 fail-closed 判反,`env '=key'` rc=0 静默放过
+  #    ⇒ 腿活着但永远 401。安静的失败比响亮的失败贵得多。
+  local fb="$d/fakebin"; mkdir -p "$fb"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fb/unshare"; chmod +x "$fb/unshare"
+  local out rc
+  out="$(PATH="$fb:$PATH" "$BIN/ro-repo-exec" "$repo" -- bash -c 'touch "$1/LEAKED"' _ "$repo" 2>&1)"; rc=$?
+  [[ $rc -ne 0 ]]
+  check "V35: unshare 挂不上 ⇒ **非零退出**(不许静默降级)" $?
+  [[ ! -e "$repo/LEAKED" ]]
+  check "V35: 挂不上时命令**根本没跑**(降级跑=白读了只读两个字)" $?
+  grep -qiE 'unshare|namespace|只读|拒绝' <<<"$out"
+  check "V35: 拒跑时说清是什么挂了(不说清 = 下次没人查得动)" $?
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -2843,5 +2950,6 @@ REVIEW_NO_MY_REVIEW=1 v26_glm_on_opencode_go
 REVIEW_NO_MY_REVIEW=1 v27_knockon_of_the_backend_switch
 REVIEW_NO_MY_REVIEW=1 v28_glm_on_opencode_base
 REVIEW_NO_MY_REVIEW=1 v33_submimo_review_leg_is_read_only
+v35_legs_run_in_readonly_repo
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
