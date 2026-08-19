@@ -2214,6 +2214,7 @@ v27_knockon_of_the_backend_switch() {
   echo "[V27] 换后端的连带面:AUTH_ENV 守卫 / panel-explore 默认档 / -h 不许谎报"
   local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
   printf '# review this\n' > "$d/t.md"
 
   # ── ① AUTH_ENV 漏填必须**硬失败**,不许静默注一个空名变量。

@@ -3,7 +3,7 @@
 # bin/_review-workspace.sh; wrappers must fail closed when that helper cannot
 # prepare a workspace.
 set -uo pipefail
-. "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78
 
 BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 HELPER="${REVIEW_WORKSPACE_HELPER:-$BIN/_review-workspace.sh}"
