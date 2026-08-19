@@ -1,7 +1,7 @@
 # Verify: repo-write-audit
 
 - Date: 2026-08-19
-- Verdict: <PASS | BLOCK | NEEDS_MORE_INFO>
+- Verdict: <第二轮四审跑完回填 —— 不许留占位符>
 
 > Panel hook — 软判断(correctness/security/edge/spec-drift)走 panel-review:
 > 主 agent 先独立审并落 findings,再跑 panel-review 的全部评审腿,主 agent 主裁。
@@ -9,50 +9,97 @@
 
 ## Mechanical checks
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+- [x] build passes —— 本单全是 bash 工具,**没有 build 步骤**;等价检查是
+      `bash -n` 语法 + 判据里 15 条工具层断言真起进程跑 `ro-repo-exec`。
+- [x] tests pass —— `bash tests/test-review-tooling.sh` **405 passed, 0 failed**(rc=0),
+      且这一遍跑在**最后一次编辑之后**(见下面最末那行收据 `final-green-after-mutations`)。
+      收据里唯一一处 `skip` 字样是断言正文 `PASS: panel: PANEL_KIMI_LEG=off skips kimi`,
+      **不是**被跳过的闸(老账:「全绿」那句话里不含整块 SKIP)。
+- [x] no secrets / unsafe ops —— 新增的写口是 `mount --bind`(在 namespace 内,
+      `--make-rprivate` 不外泄);`--rw` 写口最终**为零**(V37 断言);
+      没有 push / 没有删文件 / 没有装依赖。
 
-**机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
+**机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,收据行原样粘在下面。
+⚠️ **slug 是我起的名字,rc 才是机器写的**:下面 `red-v36-integration rc=0`、
+`green-v36-wired rc=1` 这种名不副实的行**照原样留着**,不修饰 —— 08-19 上一单的教训
+(5 份叫 green- 的其实 rc=1)。判红检有没有真红,看 rc,不看名字。
 
 ```
-runlog -t repo-write-audit -- <判据命令>
-```
-
-```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
+runlog: probe-readonly-mount rc=0 commit=281dcbf dirty=yes at=2026-08-19T06:29:19Z file=tracks/repo-write-audit/evidence/20260819T062919Z-01-probe-readonly-mount.txt
+runlog: probe-readonly-mount-v2 rc=0 commit=281dcbf dirty=yes at=2026-08-19T06:30:16Z file=tracks/repo-write-audit/evidence/20260819T063016Z-01-probe-readonly-mount-v2.txt
+runlog: probe-logs-writable rc=0 commit=281dcbf dirty=yes at=2026-08-19T06:32:31Z file=tracks/repo-write-audit/evidence/20260819T063231Z-01-probe-logs-writable.txt
+runlog: red-v35-readonly rc=1 commit=308934a dirty=yes at=2026-08-19T06:34:44Z file=tracks/repo-write-audit/evidence/20260819T063444Z-01-red-v35-readonly.txt
+runlog: red-v35-readonly-v2 rc=1 commit=308934a dirty=yes at=2026-08-19T06:39:14Z file=tracks/repo-write-audit/evidence/20260819T063914Z-01-red-v35-readonly-v2.txt
+runlog: green-v35-tool rc=0 commit=303f01b dirty=yes at=2026-08-19T06:44:43Z file=tracks/repo-write-audit/evidence/20260819T064443Z-01-green-v35-tool.txt
+runlog: probe-real-leg-readonly rc=2 commit=2efb0d6 dirty=no at=2026-08-19T06:51:03Z file=tracks/repo-write-audit/evidence/20260819T065103Z-01-probe-real-leg-readonly.txt
+runlog: probe-real-leg-readonly-v2 rc=0 commit=2efb0d6 dirty=yes at=2026-08-19T06:51:51Z file=tracks/repo-write-audit/evidence/20260819T065151Z-01-probe-real-leg-readonly-v2.txt
+runlog: red-v36-integration rc=0 commit=2efb0d6 dirty=yes at=2026-08-19T06:53:51Z file=tracks/repo-write-audit/evidence/20260819T065351Z-01-red-v36-integration.txt
+runlog: red-v36-integration-v2 rc=1 commit=2efb0d6 dirty=yes at=2026-08-19T06:58:43Z file=tracks/repo-write-audit/evidence/20260819T065843Z-01-red-v36-integration-v2.txt
+runlog: red-v36-integration-v3 rc=1 commit=2efb0d6 dirty=yes at=2026-08-19T07:03:06Z file=tracks/repo-write-audit/evidence/20260819T070306Z-01-red-v36-integration-v3.txt
+runlog: green-v36-wired rc=1 commit=18acaec dirty=yes at=2026-08-19T07:08:32Z file=tracks/repo-write-audit/evidence/20260819T070832Z-01-green-v36-wired.txt
+runlog: green-v36-wired-v2 rc=1 commit=18acaec dirty=yes at=2026-08-19T07:12:26Z file=tracks/repo-write-audit/evidence/20260819T071226Z-01-green-v36-wired-v2.txt
+runlog: green-v36-wired-v3 rc=1 commit=18acaec dirty=yes at=2026-08-19T07:16:42Z file=tracks/repo-write-audit/evidence/20260819T071642Z-01-green-v36-wired-v3.txt
+runlog: green-v36-wired-final rc=0 commit=18acaec dirty=yes at=2026-08-19T07:20:25Z file=tracks/repo-write-audit/evidence/20260819T072025Z-01-green-v36-wired-final.txt
+runlog: red-rootrw-warning rc=1 commit=e2798be dirty=yes at=2026-08-19T07:24:41Z file=tracks/repo-write-audit/evidence/20260819T072441Z-01-red-rootrw-warning.txt
+runlog: green-rootrw-warning rc=0 commit=a8edf65 dirty=yes at=2026-08-19T07:27:46Z file=tracks/repo-write-audit/evidence/20260819T072746Z-01-green-rootrw-warning.txt
+runlog: mutation-control-unmutated rc=0 commit=f664d75 dirty=no at=2026-08-19T07:36:12Z file=tracks/repo-write-audit/evidence/20260819T073612Z-01-mutation-control-unmutated.txt
+runlog: mutation-ro-removed rc=1 commit=f664d75 dirty=yes at=2026-08-19T07:36:27Z file=tracks/repo-write-audit/evidence/20260819T073627Z-01-mutation-ro-removed.txt
+runlog: red-v36-opencode-leg rc=1 commit=082cc60 dirty=yes at=2026-08-19T07:42:25Z file=tracks/repo-write-audit/evidence/20260819T074225Z-01-red-v36-opencode-leg.txt
+runlog: green-v36-opencode-leg rc=0 commit=f7f4b93 dirty=yes at=2026-08-19T07:43:46Z file=tracks/repo-write-audit/evidence/20260819T074346Z-01-green-v36-opencode-leg.txt
+runlog: green-after-opencode-fix rc=0 commit=f7f4b93 dirty=yes at=2026-08-19T07:43:58Z file=tracks/repo-write-audit/evidence/20260819T074358Z-01-green-after-opencode-fix.txt
+runlog: panel-full-rwaudit rc=0 commit=eb7b77b dirty=no at=2026-08-19T07:50:04Z file=tracks/repo-write-audit/evidence/20260819T075004Z-01-panel-full-rwaudit.txt
+runlog: red-v37-v38-writehole-home rc=1 commit=eb7b77b dirty=yes at=2026-08-19T08:05:17Z file=tracks/repo-write-audit/evidence/20260819T080517Z-01-red-v37-v38-writehole-home.txt
+runlog: red-v37-v38-fixed-oracle rc=1 commit=eb7b77b dirty=yes at=2026-08-19T08:06:26Z file=tracks/repo-write-audit/evidence/20260819T080626Z-01-red-v37-v38-fixed-oracle.txt
+runlog: red-v37-v38-final rc=1 commit=eb7b77b dirty=yes at=2026-08-19T08:07:39Z file=tracks/repo-write-audit/evidence/20260819T080739Z-01-red-v37-v38-final.txt
+runlog: red-v37-v38-oracle-v4 rc=1 commit=eb7b77b dirty=yes at=2026-08-19T08:09:03Z file=tracks/repo-write-audit/evidence/20260819T080903Z-01-red-v37-v38-oracle-v4.txt
+runlog: green-v37-v38 rc=0 commit=b127eec dirty=yes at=2026-08-19T08:11:36Z file=tracks/repo-write-audit/evidence/20260819T081136Z-01-green-v37-v38.txt
+runlog: green-full-after-v37-v38 rc=1 commit=b127eec dirty=yes at=2026-08-19T08:11:48Z file=tracks/repo-write-audit/evidence/20260819T081148Z-01-green-full-after-v37-v38.txt
+runlog: full-after-obs-outside rc=1 commit=b127eec dirty=yes at=2026-08-19T08:17:00Z file=tracks/repo-write-audit/evidence/20260819T081700Z-01-full-after-obs-outside.txt
+runlog: full-obs-outside-v2 rc=1 commit=b127eec dirty=yes at=2026-08-19T08:20:24Z file=tracks/repo-write-audit/evidence/20260819T082024Z-01-full-obs-outside-v2.txt
+runlog: full-repo-subdir rc=1 commit=b127eec dirty=yes at=2026-08-19T08:24:23Z file=tracks/repo-write-audit/evidence/20260819T082423Z-01-full-repo-subdir.txt
+runlog: full-green-writehole-removed rc=0 commit=b127eec dirty=yes at=2026-08-19T08:27:38Z file=tracks/repo-write-audit/evidence/20260819T082738Z-01-full-green-writehole-removed.txt
+runlog: red-v39-blindspots rc=1 commit=fedb834 dirty=yes at=2026-08-19T08:32:08Z file=tracks/repo-write-audit/evidence/20260819T083208Z-01-red-v39-blindspots.txt
+runlog: green-v39-blindspots rc=0 commit=81e3bb8 dirty=yes at=2026-08-19T08:33:16Z file=tracks/repo-write-audit/evidence/20260819T083316Z-01-green-v39-blindspots.txt
+runlog: full-after-v39 rc=0 commit=81e3bb8 dirty=yes at=2026-08-19T08:33:25Z file=tracks/repo-write-audit/evidence/20260819T083325Z-01-full-after-v39.txt
+runlog: mutation2-control rc=0 commit=b789f2c dirty=no at=2026-08-19T08:36:38Z file=tracks/repo-write-audit/evidence/20260819T083638Z-01-mutation2-control.txt
+runlog: mutation2-ro-removed rc=1 commit=b789f2c dirty=yes at=2026-08-19T08:36:48Z file=tracks/repo-write-audit/evidence/20260819T083648Z-01-mutation2-ro-removed.txt
+runlog: mutation3-gitdir-removed rc=1 commit=b789f2c dirty=yes at=2026-08-19T08:37:29Z file=tracks/repo-write-audit/evidence/20260819T083729Z-01-mutation3-gitdir-removed.txt
+runlog: final-green-after-mutations rc=0 commit=495251a dirty=yes at=2026-08-19T08:49:49Z file=tracks/repo-write-audit/evidence/20260819T084949Z-01-final-green-after-mutations.txt
 ```
 
 ## Review
 
 - lane: **full** —— 这一单造的是**判卷防线本身**(评审腿动没动被评审的仓),
-  而且碰 auth/权限面(strace/ptrace、受保护根解析)。硬规矩:碰权限/新写口 → full,
-  针孔再薄也不打折。
-  > **碰了新写口 / 权限 / auth / 钱 / 数据一致性 → full,针孔再薄也不打折**(硬规矩,别在这降档)。
-  > fast = 主+1,中等风险;self = 主自审(闸③ + 截图 + 全量回归),
-  > 限纯前端/纯观感、后端一字未动、只新增已过审针孔的调用方。
+  而且碰权限面(mount namespace、只读重挂、受保护根解析)。硬规矩:碰权限/新写口 → full,
+  针孔再薄也不打折。**实际走了两轮 full**(轮 1 在 `eb7b77b`,轮 2 在 `495251a`)。
 - 派给: **主 agent 直接干**(开工前判断,收口时回填返工数)——
-  ① 判卷面要真起进程做系统调用跟踪,要现场设计探针、看实际行为,不是照单执行的活;
-  ② 核心判断是"审计器自己坏掉时会不会静默变成 CLEAN",属于安全语义,不外包;
-  ③ strace 输出解析那段是有界的,真开工时可以再评估切一块给 codex 腿。
-  返工 0 轮 / 自身错误 <收口时数>
-- 规格自查(读任何 panel 输出之前先答):<如果规格本身就是错的,会错成什么样、我怎么发现?
-  panel 只验"实现合不合规格",验不了"规格对不对" —— 四腿齐 PASS 不等于题是对的。>
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
-  > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
-  > 08-06 立这条的理由:08-05 我在这里手写了"三条腿一致 PASS",而 Kimi 根本没出结论
-  > (同一页第 90 行我自己还写着它没出报告)—— 手抄一份终端上的东西,抄错那次没人会发现。
-- findings:
-  - <...>
-  > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
-  > 花名册在上一格,查工件不查自述。
-- arbitrated verdict (主裁): <...>
-  > **归档时这一条和顶部的 `Verdict:` 都不许还是占位符**,`track-guard` 规矩3 会挡;
-  > 没归档但已经合并上线的,`track list` 会打 ⚠️(stage-timer 就这么漏了两个月)。
-
-## Accepted deviations
-
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
+  ① 判卷面要真起 mount namespace 做系统调用,要现场设计探针、看实际行为,不是照单执行的活;
+  ② 核心判断是"防线自己失效时会不会安静降级",属于安全语义,不外包;
+  ③ 事后看这个判断是对的:全单最贵的四件事(opencode 腿在防线外、写口多余且带两条真 bug、
+     worktree 的真 git 目录在挂载外、挂载没生效没人发现)全是**现场看行为**才冒出来的,
+     照单执行的腿一件也碰不到。
+  **返工 0 轮 / 自身错误 9 处**(按证据链数,不按印象):
+  1. `bin/subagent` 的只读段第一版焊在 claude 那一支里 ⇒ opencode 底座整条腿在防线外
+     (**自审抓到**,判据 V36①b 先行红过 —— 假模型真的写进去了,`f7f4b93`→`4fef188`);
+  2. kimi 腿的运行期 home 在仓内 ⇒ 这道防线**把一条评审腿弄死了**(EROFS)
+     (**真 panel 撞出来的**,轮 1 花名册 `subkimi=FAIL(rc=1)`,`b127eec`→`fedb834`);
+  3. `--rw <日志目录>` 那个写口**根本不必要**(腿日志的 fd 在父 namespace 就打开了)
+     (四审 subdeepseek F1/F2、subglm F1~F3);
+  4. 同一处的真 bug 之一:`dirname` 相对调用方 cwd 解析 ⇒ 从仓根裸文件名调用时**整仓开闸**;
+  5. 同一处的真 bug 之二:写口在 mkdir 日志目录**之前**构建 ⇒ 新日志目录直接拒跑(行为回归);
+  6. linked worktree 的真 git 目录在挂载外 ⇒ 腿照样 `git commit` / `git tag` 改主仓
+     (四审 subdeepseek F3;被推翻的 strace 方案当初**明确计划**保护 `--git-common-dir`,
+     只读方案漏了 —— 老账:换方案时把旧方案的保护清单丢了);
+  7. "挂载成功"没有实证 ⇒ 最贵的失败形态(安静失效)没人发现(判据 V39②);
+  8. 判据夹具的观测文件住在**被评审的仓内**(34 处)⇒ 它们此前一直在"防线关闭"下跑;
+  9. 工件债:`proposal.md` 的结论「⇒ 检测,不预防」与实际做的(预防)**互相矛盾**、
+     `tasks.md` 的 base-ref 指到建 track 时的 HEAD(会把上一单已过审的改动卷进 diff)。
+- 规格自查(读任何 panel 输出之前先答):**规格错的话会错成这样** —— 这道防线保护的是
+  "被评审的那个仓",而**判据自己住在另一个仓里**跑;如果真实威胁是"腿写自己能碰到的任何地方",
+  那这道防线只挡住了其中一个目录,规格就是**问错了问题**(08-19 上一单正是这个形状:
+  实现完全合规格,错在规格问错了问题,而 panel 验不出来)。我怎么发现:轮 1 我把这条
+  写进自审 F2 明确请腿挑战;**结论是不改规格** —— 威胁模型写死在 proposal:对面是
+  **误伤和提示注入**,不是有动机的对手。有动机的对手在 namespace 里本来就能自己 remount,
+  挡不住也不打算挡;而误伤的实际形态就是"腿在被评审的仓里留下东西",那正是这道防线的靶心。
+  ⚠️ **这个结论本身仍可能是错的**,它依赖"评审腿没有改判据让自己及格的动机"这个前提;
+  前提失效(比如将来把执行腿也塞进 panel)⇒ 规格要重开。

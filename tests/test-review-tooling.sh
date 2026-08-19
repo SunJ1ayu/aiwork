@@ -3365,6 +3365,212 @@ v39_readonly_blind_spots() {
   rm -rf "$d"
 }
 
+
+# ---------------------------------------------------------------- V40
+# 第二轮四审(2026-08-19 17:15,四腿齐全)逼出来的五件事。**共同的形状只有一个:
+# 一件事只在一条腿/一个点上做对了,而它本该处处成立。** 这一单里这个形状犯了三次:
+# 第一次是 opencode 底座整条腿在防线外(V36①b),第二次是 V37② 只抄了一条 wrapper
+# 的 argv,第三次是 V38 的"home 在仓内就拒跑"只给 kimi 装了。三次都是我写的。
+#
+# ① **零写口只对一条 wrapper 有结构证明**(subdeepseek F1 / subkimi / subglm 三腿独立命中)。
+#    V37② 用记账版 ro-repo-exec 抄 argv,但只跑了 subdeepseek-agent 一条。
+#    给 submimo/subkimi 重新加回 `--rw <仓>/logs` 的回归**全绿**:V36 的假模型写的是
+#    仓根(PWNED_BY_LEG),仓根仍然只读 ⇒ 照样 BLOCKED。四条路径都得抄。
+#
+# ② **"home 在仓内就拒跑"只有 kimi 有**(subglm 孤腿命中)。opencode 腿的
+#    `OPENCODE_REVIEW_HOME`、mimo 腿的 `MIMO_REVIEW_HOME` 都能指进被评审的仓,
+#    复现的正是 V38 修的那个病:底座吐一句 cryptic 的 I/O 错,花名册记 FAIL(rc=1),
+#    和"额度耗尽"长得一模一样。默认值安全不等于防线存在。
+#
+# ③ **`--rw` 指到仓根仍然只是警告**(subglm 孤腿)。当初不拒绝的理由是"判据里几十条
+#    老夹具的日志落在仓根,拒绝会误伤一大片"——第二轮把三条 wrapper 的写口全删了,
+#    实测生产调用方**归零**,理由过期了。更糟的是自检对这种配置**主动跳过**
+#    ⇒ 最危险的配置错正好绕开最贵的那道自检。fail-closed 才是这一单的论点。
+#
+# ④ **自检只探仓根,GITDIRS 的挂载只凭 rc 相信**(subdeepseek F6 + subglm 独立命中)。
+#    自检存在的全部理由就是"不许相信 mount 的退出码",而它自己对 worktree 的
+#    git 目录恰恰只相信退出码。安静失效的靶心上留了个洞。
+#
+# ⑤ **自检的 EROFS 报错漏进每条腿的日志**(subdeepseek F4,我自己也在真腿日志里看见)。
+#    `: > "$p" 2>/dev/null` —— 重定向从左往右处理,报错在 `2>/dev/null` 生效**之前**
+#    就打出去了。它长得像腿崩了,而本单的老账正是"cryptic 报错被误读成额度耗尽"。
+#
+# ⑥ **kimi 的文档和真实默认值对不上**(subdeepseek F3)。usage 还写着仓内那个旧默认。
+# ⑦ **种子 config 的 hook 指回仓内**(subdeepseek F2)⇒ wrapper 维护的 hooks 副本
+#    是死代码,"运行期 home 自包含"是假的。同一件事写两处、只更新一处的老账。
+v40_second_panel_findings() {
+  echo "[V40] 第二轮四审:零写口/拒跑/自检 这三件事必须**处处成立**,不是只在一条腿上"
+  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"; local repo="$d/repo"; mkdir -p "$repo/logs"
+  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
+  printf '# t\n' > "$d/t.md"
+
+  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    local t
+    for t in "argv 零写口:subdeepseek-agent" "argv 零写口:subglm-agent(opencode)" \
+             "argv 零写口:submimo" "argv 零写口:subkimi" \
+             "home 在仓内拒跑:opencode 腿" "home 在仓内拒跑:mimo 腿" \
+             "home 在仓内拒跑:kimi 腿" "三条腿说的是同一件事" \
+             "--rw 仓根 ⇒ 拒跑" "--rw 仓根 ⇒ 命令没跑" \
+             "gitdir 静默没挂上 ⇒ 拒跑" "自检不漏 EROFS 到 stderr" \
+             "usage 的默认值和真实解析一致" "hook 指向运行期 home"; do
+      bad "V40: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
+    done
+    rm -rf "$d"; return
+  fi
+
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$BIN/submimo" \
+     "$BIN/subkimi" "$BIN/ro-repo-exec" "$b/"
+  [[ -f "$BIN/_my-review-gate.sh" ]] && cp "$BIN/_my-review-gate.sh" "$b/"
+  [[ -f "$BIN/_review-home-guard.sh" ]] && cp "$BIN/_review-home-guard.sh" "$b/"
+
+  _mk_stub40() {   # 一个什么都不写、只出结论的假底座(这一节问的不是"写没写成")
+    cat > "$1" <<'STUB'
+#!/usr/bin/env bash
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+echo "Conclusion: PASS"
+STUB
+    chmod +x "$1"
+  }
+  _mk_stub40 "$b/claude"; _mk_stub40 "$b/mimo"; _mk_stub40 "$b/kimi"; _mk_stub40 "$b/opencode"
+
+  # ── ① 四条路径的 argv 里一个 --rw 都不许有 ────────────────────────────────
+  # 记账版 ro-repo-exec:抄下 argv 再转给真的(**指到 $BIN 那份**,变异测试才咬得动)。
+  cat > "$b/ro-repo-exec" <<RECORD
+#!/usr/bin/env bash
+printf '%s\\n' "\$@" >> "\${RO_ARGV_OUT:-/dev/null}"
+exec "$BIN/ro-repo-exec" "\$@"
+RECORD
+  chmod +x "$b/ro-repo-exec"
+
+  local ochome="$d/ochome" mihome="$d/mihome" kihome="$d/kihome"
+  mkdir -p "$ochome" "$mihome" "$kihome"
+  # ⚠️ 显式 KIMI_REVIEW_HOME **跳过**种子同步(那是设计:调用方自己负责),所以夹具
+  #    得自己把种子放进去。少了这一步 subkimi 在 "review home config missing" 就退了,
+  #    ro-repo-exec 一次都没被调到 —— 断言照样红,但**红在我的夹具上**,
+  #    而"红了就当抓到 bug"正是改考卷的第一步。2026-08-19 第一版就是这样。
+  cp -a "$BIN/../kimi-review-home/." "$kihome/" 2>/dev/null || true
+
+  rm -f "$d/argv1.txt"
+  env PATH="$b:$PATH" RO_ARGV_OUT="$d/argv1.txt" CAPTURE="$d/c1.json" \
+    DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/a1.log" "$repo" >/dev/null 2>&1
+  [[ -s "$d/argv1.txt" ]] && ! grep -q -- '^--rw$' "$d/argv1.txt"
+  check "V40①: subdeepseek-agent 的 argv 里没有 --rw(且真抄到了 argv)" $?
+
+  rm -f "$d/argv2.txt"
+  env PATH="$b:$PATH" RO_ARGV_OUT="$d/argv2.txt" OPENCODE_REVIEW_HOME="$ochome" \
+    ZHIPU_API_KEY=zk REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subglm-agent" review "$d/t.md" "$repo/logs/a2.log" "$repo" >/dev/null 2>&1
+  [[ -s "$d/argv2.txt" ]] && ! grep -q -- '^--rw$' "$d/argv2.txt"
+  check "V40①: subglm-agent(opencode 底座)的 argv 里没有 --rw" $?
+
+  rm -f "$d/argv3.txt"
+  env PATH="$b:$PATH" RO_ARGV_OUT="$d/argv3.txt" MIMO_REVIEW_HOME="$mihome" \
+    REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/submimo" review "$d/t.md" "$repo/logs/a3.log" "$repo" >/dev/null 2>&1
+  [[ -s "$d/argv3.txt" ]] && ! grep -q -- '^--rw$' "$d/argv3.txt"
+  check "V40①: submimo review 的 argv 里没有 --rw" $?
+
+  rm -f "$d/argv4.txt"
+  env PATH="$b:$PATH" RO_ARGV_OUT="$d/argv4.txt" KIMI_REVIEW_HOME="$kihome" \
+    REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subkimi" review "$d/t.md" "$repo/logs/a4.log" "$repo" >/dev/null 2>&1
+  [[ -s "$d/argv4.txt" ]] && ! grep -q -- '^--rw$' "$d/argv4.txt"
+  check "V40①: subkimi 的 argv 里没有 --rw" $?
+
+  cp "$BIN/ro-repo-exec" "$b/"   # 换回真的
+
+  # ── ② 运行期 home 落在被评审的仓里 ⇒ 三条腿**都**拒跑,而且说得出为什么 ──────
+  local o_out m_out k_out o_rc m_rc k_rc
+  mkdir -p "$repo/inrepo-oc" "$repo/inrepo-mi" "$repo/inrepo-ki"
+  o_out="$(env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$repo/inrepo-oc" ZHIPU_API_KEY=zk \
+    REVIEW_NO_MY_REVIEW=1 bash "$b/subglm-agent" review "$d/t.md" "$d/o.log" "$repo" 2>&1)"; o_rc=$?
+  m_out="$(env PATH="$b:$PATH" MIMO_REVIEW_HOME="$repo/inrepo-mi" \
+    REVIEW_NO_MY_REVIEW=1 bash "$b/submimo" review "$d/t.md" "$d/m.log" "$repo" 2>&1)"; m_rc=$?
+  k_out="$(env PATH="$b:$PATH" KIMI_REVIEW_HOME="$repo/inrepo-ki" \
+    REVIEW_NO_MY_REVIEW=1 bash "$b/subkimi" review "$d/t.md" "$d/k.log" "$repo" 2>&1)"; k_rc=$?
+
+  [[ $o_rc -ne 0 ]] && grep -qE '仓内|仓外|reviewed repo' <<<"$o_out"
+  check "V40②: opencode 腿的 home 在仓内 ⇒ 拒跑并说清原因(rc=$o_rc)" $?
+  [[ $m_rc -ne 0 ]] && grep -qE '仓内|仓外|reviewed repo' <<<"$m_out"
+  check "V40②: mimo 腿的 home 在仓内 ⇒ 拒跑并说清原因(rc=$m_rc)" $?
+  [[ $k_rc -ne 0 ]] && grep -qE '仓内|仓外|reviewed repo' <<<"$k_out"
+  check "V40②: kimi 腿的 home 在仓内 ⇒ 拒跑并说清原因(rc=$k_rc)" $?
+  # 三条腿必须是**同一句话**的三次复用,不是各写各的(共享实现才防得住"下次又漏一条")
+  [[ -f "$BIN/_review-home-guard.sh" ]]
+  check "V40②: 这道拒跑是**共享实现**(bin/_review-home-guard.sh),不是抄三份" $?
+
+  # ── ③ --rw 指到仓根 ⇒ 拒跑(不再是警告)。生产调用方已归零,豁免理由过期 ────
+  local rootout rootrc
+  rm -f "$repo/ROOTRW_LEAK"
+  rootout="$("$BIN/ro-repo-exec" --rw "$repo" "$repo" -- bash -c 'touch "$1/ROOTRW_LEAK"' _ "$repo" 2>&1)"; rootrc=$?
+  [[ $rootrc -ne 0 ]] && grep -qE '仓根|整仓开闸|拒' <<<"$rootout"
+  check "V40③: --rw 指到仓根 ⇒ **拒跑**(fail-closed,不再只是警告)" $?
+  [[ ! -e "$repo/ROOTRW_LEAK" ]]
+  check "V40③: --rw 指到仓根时命令**根本没跑**(拒跑不是跑完再抱怨)" $?
+
+  # ── ④ gitdir 的挂载静默没生效(rc=0 但什么都没做)⇒ 自检必须逮住 ─────────────
+  local wt="$d/wt" realmount; realmount="$(command -v mount)"
+  ( cd "$repo" && git worktree add -q "$wt" -b v40wt ) >/dev/null 2>&1
+  if [[ -d "$wt" ]]; then
+    local sb="$d/selective"; mkdir -p "$sb"
+    # 只对 .git 相关的挂载装死(rc=0 什么都不做),仓根照常真挂 ——
+    # 于是"仓根探针"照过,而 git 目录仍然可写。这正是 ④ 说的那个洞。
+    cat > "$sb/mount" <<SEL
+#!/usr/bin/env bash
+for a in "\$@"; do case "\$a" in *.git|*.git/*) exit 0 ;; esac; done
+exec $realmount "\$@"
+SEL
+    chmod +x "$sb/mount"
+    local wout wrc
+    wout="$(PATH="$sb:$PATH" "$BIN/ro-repo-exec" "$wt" -- \
+      bash -c 'cd "$1" && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m v40leak' \
+      _ "$wt" 2>&1)"; wrc=$?
+    [[ $wrc -ne 0 ]] && grep -qE '自检|没有真的只读|仍然可写|not read-only' <<<"$wout"
+    check "V40④: git 目录的挂载静默没生效 ⇒ 自检逮住并拒跑(不许只信 mount 的 rc)" $?
+    # ⚠️ 第一版写的是 `git log --oneline -1 --all`(**只看最新一条**)—— 泄漏的 commit
+    #    排在第二行就永远查不到 ⇒ 这条断言结构上几乎永远绿。手工复现证明洞是真的
+    #    (v40leak 确实进了主仓)而断言却报"没泄漏"。假绿比没有断言更坏。
+    local leaked=0
+    ( cd "$repo" && git log --oneline --all 2>/dev/null | grep -q v40leak ) && leaked=1
+    [[ $leaked -eq 0 ]]
+    check "V40④: 那次 commit **没有**落进主仓(证明拒跑发生在腿动手之前)" $?
+    ( cd "$repo" && git worktree remove --force "$wt" ) >/dev/null 2>&1
+    git -C "$repo" branch -D v40wt >/dev/null 2>&1
+  else
+    bad "V40④: git 目录静默没挂上 ⇒ 拒跑(前置不满足:建不出 worktree)"
+    bad "V40④: 那次 commit 没有落进主仓(前置不满足)"
+  fi
+
+  # ── ⑤ 自检自己的报错不许漏到 stderr(它长得像腿崩了)────────────────────────
+  local quiet
+  quiet="$("$BIN/ro-repo-exec" "$repo" -- bash -c 'echo ok' 2>&1 >/dev/null)"
+  ! grep -qiE 'Read-only file system|ro-selfcheck' <<<"$quiet"
+  check "V40⑤: 挂载正常时自检不往 stderr 漏 EROFS 噪音(别让防线长得像故障)" $?
+
+  # ── ⑥ usage 写的默认值 = 真实解析出来的(**查行为,不查我写了什么**)──────────
+  local doc real
+  doc="$(bash "$BIN/subkimi" --help 2>&1 | sed -n 's/.*KIMI_REVIEW_HOME[^,]*, *default *\([^ ]*\).*/\1/p' | head -1)"
+  doc="${doc/\$HOME/$HOME}"; doc="${doc/#\~/$HOME}"
+  real="$(env -u KIMI_REVIEW_HOME PATH="$b:$PATH" REVIEW_PRINT_HOME=1 REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subkimi" review "$d/t.md" "$d/k2.log" "$repo" 2>/dev/null)"
+  [[ -n "$doc" && -n "$real" && "$doc" == "$real" ]]
+  check "V40⑥: subkimi 的 usage 默认值和真实解析一致(doc=$doc)" $?
+
+  # ── ⑦ 同步之后,hook 命令指向**运行期 home**,不是仓内那份种子 ────────────────
+  local fakehome="$d/fh"; mkdir -p "$fakehome"
+  env PATH="$b:$PATH" HOME="$fakehome" REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subkimi" review "$d/t.md" "$d/k3.log" "$repo" >/dev/null 2>&1
+  local rt="$fakehome/.cache/aiwork/kimi-review-home"
+  [[ -f "$rt/config.toml" ]] && grep -q "$rt/hooks/guard.mjs" "$rt/config.toml" \
+    && ! grep -q '/root/aiwork/kimi-review-home/hooks' "$rt/config.toml"
+  check "V40⑦: 运行期 home 的 hook 指向自己那份 guard(不是仓内种子 ⇒ 副本不是死代码)" $?
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -3406,5 +3612,6 @@ v36_wrappers_actually_use_readonly_repo
 v37_wrappers_open_no_write_hole
 v38_leg_runtime_home_outside_repo
 v39_readonly_blind_spots
+v40_second_panel_findings
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
