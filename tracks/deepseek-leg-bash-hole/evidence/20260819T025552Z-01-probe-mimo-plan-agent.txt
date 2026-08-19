@@ -1,0 +1,39 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    probe-mimo-plan-agent
+cmd:     bash -c $'echo "探针:panel 第一条腿 submimo 用的 mimo --agent plan,它的实际工具面是什么"; echo "(bin/submimo:147 => mimo run --agent plan ...)"; echo; mimo debug agent plan | python3 -c "\nimport json,sys\nd=json.load(sys.stdin)\nprint(\\"description(自述):\\", d.get(\\"description\\"))\nt=d.get(\\"tools\\",{})\nprint()\nprint(\\"tools(实际):\\")\nfor k in sorted(t): print(f\\"  {k:14s} = {t[k]}\\")\nprint()\nprint(\\"permission(实际):\\")\nfor p in d.get(\\"permission\\",[]):\n    if p.get(\\"permission\\") in (\\"*\\",\\"bash\\",\\"write\\",\\"edit\\",\\"patch\\",\\"task\\"):\n        print(\\"  \\", p)\n"'
+cwd:     /root/aiwork(仓根)
+commit:  d3e2e5a
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-19T02:55:52Z
+---------------- 输出开始 ----------------
+探针:panel 第一条腿 submimo 用的 mimo --agent plan,它的实际工具面是什么
+(bin/submimo:147 => mimo run --agent plan ...)
+
+description(自述): Plan mode. Disallows all edit tools.
+
+tools(实际):
+  actor          = True
+  bash           = True
+  change_directory = True
+  edit           = True
+  glob           = True
+  grep           = True
+  history        = True
+  invalid        = True
+  memory         = True
+  plan_exit      = True
+  question       = True
+  read           = True
+  skill          = True
+  task           = True
+  webfetch       = True
+  workflow       = True
+  write          = True
+
+permission(实际):
+   {'permission': '*', 'action': 'allow', 'pattern': '*'}
+   {'permission': 'edit', 'pattern': '*', 'action': 'deny'}
+   {'permission': 'edit', 'pattern': '.mimocode/plans/*.md', 'action': 'allow'}
+   {'permission': 'edit', 'pattern': '../.local/share/mimocode/plans/*.md', 'action': 'allow'}
+---------------- 输出结束 ----------------
+runlog: probe-mimo-plan-agent rc=0 commit=d3e2e5a dirty=yes at=2026-08-19T02:55:52Z file=tracks/deepseek-leg-bash-hole/evidence/20260819T025552Z-01-probe-mimo-plan-agent.txt

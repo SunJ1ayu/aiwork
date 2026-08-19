@@ -669,13 +669,19 @@ i=a.index('--allowedTools'); rest=a[i+1:]
 j=[k for k,x in enumerate(rest) if x.startswith('--')]
 seg=rest[:j[0]] if j else rest
 sys.exit(0 if any(t.startswith('Bash') for t in seg) else 1)" "$d/a1.json" 2>/dev/null; then
-    bad "agent: allowlist 里不许有 Bash(它放行了 git diff --output= 这种写)"
+    ok  "agent: allowlist 里**要有** Bash —— 腿得能自己读 git(08-19 转向,见下)"
   else
-    ok  "agent: allowlist 里不许有 Bash(它放行了 git diff --output= 这种写)"
+    bad "agent: allowlist 里**要有** Bash —— 腿得能自己读 git(08-19 转向,见下)"
   fi
-  # 只在 **disallowedTools 那一段**里找。用 argvhas(整个 argv 找子串)会匹配到
-  # allowlist 里的 `Bash(git diff:*)` ⇒ 在 Bash 根本没被禁的时候也报绿
-  # (08-18 我第一版就是这么写的,今天第六条假绿)。
+  # ⚠️ 这条 08-19 反转过一次,理由写在这儿免得有人再来回翻:
+  # 08-18 我把 Bash 关了(理由:`git diff --output=` 能往仓里写 ⇒ 能改判据)。
+  # 关掉的代价是腿看不了 git,于是主 agent 要算好 diff 喂进提示词 —— 那条链上长出
+  # E2BIG(两条腿直接起不来)、SIGPIPE 静默暴毙、基线打错字静默变瞎,
+  # **最坏形态是腿没跑起来而 panel 照常出结论**(比腿写个文件危险得多)。
+  # 业主推翻了那个方向:评审腿**没有**"改判据让自己及格"的动机(那是执行腿的威胁模型),
+  # 对面是误伤和提示注入,不是有动机的对手 ⇒ **检测代替预防**,写审计见 track
+  # `repo-write-audit`(还没上线,窗口期是明账)。
+  # 下面这条跟着反转:Bash **不许**再被塞进 disallowedTools。
   if python3 -c "
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
@@ -683,9 +689,22 @@ i=a.index('--disallowedTools'); rest=a[i+1:]
 j=[k for k,x in enumerate(rest) if x.startswith('--')]
 seg=rest[:j[0]] if j else rest
 sys.exit(0 if 'Bash' in seg else 1)" "$d/a1.json" 2>/dev/null; then
-    ok  "agent: Bash 明确列进 disallowedTools"
+    bad "agent: Bash 不许再列进 disallowedTools(腿要能读 git)"
   else
-    bad "agent: Bash 明确列进 disallowedTools"
+    ok  "agent: Bash 不许再列进 disallowedTools(腿要能读 git)"
+  fi
+  # **写口仍然全禁** —— 这几样评审腿本来就不需要,关掉是零成本的,和 Bash 完全不同。
+  if python3 -c "
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+i=a.index('--disallowedTools'); rest=a[i+1:]
+j=[k for k,x in enumerate(rest) if x.startswith('--')]
+seg=rest[:j[0]] if j else rest
+missing=[t for t in ('Write','Edit','NotebookEdit','Task','Agent') if t not in seg]
+sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
+    ok  "agent: 写口仍全禁(Write/Edit/NotebookEdit/Task/Agent)—— 零成本,不跟着 Bash 一起放"
+  else
+    bad "agent: 写口仍全禁(Write/Edit/NotebookEdit/Task/Agent)—— 零成本,不跟着 Bash 一起放"
   fi
   argvhas "$d/a1.json" "--model sonnet";    check "agent: --model sonnet (mapped slot)" $?
   argvhas "$d/a1.json" "--setting-sources project"; check "agent: user settings not loaded" $?
@@ -899,34 +918,50 @@ v13_subkimi_leg() {
     echo '{"tool_name":"Read","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: Read allowed (rc=0)" $?
 
-    # 2026-08-18 晚(track deepseek-leg-bash-hole):**Bash 整个不许再放行**。
-    # 原守卫是"禁元字符 + 放行 ^git (diff|log|show|...)"的正则前缀白名单。
-    # 我直接拿这个守卫跑了四条命令,结果:
-    #   git diff --output=pwned.txt HEAD                     → **放行**(能往仓里写)
-    #   git diff --no-index <仓外的 key 文件> /dev/null       → **放行**(能读仓外并打进日志)
-    #   git log --oneline -5                                  → 放行
-    #   rm -rf x                                              → 拦下
-    # 前两条都不含元字符、又匹配 ^git\s+diff ⇒ 白名单挡不住 git 自己的参数,
-    # 而且这个守卫比 claude 那层更弱(没有路径感知)。
-    # 和另外两条底座腿同一个处置:**不留 Bash**,diff 由我们算好喂进提示词。
+    # ⚠️ 这一格 08-18 收紧过、08-19 又放回来,两次的理由都留着,别再来回翻:
+    #
+    # 08-18 我把 Bash 整个禁掉。**事实依据仍然成立**(我拿这个守卫真跑过):
+    #   git diff --output=pwned.txt HEAD                → **放行**(能往仓里写)
+    #   git diff --no-index <仓外 key 文件> /dev/null    → **放行**(能读仓外并打进日志)
+    #   rm -rf x                                        → 拦下
+    # 也就是说:这个正则前缀白名单**挡不住 git 自己的参数**。
+    #
+    # 08-19 业主推翻的是从那个事实推出的**结论**。禁掉 Bash 之后腿读不了 git,
+    # 主 agent 得算好 diff 喂进去,那条链上长出 E2BIG、SIGPIPE 静默暴毙、基线静默变瞎,
+    # 最坏形态是**腿根本没跑起来而 panel 照常出结论**。而评审腿没有"改判据让自己
+    # 及格"的动机(那是执行腿的威胁模型)⇒ 对面是误伤,不是有动机的对手。
+    #
+    # 所以现在的规格是:**白名单留着,但只当它是防误伤的,不当它是防对手的。**
+    # 它确实挡得住误伤的典型形态(rm、元字符链、非 git 命令);挡不住的那两条
+    # (--output= / --no-index)交给**跑完的写审计**(track repo-write-audit)。
+    # 下面这组断言因此按"挡误伤"来钉,不按"挡对手"来钉。
     local kcmd
-    for kcmd in "git diff --output=pwned.txt HEAD" \
-                "git diff --no-index /root/.config/opencode-go/auth.json /dev/null" \
-                "git log --oneline -5" \
-                "rm -rf x"; do
+    for kcmd in "rm -rf x" \
+                "curl http://evil" \
+                "git log && rm -rf /"; do
       echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$kcmd\"}}" \
         | node "$guard" >/dev/null 2>&1
-      check "guard: Bash 一律拒绝(含只读 git)—— $kcmd" $([[ $? -ne 0 ]]; echo $?)
+      check "guard: 误伤形态照旧拦下 —— $kcmd" $([[ $? -ne 0 ]]; echo $?)
     done
-    # 这里原本有一条 `guard: read-only git allowed`(断言只读 git 必须放行)。
-    # **它编码的是被本单推翻的旧规格**:白名单挡不住 git 自己的参数
-    # (--output= 能写、--no-index 能读仓外),所以现在只读 git 也不放行。
-    # 删它不是删考卷:上面那一组(四条,含 `git log --oneline -5`)把同一件事
-    # **反过来钉死了**,覆盖严格更强。理由写在原地,免得以后有人看见"少了一条"就补回去。
-    echo '{"tool_name":"Bash","tool_input":{"command":"git log && rm -rf /"}}' | node "$guard" >/dev/null 2>&1
-    check "guard: metachar chain denied" $([[ $? -eq 2 ]]; echo $?)
-    echo '{"tool_name":"Bash","tool_input":{"command":"curl http://evil"}}' | node "$guard" >/dev/null 2>&1
-    check "guard: non-git bash denied" $([[ $? -eq 2 ]]; echo $?)
+    # **正向**:只读 git 必须放行 —— 腿要能自己看历史和差异。
+    # (这条 08-18 被我删过,理由是"编码了被推翻的旧规格";08-19 它又成了对的规格。
+    #  留个记号:同一条断言两天内被删又被加回来,说明当时删它的那个判断是错的。)
+    for kcmd in "git log --oneline -5" \
+                "git diff HEAD" \
+                "git show --stat HEAD"; do
+      echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$kcmd\"}}" \
+        | node "$guard" >/dev/null 2>&1
+      check "guard: 只读 git 放行(腿得能自己读仓库)—— $kcmd" $?
+    done
+    # **已知挡不住、且明知故留**:这两条不是判据的洞,是写下来的账。
+    # 它们的防线在 repo-write-audit(还没上线)。断言写成"记录现状",红了说明
+    # 守卫行为变了,那时要回来重新判断,而不是默默接受。
+    for kcmd in "git diff --output=pwned.txt HEAD" \
+                "git diff --no-index /etc/hostname /dev/null"; do
+      echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$kcmd\"}}" \
+        | node "$guard" >/dev/null 2>&1
+      check "guard: 现状记录 —— 白名单挡不住这条(防线在 repo-write-audit)—— $kcmd" $?
+    done
     echo '{"tool_name":"SomeFutureTool","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: unknown tool denied (default-deny)" $([[ $? -eq 2 ]]; echo $?)
     echo 'garbage not json' | node "$guard" >/dev/null 2>&1
@@ -1389,13 +1424,13 @@ sys.exit(0 if sys.argv[2] in blob else 1)" "$1" "$2"; }
     local goff; goff="$(occfg "$gcfg" tools_off)"
     [[ " $goff " == *" write "* && " $goff " == *" edit "* ]]
     check "V17: subglm-agent explore 仍无写工具(配置里 write/edit 关着)" $?
-    # 08-18 晚随四审收紧:bash 从"白名单"变成整个关掉(白名单挡不住 git 自己的参数,
-    # 见 V28 那条的原委)。这里跟着收紧 —— 换模式不许把只读锁放松,而"锁"的定义变严了。
-    [[ " $goff " == *" bash "* ]]
-    check "V17: subglm-agent explore 下 bash 也是关的(换模式不许放松只读锁)" $?
+    # 08-19 反转(同 V28):bash 留着。换模式不许**收紧**成看不了 git,
+    # 也不许放松写口 —— 两个方向都钉住。
+    [[ " $goff " != *" bash "* ]]
+    check "V17: subglm-agent explore 下 bash 也留着(换模式不许把腿弄瞎)" $?
   else
     bad "V17: subglm-agent explore 仍无写工具(配置里 write/edit 关着)"
-    bad "V17: subglm-agent explore 的 bash 仍是白名单(* deny)"
+    bad "V17: subglm-agent explore 下 bash 也留着(换模式不许把腿弄瞎)"
   fi
   # review 模式的裁决闸不许被放松(opencode 报错也 rc=0,这道闸是唯一的活口)
   env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk STUB_OC_OUT="看着还行" \
@@ -2244,9 +2279,18 @@ PYCFG
     # 白名单本身就不成立**,不是模式写得不够细。所以不留 bash。
     # 代价认下来:这条腿看不了 git 历史/diff,但它的核心价值(自己读仓库)由
     # read/glob/grep 提供,一条没丢。
+    # ⚠️ 08-19 反转:**bash 必须留着**。上面那段原委(白名单挡不住 git 自己的参数)
+    # 事实仍然成立,但从它推出"所以关掉 bash"是错的一步 —— 关掉之后腿读不了 git,
+    # 主 agent 得算好 diff 喂进去,那条链上长出 E2BIG(两条腿直接起不来)、
+    # SIGPIPE 静默暴毙、基线静默变瞎。**最坏形态是腿没跑起来而 panel 照常出结论。**
+    # 正确结论是:白名单不成立 ⇒ **别用白名单**,不是 ⇒ 别给 bash。
+    # 评审腿没有改判据的动机;防误伤靠**跑完的写审计**(track repo-write-audit)。
     local off2; off2="$(occfg "$cfg" tools_off)"
-    [[ " $off2 " == *" bash "* ]]
-    check "V28: bash 整个关掉(命令行白名单挡不住 git 自己的参数,实测可写可读仓外)" $?
+    [[ " $off2 " != *" bash "* ]]
+    check "V28: **bash 留着**(腿要能自己读 git;关掉的代价见上,已被推翻)" $?
+    # 写口仍然全关 —— 零成本,不跟着 bash 一起放
+    [[ " $off2 " == *" write "* && " $off2 " == *" edit "* && " $off2 " == *" task "* ]]
+    check "V28: 写口仍全关(write/edit/task)—— 零成本,不跟着 bash 一起放" $?
   fi
 
   # ── ⑤ 裁决 gate 必须硬:**opencode 报错也 rc=0**(实测:余额不足那次错误打在
@@ -2394,491 +2438,189 @@ EOF
   rm -rf "$d"
 }
 
-# ---------------------------------------------------------------- V29
-# 2026-08-18 晚,track deepseek-leg-bash-hole。两条底座腿的 Bash 都关掉之后,
-# 它们看不了 git 历史/差异了 —— 但**它们需要的是那份 diff,不是一个 shell**。
-# 所以给底座腿补上"把 diff 算好塞进提示词"(聊天腿一直是这么拿 diff 的,底座腿反而没有)。
-v29_agent_legs_get_the_diff() {
-  echo "[V29] 底座腿拿得到 diff(Bash 关掉之后,diff 由我们算好喂进去)"
-  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"
-  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
-  cat > "$b/claude" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import json,os,sys
-open(os.environ['CAPTURE'],'w').write(json.dumps({'stdin': sys.stdin.read()}))"
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
-EOF
-  chmod +x "$b/claude"
-  printf '# t\n' > "$d/t.md"
-  # 造一个有历史的真仓:base 一版、HEAD 一版
-  local repo="$d/repo"; mkdir -p "$repo"
-  ( cd "$repo" && git init -q . \
-    && printf 'def add(a,b):\n    return a+b\n' > calc.py \
-    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base \
-    && printf 'def add(a,b):\n    return a-b\n' > calc.py \
-    && git add -A && git -c user.email=t@t -c user.name=t commit -qm head ) >/dev/null 2>&1
-  local base; base="$(git -C "$repo" rev-parse HEAD~1)"
-
-  local stdin_of; stdin_of() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['stdin'])" "$1"; }
-
-  # ① 给了 PANEL_DIFF_BASE ⇒ 提示词里必须真的带着那段 diff
-  env PATH="$b:$PATH" CAPTURE="$d/c1.json" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE="$base" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c1.log" "$repo" >/dev/null 2>&1
-  if [[ -f "$d/c1.json" ]]; then
-    stdin_of "$d/c1.json" | grep -q "return a-b"
-    check "V29: 给了 PANEL_DIFF_BASE 时,diff 正文进了提示词" $?
-    # 段头带基线号,所以按**前缀**匹配(第一版我写死了 "(diff)" 这个字面,
-    # 而真段头是 "(diff <基线>...HEAD)" ⇒ 断言错、实现对,红了一轮)。
-    stdin_of "$d/c1.json" | grep -q -- "--- 改动 (diff "
-    check "V29: diff 有自己的段头(别和任务书糊在一起)" $?
-  else
-    bad "V29: 给了 PANEL_DIFF_BASE 时,diff 正文进了提示词"
-    bad "V29: diff 有自己的段头(别和任务书糊在一起)"
-    echo "    (stub 没被调到 ⇒ 测空气)"
-  fi
-
-  # ①b **未提交的改动也要看得见**。腿现在没有 shell 了,以前它能自己 `git diff` 看工作区;
-  #    如果我们只喂 `base...HEAD`(三点),未提交的部分对它就是隐形的 —— 而派活现场
-  #    经常是"改完还没提交就先送审"。用两点 `git diff <base>`(base 对工作区)才全。
-  printf 'def add(a,b):\n    return a/b\n' > "$repo/calc.py"
-  env PATH="$b:$PATH" CAPTURE="$d/c3.json" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE="$base" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c3.log" "$repo" >/dev/null 2>&1
-  if [[ -f "$d/c3.json" ]]; then
-    stdin_of "$d/c3.json" | grep -q "return a/b"
-    check "V29: 未提交的改动也进了 diff 段(腿没有 shell,看不见就是真看不见)" $?
-  else
-    bad "V29: 未提交的改动也进了 diff 段(腿没有 shell,看不见就是真看不见)"
-  fi
-  git -C "$repo" checkout -- calc.py 2>/dev/null
-
-  # ② 没给 PANEL_DIFF_BASE ⇒ 不许硬塞一段空 diff 冒充有内容
-  env -u PANEL_DIFF_BASE PATH="$b:$PATH" CAPTURE="$d/c2.json" DEEPSEEK_API_KEY=dk \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c2.log" "$repo" >/dev/null 2>&1
-  if [[ -f "$d/c2.json" ]]; then
-    stdin_of "$d/c2.json" | grep -q -- "--- 改动 (diff "
-    check "V29: 没给基线时不硬塞空 diff 段" $([[ $? -ne 0 ]] && echo 0 || echo 1)
-  else
-    bad "V29: 没给基线时不硬塞空 diff 段"
-  fi
-
-  # ③ 提示词不许再宣称有 git(两条底座现在都没 shell 了)
-  if [[ -f "$d/c1.json" ]] && stdin_of "$d/c1.json" | grep -q "read-only git"; then
-    bad "V29: claude 底座的提示词也不许再宣称有只读 git"
-  elif [[ -f "$d/c1.json" ]]; then
-    ok  "V29: claude 底座的提示词也不许再宣称有只读 git"
-  else
-    bad "V29: claude 底座的提示词也不许再宣称有只读 git"
-  fi
-  rm -rf "$d"
-}
-
-
-# ---------------------------------------------------------------- V30
-# 2026-08-18 实事故(就发生在本单自己的四审里):opencode 腿和 kimi 腿双双 rc=126,
-# 日志里只有一句 `/usr/bin/timeout: Argument list too long`。
-# 根因:这两条腿把**整个提示词当一个 argv 参数**传(opencode 是位置参数、
-# kimi 是 `-p <prompt>`),而 Linux 对**单个参数**的硬上限是
-# MAX_ARG_STRLEN = 32 × PAGE_SIZE = 131072 字节;本单自己的 diff 是 132061 字节 ⇒ 必炸。
-# 而当时的截断上限是拍脑袋的 200KB —— **比物理上限还大,所以它在最该保护的时候不保护**。
-# claude 腿没炸,只因为它的提示词走 stdin(根本不占 argv)。
-# 这条判据钉死三件事:①巨型 diff 下走 argv 的腿也得起得来;②走 stdin 的腿不许被
-# argv 的预算连累;③提示词真的放不下时必须**响亮失败**,不是让 shell 吐一句 rc=126 的
-# 天书(那次 panel 只当"腿挂了"就回落,失败原因埋在 .err 里差点被当成模型问题)。
-v30_giant_prompt_does_not_blow_argv() {
-  echo "[V30] 巨型提示词不许把走 argv 的腿撑到起不来(E2BIG,08-18 实事故)"
-  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
-  local ARGMAX=131072
-  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$b/"
-  printf '# t\n' > "$d/t.md"
-
-  # 三个 stub:各自落盘"我被调起来了 + 我拿到的最大单参有多长 + 提示词原文"。
-  # 提示词原文要留全,后面 grep 截断标注用。
-  cat > "$b/opencode" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import os,sys,json
-a=sys.argv[1:]
-p=max(a,key=len) if a else ''
-json.dump({'argvmax':max((len(x) for x in a),default=0)},open(os.environ['CAPTURE'],'w'))
-open(os.environ['CAPTURE_PROMPT'],'w').write(p)" "$@"
-echo "stub"; echo "Conclusion: PASS"
-EOF
-  cat > "$b/kimi" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import os,sys,json
-a=sys.argv[1:]
-p=max(a,key=len) if a else ''
-json.dump({'argvmax':max((len(x) for x in a),default=0)},open(os.environ['CAPTURE'],'w'))
-open(os.environ['CAPTURE_PROMPT'],'w').write(p)" "$@"
-echo "stub"; echo "Conclusion: PASS"
-EOF
-  cat > "$b/claude" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import os,sys,json
-a=sys.argv[1:]
-s=sys.stdin.read()
-json.dump({'argvmax':max((len(x) for x in a),default=0),'stdinlen':len(s)},open(os.environ['CAPTURE'],'w'))
-open(os.environ['CAPTURE_PROMPT'],'w').write(s)"
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
-EOF
-  chmod +x "$b/opencode" "$b/kimi" "$b/claude"
-
-  # 真仓:base 一版,然后往工作区塞一个 ~400KB 的改动(不提交 —— 派活现场就是这样)
-  local repo="$d/repo"; mkdir -p "$repo"
-  ( cd "$repo" && git init -q . \
-    && printf 'x\n' > big.txt \
-    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base \
-    && python3 -c "
-open('big.txt','w').write(''.join('line %06d 0123456789abcdefghij\n' % i for i in range(12000)))" \
-  ) >/dev/null 2>&1
-
-  # ── ⓪ 前置锚:这一刀真的切中了。没有它,下面全是在测空气
-  #    (08-18 教训:「不含某串」的断言在输入缺席时会假绿)。
-  local dsz; dsz="$(git -C "$repo" diff HEAD | wc -c)"
-  [[ "$dsz" -gt "$ARGMAX" ]]
-  check "V30: 锚 —— 造出的 diff(${dsz}B)真的超过单参上限 ${ARGMAX}" $?
-
-  local getj; getj() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],-1))" "$1" "$2"; }
-
-  # ── ① opencode 底座腿(提示词走位置参数)
-  rm -f "$d/oc.json" "$d/oc.prompt"
-  env PATH="$b:$PATH" CAPTURE="$d/oc.json" CAPTURE_PROMPT="$d/oc.prompt" \
-    OPENCODE_REVIEW_HOME="$d/ochome" ZHIPU_API_KEY=zk PANEL_DIFF_BASE=HEAD \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/oc.log" "$repo" >/dev/null 2>"$d/oc.err"; rc=$?
-  [[ -f "$d/oc.json" ]]
-  check "V30: 巨型 diff 下 opencode 腿仍被调起(不是没起来就 E2BIG 了)" $?
-  grep -qi 'Argument list too long' "$d/oc.err" "$d/oc.log" 2>/dev/null
-  check "V30: opencode 腿不许再吐 Argument list too long" $([[ $? -ne 0 ]]; echo $?)
-  # wrapper 会把 126 转成自己的 rc,所以查"最终 rc 不是 126"永远绿(第一版就是这条,
-  # 红检时它在腿明明炸了的情况下照样 PASS)。真实失败形态是腿自己在 stderr 里的那句自述。
-  grep -q 'rc=126' "$d/oc.err" 2>/dev/null
-  check "V30: opencode 腿不许再以 rc=126 挂掉(查它自己的自述,不是转手后的 rc)" $([[ $? -ne 0 ]]; echo $?)
-  if [[ -f "$d/oc.json" ]]; then
-    local ocmax; ocmax="$(getj "$d/oc.json" argvmax)"
-    [[ "$ocmax" -gt 0 && "$ocmax" -lt "$ARGMAX" ]]
-    check "V30: 传给 opencode 的最大单参 ${ocmax}B < ${ARGMAX}" $?
-    # 截断了就必须说出来 —— 静默丢掉 2/3 的 diff 比看不到 diff 更坏(腿会以为自己看全了)
-    grep -q '截断' "$d/oc.prompt" 2>/dev/null
-    check "V30: opencode 腿的提示词里写明了 diff 被截断(不许静默丢)" $?
-  else
-    bad "V30: 传给 opencode 的最大单参 < ${ARGMAX}"
-    bad "V30: opencode 腿的提示词里写明了 diff 被截断(不许静默丢)"
-  fi
-
-  # ── ② kimi 腿(提示词走 -p <prompt>)
-  #    review home 必须真建出来(hooks/credentials/config.toml):第一版我只给了个空目录,
-  #    腿卡在 "review home config missing" 压根没跑到 exec ⇒ 那几条断言全在测空气,
-  #    而"不含 Argument list too long"这种否定断言在输入缺席时**假绿**(08-18 同一个坑)。
-  # fixture 照抄 V13 那份完整的(config + guard + credentials 三样缺一不可)。
-  # 我第一版自己拼,漏一样红一次、连漏三次,而每次"腿没起来"都让那两条否定断言假绿。
-  local kh="$d/kh"; mkdir -p "$kh/hooks" "$kh/credentials"
-  printf 'default_model = "x"\n' > "$kh/config.toml"
-  cp /root/aiwork/kimi-review-home/hooks/guard.mjs "$kh/hooks/guard.mjs" 2>/dev/null \
-    || printf 'process.exit(2)\n' > "$kh/hooks/guard.mjs"
-  echo '{}' > "$kh/credentials/kimi-code.json"
-  rm -f "$d/k.json" "$d/k.prompt"
-  env PATH="$b:$PATH" CAPTURE="$d/k.json" CAPTURE_PROMPT="$d/k.prompt" \
-    KIMI_REVIEW_HOME="$kh" PANEL_DIFF_BASE=HEAD \
-    bash "$b/subkimi" review "$d/t.md" "$d/k.log" "$repo" >/dev/null 2>"$d/k.err"; rc=$?
-  [[ -f "$d/k.json" ]]
-  check "V30: 巨型 diff 下 kimi 腿仍被调起" $?
-  grep -qi 'Argument list too long' "$d/k.err" "$d/k.log" 2>/dev/null
-  check "V30: kimi 腿不许再吐 Argument list too long" $([[ $? -ne 0 ]]; echo $?)
-  # wrapper 会把 126 转成自己的 rc,所以查"最终 rc 不是 126"永远绿(第一版就是这条,
-  # 红检时它在腿明明炸了的情况下照样 PASS)。真实失败形态是腿自己在 stderr 里的那句自述。
-  grep -q 'rc=126' "$d/k.err" 2>/dev/null
-  check "V30: kimi 腿不许再以 rc=126 挂掉(查它自己的自述,不是转手后的 rc)" $([[ $? -ne 0 ]]; echo $?)
-  if [[ -f "$d/k.json" ]]; then
-    local kmax; kmax="$(getj "$d/k.json" argvmax)"
-    [[ "$kmax" -gt 0 && "$kmax" -lt "$ARGMAX" ]]
-    check "V30: 传给 kimi 的最大单参 ${kmax}B < ${ARGMAX}" $?
-    grep -q '截断' "$d/k.prompt" 2>/dev/null
-    check "V30: kimi 腿的提示词里写明了 diff 被截断(不许静默丢)" $?
-  else
-    bad "V30: 传给 kimi 的最大单参 < ${ARGMAX}"
-    bad "V30: kimi 腿的提示词里写明了 diff 被截断(不许静默丢)"
-  fi
-
-  # ── ③ claude 腿走 stdin ⇒ **不该被 argv 的预算连累**。
-  #    修法如果图省事把上限一刀切到 128KB,这条会红 —— 那是能力的无谓损失。
-  rm -f "$d/c.json" "$d/c.prompt"
-  env PATH="$b:$PATH" CAPTURE="$d/c.json" CAPTURE_PROMPT="$d/c.prompt" \
-    DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c.log" "$repo" >/dev/null 2>"$d/c.err"; rc=$?
-  if [[ -f "$d/c.json" ]]; then
-    local cstdin cargv; cstdin="$(getj "$d/c.json" stdinlen)"; cargv="$(getj "$d/c.json" argvmax)"
-    [[ "$cstdin" -gt "$ARGMAX" ]]
-    check "V30: claude 腿(走 stdin)仍拿到超过 ${ARGMAX}B 的提示词(${cstdin}B),没被 argv 预算连累" $?
-    [[ "$cargv" -lt "$ARGMAX" ]]
-    check "V30: claude 腿的提示词确实没走 argv(最大单参 ${cargv}B)" $?
-  else
-    bad "V30: claude 腿(走 stdin)仍拿到超过 ${ARGMAX}B 的提示词"
-    bad "V30: claude 腿的提示词确实没走 argv"
-  fi
-
-  # ── ④ 提示词的**非 diff 部分**自己就超限时:截 diff 也救不回来 ⇒ 必须响亮失败。
-  #    这是本次事故最难看的地方:失败形态是 rc=126 + 一句 shell 天书,
-  #    panel 只当"腿挂了"照常回落,真原因埋在 .err 里没人看。
-  python3 -c "
-open('$d/huge.md','w').write('# t\n' + ''.join('task line %06d padding padding padding\n' % i for i in range(5000)))"
-  rm -f "$d/oc2.json" "$d/oc2.prompt"
-  env PATH="$b:$PATH" CAPTURE="$d/oc2.json" CAPTURE_PROMPT="$d/oc2.prompt" \
-    OPENCODE_REVIEW_HOME="$d/ochome2" ZHIPU_API_KEY=zk \
-    bash "$b/subglm-agent" review "$d/huge.md" "$d/oc2.log" "$repo" >/dev/null 2>"$d/oc2.err"; rc=$?
-  local hsz; hsz="$(wc -c < "$d/huge.md")"
-  [[ "$hsz" -gt "$ARGMAX" ]]
-  check "V30: 锚 —— 造出的任务书(${hsz}B)本身就超过单参上限" $?
-  [[ "$rc" -ne 0 ]]
-  check "V30: 提示词放不下时硬失败(rc=${rc},不许假装跑过)" $?
-  grep -qiE '提示词|prompt' "$d/oc2.err" 2>/dev/null
-  check "V30: 失败原因点名是提示词太大(别让人对着 rc=126 猜)" $?
-  if [[ -f "$d/oc2.json" ]]; then
-    bad "V30: 提示词放不下时腿压根不该被调起"
-    echo "    (stub 被调起来了 ⇒ 我们没在自己这边拦住,又要靠 execve 去炸)"
-  else
-    ok "V30: 提示词放不下时腿压根不该被调起"
-  fi
-
-  rm -rf "$d"
-}
-
-
-# ---------------------------------------------------------------- V31
-# 收 08-18 四审 subdeepseek 的 F2 / F4(两条都成立,修完在这儿钉死):
+# ---------------------------------------------------------------- V29~V32(已退场)
+# 2026-08-19 拆除。这四段(底座腿的 diff 注入 / argv 预算 / 三腿覆盖 / 工件排除)
+# 测的是一个**已经被推翻的机制**:为了给评审腿关掉 bash,由主 agent 把 diff 算好喂进
+# 提示词。业主推翻了那个方向 —— 评审腿没有"改判据让自己及格"的动机(那是执行腿的
+# 威胁模型),而关掉 bash 的代价是那条链上长出 E2BIG / SIGPIPE 静默暴毙 / 基线静默变瞎,
+# 最坏形态是**两条腿根本没跑起来而 panel 照常出结论**。
 #
-# F2:diff 注入是 subagent 那份**复制粘贴**进 subkimi 的,而 V29 只拷了 claude 腿去测
-#     ⇒ subkimi 的新代码零断言覆盖,而 F1(E2BIG)恰恰先砸在它头上。
-#     代码面已抽成共享库 _prompt-budget.sh(根治"两份拷贝总有一份落下"),
-#     判据这边补上:**三条腿都要真的拿到 diff**,不是只有被测过的那条。
+# ⚠️ 这不是"删断言让自己及格":被删的断言测的是**不复存在的代码路径**
+# (`bin/_prompt-budget.sh` 同轮删除),留着只会永远绿或永远红,两种都是噪音。
+# 全文在 git 历史里:`git log --oneline -- tests/test-review-tooling.sh`,
+# 拆除那一版是本行所在 commit 的父提交。
+# 替代防线是新 track `repo-write-audit`(写审计,按进程树归因),**它还没上线** ——
+# 窗口期是明账,写在 tracks/repo-write-audit/proposal.md 末尾。
+
+# ---------------------------------------------------------------- V33
+# 2026-08-19,收本轮四审 subkimi 的 F1(孤腿 BLOCK,成立)。
 #
-# F4:非法基线在底座腿被静默吞掉(`git diff "$BASE" 2>/dev/null` ⇒ 空 ⇒ 不注入不报错),
-#     而聊天腿的引擎把它当硬错误(V5:invalid PANEL_DIFF_BASE is a hard error)。
-#     不一致的后果是**基线打错字时腿静默变瞎**,评审质量掉下去却没人知道。
-v31_diff_injection_covers_every_leg() {
-  echo "[V31] diff 注入:三条腿都真的拿得到;基线非法一律硬失败(收 F2/F4)"
-  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
-  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$b/"
+# 本单从头到尾在堵"评审腿能往被评审的仓里写 ⇒ 能改判据"。我以为是三条腿,
+# **漏了 panel 的第一条**:`bin/submimo` 跑的是 `mimo run --agent plan`,
+# 是 MiMoCode **agent 底座**,不是我一直以为的聊天腿 —— 这个错误分类我还亲手
+# 写进了给评审腿的任务书,是腿去读代码把我推翻的。
+#
+# 取证(`mimo debug agent plan`,收据 20260819T025552Z):
+#     description: "Plan mode. Disallows all edit tools."   ← 自述
+#     tools:  bash=True  write=True  edit=True  task=True  webfetch=True  skill=True
+#     permission: {"*": allow "*"},只有 edit 被 deny
+# ⇒ **能跑任意命令、能写新文件**,比已修的三条腿的洞都大。而它一直在跑。
+# 和 opencode 内置 plan 档一模一样的病(subagent 里早有取证):**自称禁编辑,
+# 实际全开** —— 只读靠模型自觉,不是闸。
+#
+# ⚠️ 边界一(业主当场拦下的):`submimo` 有两个身份。`fix` 是**执行腿**,
+# 写代码就是它的本职,`--agent build` 一个字都不许动。只锁 review / explore。
+# 这条判据因此必须带**反面对照组**,否则"加一道防线顺手拆掉另一道"。
+#
+# ⚠️ 边界二(08-19 业主拍板转向后):**bash 必须留着。**
+# 关 bash 那条路已经走过并被推翻:代价是腿不能自己读 git,于是要由主 agent 算好
+# diff 喂进去,而那条链上长出了 E2BIG / SIGPIPE 静默暴毙 / 基线静默变瞎 一整串 bug,
+# 最坏的形态是**两条腿根本没跑起来而 panel 照常出结论**。
+# 评审腿没有"改判据让自己及格"的动机(那是执行腿的威胁模型),
+# 对面是误伤不是有动机的对手 ⇒ 用**跑完检测工作树**兜底,不用砍能力。
+# 下面因此有一条**反向断言:bash 不许被关掉** —— 它挡的是"以后又有人觉得关掉更安全"。
+v33_submimo_review_leg_is_read_only() {
+  echo "[V33] panel 第一条腿(submimo)写口关掉、bash 留着,fix 不受连累"
+  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local REAL_MIMO; REAL_MIMO="$(command -v mimo || true)"
+  cp "$BIN/submimo" "$b/"
   printf '# t\n' > "$d/t.md"
-
-  # kimi 的 fixture 照抄 V13 那份完整的(config + guard + credentials,缺一样腿就起不来,
-  # 而腿起不来会让下面每一条否定断言假绿 —— V30 那轮我连漏三次)。
-  local kh="$d/kh"; mkdir -p "$kh/hooks" "$kh/credentials"
-  printf 'default_model = "x"\n' > "$kh/config.toml"
-  cp /root/aiwork/kimi-review-home/hooks/guard.mjs "$kh/hooks/guard.mjs" 2>/dev/null \
-    || printf 'process.exit(2)\n' > "$kh/hooks/guard.mjs"
-  echo '{}' > "$kh/credentials/kimi-code.json"
-
-  cat > "$b/opencode" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import os,sys
-a=sys.argv[1:]
-open(os.environ['CAPTURE_PROMPT'],'w').write(max(a,key=len) if a else '')" "$@"
-echo "stub"; echo "Conclusion: PASS"
-EOF
-  cat > "$b/kimi" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import os,sys
-a=sys.argv[1:]
-open(os.environ['CAPTURE_PROMPT'],'w').write(max(a,key=len) if a else '')" "$@"
-echo "stub"; echo "Conclusion: PASS"
-EOF
-  cat > "$b/claude" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import os,sys
-open(os.environ['CAPTURE_PROMPT'],'w').write(sys.stdin.read())"
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
-EOF
-  chmod +x "$b/opencode" "$b/kimi" "$b/claude"
-
-  # 真仓:base 一版(已提交),工作区再改一版(未提交 —— 派活现场就是这样)
   local repo="$d/repo"; mkdir -p "$repo"
-  ( cd "$repo" && git init -q . \
-    && printf 'def add(a,b):\n    return a+b\n' > calc.py \
-    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base \
-    && printf 'def add(a,b):\n    return a/b\n' > calc.py ) >/dev/null 2>&1
+  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
 
-  # ── ① F2:三条腿都得真的拿到 diff(含未提交那一版)
-  #    腿名 / 启动命令 / 需要的额外 env 各不同,所以逐条写,不做花哨的表驱动。
-  rm -f "$d/p_oc"
-  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p_oc" OPENCODE_REVIEW_HOME="$d/ochome" \
-    ZHIPU_API_KEY=zk PANEL_DIFF_BASE=HEAD \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/oc.log" "$repo" >/dev/null 2>&1
-  if [[ -f "$d/p_oc" ]]; then
-    grep -q "return a/b" "$d/p_oc"
-    check "V31: opencode 腿拿到了 diff(含未提交的改动)" $?
+  # stub mimo:只落 argv(查它到底用哪个档),不碰真底座
+  cat > "$b/mimo" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import os,sys,json
+json.dump({'argv':sys.argv[1:]},open(os.environ['CAPTURE'],'w'))" "$@"
+echo "stub review output"; echo "Conclusion: PASS"
+EOF
+  chmod +x "$b/mimo"
+  local agent_of; agent_of() {
+    python3 -c "
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
+  }
+
+  local mhome="$d/mimohome"
+
+  # ── ⓪ 前置锚:内置 plan 档**确实**是全开的。
+  #    没有这一条,下面所有断言都可能是在给一个本来就没问题的东西加锁(测空气)。
+  #    用 mimo 自己的解析器取证 —— 查工件不查自述。
+  if [[ -n "$REAL_MIMO" ]]; then
+    local planopen
+    planopen="$("$REAL_MIMO" debug agent plan 2>/dev/null | python3 -c "
+import json,sys
+try: t=json.load(sys.stdin).get('tools',{})
+except Exception: print('ERR'); raise SystemExit
+print('OPEN' if (t.get('write') and t.get('task')) else 'LOCKED')" 2>/dev/null)"
+    [[ "$planopen" == "OPEN" ]]
+    check "V33: 锚 —— 内置 plan 档实测 write+task 全开(自称 Disallows all edit tools)" $?
   else
-    bad "V31: opencode 腿拿到了 diff(含未提交的改动)"
+    bad "V33: 锚 —— 内置 plan 档实测 write+task 全开"
+    echo "    (机器上没有 mimo,这条取证跑不了)"
+  fi
+
+  # ── ① review 不许再用内置 plan 档
+  rm -f "$d/c_review"
+  env PATH="$b:$PATH" CAPTURE="$d/c_review" MIMO_REVIEW_HOME="$mhome" \
+    bash "$b/submimo" review "$d/t.md" "$d/r.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/c_review" ]]; then
+    local ag; ag="$(agent_of "$d/c_review")"
+    [[ "$ag" != "plan" && -n "$ag" ]]
+    check "V33: review 模式不许再用内置 plan 档(实际用的是 '$ag')" $?
+  else
+    bad "V33: review 模式不许再用内置 plan 档"
     echo "    (stub 没被调起 ⇒ 测空气)"
   fi
 
-  rm -f "$d/p_k"
-  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p_k" KIMI_REVIEW_HOME="$kh" PANEL_DIFF_BASE=HEAD \
-    bash "$b/subkimi" review "$d/t.md" "$d/k.log" "$repo" >/dev/null 2>&1
-  if [[ -f "$d/p_k" ]]; then
-    grep -q "return a/b" "$d/p_k"
-    check "V31: kimi 腿拿到了 diff(含未提交的改动)—— F2 说的就是这条没人测" $?
+  # ── ② explore 同样(它的指令还写着"不许用任何工具",更不该有 shell)
+  rm -f "$d/c_explore"
+  env PATH="$b:$PATH" CAPTURE="$d/c_explore" MIMO_REVIEW_HOME="$mhome" \
+    bash "$b/submimo" explore "$d/t.md" "$d/e.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/c_explore" ]]; then
+    local ag2; ag2="$(agent_of "$d/c_explore")"
+    [[ "$ag2" != "plan" && -n "$ag2" ]]
+    check "V33: explore 模式不许再用内置 plan 档(实际用的是 '$ag2')" $?
   else
-    bad "V31: kimi 腿拿到了 diff(含未提交的改动)—— F2 说的就是这条没人测"
-    echo "    (stub 没被调起 ⇒ 测空气)"
+    bad "V33: explore 模式不许再用内置 plan 档"
   fi
 
-  rm -f "$d/p_c"
-  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p_c" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c.log" "$repo" >/dev/null 2>&1
-  if [[ -f "$d/p_c" ]]; then
-    grep -q "return a/b" "$d/p_c"
-    check "V31: claude 腿拿到了 diff(含未提交的改动)" $?
+  # ── ③ **反面对照(业主拦下的那条)**:fix 是执行腿,写代码是本职。
+  #    只读锁不许连坐到它身上 —— 那等于把执行腿打死。
+  rm -f "$d/c_fix"
+  env PATH="$b:$PATH" CAPTURE="$d/c_fix" MIMO_REVIEW_HOME="$mhome" \
+    bash "$b/submimo" fix "$d/t.md" "$d/f.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/c_fix" ]]; then
+    local ag3; ag3="$(agent_of "$d/c_fix")"
+    [[ "$ag3" == "build" ]]
+    check "V33: 对照 —— fix 仍用 build 档(执行腿要写代码,不许被顺手锁死)" $?
   else
-    bad "V31: claude 腿拿到了 diff(含未提交的改动)"
+    bad "V33: 对照 —— fix 仍用 build 档(执行腿要写代码,不许被顺手锁死)"
   fi
 
-  # ── ② F4:基线非法 ⇒ **硬失败**,别静默变瞎。
-  #    聊天腿早就是硬错误(V5),底座腿却是 `2>/dev/null` 吞掉 ⇒ 不注入、不报错。
-  #    基线打错一个字母,腿就在没有 diff 的情况下照常评审,而日志里看不出区别。
-  local badbase="no-such-ref-deadbeef"
-  for leg in subglm-agent subkimi subdeepseek-agent; do
-    local extra=() cap="$d/p_bad_$leg"
-    case "$leg" in
-      subglm-agent)      extra=(OPENCODE_REVIEW_HOME="$d/ochome2" ZHIPU_API_KEY=zk) ;;
-      subkimi)           extra=(KIMI_REVIEW_HOME="$kh") ;;
-      subdeepseek-agent) extra=(DEEPSEEK_API_KEY=dk) ;;
-    esac
-    rm -f "$cap"
-    env PATH="$b:$PATH" CAPTURE_PROMPT="$cap" "${extra[@]}" PANEL_DIFF_BASE="$badbase" \
-      bash "$b/$leg" review "$d/t.md" "$d/bad_$leg.log" "$repo" >/dev/null 2>"$d/bad_$leg.err"; rc=$?
-    [[ "$rc" -ne 0 ]]
-    check "V31: $leg —— 基线非法时硬失败(rc=$rc),不许静默变瞎" $?
-    grep -q -- "$badbase" "$d/bad_$leg.err" 2>/dev/null
-    check "V31: $leg —— 报错点名那个解不开的基线(别让人猜)" $?
-    if [[ -f "$cap" ]]; then
-      bad "V31: $leg —— 基线非法时腿压根不该被调起"
-      echo "    (腿起来了 ⇒ 它正在评审一份没有 diff 的改动,而且没人知道)"
+  # ── ④ 锁必须是**机械的**:拿 mimo 自己的解析器去读我们生成的配置。
+  #    只查"我们往 json 里写了什么"是不够的 —— plan 档骗过我的正是这个区别:
+  #    配置说一套、解析出来是另一套。
+  if [[ -f "$mhome/.config/mimocode/mimocode.json" ]]; then
+    ok "V33: 只读 agent 的配置生成在隔离 HOME(没污染 /root/.config/mimocode)"
+    if [[ -n "$REAL_MIMO" ]]; then
+      # 写口必须关:write/edit/task/webfetch/skill。这几样评审腿本来就不需要,
+      # 关掉是**零成本**的 —— 和关 bash 完全不同(那个的代价见文件头边界二)。
+      # task 尤其要关:spawn 子代理 = 子代理有自己的工具面 = 现成的绕过通道。
+      local wopen
+      wopen="$(HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
+import json,sys
+try: t=json.load(sys.stdin).get('tools',{})
+except Exception: print('ERR'); raise SystemExit
+bad=[k for k in ('write','edit','patch','task','webfetch','skill') if t.get(k)]
+print(','.join(bad) if bad else 'NONE')" 2>/dev/null)"
+      [[ "$wopen" == "NONE" ]]
+      check "V33: 写口全关(残留: ${wopen:-?})—— write/edit/patch/task/webfetch/skill" $?
+
+      # **反向断言**:bash 不许被关掉。
+      # 这条挡的不是攻击者,是**未来的我** —— 08-18 我就是觉得"关掉更安全"才关的,
+      # 结果两条腿静默不跑、一天半白干。腿要能自己 git diff/log/show 读仓库。
+      local bashon
+      bashon="$(HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
+import json,sys
+t=json.load(sys.stdin).get('tools',{})
+print('ON' if t.get('bash') else 'OFF')" 2>/dev/null)"
+      [[ "$bashon" == "ON" ]]
+      check "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)" $?
+
+      local keep
+      keep="$(HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
+import json,sys
+t=json.load(sys.stdin).get('tools',{})
+print('OK' if all(t.get(k) for k in ('read','glob','grep')) else 'MISSING')" 2>/dev/null)"
+      [[ "$keep" == "OK" ]]
+      check "V33: read/glob/grep 还在(否则这条腿等于废了)" $?
     else
-      ok "V31: $leg —— 基线非法时腿压根不该被调起"
+      bad "V33: 写口全关 —— write/edit/patch/task/webfetch/skill"
+      bad "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)"
+      bad "V33: read/glob/grep 还在"
     fi
-  done
-
-  # ── ③ 反面对照:基线**合法但没有任何改动**时,不许跟着一起硬失败。
-  #    (没有这一条,上面那组用"凡是拿不到 diff 就报错"也能全绿 —— 那会把
-  #     "干净工作区送审"这个正常场景一并打死。)
-  ( cd "$repo" && git checkout -q -- calc.py ) 2>/dev/null
-  rm -f "$d/p_clean"
-  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p_clean" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/clean.log" "$repo" >/dev/null 2>&1; rc=$?
-  [[ "$rc" -eq 0 ]]
-  check "V31: 对照 —— 基线合法但工作区干净时照常跑(rc=$rc),不许连坐" $?
-  [[ -f "$d/p_clean" ]]
-  check "V31: 对照 —— 干净工作区下腿仍被正常调起" $?
-
-  rm -rf "$d"
-}
-
-
-# ---------------------------------------------------------------- V32
-# 2026-08-19,业主一句「第一性原理别忘了」逼出来的。
-#
-# 我一路在修的是"提示词塞不下怎么办"(按通道算预算、截断、响亮失败 —— V30/V31)。
-# 那些都对,但全是**管理症状**。往下问一层:一份 diff 凭什么有 132KB?
-# 实测昨天撑爆 argv 的那份(a604e16→工作区,4770 行):
-#     evidence 收据 4011 行(84%) / 判据 448 行(9%) / **代码 219 行(4%)**
-# 84% 是 runlog 机器打印的收据 —— 348 行 PASS 清单那种。评审腿不需要逐行读它们,
-# 而它们正把真正该看的 219 行代码挤出窗口(截断是从尾部砍,代码在哪一段全看运气)。
-#
-# ⇒ 根不是"管子太细",是"往管子里塞了不该塞的东西"。排掉之后 diff 回到 ~20KB,
-#   128KB 那条线根本撞不到,而且腿看到的是**完整**的代码改动,不是截断的三分之一。
-#
-# 但不许变成盲区:被省略的文件**名字和行数照样给**(腿知道它们变过、想看能自己 Read)。
-# 省略必须写在提示词里 —— 和截断同一个道理:静默省略比不省略更坏。
-v32_diff_drops_machine_artifacts() {
-  echo "[V32] 喂腿的 diff 只放该读的:机器写的收据给摘要不给正文(拔根,08-19)"
-  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"
-  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
-  printf '# t\n' > "$d/t.md"
-  cat > "$b/claude" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import os,sys
-open(os.environ['CAPTURE_PROMPT'],'w').write(sys.stdin.read())"
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
-EOF
-  chmod +x "$b/claude"
-
-  # 真仓:一处**代码**改动 + 一份**机器写的收据**(后者故意造得很大,正是真实形状)
-  local repo="$d/repo"; mkdir -p "$repo"
-  ( cd "$repo" && git init -q . \
-    && printf 'def add(a,b):\n    return a+b\n' > calc.py \
-    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base \
-    && printf 'def add(a,b):\n    return a-b\n    # CODE_CHANGE_MARKER\n' > calc.py \
-    && mkdir -p tracks/demo/evidence \
-    && python3 -c "
-open('tracks/demo/evidence/20260819T000000Z-01-green.txt','w').write(
-    'runlog receipt header\n' + ''.join('  PASS: RECEIPT_LINE_MARKER %04d\n' % i for i in range(900)))" \
-    && git add -A \
-  ) >/dev/null 2>&1
-  # ↑ `git add` 不是可有可无:`git diff HEAD` **不含未跟踪文件**,第一版忘了这一步,
-  #   收据压根没进 diff ⇒ "收据正文不许进提示词"这条否定断言当场**假绿**。
-  #   是顶上那个前置锚(收据 0 行 vs 代码 1 行)把它抓出来的 —— 锚的价值就在这。
-
-  # ⓪ 前置锚:收据真的比代码大得多(不然这条判据是在测空气)
-  local ev_lines code_lines
-  ev_lines="$(git -C "$repo" diff HEAD -- 'tracks/*/evidence/*' | grep -c RECEIPT_LINE_MARKER)"
-  code_lines="$(git -C "$repo" diff HEAD -- calc.py | grep -c CODE_CHANGE_MARKER)"
-  [[ "$ev_lines" -gt 500 && "$code_lines" -ge 1 ]]
-  check "V32: 锚 —— 收据 ${ev_lines} 行 vs 代码 ${code_lines} 行,比例真实" $?
-
-  rm -f "$d/p"
-  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c.log" "$repo" >/dev/null 2>&1
-
-  if [[ ! -f "$d/p" ]]; then
-    bad "V32: 代码改动的正文照常进提示词"
-    bad "V32: 收据的正文不许进提示词"
-    bad "V32: 被省略的收据仍要报出文件名(不许变成盲区)"
-    bad "V32: 省略这件事要写在提示词里(静默省略比不省略更坏)"
-    echo "    (stub 没被调起 ⇒ 测空气)"
-    rm -rf "$d"; return 0
+  else
+    bad "V33: 只读 agent 的配置生成在隔离 HOME(没污染 /root/.config/mimocode)"
+    bad "V33: 写口全关 —— write/edit/patch/task/webfetch/skill"
+    bad "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)"
+    bad "V33: read/glob/grep 还在"
   fi
 
-  # ① 代码改动照常进 —— 这才是腿要读的东西
-  grep -q "CODE_CHANGE_MARKER" "$d/p"
-  check "V32: 代码改动的正文照常进提示词" $?
-
-  # ② 收据正文不许进(它占 84% 而信息量约等于"绿了")
-  grep -q "RECEIPT_LINE_MARKER" "$d/p"
-  check "V32: 收据的正文不许进提示词" $([[ $? -ne 0 ]]; echo $?)
-
-  # ③ 但不许变成盲区:名字和规模要给,腿想看能自己 Read
-  grep -q "20260819T000000Z-01-green.txt" "$d/p"
-  check "V32: 被省略的收据仍要报出文件名(不许变成盲区)" $?
-
-  # ④ 省略要说出来
-  grep -qE '省略|摘要' "$d/p"
-  check "V32: 省略这件事要写在提示词里(静默省略比不省略更坏)" $?
-
-  # ⑤ 对照组:没有收据变动时,不许硬塞一段空摘要充数
-  #    (没有这条,实现用"永远打印一句摘要"也能让 ④ 全绿。)
-  local repo2="$d/repo2"; mkdir -p "$repo2"
-  ( cd "$repo2" && git init -q . \
-    && printf 'a\n' > calc.py && git add -A \
-    && git -c user.email=t@t -c user.name=t commit -qm base \
-    && printf 'b\n    # CODE_CHANGE_MARKER\n' > calc.py ) >/dev/null 2>&1
-  rm -f "$d/p2"
-  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p2" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c2.log" "$repo2" >/dev/null 2>&1
-  if [[ -f "$d/p2" ]]; then
-    grep -qE '省略|摘要' "$d/p2"
-    check "V32: 对照 —— 没有收据变动时不许硬塞空摘要" $([[ $? -ne 0 ]]; echo $?)
-    grep -q "CODE_CHANGE_MARKER" "$d/p2"
-    check "V32: 对照 —— 该进的代码仍然进了(证明这一组不是空跑)" $?
+  # ── ⑤ 配置每次重写(它就是锁本身,不许留隔夜残留)
+  if [[ -f "$mhome/.config/mimocode/mimocode.json" ]]; then
+    printf '{"agent":{"aiwork-review":{"tools":{"bash":true}}}}' > "$mhome/.config/mimocode/mimocode.json"
+    rm -f "$d/c_rewrite"
+    env PATH="$b:$PATH" CAPTURE="$d/c_rewrite" MIMO_REVIEW_HOME="$mhome" \
+      bash "$b/submimo" review "$d/t.md" "$d/r2.log" "$repo" >/dev/null 2>&1
+    grep -q '"bash": *true' "$mhome/.config/mimocode/mimocode.json"
+    check "V33: 配置每次重写(被人改松了也会被覆盖回去)" $([[ $? -ne 0 ]]; echo $?)
   else
-    bad "V32: 对照 —— 没有收据变动时不许硬塞空摘要"
-    bad "V32: 对照 —— 该进的代码仍然进了(证明这一组不是空跑)"
+    bad "V33: 配置每次重写(被人改松了也会被覆盖回去)"
   fi
 
   rm -rf "$d"
@@ -2919,9 +2661,6 @@ v25_legs_run_in_their_own_session
 REVIEW_NO_MY_REVIEW=1 v26_glm_on_opencode_go
 REVIEW_NO_MY_REVIEW=1 v27_knockon_of_the_backend_switch
 REVIEW_NO_MY_REVIEW=1 v28_glm_on_opencode_base
-REVIEW_NO_MY_REVIEW=1 v29_agent_legs_get_the_diff
-REVIEW_NO_MY_REVIEW=1 v30_giant_prompt_does_not_blow_argv
-REVIEW_NO_MY_REVIEW=1 v31_diff_injection_covers_every_leg
-REVIEW_NO_MY_REVIEW=1 v32_diff_drops_machine_artifacts
+REVIEW_NO_MY_REVIEW=1 v33_submimo_review_leg_is_read_only
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
