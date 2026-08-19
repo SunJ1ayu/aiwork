@@ -2,7 +2,7 @@
 set -uo pipefail
 
 # subagent - 底座腿的**唯一躯干**:把 Claude Code headless(`claude -p`)指向某个
-# Anthropic 兼容端点,让那个模型自己读仓库(Read/Glob/Grep + 只读 git)做评审/发散。
+# Anthropic 兼容端点,让模型自己读仓库并在 review 的可写副本里跑本地检查。
 # 今天服务 deepseek 与 zhipu 两条腿,经 `subdeepseek-agent` / `subglm-agent` 两个瘦
 # shim 调用,调用方一个字都不用改。加新供应商 = 在下面的供应商表里加一段。
 #
@@ -10,7 +10,7 @@ set -uo pipefail
 # 相同的两份拷贝(342 行只差 80 行,多半还是注释)⇒ 每条修法都要改两遍,而历史证明
 # **总有一份会落下**。聊天腿早就用 `subchat` + 供应商表治过这个病,底座腿一直没治。
 #
-#   review  -> claude -p,只读工具白名单,出卷闸(必须给裁决)。
+#   review  -> claude -p,每腿可写副本 + 原仓只读,出卷闸(必须给裁决)。
 #   explore -> claude -p,同样只读,无裁决闸。
 #   fix     -> 故意不支持:评审腿保持只读。要改代码用 `submimo fix`。
 #
@@ -69,6 +69,15 @@ done
 if [[ $# -lt 4 || $# -gt 5 ]]; then usage; exit 2; fi
 
 PROVIDER="$1"; MODE="$2"; TASK_FILE="$3"; LOG_FILE="$4"; REPO_DIR="${5:-$PWD}"
+SOURCE_REPO="$REPO_DIR"
+
+if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
+  _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
+    || { echo "subagent: review/explore needs a Git worktree with HEAD: $SOURCE_REPO" >&2; exit 78; }
+  SOURCE_REPO="$(cd "$_SOURCE_TOP" && pwd -P)" \
+    || { echo "subagent: cannot resolve source repo: $_SOURCE_TOP" >&2; exit 78; }
+  REPO_DIR="$SOURCE_REPO"
+fi
 
 # 反锚定闸(2026-08-06):review 模式下,主 agent 自己那一遍必须先落盘;
 # panel-review 派发时在命令行末尾带 --panel-dispatch,不重复拦。共享实现,不抄第二份。
@@ -187,13 +196,17 @@ mkdir -p "$(dirname "$LOG_FILE")"
 # 能力清单按底座给:**不许宣称一个它没有的工具,也不许瞒着它有的**。
 # 08-18 真跑撞过一次:bash 关掉后提示词还写着 "read-only git commands",
 # 腿当场顶回来「The task's premise ... is incorrect」并为此白花几轮。
-# 08-19 转向后两个底座都**有** bash(只读 git),所以清单说实话。
-TOOLS_SENTENCE="Read, Glob, Grep, and read-only git via Bash (git diff/log/show)"
+# review 的 Bash 跑在可丢弃副本，可运行本地 tests/lint/build；explore 仍保持旧能力边界。
+TOOLS_SENTENCE="Read, Glob, Grep, and Bash for local tests, lint, build, and diagnostics"
 TOOLS_SENTENCE_X=" - you also have read-only git via Bash (git diff/log/show)"
-REVIEW_PROMPT="You are an independent code reviewer running inside a read-only harness.
+REVIEW_PROMPT="You are an independent code reviewer running inside a disposable writable repository snapshot.
 Explore the repository yourself with the tools you have
 (${TOOLS_SENTENCE}). Do not take the task's claims at face value - verify
 them against the actual files.
+
+Command outputs and caches may be written inside this disposable snapshot, but
+do not intentionally edit source files. Do not push, merge, install dependencies,
+run migrations, access production systems, or change credentials.
 
 Report findings with file:line references and a severity each. You MUST end
 your review with a final line of exactly this form:
@@ -239,6 +252,33 @@ else
   PROMPT="${REVIEW_PROMPT}"
 fi
 
+REVIEW_WORKSPACE_ACTIVE=0
+if [[ "$MODE" == "review" ]]; then
+  _RW="$BIN_DIR/_review-workspace.sh"
+  [ -f "$_RW" ] || _RW=/root/aiwork/bin/_review-workspace.sh
+  [ -f "$_RW" ] || { echo "$LABEL: 找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)" >&2; exit 78; }
+  # shellcheck source=_review-workspace.sh
+  . "$_RW"
+  if ! review_workspace_prepare "$SOURCE_REPO" "$LABEL"; then
+    echo "$LABEL: review workspace 准备失败 ⇒ 模型未启动" >&2
+    exit 78
+  fi
+  REVIEW_WORKSPACE_ACTIVE=1
+  SOURCE_REPO="$REVIEW_SOURCE_REPO"
+  REPO_DIR="$(review_workspace_repo)" || exit 78
+fi
+
+_subagent_cleanup() {
+  local rc=$?
+  if [[ "${REVIEW_WORKSPACE_ACTIVE:-0}" -eq 1 ]]; then
+    review_workspace_cleanup \
+      || echo "$LABEL: 警告:review workspace 清理失败:${REVIEW_WORKSPACE_DIR:-?}" >&2
+  fi
+  trap - EXIT
+  exit "$rc"
+}
+trap _subagent_cleanup EXIT
+
 STREAM_FILE="${LOG_FILE%.log}.stream.jsonl"
 ERR_FILE="$(mktemp)"
 
@@ -263,17 +303,21 @@ ERR_FILE="$(mktemp)"
     echo "model: $MODEL"
   fi
   echo "repo: $REPO_DIR"
+  [[ "$MODE" == "review" ]] && echo "source_repo: $SOURCE_REPO"
   echo "task: $TASK_FILE"
-  echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep)+ 只读 git(自己跑 git diff/log/show)。"
-  echo "      写口全禁。08-19 起不再由主 agent 把 diff 喂进提示词 —— 那条路"
-  echo "      (为了关 bash 而自己算 diff)已被推翻,代价是腿会静默起不来。"
+  if [[ "$MODE" == "review" ]]; then
+    echo "视野: 底座腿 —— 独立可写副本；Bash 可跑本地 tests/lint/build/诊断。"
+    echo "      Write/Edit/Task 关闭；原仓由外层只读挂载保护。"
+  else
+    echo "视野: 底座腿 —— 自己读仓库(Read/Glob/Grep)+ 只读 git(自己跑 git diff/log/show)。"
+  fi
   echo
 } > "$LOG_FILE"
 
 RC=0
-# ── 只读仓(track repo-write-audit,2026-08-19)────────────────────────────────
-# 评审腿在**仓是只读的** mount namespace 里跑:腿的能力一个字没改(它照样
-# `git diff/log/show`、照样自己读仓库),但写口物理消失 —— 08-18 我发现
+# ── 原仓只读 + review 副本可写 ─────────────────────────────────────────────
+# 模型 cwd/--dir 是独立 clone；mount namespace 只把 SOURCE_REPO 盖成只读。
+# 腿可在 clone 跑 tests/build，但原仓写口物理消失 —— 08-18 我发现
 # `git diff --output=<path>` 能绕过任何命令行白名单,而"把 bash 整个关掉"那条路
 # 已经被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
 # **一个写口都不开。** 腿日志是父 shell 重定向写的(`>> "$LOG_FILE"` / `| tee -a`),
@@ -288,7 +332,7 @@ RC=0
 # 已接的那条路径上)。定义一次、两支共用 ⇒ **将来再加底座也自动带上**,
 # 这比在新分支里记得抄一遍可靠。本仓的老账:同一件事写两处、只更新一处。
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
-RO_EXEC=("$BIN_DIR/ro-repo-exec" "$REPO_DIR" --)
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 
 if [[ "$AGENT_BASE" == "opencode" ]]; then
   # ── opencode 底座 ───────────────────────────────────────────────────────────
@@ -297,16 +341,16 @@ if [[ "$AGENT_BASE" == "opencode" ]]; then
   OC_HOME="${OPENCODE_REVIEW_HOME:-$HOME/.cache/aiwork/opencode-review-home}"
   # 运行期 HOME 不许在被评审的仓里(共享闸)—— 底座在只读仓里写状态会当场 EROFS,
   # 而报出来的错看不出是自家防线干的。默认值在仓外不等于这条路被挡住了。
-  review_home_guard opencode "$OC_HOME" "$REPO_DIR" OPENCODE_REVIEW_HOME || exit 1
+  review_home_guard opencode "$OC_HOME" "$SOURCE_REPO" OPENCODE_REVIEW_HOME || exit 1
   # umask 077:配置文件**创建即 600**。先 644 再 chmod 会留一个窗口,中断在中间
   # 就是一个人人可读的 key 文件。key 走 **env 不走 argv** —— argv 在进程存续期间
   # `ps` 就看得见(四审 subdeepseek F3)。
   umask 077
   mkdir -p "$OC_HOME/.config/opencode"
   OC_KEY="$API_KEY" python3 - "$OC_HOME/.config/opencode/opencode.json" \
-           "$OC_PROVIDER" "$OC_MODEL_ID" "$OC_BASE_URL" "$OC_AGENT" "$MAX_TURNS" <<'PYOC'
+           "$OC_PROVIDER" "$OC_MODEL_ID" "$OC_BASE_URL" "$OC_AGENT" "$MAX_TURNS" "$MODE" <<'PYOC'
 import json, os, sys
-cfgpath, prov, model, base, agent, steps = sys.argv[1:7]
+cfgpath, prov, model, base, agent, steps, mode = sys.argv[1:8]
 key = os.environ["OC_KEY"]
 # 只读锁:**写工具全关,bash 留着**。
 #
@@ -328,20 +372,20 @@ tools = {"write": False, "edit": False, "patch": False, "task": False,
          "todowrite": False, "webfetch": False, "websearch": False, "skill": False,
          "bash": True,
          "read": True, "glob": True, "grep": True}
-# bash 是**白名单**,不是全放开。08-19 第二轮四审实跑的账:裸放开之后腿
-# `cat` 了仓外文件、还跑了 `bash tests/test-review-tooling.sh`(547 秒后自己挂掉,
-# 留下一批真 mimo 遗孤)。白名单挡不住 `git diff --output=` 那种精巧绕法(那条账在
-# track repo-write-audit),但**挡得住误伤**,而腿顺手跑判据正是误伤的典型形态。
-perm = {"edit": "deny", "write": "deny",
-        "bash": {"*": "deny",
-                 "git diff*": "allow", "git log*": "allow",
-                 "git status*": "allow", "git show*": "allow"}}
+# Bash 整项允许：cwd/--dir 是可丢弃副本，测试/build 产生的文件只污染该副本。
+# 原仓保护由 RO_EXEC 承重，不再把命令字符串白名单冒充隔离边界。
+if mode == "review":
+    bash_perm = "allow"
+else:
+    bash_perm = {"*": "deny", "git diff*": "allow", "git log*": "allow",
+                 "git status*": "allow", "git show*": "allow"}
+perm = {"edit": "deny", "write": "deny", "bash": bash_perm}
 cfg = {"$schema": "https://opencode.ai/config.json",
        "provider": {prov: {"npm": "@ai-sdk/openai-compatible",
                            "name": "OpenCode Go (subscription)",
                            "options": {"baseURL": base, "apiKey": key},
                            "models": {model: {}}}},
-       "agent": {agent: {"description": "aiwork read-only review leg",
+       "agent": {agent: {"description": "aiwork isolated review leg",
                          "mode": "primary", "model": prov + "/" + model,
                          # 轮次上限:供应商表里那个历史值,换底座也得跟着搬。
                          # opencode 没有 --max-turns 这类命令行开关,只有配置里这个
@@ -374,6 +418,12 @@ else
 # 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,
 # 否则它会盖过供应商 token。提示词走 stdin:--allowedTools/--disallowedTools 是变长
 # 参数,尾随的位置参数会被当成又一个工具名吞掉。
+if [[ "$MODE" == "review" ]]; then
+  CLAUDE_BASH_TOOLS=(Bash)
+else
+  CLAUDE_BASH_TOOLS=("Bash(git diff:*)" "Bash(git log:*)" \
+                     "Bash(git status:*)" "Bash(git show:*)")
+fi
 (
   cd "$REPO_DIR"
   printf '%s\n' "$PROMPT" | env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
@@ -387,8 +437,7 @@ else
       --setting-sources project \
       --max-turns "$MAX_TURNS" \
       --output-format stream-json --verbose \
-      --allowedTools Read Glob Grep "Bash(git diff:*)" "Bash(git log:*)" \
-                     "Bash(git status:*)" "Bash(git show:*)" \
+      --allowedTools Read Glob Grep "${CLAUDE_BASH_TOOLS[@]}" \
       --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent
 ) > "$STREAM_FILE" 2>"$ERR_FILE" || RC=$?
 

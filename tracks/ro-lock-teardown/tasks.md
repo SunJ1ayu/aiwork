@@ -21,26 +21,26 @@
 
 ## S2 独立 review workspace
 
-- [ ] S2a 新增共享 helper:仓外安全建目录、shared clone、明确 source HEAD
-- [ ] S2b 用临时 index `read-tree HEAD` + `add -A -- :/` 生成 snapshot tree，双读 tree-id 对账
-- [ ] S2c 临时 commit 物化快照，再 mixed reset 回 source HEAD；删除 origin、关闭 auto gc
-- [ ] S2d gitlink/submodule 首版 fail-closed
-- [ ] S2e cleanup 只接受 helper 自己创建且位于受控根下的路径
-- [ ] S2f O1/O3 转绿 + 两个变异红检
+- [x] S2a 新增共享 helper:仓外安全建目录、shared clone、明确 source HEAD
+- [x] S2b 用临时 index `read-tree HEAD` + `add -A -- :/` 生成 snapshot tree，双读 tree-id 对账
+- [x] S2c 临时 commit 物化快照，再 mixed reset 回 source HEAD；删除 origin、关闭 auto gc
+- [x] S2d gitlink/submodule 首版 fail-closed
+- [x] S2e cleanup 只接受 helper 自己创建且位于受控根下的路径
+- [x] S2f O1/O3 转绿 + 两个变异红检
 
 ## S3 wrapper 接入与执行能力
 
-- [ ] S3a `submimo review`:模型 cwd/--dir 指向副本，`fix`/`explore` 语义不变
-- [ ] S3b `subagent review`:OpenCode 与 Claude 两支共用同一个副本接入点
-- [ ] S3c `subkimi review`:副本接入，guard 放行本地 Bash
-- [ ] S3d 外层 `ro-repo-exec` 保护 SOURCE_REPO/common dir，不挂只读副本
-- [ ] S3e 三底座放开本地 Bash，保留 Write/Edit/Task deny，并更新提示词边界
-- [ ] S3f O2/O4/O5 转绿；变异“直接在 source 跑”必须红
+- [x] S3a `submimo review`:模型 cwd/--dir 指向副本，`fix`/`explore` 语义不变
+- [x] S3b `subagent review`:OpenCode 与 Claude 两支共用同一个副本接入点
+- [x] S3c `subkimi review`:副本接入，guard 放行本地 Bash
+- [x] S3d 外层 `ro-repo-exec` 保护 SOURCE_REPO/common dir，不挂只读副本
+- [x] S3e 三底座放开本地 Bash，保留 Write/Edit/Task deny，并更新提示词边界
+- [x] S3f O2/O4/O5 转绿；变异“直接在 source 跑”必须红
 
 ## S4 收判据与回归
 
-- [ ] S4a 逐条调整 V35/V36 等旧语义，不按编号/差值批量删除
-- [ ] S4b 保留 `ro-repo-exec` unit coverage 与 V37/V38/V41
+- [x] S4a 逐条调整 V35/V36 等旧语义，不按编号/差值批量删除
+- [x] S4b 保留 `ro-repo-exec` unit coverage 与 V37/V38/V41
 - [ ] S4c `tests/test-review-tooling.sh` 全量绿，最终收据在最后一次编辑之后
 - [ ] S4d 三条 agent wrapper 各真跑一次 review，确认有裁决且原仓未变
 

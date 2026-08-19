@@ -194,6 +194,21 @@ check(){ # check "desc" COND_RC   (0 => pass)
   if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi
 }
 
+# Agent wrappers now require a real HEAD because their review workspace is a
+# snapshot of a Git view.  Fixtures that exercise a successful model dispatch
+# must therefore be repositories, not merely directories named "repo".
+fixture_git_repo() { # path
+  local repo="$1"
+  mkdir -p "$repo"
+  git -C "$repo" rev-parse --verify HEAD >/dev/null 2>&1 && return 0
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@t
+  git -C "$repo" config user.name t
+  printf 'fixture\n' > "$repo/.fixture"
+  git -C "$repo" add .fixture
+  git -C "$repo" commit -qm fixture
+}
+
 # ---------------------------------------------------------------- V1
 v1_untracked_content() {
   echo "[V1] submimo-review inlines untracked file content under --git-diff"
@@ -617,6 +632,7 @@ v9_claude_shell_base() {
   echo "[V9] claude 壳底座(subdeepseek-agent):env 注入、只读工具、裁决 gate"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
   # 2026-08-18 **这一组从 GLM 腿挪到 DeepSeek 腿**:GLM 的底座换成了 opencode CLI
   # (track opencode-agent-base),它已经不走 claude 壳,再拿它测 claude 壳就是
   # 拿错车验错路 —— 而且会去调真 opencode 干等 900 秒。
@@ -977,6 +993,7 @@ v13_subkimi_leg() {
   echo "[V13] subkimi: guard default-deny, wrapper contract, panel 4th-leg selection"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
 
   # --- the SHIPPED guard, invoked directly: default-deny semantics
   local guard="/root/aiwork/kimi-review-home/hooks/guard.mjs"
@@ -1160,6 +1177,7 @@ v14_leg_fallback_and_include() {
   echo "[V14] panel-review: agent 腿失败自动回落 chat 腿 + PANEL_INCLUDE 喂 oracle + DS 轮次上限"
   local d pb rc; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
   cp "$BIN/panel-review" "$pb/panel-review"
   printf '# review\n' > "$d/t.md"
   # 中立的两条腿(不参与本组断言)
@@ -1297,6 +1315,7 @@ v16_timeout_and_blind_chat_leg() {
   echo "[V16] subkimi 超时可用性 + chat 腿「先 commit 再派发 = 空 diff 盲评」(07-27 实事故)"
   local d pb rc; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
 
   # --- ① subkimi:超时后仍要留下裁决 → prompt 必须要求「一有结论就先写出来」
   # 07-27 取证:kimi 900s 被砍时,最值钱的发现已经在正文里,唯独裁决行没写成
@@ -1362,7 +1381,7 @@ EOF
   # 而 chat 腿默认只看工作区未提交改动 → 它拿到的实现代码是空的。
   # 07-27 实事故:subglm agent 腿挂了回落 chat 腿,报告里自己写着
   # "bin/ds_web.py 的具体实现内容不可得",findings 全是把任务书复述回来。
-  local repo="$d/repo"; mkdir -p "$repo"
+  local repo="$d/repo"; rm -rf "$repo"; mkdir -p "$repo"
   ( cd "$repo"; git init -qb main; git config user.email t@t; git config user.name t
     echo base > impl.py; git add -A; git commit -qm init
     git checkout -qb feature; echo "真正要审的实现" >> impl.py
@@ -1393,6 +1412,7 @@ v17_explore_agent_legs() {
   echo "[V17] panel-explore 走底座腿:explore 模式 + 无裁决闸 + 只读姿态不松"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
   # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
@@ -1662,7 +1682,7 @@ exit 1
 FAKE
   chmod +x "$fake/claude"
   printf '# t\n' > "$d/t.md"
-  mkdir -p "$d/repo"; ( cd "$d/repo"; git init -q )
+  fixture_git_repo "$d/repo"
   printf '{"key":"x"}\n' > "$d/auth.json"
   PATH="$fake:$PATH" DEEPSEEK_AUTH_FILE="$d/auth.json" \
     "$BIN/subdeepseek-agent" review "$d/t.md" "$d/a.log" "$d/repo" >/dev/null 2>"$d/a.err"
@@ -1697,6 +1717,7 @@ v21_agent_leg_body_is_single_source() {
   # 这次刚修好的那条 deepseek 腿的首跑。⇒ 每条腿的默认值单独钉死,改要显式改判据。
   local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
   cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$ab/claude" <<'CAPEOF'
@@ -2027,6 +2048,7 @@ v26_glm_on_opencode_go() {
   echo "[V26] GLM 腿改挂 OpenCode Go:端点/认证风格/模型/key 落位,且不碰 deepseek"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" \
      "$BIN/subchat" "$BIN/subglm" "$BIN/subdeepseek" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
@@ -2276,6 +2298,7 @@ v28_glm_on_opencode_base() {
   echo "[V28] GLM 腿改用 opencode 底座:调谁、只读锁、配置隔离、裁决 gate"
   local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  fixture_git_repo "$d/repo"
   printf '# review this\n' > "$d/t.md"
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
@@ -2666,6 +2689,11 @@ print('OPEN' if (t.get('write') and t.get('task')) else 'LOCKED')" 2>/dev/null)"
   else
     bad "V33: 对照 —— fix 仍用 build 档(执行腿要写代码,不许被顺手锁死)"
   fi
+
+  # 上面 explore 会按旧语义把 Bash 收回只读 git；O4 问的是 review 能力。
+  # 再跑一次 review，让下面的解析器检查 review 最终生成的配置。
+  env PATH="$b:$PATH" CAPTURE="$d/c_review_config" MIMO_REVIEW_HOME="$mhome" \
+    bash "$b/submimo" review "$d/t.md" "$d/r-config.log" "$repo" >/dev/null 2>&1
 
   # ── ④ 锁必须是**机械的**:拿 mimo 自己的解析器去读我们生成的配置。
   #    只查"我们往 json 里写了什么"是不够的 —— plan 档骗过我的正是这个区别:

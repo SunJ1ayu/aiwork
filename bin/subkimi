@@ -3,22 +3,20 @@ set -euo pipefail
 
 # subkimi - Kimi (Moonshot) review employee on an AGENT base: kimi-code CLI
 # run headless (`kimi -p`). Like subglm-agent/subdeepseek-agent, the model
-# explores the repo itself (Read/Glob/Grep + 只读 git via Bash), so no blind
-# reviews and no manual INCLUDE feeding.
+# explores the repo itself (Read/Glob/Grep + Bash), so no blind reviews and no
+# manual INCLUDE feeding. Review runs in a writable disposable clone while the
+# original repository stays physically read-only.
 #
 #   review -> kimi -p, review-only guard, verdict-gated. Works now.
 #   fix    -> NOT supported here on purpose: panel reviewers stay review-only.
 #             Use `submimo fix` (mimo) for fix work.
 #
 # Isolation: KIMI_CODE_HOME points at a dedicated review home whose config
-# carries a PreToolUse guard hook (default-DENY: only Read/ReadMediaFile/Glob/
-# Grep/todo-goal tools 允许;**Bash 只放行只读 git**(git diff/log/show/status…),
-# 元字符链和非 git 命令一律拒。08-18 实测这个白名单挡不住 git 自己的参数
-# (--output= 能写、--no-index 能读仓外)—— 那两条是**明账**,防线在 track
-# repo-write-audit;白名单留着是因为它挡得住**误伤**(08-19 实证:没有白名单的那两条腿
-# 当场去 cat 仓外文件、跑判据,而这条腿被守卫拦了 7 次);
-# Write/Edit/Agent/AgentSwarm/Skill/Cron*/FetchURL/WebSearch and unknown tools
-# are blocked). The user's global ~/.kimi-code is never touched. Auth is the
+# carries a PreToolUse guard hook. Read/ReadMediaFile/Glob/Grep/todo-goal and
+# Bash are allowed; Bash writes only the disposable clone. The original repo is
+# separately protected by ro-repo-exec. Write/Edit/Agent/AgentSwarm/Skill,
+# Cron*/FetchURL/WebSearch, and unknown tools are blocked. The user's global
+# ~/.kimi-code is never touched. Auth is the
 # Kimi membership OAuth token, shared via a credentials symlink in the review
 # home. NOTE: kimi-code's hook protocol is fail-open (non-0/2 exit = allow),
 # so this wrapper preflights the guard (must deny a canary Write with rc=2)
@@ -53,9 +51,9 @@ Usage:
   subkimi review TASK_FILE LOG_FILE [REPO_DIR]
   subkimi fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
 
-Runs Kimi (Moonshot kimi-code CLI, headless) as an agentic read-only review
-sub-agent. The reviewer reads the repo itself; mutations are hard-blocked by
-a PreToolUse guard in an isolated KIMI_CODE_HOME.
+Runs Kimi (Moonshot kimi-code CLI, headless) as an isolated review sub-agent.
+The reviewer reads and tests a disposable clone; the source repo remains
+read-only and direct write tools stay blocked in an isolated KIMI_CODE_HOME.
 
 Environment:
   KIMI_MODEL        optional, model alias (default: kimi-code/k3, 1M context;
@@ -77,7 +75,15 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
 if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
 
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
+SOURCE_REPO="$REPO_DIR"
 BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ "$MODE" == "review" ]]; then
+  _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
+    || die "review needs a Git worktree with HEAD: $SOURCE_REPO"
+  SOURCE_REPO="$(cd "$_SOURCE_TOP" && pwd -P)" || die "cannot resolve source repo: $_SOURCE_TOP"
+  REPO_DIR="$SOURCE_REPO"
+fi
 
 
 # 反锚定闸(2026-08-06 补):第四条腿也要接 —— 上一版只接了三条躯干,
@@ -132,11 +138,11 @@ if [[ -n "${REVIEW_PRINT_HOME:-}" ]]; then printf '%s\n' "$REVIEW_HOME"; exit 0;
 # 落在被评审的仓里 ⇒ **拒跑并说清楚**(共享实现,三条腿同一句话)。
 # 这里原本是 kimi 自己的一份内联检查 —— 第二轮四审点名:另两条腿的
 # OPENCODE_REVIEW_HOME / MIMO_REVIEW_HOME 一样指得进仓里,而只有 kimi 有这道检查。
-review_home_guard kimi "$REVIEW_HOME" "$REPO_DIR" KIMI_REVIEW_HOME || exit 1
+review_home_guard kimi "$REVIEW_HOME" "$SOURCE_REPO" KIMI_REVIEW_HOME || exit 1
 
-# ── 只读仓(track repo-write-audit,2026-08-19)────────────────────────────────
-# 评审腿在**仓是只读的** mount namespace 里跑:腿的能力一个字没改(照样
-# `git diff/log/show`、照样自己读仓库),但写口物理消失 —— 08-18 我发现
+# ── 原仓只读 + review 副本可写 ─────────────────────────────────────────────
+# Kimi 的 cwd 是独立 clone；mount namespace 只保护 SOURCE_REPO。腿可在 clone
+# 跑 tests/build，但原仓写口物理消失 —— 08-18 我发现
 # `git diff --output=<path>` 绕得过任何命令行白名单,而"把 bash 整个关掉"那条路
 # 已被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
 # **一个写口都不开。** 腿日志是父 shell 重定向写的(`>> "$LOG_FILE"` / `| tee -a`),
@@ -146,7 +152,7 @@ review_home_guard kimi "$REVIEW_HOME" "$REPO_DIR" KIMI_REVIEW_HOME || exit 1
 # 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
-RO_EXEC=("$BIN_DIR/ro-repo-exec" "$REPO_DIR" --)
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 MODEL="${KIMI_MODEL:-$DEFAULT_MODEL}"
 TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 
@@ -173,6 +179,30 @@ GUARD_RC=$?
 set -e
 [[ $GUARD_RC -eq 2 ]] || die "guard preflight failed (rc=$GUARD_RC, want 2) - refusing to dispatch with a fail-open sandbox"
 
+_RW="$BIN_DIR/_review-workspace.sh"
+[ -f "$_RW" ] || _RW=/root/aiwork/bin/_review-workspace.sh
+[ -f "$_RW" ] || die '找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)'
+# shellcheck source=_review-workspace.sh
+. "$_RW"
+if ! review_workspace_prepare "$SOURCE_REPO" subkimi; then
+  die 'review workspace 准备失败 ⇒ 模型未启动'
+fi
+REVIEW_WORKSPACE_ACTIVE=1
+SOURCE_REPO="$REVIEW_SOURCE_REPO"
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+REPO_DIR="$(review_workspace_repo)" || exit 78
+
+_subkimi_cleanup() {
+  local rc=$?
+  if [[ "${REVIEW_WORKSPACE_ACTIVE:-0}" -eq 1 ]]; then
+    review_workspace_cleanup \
+      || echo "subkimi: 警告:review workspace 清理失败:${REVIEW_WORKSPACE_DIR:-?}" >&2
+  fi
+  trap - EXIT
+  exit "$rc"
+}
+trap _subkimi_cleanup EXIT
+
 # Absolute log path: the agent runs with cwd = REPO_DIR.
 case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -182,15 +212,18 @@ mkdir -p "$(dirname "$LOG_FILE")"
 # "改判据让自己及格"的动机(那是执行腿的威胁模型),而关 bash 的代价是
 # E2BIG(这条腿 rc=126 直接起不来)、`git diff | head -c N` 在本文件的
 # `set -euo pipefail` 下让 git 吃 SIGPIPE **静默暴毙 rc=141 一个字不留**。
-# 现在腿自己有只读 git,自己去看。防线换成跑完的写审计(track `repo-write-audit`,
-# **还没上线**,窗口期是明账)。
-PROMPT="You are an independent code reviewer running inside a read-only harness.
+# 现在腿在独立副本里自己看 diff 并跑本地检查；原仓由只读挂载承重。
+PROMPT="You are an independent code reviewer running inside a disposable writable repository snapshot.
 Explore the repository yourself with the tools you have
-(Read, Glob, Grep, and read-only git via Bash: git diff/log/show).
+(Read, Glob, Grep, and Bash for local tests, lint, build, and diagnostics).
 Do not take the task's claims at face value -
 verify them against the actual files. Some tools are intentionally blocked by
 the harness; if a call is denied, work with the allowed tools instead of
 retrying it.
+
+Command outputs and caches may be written inside this disposable snapshot, but
+do not intentionally edit source files. Do not push, merge, install dependencies,
+run migrations, access production systems, or change credentials.
 
 Report findings with file:line references and a severity each.
 
@@ -214,6 +247,7 @@ $(cat "$TASK_FILE")"
   echo "model: $MODEL"
   echo "review_home: $REVIEW_HOME"
   echo "repo: $REPO_DIR"
+  echo "source_repo: $SOURCE_REPO"
   echo "task: $TASK_FILE"
   echo
 } > "$LOG_FILE"

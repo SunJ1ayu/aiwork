@@ -6,7 +6,7 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh"
 
 BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
-HELPER="$BIN/_review-workspace.sh"
+HELPER="${REVIEW_WORKSPACE_HELPER:-$BIN/_review-workspace.sh}"
 PASS=0; FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -23,6 +23,8 @@ new_repo() { # new_repo PATH
   printf 'old-staged\n' > "$repo/staged.txt"
   printf 'delete-me\n' > "$repo/deleted.txt"
   printf 'ignored.cache\n' > "$repo/.gitignore"
+  mkdir -p "$repo/nested"
+  printf 'nested\n' > "$repo/nested/file.txt"
   git -C "$repo" add -A
   git -C "$repo" commit -qm base
 
@@ -42,7 +44,7 @@ test_snapshot_view() {
   before="$(git -C "$repo" status --short)"
   head="$(git -C "$repo" rev-parse HEAD)"
   REVIEW_WORKSPACE_BASE="$d/workspaces"
-  review_workspace_prepare "$repo" oracle-view >/dev/null 2>&1
+  review_workspace_prepare "$repo/nested" oracle-view >/dev/null 2>&1
   local rc=$?
   check 'RW1: helper prepares a workspace' "$rc"
   if [[ $rc -ne 0 ]]; then rm -rf "$d"; return; fi
@@ -50,6 +52,8 @@ test_snapshot_view() {
 
   [[ "$(git -C "$clone" rev-parse HEAD 2>/dev/null)" == "$head" ]]
   check 'RW1: clone HEAD stays at the source HEAD' $?
+  [[ "$REVIEW_SOURCE_REPO" == "$repo" ]]
+  check 'RW1: a subdirectory input is normalized to the Git top-level' $?
   cmp -s "$repo/committed.txt" "$clone/committed.txt" \
     && cmp -s "$repo/modified.txt" "$clone/modified.txt" \
     && cmp -s "$repo/staged.txt" "$clone/staged.txt" \
@@ -240,6 +244,67 @@ MODEL_STUB
   rm -rf "$d"
 }
 
+test_mutation_sensitivity() {
+  echo '[RW7] oracle rejects direct-source and shared-clone mutations'
+  local d direct fake rc real_mktemp
+  d="$(mktemp -d)"; direct="$d/direct-source.sh"; fake="$d/bin"; mkdir -p "$fake"
+
+  # Mutation 1: preparation appears successful but reports SOURCE as the model
+  # repo. RW2 must reject it because the "work" write is blocked together with
+  # the source write.
+  sed '/^  REVIEW_SNAPSHOT_TREE="\$tree1"$/a\  REVIEW_WORK_REPO="$REVIEW_SOURCE_REPO"' \
+    "$HELPER" > "$direct"
+  REVIEW_WORKSPACE_CASE=write-boundary REVIEW_WORKSPACE_HELPER="$direct" \
+    bash "$0" > "$d/direct.out" 2>&1
+  rc=$?
+  [[ $rc -ne 0 ]] && grep -q 'FAIL: RW2: same leg writes and commits' "$d/direct.out"
+  check 'RW7: mutation direct-source makes the write-boundary oracle red' $?
+
+  # Mutation 2: force every helper mktemp call to return one shared directory.
+  # At least one parallel leg collides and RW3 must go red; a green result would
+  # mean the oracle cannot detect cross-leg reuse.
+  real_mktemp="$(command -v mktemp)"
+  cat > "$fake/mktemp" <<'MKTEMP_STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == -d && "${2:-}" == *XXXXXXXX ]]; then
+  mkdir -p "$MUT_SHARED"
+  printf '%s\n' "$MUT_SHARED"
+  exit 0
+fi
+exec "$REAL_MKTEMP" "$@"
+MKTEMP_STUB
+  chmod +x "$fake/mktemp"
+  PATH="$fake:$PATH" REAL_MKTEMP="$real_mktemp" MUT_SHARED="$d/shared" \
+    REVIEW_WORKSPACE_CASE=parallel-isolation REVIEW_WORKSPACE_HELPER="$HELPER" \
+    bash "$0" > "$d/shared.out" 2>&1
+  rc=$?
+  [[ $rc -ne 0 ]] && grep -q 'FAIL: RW3:' "$d/shared.out"
+  check 'RW7: mutation shared-clone makes the parallel-isolation oracle red' $?
+  rm -rf "$d"
+}
+
+_review_workspace_summary() {
+  echo "=== total: $PASS passed, $FAIL failed ==="
+  [[ $FAIL -eq 0 ]]
+}
+
+case "${REVIEW_WORKSPACE_CASE:-all}" in
+  write-boundary)
+    . "$HELPER"
+    test_write_boundary
+    _review_workspace_summary
+    exit $?
+    ;;
+  parallel-isolation)
+    . "$HELPER"
+    test_parallel_isolation
+    _review_workspace_summary
+    exit $?
+    ;;
+  all) ;;
+  *) echo "unknown REVIEW_WORKSPACE_CASE:${REVIEW_WORKSPACE_CASE}" >&2; exit 2 ;;
+esac
+
 echo '=== review workspace oracle ==='
 if [[ ! -f "$HELPER" ]]; then
   bad "RW1: helper exists ($HELPER)"
@@ -256,6 +321,6 @@ else
   test_gitlink_fails_closed
 fi
 test_wrapper_helper_failure
+[[ -f "$HELPER" ]] && test_mutation_sensitivity
 
-echo "=== total: $PASS passed, $FAIL failed ==="
-[[ $FAIL -eq 0 ]]
+_review_workspace_summary
