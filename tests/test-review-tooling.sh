@@ -198,6 +198,7 @@ check(){ # check "desc" COND_RC   (0 => pass)
 v1_untracked_content() {
   echo "[V1] submimo-review inlines untracked file content under --git-diff"
   local d; d="$(mktemp -d)"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo"   # task/out live outside repo so they aren't untracked
   ( cd "$repo"
     git init -q; git config user.email t@t; git config user.name t
@@ -220,6 +221,7 @@ v1_untracked_content() {
 v1_no_untracked_and_nonrepo() {
   echo "[V1] submimo-review: clean repo has no header; non-repo does not crash"
   local d; d="$(mktemp -d)"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo a > f; git add f; git commit -qm init )
@@ -240,6 +242,7 @@ v1_no_untracked_and_nonrepo() {
 v2_glob_not_pre_expanded() {
   echo "[V2] subdeepseek passes DEEPSEEK_INCLUDE patterns literally (no shell glob)"
   local d stub_bin; d="$(mktemp -d)"; stub_bin="$d/bin"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   mkdir -p "$stub_bin"
   # subdeepseek is a thin shim onto subchat; bin/ deploys as a set, so copy both.
   cp "$BIN/subdeepseek" "$stub_bin/subdeepseek"
@@ -281,6 +284,7 @@ EOF
 v3_panel_sidecar() {
   echo "[V3] panel-review captures stderr to .err sidecar, prunes empties, exits right"
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$b/panel-review"
   printf '# t\n' > "$d/t.md"
 
@@ -355,6 +359,7 @@ run_engine_against() { # url task log [VAR=VAL...] [engine-args...] -> engine rc
 v4_output_validation() {
   echo "[V4] submimo-review rejects empty/null/verdict-less output; explore exempt"
   local d url rc; d="$(mktemp -d)"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   printf '# t\n' > "$d/t.md"
 
   start_stub_api "$d" '{"choices":[{"message":{"content":""}}]}'
@@ -419,6 +424,7 @@ dry_prompt() { # task log repo extra-args/env... (env VAR=VAL pairs first)
 v5_diff_scope() {
   echo "[V5] staged/committed work visible; empty-tree fallback; PANEL_DIFF_BASE"
   local d repo; d="$(mktemp -d)"; repo="$d/repo"; mkdir -p "$repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   printf '# t\n' > "$d/t.md"
 
   # -b main: deterministic base branch name so the PANEL_DIFF_BASE case below
@@ -450,6 +456,7 @@ v5_diff_scope() {
 v6_truncation() {
   echo "[V6] diff and pooled untracked content are byte-capped with markers"
   local d repo; d="$(mktemp -d)"; repo="$d/repo"; mkdir -p "$repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   printf '# t\n' > "$d/t.md"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo base > big.txt; git add big.txt; git commit -qm init
@@ -469,6 +476,7 @@ v6_truncation() {
 v7_blind_warning() {
   echo "[V7] empty diff + nothing attached warns BLIND on stderr and in log, rc=0"
   local d repo; d="$(mktemp -d)"; repo="$d/repo"; mkdir -p "$repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   printf '# t\n' > "$d/t.md"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo a > f; git add f; git commit -qm init )
@@ -489,6 +497,7 @@ v7_blind_warning() {
 v8_subchat_provider_table() {
   echo "[V8] subchat: provider table drives engine env; shims + auth fallback intact"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/subchat" "$b/subchat"
   cp "$BIN/subdeepseek" "$b/subdeepseek"
   cp "$BIN/subglm"   "$b/subglm"
@@ -584,13 +593,13 @@ PYEOF
     bash "$b/subchat" zhipu fix "$d/t.md" "$d/o6.log" "$d" >/dev/null 2>&1; rc=$?
   check "subchat zhipu fix refused" $([[ $rc -ne 0 ]]; echo $?)
   env CAPTURE="$d/c7.json" DEEPSEEK_API_KEY=sk \
-    bash "$b/subdeepseek" fix "$d/t.md" "$d/o7.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subdeepseek" fix "$d/t.md" "$d/o7.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subdeepseek shim fix refused" $([[ $rc -ne 0 ]]; echo $?)
 
   # subglm shim end-to-end: literal include glob survives the shim->subchat chain
   ( cd "$d"; touch decoy_c.py
     env CAPTURE="$d/c8.json" ZHIPU_API_KEY=zk ZHIPU_INCLUDE="*.py" \
-      bash "$b/subglm" review "$d/t.md" "$d/o8.log" "$d" >/dev/null 2>&1 )
+      bash "$b/subglm" review "$d/t.md" "$d/o8.log" "$d/repo" >/dev/null 2>&1 )
   if [[ -f "$d/c8.json" ]]; then
     python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];sys.exit(0 if '*.py' in a else 1)" "$d/c8.json"
     check "subglm shim: literal '*.py' reached engine" $?
@@ -607,6 +616,7 @@ PYEOF
 v9_claude_shell_base() {
   echo "[V9] claude 壳底座(subdeepseek-agent):env 注入、只读工具、裁决 gate"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   # 2026-08-18 **这一组从 GLM 腿挪到 DeepSeek 腿**:GLM 的底座换成了 opencode CLI
   # (track opencode-agent-base),它已经不走 claude 壳,再拿它测 claude 壳就是
   # 拿错车验错路 —— 而且会去调真 opencode 干等 900 秒。
@@ -641,7 +651,7 @@ PYEOF
   # env-key path: token, base url, model mapping, API_KEY scrubbed
   env PATH="$b:$PATH" CAPTURE="$d/a1.json" ANTHROPIC_API_KEY=real-anthropic-key \
     DEEPSEEK_API_KEY=dk-env DEEPSEEK_MODEL=ds-test-model \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a1.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent review (env key) exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18 后端换成 OpenCode Go 之后,**认证 header 也换了**:
   # deepseek 的 Anthropic 面走 Authorization: Bearer(= ANTHROPIC_AUTH_TOKEN)。
@@ -779,7 +789,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   # auth-file fallback
   printf '{"key":"dk-file"}' > "$d/auth.json"
   env -u DEEPSEEK_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" DEEPSEEK_AUTH_FILE="$d/auth.json" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18:env-key 那条路已经换成 x-api-key,**这条 auth-file 路当时被漏掉了**
   # —— 是判据自己在这儿红了一次才发现的。所以这里不止把变量名跟着改,还补上
@@ -792,7 +802,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   # verdict gate: no Conclusion -> non-zero, log still written
   env PATH="$b:$PATH" CAPTURE="$d/a3.json" DEEPSEEK_API_KEY=dk \
     STUB_REVIEW_OUT="looks fine to me" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: verdict-less output exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
   [[ -f "$d/a3.log" ]]; check "agent: log still written on verdict miss" $?
 
@@ -800,12 +810,12 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   # that bit subdeepseek twice (Track B + client-tools)
   env PATH="$b:$PATH" CAPTURE="$d/a3b.json" DEEPSEEK_API_KEY=dk \
     STUB_REVIEW_OUT=$'review body\n结论：PASS' \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3b.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3b.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: Chinese 结论+full-width colon accepted" $([[ $rc -eq 0 ]]; echo $?)
 
   # fix refused; -h ok
   env PATH="$b:$PATH" CAPTURE="$d/a4.json" DEEPSEEK_API_KEY=dk \
-    bash "$b/subdeepseek-agent" fix "$d/t.md" "$d/a4.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subdeepseek-agent" fix "$d/t.md" "$d/a4.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: fix refused" $([[ $rc -ne 0 ]]; echo $?)
   bash "$b/subdeepseek-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
 
@@ -854,6 +864,7 @@ EOF
 v10_git_stderr_isolation() {
   echo "[V10] git stderr never pollutes values or prompt (F4/F5, 07-04 存量债)"
   local d; d="$(mktemp -d)"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
 
   # F4: non-git dir -> fatal text must NOT appear as diff content, BLIND must fire
   local nr="$d/notrepo"; mkdir -p "$nr"; printf '# t\n' > "$d/t.md"
@@ -884,6 +895,7 @@ v10_git_stderr_isolation() {
 v11_panel_gates() {
   echo "[V11] panel-review: PANEL_ORACLE_CMD 记录位 + --require-my-review 闸门"
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   for leg in submimo subdeepseek subglm; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"
@@ -941,6 +953,7 @@ v11_panel_gates() {
 v12_gate_default_on() {
   echo "[V12] panel-review my-review gate is DEFAULT-ON (opt-out), auto-arms on convention path"
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   for leg in submimo subdeepseek subglm; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
@@ -975,6 +988,7 @@ v12_gate_default_on() {
 v13_subkimi_leg() {
   echo "[V13] subkimi: guard default-deny, wrapper contract, panel 4th-leg selection"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
 
   # --- the SHIPPED guard, invoked directly: default-deny semantics
   local guard="/root/aiwork/kimi-review-home/hooks/guard.mjs"
@@ -1066,7 +1080,7 @@ PYEOF
   kimiget() { python3 -c "import json,sys;o=json.load(open(sys.argv[1]));v=o['env'].get(sys.argv[2]);print('' if v is None else v)" "$1" "$2"; }
 
   env PATH="$b:$PATH" CAPTURE="$d/k1.json" KIMI_REVIEW_HOME="$rh" \
-    bash "$b/subkimi" review "$d/t.md" "$d/k1.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subkimi" review "$d/t.md" "$d/k1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: review exits 0" $([[ $rc -eq 0 ]]; echo $?)
   [[ "$(kimiget "$d/k1.json" KIMI_CODE_HOME)" == "$rh" ]]
   check "subkimi: KIMI_CODE_HOME points at review home" $?
@@ -1080,18 +1094,18 @@ sys.exit(0 if any('read-only git' in str(x) for x in a) else 1)" "$d/k1.json" 2>
   grep -q 'Conclusion: PASS' "$d/k1.log"; check "subkimi: verdict recorded in log" $?
 
   env PATH="$b:$PATH" CAPTURE="$d/k2.json" KIMI_REVIEW_HOME="$rh" STUB_REVIEW_OUT="no verdict here" \
-    bash "$b/subkimi" review "$d/t.md" "$d/k2.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subkimi" review "$d/t.md" "$d/k2.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: verdict-less output rejected" $([[ $rc -ne 0 ]]; echo $?)
 
   # Chinese-style verdict (结论 + full-width colon) must pass the gate — the
   # drift that bit subdeepseek twice (Track B + client-tools).
   env PATH="$b:$PATH" CAPTURE="$d/k2b.json" KIMI_REVIEW_HOME="$rh" \
     STUB_REVIEW_OUT=$'review body\n结论：PASS' \
-    bash "$b/subkimi" review "$d/t.md" "$d/k2b.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subkimi" review "$d/t.md" "$d/k2b.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: Chinese 结论+full-width colon accepted" $([[ $rc -eq 0 ]]; echo $?)
 
   env PATH="$b:$PATH" CAPTURE="$d/k3.json" KIMI_REVIEW_HOME="$rh" \
-    bash "$b/subkimi" fix "$d/t.md" "$d/k3.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subkimi" fix "$d/t.md" "$d/k3.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: fix refused" $([[ $rc -ne 0 ]]; echo $?)
 
   # broken (fail-open) guard must refuse to dispatch BEFORE invoking kimi
@@ -1101,7 +1115,7 @@ sys.exit(0 if any('read-only git' in str(x) for x in a) else 1)" "$d/k1.json" 2>
   echo '{}' > "$rh2/credentials/kimi-code.json"
   rm -f "$d/k4.json"
   env PATH="$b:$PATH" CAPTURE="$d/k4.json" KIMI_REVIEW_HOME="$rh2" \
-    bash "$b/subkimi" review "$d/t.md" "$d/k4.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subkimi" review "$d/t.md" "$d/k4.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: fail-open guard refused (preflight)" $([[ $rc -ne 0 ]]; echo $?)
   if [[ -e "$d/k4.json" ]]; then bad "subkimi: kimi never invoked on bad guard"; else ok "subkimi: kimi never invoked on bad guard"; fi
 
@@ -1190,6 +1204,7 @@ EOF
 v14_leg_fallback_and_include() {
   echo "[V14] panel-review: agent 腿失败自动回落 chat 腿 + PANEL_INCLUDE 喂 oracle + DS 轮次上限"
   local d pb rc; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   printf '# review\n' > "$d/t.md"
   # 中立的两条腿(不参与本组断言)
@@ -1293,6 +1308,7 @@ PYEOF
 v15_anchor_leak_warning() {
   echo "[V15] panel-review: 主审自己的评审落进被评 diff 时报警(反锚定,07-21 实事故)"
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   for leg in submimo subdeepseek subglm subkimi; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
@@ -1325,6 +1341,7 @@ v15_anchor_leak_warning() {
 v16_timeout_and_blind_chat_leg() {
   echo "[V16] subkimi 超时可用性 + chat 腿「先 commit 再派发 = 空 diff 盲评」(07-27 实事故)"
   local d pb rc; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
 
   # --- ① subkimi:超时后仍要留下裁决 → prompt 必须要求「一有结论就先写出来」
   # 07-27 取证:kimi 900s 被砍时,最值钱的发现已经在正文里,唯独裁决行没写成
@@ -1352,7 +1369,7 @@ EOF
   printf '# review this\n' > "$d/t.md"
   env PATH="$pb:$PATH" KIMI_REVIEW_HOME="$rh" \
       CAPTURE_TIMEOUT="$d/to.txt" CAPTURE_PROMPT="$d/prompt.txt" \
-      bash "$pb/subkimi" review "$d/t.md" "$d/k.log" "$d" >/dev/null 2>&1
+      bash "$pb/subkimi" review "$d/t.md" "$d/k.log" "$d/repo" >/dev/null 2>&1
 
   [[ "$(cat "$d/to.txt" 2>/dev/null)" -ge 1500 ]]
   check "V16: subkimi 默认超时 ≥1500s(900 实测不够,证据在 07-27 日志)" $?
@@ -1372,7 +1389,7 @@ echo "findings: 一条真发现"; echo "Conclusion: BLOCK"; sleep 30
 EOF
   chmod +x "$pb/kimi"
   env PATH="$pb:$PATH" KIMI_REVIEW_HOME="$rh" KIMI_TIMEOUT=2 \
-      bash "$pb/subkimi" review "$d/t.md" "$d/kt.log" "$d" >/dev/null 2>"$d/kt.err"; rc=$?
+      bash "$pb/subkimi" review "$d/t.md" "$d/kt.log" "$d/repo" >/dev/null 2>"$d/kt.err"; rc=$?
   check "V16: 超时但裁决已写出 → rc=0(评审算数)" $([[ $rc -eq 0 ]]; echo $?)
   grep -qiE 'timed out|超时' "$d/kt.err" "$d/kt.log"
   check "V16: 超时仍要留痕(不静默当成正常完卷)" $?
@@ -1383,7 +1400,7 @@ echo "还在想"; sleep 30
 EOF
   chmod +x "$pb/kimi"
   env PATH="$pb:$PATH" KIMI_REVIEW_HOME="$rh" KIMI_TIMEOUT=2 \
-      bash "$pb/subkimi" review "$d/t.md" "$d/kt2.log" "$d" >/dev/null 2>&1; rc=$?
+      bash "$pb/subkimi" review "$d/t.md" "$d/kt2.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "V16: 超时且无裁决 → 仍判失败" $([[ $rc -ne 0 ]]; echo $?)
 
   # --- ② chat 腿的空 diff 盲评:先 commit 再派发是本机的**标准流程**,
@@ -1420,6 +1437,7 @@ EOF
 v17_explore_agent_legs() {
   echo "[V17] panel-explore 走底座腿:explore 模式 + 无裁决闸 + 只读姿态不松"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
@@ -1448,7 +1466,7 @@ PYEOF
   for leg in subdeepseek; do
     local keyenv=(DEEPSEEK_API_KEY=dk)
     env PATH="$b:$PATH" CAPTURE="$d/$leg.e1.json" "${keyenv[@]}" \
-      bash "$b/$leg-agent" explore "$d/brief.md" "$d/$leg.e1.log" "$d" >/dev/null 2>&1; rc=$?
+      bash "$b/$leg-agent" explore "$d/brief.md" "$d/$leg.e1.log" "$d/repo" >/dev/null 2>&1; rc=$?
     check "V17: $leg-agent 接受 explore 模式且无裁决输出仍 rc=0" $([[ $rc -eq 0 ]]; echo $?)
     [[ -s "$d/$leg.e1.log" ]]; check "V17: $leg-agent explore 写出了日志" $?
     # ② 发散提示词到位:要"一个方向",且**不能**再要求裁决行
@@ -1471,7 +1489,7 @@ PYEOF
     # ④ 护栏:review 模式的裁决闸**不许被这次改动放松**
     env PATH="$b:$PATH" CAPTURE="$d/$leg.r1.json" "${keyenv[@]}" \
       STUB_REVIEW_OUT="看着还行" \
-      bash "$b/$leg-agent" review "$d/brief.md" "$d/$leg.r1.log" "$d" >/dev/null 2>&1; rc=$?
+      bash "$b/$leg-agent" review "$d/brief.md" "$d/$leg.r1.log" "$d/repo" >/dev/null 2>&1; rc=$?
     check "V17: $leg-agent review 无裁决仍判失败(闸没被放松)" $([[ $rc -ne 0 ]]; echo $?)
   done
 
@@ -1484,7 +1502,7 @@ blob=open(sys.argv[1],'rb').read().decode('utf-8','replace')
 sys.exit(0 if sys.argv[2] in blob else 1)" "$1" "$2"; }
   env PATH="$b:$PATH" CAPTURE="$d/glm.e1.argv" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk \
     STUB_OC_OUT="Direction: 单一看法" \
-    bash "$b/subglm-agent" explore "$d/brief.md" "$d/glm.e1.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subglm-agent" explore "$d/brief.md" "$d/glm.e1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "V17: subglm-agent(opencode 底座)接受 explore 且无裁决输出仍 rc=0" $([[ $rc -eq 0 ]]; echo $?)
   [[ -s "$d/glm.e1.log" ]]; check "V17: subglm-agent explore 写出了日志" $?
   if [[ -f "$d/glm.e1.argv" ]]; then
@@ -1517,13 +1535,13 @@ sys.exit(0 if sys.argv[2] in blob else 1)" "$1" "$2"; }
   fi
   # review 模式的裁决闸不许被放松(opencode 报错也 rc=0,这道闸是唯一的活口)
   env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk STUB_OC_OUT="看着还行" \
-    bash "$b/subglm-agent" review "$d/brief.md" "$d/glm.r1.log" "$d" >/dev/null 2>&1; rc=$?
+    bash "$b/subglm-agent" review "$d/brief.md" "$d/glm.r1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "V17: subglm-agent review 无裁决仍判失败(闸没被放松)" $([[ $rc -ne 0 ]]; echo $?)
 
   # ---- ⑤ 发散的系统提示词必须真的送达底座腿(单一真相源:panel-explore 导出它)
   env PATH="$b:$PATH" CAPTURE="$d/sysp.argv" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk \
     REVIEW_SYSTEM_PROMPT="ANGLE_NOT_CONSENSUS_MARKER" \
-    bash "$b/subglm-agent" explore "$d/brief.md" "$d/sysp.log" "$d" >/dev/null 2>&1
+    bash "$b/subglm-agent" explore "$d/brief.md" "$d/sysp.log" "$d/repo" >/dev/null 2>&1
   if [[ -f "$d/sysp.argv" ]]; then
     argv_has "$d/sysp.argv" "ANGLE_NOT_CONSENSUS_MARKER"
     check "V17: REVIEW_SYSTEM_PROMPT 送达底座腿(发散指令不丢)" $?
@@ -1587,6 +1605,7 @@ EOF
 v18_engine_identity_single_source() {
   echo "[V18] submimo-review: 身份只有一个来源(不许用别人的名字报自己的错)"
   local d; d="$(mktemp -d)"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   printf '# t\n' > "$d/t.md"
   # 走"无裁决 ⇒ fail()"这条必然报错的路径,看它自报家门用的是哪个名字。
   # 起一个只回 429 的本地端点,顺便验端点报错不写死厂商名。
@@ -1629,6 +1648,7 @@ PY
 v19_degradation_travels_with_conclusion() {
   echo "[V19] 降级的事实必须写进结论所在的那份日志"
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   # 三腿:mimo 正常;deepseek 底座腿必死 + 聊天腿成功(这就是要验的回落路径);glm 关掉
   for n in submimo subglm subkimi; do
@@ -1657,6 +1677,7 @@ v19_degradation_travels_with_conclusion() {
 v19_chat_leg_declares_its_blindness() {
   echo "[V19] 聊天腿日志头自报视野边界"
   local d; d="$(mktemp -d)"; local repo="$d/repo"; mkdir -p "$repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo a > f; git add f; git commit -qm init; echo b >> f )
   printf '# t\n' > "$d/t.md"
@@ -1671,6 +1692,7 @@ v19_chat_leg_declares_its_blindness() {
 v20_max_turns_does_not_discard_work() {
   echo "[V20] 底座腿撞上 max-turns 不许把工作全丢掉"
   local d fake; d="$(mktemp -d)"; fake="$d/fakebin"; mkdir -p "$fake"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   # 假 claude:吐几条 stream-json(含模型说的话与工具动作)后按 max-turns 那样 rc=1
   cat > "$fake/claude" <<'FAKE'
 #!/usr/bin/env bash
@@ -1719,6 +1741,7 @@ v21_agent_leg_body_is_single_source() {
   # 而合并说明里一个字没提 —— 这是"超出规格的好意",不是修复。讽刺的是抓到它的正是
   # 这次刚修好的那条 deepseek 腿的首跑。⇒ 每条腿的默认值单独钉死,改要显式改判据。
   local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$ab/claude" <<'CAPEOF'
@@ -1760,6 +1783,7 @@ CAPEOF
 v22_head_moved_during_review() {
   echo "[V22a] panel-review: 评审期间 HEAD 动了要报,且要写进每份腿日志"
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb" "$repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
@@ -1798,6 +1822,7 @@ EOF
 v22_anchor_leak_sees_committed_track() {
   echo "[V22b] panel-review: 已提交的同名 track verify.md 也算锚定泄漏(不依赖 diff 基线)"
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   for leg in submimo subdeepseek subglm subkimi; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
@@ -1829,6 +1854,7 @@ v22_anchor_leak_sees_committed_track() {
 v22_roster_file() {
   echo "[V22c] panel-review: 收尾把各腿状态落盘成 <prefix>.roster(verify.md 直接粘)"
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb" "$repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
@@ -1881,6 +1907,7 @@ EOF
 v25_legs_run_in_their_own_session() {
   echo "[V25] 腿起在自己的会话里(断线砍不到还在跑的那条)"
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$b/panel-review"
   printf '# t\n' > "$d/t.md"
 
@@ -1913,6 +1940,7 @@ EOF
 v23_my_review_gate_on_every_review_path() {
   echo "[V23] 反锚定闸要盖住**每一条评审路径**,不只是 panel-review"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   ( cd "$d/repo"; git init -q; git config user.email t@t; git config user.name t
     echo x > f; git add -A; git commit -qm init )
   cp "$BIN/_my-review-gate.sh" "$b/" 2>/dev/null
@@ -1970,6 +1998,7 @@ v23_my_review_gate_on_every_review_path() {
 v24_no_env_backdoor_and_coverage_report() {
   echo "[V24] 后门封死:环境变量不再能跳过反锚定闸;清单漏网要有人吭一声"
   local d b rc out; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   ( cd "$d/repo"; git init -q; git config user.email t@t; git config user.name t
     echo x > f; git add -A; git commit -qm init )
   cp "$BIN/_my-review-gate.sh" "$b/" 2>/dev/null
@@ -2042,6 +2071,7 @@ v24_no_env_backdoor_and_coverage_report() {
 v26_glm_on_opencode_go() {
   echo "[V26] GLM 腿改挂 OpenCode Go:端点/认证风格/模型/key 落位,且不碰 deepseek"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" \
      "$BIN/subchat" "$BIN/subglm" "$BIN/subdeepseek" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
@@ -2070,7 +2100,7 @@ PYEOF2
   oc_stub "$b"
   local m1home="$d/ochome26"
   env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$m1home" ZHIPU_API_KEY=zk \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/m1.log" "$d" >/dev/null 2>&1
+    bash "$b/subglm-agent" review "$d/t.md" "$d/m1.log" "$d/repo" >/dev/null 2>&1
   local m1cfg="$m1home/.config/opencode/opencode.json"
   if [[ -f "$m1cfg" ]]; then
     [[ "$(occfg "$m1cfg" model)" == "go/glm-5.2" ]]
@@ -2079,7 +2109,7 @@ PYEOF2
     bad "V26: 底座腿默认模型 glm-5.2(在 opencode 配置里)"; echo "    (没生成配置 ⇒ 测空气)"
   fi
   env PATH="$b:$PATH" CAPTURE="$d/m2.json" ZHIPU_API_KEY=zk \
-    bash "$b/subglm" review "$d/t.md" "$d/m2.log" "$d" >/dev/null 2>&1
+    bash "$b/subglm" review "$d/t.md" "$d/m2.log" "$d/repo" >/dev/null 2>&1
   [[ "$(get "$d/m2.json" MIMO_MODEL)" == "glm-5.2" ]]
   check "V26: 聊天腿默认模型 glm-5.2" $?
 
@@ -2088,20 +2118,20 @@ PYEOF2
   local fakehome="$d/home"; mkdir -p "$fakehome"
   rm -f "$d/h1.json"
   env -u ZHIPU_API_KEY -u ZHIPU_AUTH_FILE PATH="$b:$PATH" CAPTURE="$d/h1.json" HOME="$fakehome" \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/h1.log" "$d" >/dev/null 2>"$d/h1.err"; rc=$?
+    bash "$b/subglm-agent" review "$d/t.md" "$d/h1.log" "$d/repo" >/dev/null 2>"$d/h1.err"; rc=$?
   check "V26: 底座腿没 key 时硬失败" $([[ $rc -ne 0 ]]; echo $?)
   grep -q "opencode-go/auth.json" "$d/h1.err"
   check "V26: 底座腿默认 key 文件 = ~/.config/opencode-go/auth.json" $?
   if [[ -e "$d/h1.json" ]]; then bad "V26: 没 key 时 claude 压根没被调起"; else ok "V26: 没 key 时 claude 压根没被调起"; fi
   env -u ZHIPU_API_KEY -u ZHIPU_AUTH_FILE PATH="$b:$PATH" CAPTURE="$d/h2.json" HOME="$fakehome" \
-    bash "$b/subglm" review "$d/t.md" "$d/h2.log" "$d" >/dev/null 2>"$d/h2.err"; rc=$?
+    bash "$b/subglm" review "$d/t.md" "$d/h2.log" "$d/repo" >/dev/null 2>"$d/h2.err"; rc=$?
   check "V26: 聊天腿没 key 时硬失败" $([[ $rc -ne 0 ]]; echo $?)
   grep -q "opencode-go/auth.json" "$d/h2.err"
   check "V26: 聊天腿默认 key 文件 = ~/.config/opencode-go/auth.json" $?
 
   # ── ③ deepseek 腿一个字都没被顺手改(同一份躯干,差异只准活在供应商表里)
   env PATH="$b:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY=dk \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d" >/dev/null 2>&1
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d/repo" >/dev/null 2>&1
   [[ "$(get "$d/ds1.json" ANTHROPIC_BASE_URL)" == "https://api.deepseek.com/anthropic" ]]
   check "V26: deepseek 底座腿端点没被顺手改" $?
   [[ "$(get "$d/ds1.json" ANTHROPIC_AUTH_TOKEN)" == "dk" ]]
@@ -2109,7 +2139,7 @@ PYEOF2
   [[ -z "$(get "$d/ds1.json" ANTHROPIC_API_KEY)" ]]
   check "V26: deepseek 那格 x-api-key 保持空" $?
   env PATH="$b:$PATH" CAPTURE="$d/ds2.json" DEEPSEEK_API_KEY=dk \
-    bash "$b/subdeepseek" review "$d/t.md" "$d/ds2.log" "$d" >/dev/null 2>&1
+    bash "$b/subdeepseek" review "$d/t.md" "$d/ds2.log" "$d/repo" >/dev/null 2>&1
   [[ "$(get "$d/ds2.json" MIMO_BASE_URL)" == "https://api.deepseek.com" ]]
   check "V26: deepseek 聊天腿端点没被顺手改" $?
 
@@ -2206,6 +2236,7 @@ PYUA
 v27_knockon_of_the_backend_switch() {
   echo "[V27] 换后端的连带面:AUTH_ENV 守卫 / panel-explore 默认档 / -h 不许谎报"
   local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   printf '# review this\n' > "$d/t.md"
 
   # ── ① AUTH_ENV 漏填必须**硬失败**,不许静默注一个空名变量。
@@ -2228,7 +2259,7 @@ EOF
   check "V27: 前置——挖空 AUTH_ENV 这一刀真的切中了(不然下面三条是在测空气)" $?
   rm -f "$d/c1.flag"
   env PATH="$b:$PATH" CAPTURE="$d/c1.flag" ZHIPU_API_KEY=zk \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/c1.log" "$d" >/dev/null 2>"$d/c1.err"; rc=$?
+    bash "$b/subglm-agent" review "$d/t.md" "$d/c1.log" "$d/repo" >/dev/null 2>"$d/c1.err"; rc=$?
   [[ $rc -ne 0 ]]
   check "V27: AUTH_ENV 漏填时硬失败(env 会静默放过,所以守卫必须在我们这边)" $?
   if [[ -e "$d/c1.flag" ]]; then
@@ -2289,6 +2320,7 @@ EOF
 v28_glm_on_opencode_base() {
   echo "[V28] GLM 腿改用 opencode 底座:调谁、只读锁、配置隔离、裁决 gate"
   local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   printf '# review this\n' > "$d/t.md"
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
@@ -2311,7 +2343,7 @@ EOF
   rm -f "$d/oc.txt" "$d/claude.txt"
   env PATH="$b:$PATH" CAPTURE="$d/oc.txt" CAPTURE_CLAUDE="$d/claude.txt" \
     OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/g1.log" "$d" >/dev/null 2>"$d/g1.err"; rc=$?
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g1.log" "$d/repo" >/dev/null 2>"$d/g1.err"; rc=$?
 
   # ── ① 调的是 opencode,不是 claude
   [[ -f "$d/oc.txt" ]]; check "V28: GLM 腿调起的是 opencode 底座" $?
@@ -2409,7 +2441,7 @@ exit 0
 EOF
   chmod +x "$b/opencode"
   env PATH="$b:$PATH" CAPTURE="$d/oc2.txt" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/g2.log" "$d" >/dev/null 2>"$d/g2.err"; rc=$?
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g2.log" "$d/repo" >/dev/null 2>"$d/g2.err"; rc=$?
   [[ $rc -ne 0 ]]
   check "V28: opencode 没给裁决行时必须硬失败(它报错也 rc=0,信不得)" $?
 
@@ -2418,7 +2450,7 @@ EOF
   local fakehome="$d/home"; mkdir -p "$fakehome"
   env -u ZHIPU_API_KEY -u ZHIPU_AUTH_FILE PATH="$b:$PATH" CAPTURE="$d/oc3.txt" \
     OPENCODE_REVIEW_HOME="$ochome" HOME="$fakehome" \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/g3.log" "$d" >/dev/null 2>"$d/g3.err"; rc=$?
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g3.log" "$d/repo" >/dev/null 2>"$d/g3.err"; rc=$?
   [[ $rc -ne 0 ]]; check "V28: 没 key 时硬失败" $?
   if [[ -f "$d/oc3.txt" ]]; then bad "V28: 没 key 时 opencode 压根没被调起"
   else ok "V28: 没 key 时 opencode 压根没被调起"; fi
@@ -2431,7 +2463,7 @@ EOF
   chmod +x "$b/opencode"
   rm -f "$d/oc4.txt" "$d/claude4.txt"
   env PATH="$b:$PATH" CAPTURE="$d/oc4.txt" CAPTURE_CLAUDE="$d/claude4.txt" \
-    DEEPSEEK_API_KEY=dk bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds.log" "$d" >/dev/null 2>&1
+    DEEPSEEK_API_KEY=dk bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds.log" "$d/repo" >/dev/null 2>&1
   [[ -f "$d/claude4.txt" ]]
   check "V28: deepseek 腿仍走 claude 壳(换底座不许串味到隔壁)" $?
   if [[ -f "$d/oc4.txt" ]]; then bad "V28: deepseek 腿不许被顺手改成 opencode 底座"
@@ -2466,7 +2498,7 @@ EOF
   cp "$BIN/ro-repo-exec" "$nb/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   oc_stub "$nb"        # 只有 opencode,**没有 claude**
   env PATH="$nb:/usr/bin:/bin" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
-    bash "$nb/subglm-agent" review "$d/t.md" "$d/g12.log" "$d" >/dev/null 2>"$d/g12.err"; rc=$?
+    bash "$nb/subglm-agent" review "$d/t.md" "$d/g12.log" "$d/repo" >/dev/null 2>"$d/g12.err"; rc=$?
   [[ $rc -eq 0 ]]
   check "V28: 机器上没装 claude 也不影响 opencode 底座的腿" $?
 
@@ -2511,7 +2543,7 @@ EOF
   # 故意把 stdin 接成一个**开着的管道**,模拟 runlog 那种现场
   ( sleep 30 ) | env PATH="$b:$PATH" CAPTURE_STDIN="$d/stdin.txt" \
       OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
-      bash "$b/subglm-agent" review "$d/t.md" "$d/g9.log" "$d" >/dev/null 2>&1
+      bash "$b/subglm-agent" review "$d/t.md" "$d/g9.log" "$d/repo" >/dev/null 2>&1
   if [[ -f "$d/stdin.txt" ]]; then
     grep -q "^/dev/null$" "$d/stdin.txt"
     check "V28: 底座的 stdin 接到 /dev/null(否则管道下它会一直等输入)" $?
@@ -2537,7 +2569,7 @@ echo "Conclusion: PASS"
 EOF
   chmod +x "$b/opencode"
   env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
-    bash "$b/subglm-agent" review "$d/t.md" "$d/g11.log" "$d" >/dev/null 2>&1
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g11.log" "$d/repo" >/dev/null 2>&1
   grep -q "TOOL-TRACE-Read calc.py" "$d/g11.log" 2>/dev/null
   check "V28: 工具轨迹落进腿自己的日志(四审读的是它,不是收据)" $?
 
@@ -2593,6 +2625,7 @@ EOF
 v33_submimo_review_leg_is_read_only() {
   echo "[V33] panel 第一条腿(submimo)写口关掉、bash 留着,fix 不受连累"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local REAL_MIMO; REAL_MIMO="$(command -v mimo || true)"
   cp "$BIN/submimo" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
@@ -2835,6 +2868,7 @@ PYATOM
 v35_legs_run_in_readonly_repo() {
   echo "[V35] 评审腿在只读的仓里跑(写口物理消失,读能力一条不少)"
   local d; d="$(mktemp -d)"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs" "$repo/bin" "$repo/tests"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && printf 'y\n' > tests/oracle.sh \
     && git add -A && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
@@ -2962,6 +2996,7 @@ v35_legs_run_in_readonly_repo() {
 v36_wrappers_actually_use_readonly_repo() {
   echo "[V36] 三条 wrapper 真的把腿放进只读仓里跑(端到端:让假模型去写)"
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
@@ -3091,6 +3126,7 @@ PWN
 v37_wrappers_open_no_write_hole() {
   echo "[V37] wrapper 不给腿开任何写口(腿日志靠父进程的 fd,不靠写口)"
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
@@ -3180,6 +3216,7 @@ RECORD
 v38_leg_runtime_home_outside_repo() {
   echo "[V38] 腿的运行期状态目录不许在被评审的仓里"
   local d; d="$(mktemp -d)"
+  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1

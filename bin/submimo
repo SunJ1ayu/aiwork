@@ -112,7 +112,11 @@ my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "submimo" || exit 1
 # `git diff/log/show`、照样自己读仓库),但写口物理消失 —— 08-18 我发现
 # `git diff --output=<path>` 绕得过任何命令行白名单,而"把 bash 整个关掉"那条路
 # 已被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
-# `--rw` 只开一个口:**日志目录**(腿日志就在仓内 logs/)。仓外的日志目录会被
+# **一个写口都不开。** 腿日志是父 shell 重定向写的(`>> "$LOG_FILE"` / `| tee -a`),
+# fd 在**父 namespace** 就打开了,挂载管不着已经打开的 fd —— 探针实测过。
+# 第一版开了 `--rw <日志目录>`,那个写口不但多余,还带来两条真 bug:
+# `dirname` 相对调用方 cwd 解析 ⇒ 从仓根裸文件名调用时整仓开闸(安静失效);
+# 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。仓外的日志目录会被
 # ro-repo-exec 跳过并说明(仓外本来就可写)。
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
 #
@@ -120,7 +124,7 @@ my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "submimo" || exit 1
 # "加一道防线顺手拆掉另一道"是本仓记过的账(V33 里有同款对照组盯着这件事)。
 RO_EXEC=()
 [[ "$MODE" == "fix" ]] || [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf 'submimo: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$BIN_DIR" >&2; exit 78; }
-[[ "$MODE" == "fix" ]] || RO_EXEC=("$BIN_DIR/ro-repo-exec" --rw "$(cd "$(dirname "$LOG_FILE")" 2>/dev/null && pwd || echo /nonexistent)" "$REPO_DIR" --)
+[[ "$MODE" == "fix" ]] || RO_EXEC=("$BIN_DIR/ro-repo-exec" "$REPO_DIR" --)
 
 command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: mimo"
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"

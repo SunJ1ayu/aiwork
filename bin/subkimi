@@ -32,7 +32,11 @@ _GATE="$(dirname "$0")/_my-review-gate.sh"
 . "$_GATE"
 gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 
-REVIEW_HOME="${KIMI_REVIEW_HOME:-/root/aiwork/kimi-review-home}"
+# 运行期 home **必须在被评审的仓外面**(track repo-write-audit,2026-08-19 第二轮)。
+# 原默认是 `/root/aiwork/kimi-review-home` —— 仓内。腿进只读仓之后 kimi 的 logger
+# 当场 EROFS、腿起不来。另两条腿的运行期目录早就在 ~/.cache/aiwork/ 下,
+# kimi 是唯一的例外,这里把它拉齐。仓内那份继续当**种子**(见下面的同步)。
+REVIEW_HOME="${KIMI_REVIEW_HOME:-$HOME/.cache/aiwork/kimi-review-home}"
 DEFAULT_MODEL="kimi-code/k3"
 
 usage() {
@@ -71,16 +75,54 @@ BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 # 四审两条腿把这条顶成 HIGH:目标说的是"每一条评审路径",实现漏了一条 = 实质落差。
 my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subkimi" || exit 1
 
+# ── 运行期 home:种子同步 + 位置检查(track repo-write-audit,2026-08-19 第二轮)──
+# 仓内的 `kimi-review-home/` 继续留在版本控制里当**种子**:config.toml 和
+# hooks/guard.mjs 是判卷防线的一部分,必须可审计。每次跑都从种子覆盖到运行期 home
+# —— 不覆盖的话,改了仓内那份守卫**不生效**,又是"同一件事写两处、只更新一处"。
+# 只在用默认 home 时同步:显式指定 KIMI_REVIEW_HOME 的调用方自己负责(判据夹具靠这个)。
+KIMI_SEED_HOME="$BIN_DIR/../kimi-review-home"
+if [[ -z "${KIMI_REVIEW_HOME:-}" && -d "$KIMI_SEED_HOME" ]]; then
+  # 首次:把旧 home 的运行期状态(sessions / oauth / device_id)整份搬过来,**不删旧的**
+  if [[ ! -d "$REVIEW_HOME" ]]; then
+    mkdir -p "$(dirname "$REVIEW_HOME")"
+    cp -a "$KIMI_SEED_HOME" "$REVIEW_HOME" 2>/dev/null || true
+  fi
+  mkdir -p "$REVIEW_HOME/hooks"
+  cp -f "$KIMI_SEED_HOME/config.toml" "$REVIEW_HOME/config.toml" 2>/dev/null || true
+  for _h in "$KIMI_SEED_HOME"/hooks/*; do
+    [[ -f "$_h" ]] && cp -f "$_h" "$REVIEW_HOME/hooks/" 2>/dev/null || true
+  done
+fi
+
+# 自省开关:让 wrapper 自己把解析结果打出来,判据据此断言(**查工件不查自述**,
+# 别让判据去 grep 源码里的默认值 —— 那查的是我写了什么,不是它算出了什么)。
+if [[ -n "${REVIEW_PRINT_HOME:-}" ]]; then printf '%s\n' "$REVIEW_HOME"; exit 0; fi
+
+# 落在被评审的仓里 ⇒ **拒跑并说清楚**。不拒的话腿会去撞底座那句
+# "storage write failed: unrecognized I/O error" —— 谁看了都想不到是只读挂载,
+# 而花名册记的 FAIL(rc=1) 跟"额度耗尽"长得一模一样。2026-08-19 真 panel 撞过一次。
+_RH_REAL="$(cd "$REVIEW_HOME" 2>/dev/null && pwd -P || printf '%s' "$REVIEW_HOME")"
+_RD_REAL="$(cd "$REPO_DIR"   2>/dev/null && pwd -P || printf '%s' "$REPO_DIR")"
+case "$_RH_REAL" in
+  "$_RD_REAL"|"$_RD_REAL"/*)
+    die "运行期 home 在**被评审的仓内**($_RH_REAL):评审腿的仓是只读的,底座在那儿
+      写状态会当场 EROFS、腿起不来,而错误信息看不出是只读挂载。放到仓外,例如
+      KIMI_REVIEW_HOME=\$HOME/.cache/aiwork/kimi-review-home" ;;
+esac
+
 # ── 只读仓(track repo-write-audit,2026-08-19)────────────────────────────────
 # 评审腿在**仓是只读的** mount namespace 里跑:腿的能力一个字没改(照样
 # `git diff/log/show`、照样自己读仓库),但写口物理消失 —— 08-18 我发现
 # `git diff --output=<path>` 绕得过任何命令行白名单,而"把 bash 整个关掉"那条路
 # 已被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
-# `--rw` 只开一个口:**日志目录**(腿日志就在仓内 logs/)。仓外的日志目录会被
-# ro-repo-exec 跳过并说明(仓外本来就可写)。
+# **一个写口都不开。** 腿日志是父 shell 重定向写的(`>> "$LOG_FILE"` / `| tee -a`),
+# fd 在**父 namespace** 就打开了,挂载管不着已经打开的 fd —— 探针实测过。
+# 第一版开了 `--rw <日志目录>`,那个写口不但多余,还带来两条真 bug:
+# `dirname` 相对调用方 cwd 解析 ⇒ 从仓根裸文件名调用时整仓开闸(安静失效);
+# 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
-RO_EXEC=("$BIN_DIR/ro-repo-exec" --rw "$(cd "$(dirname "$LOG_FILE")" 2>/dev/null && pwd || echo /nonexistent)" "$REPO_DIR" --)
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$REPO_DIR" --)
 MODEL="${KIMI_MODEL:-$DEFAULT_MODEL}"
 TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 

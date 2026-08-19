@@ -268,7 +268,11 @@ RC=0
 # `git diff/log/show`、照样自己读仓库),但写口物理消失 —— 08-18 我发现
 # `git diff --output=<path>` 能绕过任何命令行白名单,而"把 bash 整个关掉"那条路
 # 已经被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
-# `--rw` 只开一个口:**日志目录**(腿日志就在仓内 logs/)。
+# **一个写口都不开。** 腿日志是父 shell 重定向写的(`>> "$LOG_FILE"` / `| tee -a`),
+# fd 在**父 namespace** 就打开了,挂载管不着已经打开的 fd —— 探针实测过。
+# 第一版开了 `--rw <日志目录>`,那个写口不但多余,还带来两条真 bug:
+# `dirname` 相对调用方 cwd 解析 ⇒ 从仓根裸文件名调用时整仓开闸(安静失效);
+# 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
 #
 # ⚠️ **这一段刻意放在两个底座分支的外面。** 第一版把它焊在 claude 那一支里,
@@ -276,7 +280,7 @@ RC=0
 # 已接的那条路径上)。定义一次、两支共用 ⇒ **将来再加底座也自动带上**,
 # 这比在新分支里记得抄一遍可靠。本仓的老账:同一件事写两处、只更新一处。
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
-RO_EXEC=("$BIN_DIR/ro-repo-exec" --rw "$(cd "$(dirname "$LOG_FILE")" 2>/dev/null && pwd || echo /nonexistent)" "$REPO_DIR" --)
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$REPO_DIR" --)
 
 if [[ "$AGENT_BASE" == "opencode" ]]; then
   # ── opencode 底座 ───────────────────────────────────────────────────────────
