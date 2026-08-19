@@ -22,7 +22,13 @@
      r2 四条腿 submimo/subdeepseek/subglm/subkimi 全 PASS,收据里也都有 `roster -> ...` 行。
      ⚠️ 留着这行不删:**我第三次把没核实的事写成事实,这次是把别的单的账抄进本单结论栏** ——
      而结论栏正是最不该有这种东西的地方。
-  ③ 断线当天我自己栽的两处:**判据在背后跑命令**(注释里的反引号被 shell 执行),
+  ③ **第三轮四审(补跑)的落地**:subdeepseek F1(MEDIUM)是真的、我实测复现 ——
+     `--path-format` 老 git 不认 ⇒ 共同目录静默不挂 ⇒ 腿能写主仓 refs/objects,
+     而仓根探针一路绿灯。已补兜底 + fail-closed(V42 先行红 2 条,变异 m7 证明咬得动)。
+     submimo 那条「外部 worktree 的 .git 是文件会被 [ -d ] 跳过」**我实测推翻**:
+     GITDIRS 装的是 rev-parse 的输出(两个都是真目录),代码从不看仓内那个 .git 文件。
+     subglm G3(mount --bind 非递归 ⇒ 仓内既有 submount 仍可写)成立但属文档债,记在下方。
+  ④ 断线当天我自己栽的两处:**判据在背后跑命令**(注释里的反引号被 shell 执行),
      V41 抓出来的,不是我看出来的;修法是加引号 heredoc,不是删掉那两个反引号。
 
 > Panel hook — 软判断(correctness/security/edge/spec-drift)走 panel-review:
@@ -105,6 +111,21 @@ runlog: red-v40-3c-mutation rc=1 commit=b9d68f6 dirty=yes at=2026-08-19T10:00:15
 runlog: red-v41-oracle-selfexec rc=1 commit=e05ba20 dirty=yes at=2026-08-19T10:17:09Z file=tracks/repo-write-audit/evidence/20260819T101709Z-01-red-v41-oracle-selfexec.txt
 runlog: red-v41-oracle-selfexec-v2 rc=1 commit=e05ba20 dirty=yes at=2026-08-19T10:21:50Z file=tracks/repo-write-audit/evidence/20260819T102150Z-01-red-v41-oracle-selfexec-v2.txt
 runlog: final-green-round4 rc=0 commit=1311f4d dirty=yes at=2026-08-19T10:25:45Z file=tracks/repo-write-audit/evidence/20260819T102545Z-01-final-green-round4.txt
+
+# —— 第三轮四审(r3)及其发现的落地 ——
+# 花名册:submimo=PASS subdeepseek=PASS subglm=PASS subkimi=FAIL(rc=1,额度 403)
+#   ⚠️ r3 的**审查范围没约束住**:三条腿都从 281dcbf(整单)起算,读的证据是
+#   final-green-round4 —— 也就是说 **V41⑤⑥ 和 V42 仍然没有被任何一条腿看过**。
+#   PANEL_DIFF_BASE 管不住 agent 腿(它们自己读仓库,任务书写的是整单)。这笔账敞着。
+runlog: green-v41-5-dollarparen rc=0 commit=4a6e656 dirty=yes at=2026-08-19T10:45:04Z file=tracks/archive/repo-write-audit/evidence/20260819T104503Z-01-green-v41-5-dollarparen.txt
+runlog: mut-m5-dollarparen-removed rc=1 commit=4a6e656 dirty=yes at=2026-08-19T10:47:59Z file=tracks/archive/repo-write-audit/evidence/20260819T104759Z-01-mut-m5-dollarparen-removed.txt
+runlog: green-v41-6-heredoc-terminator rc=0 commit=fd59d65 dirty=yes at=2026-08-19T10:52:49Z file=tracks/archive/repo-write-audit/evidence/20260819T105249Z-01-green-v41-6-heredoc-terminator.txt
+runlog: mut-m6-heredoc-strip rc=1 commit=fd59d65 dirty=yes at=2026-08-19T10:55:48Z file=tracks/archive/repo-write-audit/evidence/20260819T105548Z-01-mut-m6-heredoc-strip.txt
+runlog: panel-r3-v41 rc=0 commit=f33d575 dirty=no at=2026-08-19T10:59:46Z file=tracks/archive/repo-write-audit/evidence/20260819T105946Z-01-panel-r3-v41.txt
+runlog: red-v42-gitcommondir rc=0 commit=f33d575 dirty=yes at=2026-08-19T11:22:30Z file=tracks/archive/repo-write-audit/evidence/20260819T112230Z-01-red-v42-gitcommondir.txt
+runlog: red-v42-gitcommondir-v2 rc=1 commit=f33d575 dirty=yes at=2026-08-19T11:26:52Z file=tracks/archive/repo-write-audit/evidence/20260819T112652Z-01-red-v42-gitcommondir-v2.txt
+runlog: green-v42-fixed rc=0 commit=e025402 dirty=yes at=2026-08-19T11:30:27Z file=tracks/archive/repo-write-audit/evidence/20260819T113027Z-01-green-v42-fixed.txt
+runlog: mut-m7-commondir-fallback-removed rc=1 commit=e025402 dirty=yes at=2026-08-19T11:33:35Z file=tracks/archive/repo-write-audit/evidence/20260819T113335Z-01-mut-m7-commondir-fallback-removed.txt
 ```
 
 ## Review
