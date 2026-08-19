@@ -2473,6 +2473,178 @@ EOF
   rm -rf "$d"
 }
 
+
+# ---------------------------------------------------------------- V30
+# 2026-08-18 实事故(就发生在本单自己的四审里):opencode 腿和 kimi 腿双双 rc=126,
+# 日志里只有一句 `/usr/bin/timeout: Argument list too long`。
+# 根因:这两条腿把**整个提示词当一个 argv 参数**传(opencode 是位置参数、
+# kimi 是 `-p <prompt>`),而 Linux 对**单个参数**的硬上限是
+# MAX_ARG_STRLEN = 32 × PAGE_SIZE = 131072 字节;本单自己的 diff 是 132061 字节 ⇒ 必炸。
+# 而当时的截断上限是拍脑袋的 200KB —— **比物理上限还大,所以它在最该保护的时候不保护**。
+# claude 腿没炸,只因为它的提示词走 stdin(根本不占 argv)。
+# 这条判据钉死三件事:①巨型 diff 下走 argv 的腿也得起得来;②走 stdin 的腿不许被
+# argv 的预算连累;③提示词真的放不下时必须**响亮失败**,不是让 shell 吐一句 rc=126 的
+# 天书(那次 panel 只当"腿挂了"就回落,失败原因埋在 .err 里差点被当成模型问题)。
+v30_giant_prompt_does_not_blow_argv() {
+  echo "[V30] 巨型提示词不许把走 argv 的腿撑到起不来(E2BIG,08-18 实事故)"
+  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
+  local ARGMAX=131072
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$b/"
+  printf '# t\n' > "$d/t.md"
+
+  # 三个 stub:各自落盘"我被调起来了 + 我拿到的最大单参有多长 + 提示词原文"。
+  # 提示词原文要留全,后面 grep 截断标注用。
+  cat > "$b/opencode" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import os,sys,json
+a=sys.argv[1:]
+p=max(a,key=len) if a else ''
+json.dump({'argvmax':max((len(x) for x in a),default=0)},open(os.environ['CAPTURE'],'w'))
+open(os.environ['CAPTURE_PROMPT'],'w').write(p)" "$@"
+echo "stub"; echo "Conclusion: PASS"
+EOF
+  cat > "$b/kimi" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import os,sys,json
+a=sys.argv[1:]
+p=max(a,key=len) if a else ''
+json.dump({'argvmax':max((len(x) for x in a),default=0)},open(os.environ['CAPTURE'],'w'))
+open(os.environ['CAPTURE_PROMPT'],'w').write(p)" "$@"
+echo "stub"; echo "Conclusion: PASS"
+EOF
+  cat > "$b/claude" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import os,sys,json
+a=sys.argv[1:]
+s=sys.stdin.read()
+json.dump({'argvmax':max((len(x) for x in a),default=0),'stdinlen':len(s)},open(os.environ['CAPTURE'],'w'))
+open(os.environ['CAPTURE_PROMPT'],'w').write(s)"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+EOF
+  chmod +x "$b/opencode" "$b/kimi" "$b/claude"
+
+  # 真仓:base 一版,然后往工作区塞一个 ~400KB 的改动(不提交 —— 派活现场就是这样)
+  local repo="$d/repo"; mkdir -p "$repo"
+  ( cd "$repo" && git init -q . \
+    && printf 'x\n' > big.txt \
+    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base \
+    && python3 -c "
+open('big.txt','w').write(''.join('line %06d 0123456789abcdefghij\n' % i for i in range(12000)))" \
+  ) >/dev/null 2>&1
+
+  # ── ⓪ 前置锚:这一刀真的切中了。没有它,下面全是在测空气
+  #    (08-18 教训:「不含某串」的断言在输入缺席时会假绿)。
+  local dsz; dsz="$(git -C "$repo" diff HEAD | wc -c)"
+  [[ "$dsz" -gt "$ARGMAX" ]]
+  check "V30: 锚 —— 造出的 diff(${dsz}B)真的超过单参上限 ${ARGMAX}" $?
+
+  local getj; getj() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],-1))" "$1" "$2"; }
+
+  # ── ① opencode 底座腿(提示词走位置参数)
+  rm -f "$d/oc.json" "$d/oc.prompt"
+  env PATH="$b:$PATH" CAPTURE="$d/oc.json" CAPTURE_PROMPT="$d/oc.prompt" \
+    OPENCODE_REVIEW_HOME="$d/ochome" ZHIPU_API_KEY=zk PANEL_DIFF_BASE=HEAD \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/oc.log" "$repo" >/dev/null 2>"$d/oc.err"; rc=$?
+  [[ -f "$d/oc.json" ]]
+  check "V30: 巨型 diff 下 opencode 腿仍被调起(不是没起来就 E2BIG 了)" $?
+  grep -qi 'Argument list too long' "$d/oc.err" "$d/oc.log" 2>/dev/null
+  check "V30: opencode 腿不许再吐 Argument list too long" $([[ $? -ne 0 ]]; echo $?)
+  # wrapper 会把 126 转成自己的 rc,所以查"最终 rc 不是 126"永远绿(第一版就是这条,
+  # 红检时它在腿明明炸了的情况下照样 PASS)。真实失败形态是腿自己在 stderr 里的那句自述。
+  grep -q 'rc=126' "$d/oc.err" 2>/dev/null
+  check "V30: opencode 腿不许再以 rc=126 挂掉(查它自己的自述,不是转手后的 rc)" $([[ $? -ne 0 ]]; echo $?)
+  if [[ -f "$d/oc.json" ]]; then
+    local ocmax; ocmax="$(getj "$d/oc.json" argvmax)"
+    [[ "$ocmax" -gt 0 && "$ocmax" -lt "$ARGMAX" ]]
+    check "V30: 传给 opencode 的最大单参 ${ocmax}B < ${ARGMAX}" $?
+    # 截断了就必须说出来 —— 静默丢掉 2/3 的 diff 比看不到 diff 更坏(腿会以为自己看全了)
+    grep -q '截断' "$d/oc.prompt" 2>/dev/null
+    check "V30: opencode 腿的提示词里写明了 diff 被截断(不许静默丢)" $?
+  else
+    bad "V30: 传给 opencode 的最大单参 < ${ARGMAX}"
+    bad "V30: opencode 腿的提示词里写明了 diff 被截断(不许静默丢)"
+  fi
+
+  # ── ② kimi 腿(提示词走 -p <prompt>)
+  #    review home 必须真建出来(hooks/credentials/config.toml):第一版我只给了个空目录,
+  #    腿卡在 "review home config missing" 压根没跑到 exec ⇒ 那几条断言全在测空气,
+  #    而"不含 Argument list too long"这种否定断言在输入缺席时**假绿**(08-18 同一个坑)。
+  # fixture 照抄 V13 那份完整的(config + guard + credentials 三样缺一不可)。
+  # 我第一版自己拼,漏一样红一次、连漏三次,而每次"腿没起来"都让那两条否定断言假绿。
+  local kh="$d/kh"; mkdir -p "$kh/hooks" "$kh/credentials"
+  printf 'default_model = "x"\n' > "$kh/config.toml"
+  cp /root/aiwork/kimi-review-home/hooks/guard.mjs "$kh/hooks/guard.mjs" 2>/dev/null \
+    || printf 'process.exit(2)\n' > "$kh/hooks/guard.mjs"
+  echo '{}' > "$kh/credentials/kimi-code.json"
+  rm -f "$d/k.json" "$d/k.prompt"
+  env PATH="$b:$PATH" CAPTURE="$d/k.json" CAPTURE_PROMPT="$d/k.prompt" \
+    KIMI_REVIEW_HOME="$kh" PANEL_DIFF_BASE=HEAD \
+    bash "$b/subkimi" review "$d/t.md" "$d/k.log" "$repo" >/dev/null 2>"$d/k.err"; rc=$?
+  [[ -f "$d/k.json" ]]
+  check "V30: 巨型 diff 下 kimi 腿仍被调起" $?
+  grep -qi 'Argument list too long' "$d/k.err" "$d/k.log" 2>/dev/null
+  check "V30: kimi 腿不许再吐 Argument list too long" $([[ $? -ne 0 ]]; echo $?)
+  # wrapper 会把 126 转成自己的 rc,所以查"最终 rc 不是 126"永远绿(第一版就是这条,
+  # 红检时它在腿明明炸了的情况下照样 PASS)。真实失败形态是腿自己在 stderr 里的那句自述。
+  grep -q 'rc=126' "$d/k.err" 2>/dev/null
+  check "V30: kimi 腿不许再以 rc=126 挂掉(查它自己的自述,不是转手后的 rc)" $([[ $? -ne 0 ]]; echo $?)
+  if [[ -f "$d/k.json" ]]; then
+    local kmax; kmax="$(getj "$d/k.json" argvmax)"
+    [[ "$kmax" -gt 0 && "$kmax" -lt "$ARGMAX" ]]
+    check "V30: 传给 kimi 的最大单参 ${kmax}B < ${ARGMAX}" $?
+    grep -q '截断' "$d/k.prompt" 2>/dev/null
+    check "V30: kimi 腿的提示词里写明了 diff 被截断(不许静默丢)" $?
+  else
+    bad "V30: 传给 kimi 的最大单参 < ${ARGMAX}"
+    bad "V30: kimi 腿的提示词里写明了 diff 被截断(不许静默丢)"
+  fi
+
+  # ── ③ claude 腿走 stdin ⇒ **不该被 argv 的预算连累**。
+  #    修法如果图省事把上限一刀切到 128KB,这条会红 —— 那是能力的无谓损失。
+  rm -f "$d/c.json" "$d/c.prompt"
+  env PATH="$b:$PATH" CAPTURE="$d/c.json" CAPTURE_PROMPT="$d/c.prompt" \
+    DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c.log" "$repo" >/dev/null 2>"$d/c.err"; rc=$?
+  if [[ -f "$d/c.json" ]]; then
+    local cstdin cargv; cstdin="$(getj "$d/c.json" stdinlen)"; cargv="$(getj "$d/c.json" argvmax)"
+    [[ "$cstdin" -gt "$ARGMAX" ]]
+    check "V30: claude 腿(走 stdin)仍拿到超过 ${ARGMAX}B 的提示词(${cstdin}B),没被 argv 预算连累" $?
+    [[ "$cargv" -lt "$ARGMAX" ]]
+    check "V30: claude 腿的提示词确实没走 argv(最大单参 ${cargv}B)" $?
+  else
+    bad "V30: claude 腿(走 stdin)仍拿到超过 ${ARGMAX}B 的提示词"
+    bad "V30: claude 腿的提示词确实没走 argv"
+  fi
+
+  # ── ④ 提示词的**非 diff 部分**自己就超限时:截 diff 也救不回来 ⇒ 必须响亮失败。
+  #    这是本次事故最难看的地方:失败形态是 rc=126 + 一句 shell 天书,
+  #    panel 只当"腿挂了"照常回落,真原因埋在 .err 里没人看。
+  python3 -c "
+open('$d/huge.md','w').write('# t\n' + ''.join('task line %06d padding padding padding\n' % i for i in range(5000)))"
+  rm -f "$d/oc2.json" "$d/oc2.prompt"
+  env PATH="$b:$PATH" CAPTURE="$d/oc2.json" CAPTURE_PROMPT="$d/oc2.prompt" \
+    OPENCODE_REVIEW_HOME="$d/ochome2" ZHIPU_API_KEY=zk \
+    bash "$b/subglm-agent" review "$d/huge.md" "$d/oc2.log" "$repo" >/dev/null 2>"$d/oc2.err"; rc=$?
+  local hsz; hsz="$(wc -c < "$d/huge.md")"
+  [[ "$hsz" -gt "$ARGMAX" ]]
+  check "V30: 锚 —— 造出的任务书(${hsz}B)本身就超过单参上限" $?
+  [[ "$rc" -ne 0 ]]
+  check "V30: 提示词放不下时硬失败(rc=${rc},不许假装跑过)" $?
+  grep -qiE '提示词|prompt' "$d/oc2.err" 2>/dev/null
+  check "V30: 失败原因点名是提示词太大(别让人对着 rc=126 猜)" $?
+  if [[ -f "$d/oc2.json" ]]; then
+    bad "V30: 提示词放不下时腿压根不该被调起"
+    echo "    (stub 被调起来了 ⇒ 我们没在自己这边拦住,又要靠 execve 去炸)"
+  else
+    ok "V30: 提示词放不下时腿压根不该被调起"
+  fi
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -2509,5 +2681,6 @@ REVIEW_NO_MY_REVIEW=1 v26_glm_on_opencode_go
 REVIEW_NO_MY_REVIEW=1 v27_knockon_of_the_backend_switch
 REVIEW_NO_MY_REVIEW=1 v28_glm_on_opencode_base
 REVIEW_NO_MY_REVIEW=1 v29_agent_legs_get_the_diff
+REVIEW_NO_MY_REVIEW=1 v30_giant_prompt_does_not_blow_argv
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
