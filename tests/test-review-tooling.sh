@@ -2645,6 +2645,245 @@ open('$d/huge.md','w').write('# t\n' + ''.join('task line %06d padding padding p
   rm -rf "$d"
 }
 
+
+# ---------------------------------------------------------------- V31
+# 收 08-18 四审 subdeepseek 的 F2 / F4(两条都成立,修完在这儿钉死):
+#
+# F2:diff 注入是 subagent 那份**复制粘贴**进 subkimi 的,而 V29 只拷了 claude 腿去测
+#     ⇒ subkimi 的新代码零断言覆盖,而 F1(E2BIG)恰恰先砸在它头上。
+#     代码面已抽成共享库 _prompt-budget.sh(根治"两份拷贝总有一份落下"),
+#     判据这边补上:**三条腿都要真的拿到 diff**,不是只有被测过的那条。
+#
+# F4:非法基线在底座腿被静默吞掉(`git diff "$BASE" 2>/dev/null` ⇒ 空 ⇒ 不注入不报错),
+#     而聊天腿的引擎把它当硬错误(V5:invalid PANEL_DIFF_BASE is a hard error)。
+#     不一致的后果是**基线打错字时腿静默变瞎**,评审质量掉下去却没人知道。
+v31_diff_injection_covers_every_leg() {
+  echo "[V31] diff 注入:三条腿都真的拿得到;基线非法一律硬失败(收 F2/F4)"
+  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$b/"
+  printf '# t\n' > "$d/t.md"
+
+  # kimi 的 fixture 照抄 V13 那份完整的(config + guard + credentials,缺一样腿就起不来,
+  # 而腿起不来会让下面每一条否定断言假绿 —— V30 那轮我连漏三次)。
+  local kh="$d/kh"; mkdir -p "$kh/hooks" "$kh/credentials"
+  printf 'default_model = "x"\n' > "$kh/config.toml"
+  cp /root/aiwork/kimi-review-home/hooks/guard.mjs "$kh/hooks/guard.mjs" 2>/dev/null \
+    || printf 'process.exit(2)\n' > "$kh/hooks/guard.mjs"
+  echo '{}' > "$kh/credentials/kimi-code.json"
+
+  cat > "$b/opencode" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import os,sys
+a=sys.argv[1:]
+open(os.environ['CAPTURE_PROMPT'],'w').write(max(a,key=len) if a else '')" "$@"
+echo "stub"; echo "Conclusion: PASS"
+EOF
+  cat > "$b/kimi" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import os,sys
+a=sys.argv[1:]
+open(os.environ['CAPTURE_PROMPT'],'w').write(max(a,key=len) if a else '')" "$@"
+echo "stub"; echo "Conclusion: PASS"
+EOF
+  cat > "$b/claude" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import os,sys
+open(os.environ['CAPTURE_PROMPT'],'w').write(sys.stdin.read())"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+EOF
+  chmod +x "$b/opencode" "$b/kimi" "$b/claude"
+
+  # 真仓:base 一版(已提交),工作区再改一版(未提交 —— 派活现场就是这样)
+  local repo="$d/repo"; mkdir -p "$repo"
+  ( cd "$repo" && git init -q . \
+    && printf 'def add(a,b):\n    return a+b\n' > calc.py \
+    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base \
+    && printf 'def add(a,b):\n    return a/b\n' > calc.py ) >/dev/null 2>&1
+
+  # ── ① F2:三条腿都得真的拿到 diff(含未提交那一版)
+  #    腿名 / 启动命令 / 需要的额外 env 各不同,所以逐条写,不做花哨的表驱动。
+  rm -f "$d/p_oc"
+  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p_oc" OPENCODE_REVIEW_HOME="$d/ochome" \
+    ZHIPU_API_KEY=zk PANEL_DIFF_BASE=HEAD \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/oc.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/p_oc" ]]; then
+    grep -q "return a/b" "$d/p_oc"
+    check "V31: opencode 腿拿到了 diff(含未提交的改动)" $?
+  else
+    bad "V31: opencode 腿拿到了 diff(含未提交的改动)"
+    echo "    (stub 没被调起 ⇒ 测空气)"
+  fi
+
+  rm -f "$d/p_k"
+  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p_k" KIMI_REVIEW_HOME="$kh" PANEL_DIFF_BASE=HEAD \
+    bash "$b/subkimi" review "$d/t.md" "$d/k.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/p_k" ]]; then
+    grep -q "return a/b" "$d/p_k"
+    check "V31: kimi 腿拿到了 diff(含未提交的改动)—— F2 说的就是这条没人测" $?
+  else
+    bad "V31: kimi 腿拿到了 diff(含未提交的改动)—— F2 说的就是这条没人测"
+    echo "    (stub 没被调起 ⇒ 测空气)"
+  fi
+
+  rm -f "$d/p_c"
+  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p_c" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c.log" "$repo" >/dev/null 2>&1
+  if [[ -f "$d/p_c" ]]; then
+    grep -q "return a/b" "$d/p_c"
+    check "V31: claude 腿拿到了 diff(含未提交的改动)" $?
+  else
+    bad "V31: claude 腿拿到了 diff(含未提交的改动)"
+  fi
+
+  # ── ② F4:基线非法 ⇒ **硬失败**,别静默变瞎。
+  #    聊天腿早就是硬错误(V5),底座腿却是 `2>/dev/null` 吞掉 ⇒ 不注入、不报错。
+  #    基线打错一个字母,腿就在没有 diff 的情况下照常评审,而日志里看不出区别。
+  local badbase="no-such-ref-deadbeef"
+  for leg in subglm-agent subkimi subdeepseek-agent; do
+    local extra=() cap="$d/p_bad_$leg"
+    case "$leg" in
+      subglm-agent)      extra=(OPENCODE_REVIEW_HOME="$d/ochome2" ZHIPU_API_KEY=zk) ;;
+      subkimi)           extra=(KIMI_REVIEW_HOME="$kh") ;;
+      subdeepseek-agent) extra=(DEEPSEEK_API_KEY=dk) ;;
+    esac
+    rm -f "$cap"
+    env PATH="$b:$PATH" CAPTURE_PROMPT="$cap" "${extra[@]}" PANEL_DIFF_BASE="$badbase" \
+      bash "$b/$leg" review "$d/t.md" "$d/bad_$leg.log" "$repo" >/dev/null 2>"$d/bad_$leg.err"; rc=$?
+    [[ "$rc" -ne 0 ]]
+    check "V31: $leg —— 基线非法时硬失败(rc=$rc),不许静默变瞎" $?
+    grep -q -- "$badbase" "$d/bad_$leg.err" 2>/dev/null
+    check "V31: $leg —— 报错点名那个解不开的基线(别让人猜)" $?
+    if [[ -f "$cap" ]]; then
+      bad "V31: $leg —— 基线非法时腿压根不该被调起"
+      echo "    (腿起来了 ⇒ 它正在评审一份没有 diff 的改动,而且没人知道)"
+    else
+      ok "V31: $leg —— 基线非法时腿压根不该被调起"
+    fi
+  done
+
+  # ── ③ 反面对照:基线**合法但没有任何改动**时,不许跟着一起硬失败。
+  #    (没有这一条,上面那组用"凡是拿不到 diff 就报错"也能全绿 —— 那会把
+  #     "干净工作区送审"这个正常场景一并打死。)
+  ( cd "$repo" && git checkout -q -- calc.py ) 2>/dev/null
+  rm -f "$d/p_clean"
+  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p_clean" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/clean.log" "$repo" >/dev/null 2>&1; rc=$?
+  [[ "$rc" -eq 0 ]]
+  check "V31: 对照 —— 基线合法但工作区干净时照常跑(rc=$rc),不许连坐" $?
+  [[ -f "$d/p_clean" ]]
+  check "V31: 对照 —— 干净工作区下腿仍被正常调起" $?
+
+  rm -rf "$d"
+}
+
+
+# ---------------------------------------------------------------- V32
+# 2026-08-19,业主一句「第一性原理别忘了」逼出来的。
+#
+# 我一路在修的是"提示词塞不下怎么办"(按通道算预算、截断、响亮失败 —— V30/V31)。
+# 那些都对,但全是**管理症状**。往下问一层:一份 diff 凭什么有 132KB?
+# 实测昨天撑爆 argv 的那份(a604e16→工作区,4770 行):
+#     evidence 收据 4011 行(84%) / 判据 448 行(9%) / **代码 219 行(4%)**
+# 84% 是 runlog 机器打印的收据 —— 348 行 PASS 清单那种。评审腿不需要逐行读它们,
+# 而它们正把真正该看的 219 行代码挤出窗口(截断是从尾部砍,代码在哪一段全看运气)。
+#
+# ⇒ 根不是"管子太细",是"往管子里塞了不该塞的东西"。排掉之后 diff 回到 ~20KB,
+#   128KB 那条线根本撞不到,而且腿看到的是**完整**的代码改动,不是截断的三分之一。
+#
+# 但不许变成盲区:被省略的文件**名字和行数照样给**(腿知道它们变过、想看能自己 Read)。
+# 省略必须写在提示词里 —— 和截断同一个道理:静默省略比不省略更坏。
+v32_diff_drops_machine_artifacts() {
+  echo "[V32] 喂腿的 diff 只放该读的:机器写的收据给摘要不给正文(拔根,08-19)"
+  local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"
+  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  printf '# t\n' > "$d/t.md"
+  cat > "$b/claude" <<'EOF'
+#!/usr/bin/env bash
+python3 -c "
+import os,sys
+open(os.environ['CAPTURE_PROMPT'],'w').write(sys.stdin.read())"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+EOF
+  chmod +x "$b/claude"
+
+  # 真仓:一处**代码**改动 + 一份**机器写的收据**(后者故意造得很大,正是真实形状)
+  local repo="$d/repo"; mkdir -p "$repo"
+  ( cd "$repo" && git init -q . \
+    && printf 'def add(a,b):\n    return a+b\n' > calc.py \
+    && git add -A && git -c user.email=t@t -c user.name=t commit -qm base \
+    && printf 'def add(a,b):\n    return a-b\n    # CODE_CHANGE_MARKER\n' > calc.py \
+    && mkdir -p tracks/demo/evidence \
+    && python3 -c "
+open('tracks/demo/evidence/20260819T000000Z-01-green.txt','w').write(
+    'runlog receipt header\n' + ''.join('  PASS: RECEIPT_LINE_MARKER %04d\n' % i for i in range(900)))" \
+    && git add -A \
+  ) >/dev/null 2>&1
+  # ↑ `git add` 不是可有可无:`git diff HEAD` **不含未跟踪文件**,第一版忘了这一步,
+  #   收据压根没进 diff ⇒ "收据正文不许进提示词"这条否定断言当场**假绿**。
+  #   是顶上那个前置锚(收据 0 行 vs 代码 1 行)把它抓出来的 —— 锚的价值就在这。
+
+  # ⓪ 前置锚:收据真的比代码大得多(不然这条判据是在测空气)
+  local ev_lines code_lines
+  ev_lines="$(git -C "$repo" diff HEAD -- 'tracks/*/evidence/*' | grep -c RECEIPT_LINE_MARKER)"
+  code_lines="$(git -C "$repo" diff HEAD -- calc.py | grep -c CODE_CHANGE_MARKER)"
+  [[ "$ev_lines" -gt 500 && "$code_lines" -ge 1 ]]
+  check "V32: 锚 —— 收据 ${ev_lines} 行 vs 代码 ${code_lines} 行,比例真实" $?
+
+  rm -f "$d/p"
+  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c.log" "$repo" >/dev/null 2>&1
+
+  if [[ ! -f "$d/p" ]]; then
+    bad "V32: 代码改动的正文照常进提示词"
+    bad "V32: 收据的正文不许进提示词"
+    bad "V32: 被省略的收据仍要报出文件名(不许变成盲区)"
+    bad "V32: 省略这件事要写在提示词里(静默省略比不省略更坏)"
+    echo "    (stub 没被调起 ⇒ 测空气)"
+    rm -rf "$d"; return 0
+  fi
+
+  # ① 代码改动照常进 —— 这才是腿要读的东西
+  grep -q "CODE_CHANGE_MARKER" "$d/p"
+  check "V32: 代码改动的正文照常进提示词" $?
+
+  # ② 收据正文不许进(它占 84% 而信息量约等于"绿了")
+  grep -q "RECEIPT_LINE_MARKER" "$d/p"
+  check "V32: 收据的正文不许进提示词" $([[ $? -ne 0 ]]; echo $?)
+
+  # ③ 但不许变成盲区:名字和规模要给,腿想看能自己 Read
+  grep -q "20260819T000000Z-01-green.txt" "$d/p"
+  check "V32: 被省略的收据仍要报出文件名(不许变成盲区)" $?
+
+  # ④ 省略要说出来
+  grep -qE '省略|摘要' "$d/p"
+  check "V32: 省略这件事要写在提示词里(静默省略比不省略更坏)" $?
+
+  # ⑤ 对照组:没有收据变动时,不许硬塞一段空摘要充数
+  #    (没有这条,实现用"永远打印一句摘要"也能让 ④ 全绿。)
+  local repo2="$d/repo2"; mkdir -p "$repo2"
+  ( cd "$repo2" && git init -q . \
+    && printf 'a\n' > calc.py && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm base \
+    && printf 'b\n    # CODE_CHANGE_MARKER\n' > calc.py ) >/dev/null 2>&1
+  rm -f "$d/p2"
+  env PATH="$b:$PATH" CAPTURE_PROMPT="$d/p2" DEEPSEEK_API_KEY=dk PANEL_DIFF_BASE=HEAD \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/c2.log" "$repo2" >/dev/null 2>&1
+  if [[ -f "$d/p2" ]]; then
+    grep -qE '省略|摘要' "$d/p2"
+    check "V32: 对照 —— 没有收据变动时不许硬塞空摘要" $([[ $? -ne 0 ]]; echo $?)
+    grep -q "CODE_CHANGE_MARKER" "$d/p2"
+    check "V32: 对照 —— 该进的代码仍然进了(证明这一组不是空跑)" $?
+  else
+    bad "V32: 对照 —— 没有收据变动时不许硬塞空摘要"
+    bad "V32: 对照 —— 该进的代码仍然进了(证明这一组不是空跑)"
+  fi
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -2682,5 +2921,7 @@ REVIEW_NO_MY_REVIEW=1 v27_knockon_of_the_backend_switch
 REVIEW_NO_MY_REVIEW=1 v28_glm_on_opencode_base
 REVIEW_NO_MY_REVIEW=1 v29_agent_legs_get_the_diff
 REVIEW_NO_MY_REVIEW=1 v30_giant_prompt_does_not_blow_argv
+REVIEW_NO_MY_REVIEW=1 v31_diff_injection_covers_every_leg
+REVIEW_NO_MY_REVIEW=1 v32_diff_drops_machine_artifacts
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
