@@ -95,26 +95,16 @@ set -e
 case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# ── 把 diff 算好塞进提示词(2026-08-18,track deepseek-leg-bash-hole)────────
-# 守卫里的 Bash(含只读 git)已经整个关掉:命令行白名单挡不住 git 自己的参数
-# (`git diff --output=` 能往仓里写、`--no-index` 能读仓外)。
-# 但这条腿需要的是**那份 diff,不是一个 shell** —— 所以由我们算好喂进去。
-#
-# 2026-08-19 修(同 track,四审抓出来的):这条腿把整个提示词当 `-p <prompt>`
-# **一个 argv 参数**传,卡内核的 MAX_ARG_STRLEN=131072,而原来的上限拍的是 200KB。
-# 更隐蔽的是本文件开头的 `set -euo pipefail`:老写法 `git diff | head -c N` 在 diff
-# 超过 N 时让 git 吃 SIGPIPE ⇒ **整条 wrapper 静默暴毙 rc=141,一个字都不留**。
-# 两条都由 _prompt-budget.sh 统一处理(它不用 head、按通道算预算)。
-# 找库的形状照抄 _my-review-gate.sh 那条(脚本会被判据拷到别处跑),**缺件拒跑**:
-# 悄悄退回老的 200KB 常数 = 悄悄把这道闸拆了。
-_PB="$(dirname "$0")/_prompt-budget.sh"
-[ -f "$_PB" ] || _PB=/root/aiwork/bin/_prompt-budget.sh
-[ -f "$_PB" ] || { echo "subkimi: 找不到 _prompt-budget.sh —— 提示词预算缺件,拒跑(fail closed)" >&2; exit 1; }
-. "$_PB"
-
+# 08-18~08-19 这里曾经有一整套 diff 注入(为了补偿"把 bash 关掉"造成的失明):
+# 按 argv 预算截断、基线校验、工件排除。业主推翻了那个方向 —— 评审腿没有
+# "改判据让自己及格"的动机(那是执行腿的威胁模型),而关 bash 的代价是
+# E2BIG(这条腿 rc=126 直接起不来)、`git diff | head -c N` 在本文件的
+# `set -euo pipefail` 下让 git 吃 SIGPIPE **静默暴毙 rc=141 一个字不留**。
+# 现在腿自己有只读 git,自己去看。防线换成跑完的写审计(track `repo-write-audit`,
+# **还没上线**,窗口期是明账)。
 PROMPT="You are an independent code reviewer running inside a read-only harness.
 Explore the repository yourself with the tools you have
-(Read, Glob, Grep - note there is NO shell and NO git in this harness).
+(Read, Glob, Grep, and read-only git via Bash: git diff/log/show).
 Do not take the task's claims at face value -
 verify them against the actual files. Some tools are intentionally blocked by
 the harness; if a call is denied, work with the allowed tools instead of
@@ -134,21 +124,6 @@ Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 
 --- REVIEW TASK ---
 $(cat "$TASK_FILE")"
-
-# 提示词走 `-p <prompt>` ⇒ 通道恒为 argv。先量骨架,再给 diff 分剩下的空间。
-DIFF_SECTION=""
-if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  # 拿不到 diff 就**拒跑**,别静默评审一份看不见的改动(收四审 F4)。
-  if ! DIFF_SECTION="$(_diff_section "$REPO_DIR" "$PANEL_DIFF_BASE" \
-    "$(_diff_budget argv "$(_bytes "$PROMPT")")")"; then
-    echo "subkimi: 拿不到 diff(原因见上一行)—— 拒跑,不评审看不见的改动" >&2
-    exit 1
-  fi
-fi
-PROMPT="${PROMPT}${DIFF_SECTION}"
-
-# 放不下就响亮失败(见 _prompt-budget.sh 的理由:rc=126 那种失败没人看得见)。
-_assert_prompt_fits argv "$PROMPT" "subkimi" || exit 1
 
 {
   echo "# subkimi review log"

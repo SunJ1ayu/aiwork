@@ -107,13 +107,56 @@ command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: m
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]] || die "repo dir not found: $REPO_DIR"
 
+# ── 只读评审档:**不用 mimo 内置的 `plan`** ───────────────────────────────────
+# 2026-08-19,track deepseek-leg-bash-hole 的四审(subkimi 孤腿 BLOCK)抓出来的:
+# 我一直把这条腿当"聊天腿、没有手脚"划在安全检查范围外,**它其实是 agent 底座**。
+# `mimo debug agent plan` 实测(收据 20260819T025552Z):
+#     description: "Plan mode. Disallows all edit tools."   ← 自述
+#     tools: bash=True write=True edit=True task=True webfetch=True skill=True
+#     permission: {"*": allow "*"},只有 edit 被 deny
+# ⇒ **自称禁编辑,实际能写新文件、能 spawn 子代理**。和 opencode 内置 plan 档一个病。
+#
+# 所以自己配一个:**写口全关、bash 留着**(腿要能自己读 git;关掉 bash 那条路
+# 已被推翻 —— 代价是腿静默起不来,详见 bin/subagent 里那段账)。
+#
+# 隔离用 **XDG_CONFIG_HOME 而不是 HOME**:实测 mimo 的 data 路径(含 auth.json 凭证)
+# 只跟 HOME 走,换 HOME 会把凭证一起换掉、腿当场没法认证;换 XDG_CONFIG_HOME
+# 只挪配置,凭证不动。
+#
+# ⚠️ `fix` 模式**不走这里**:那是执行腿,写代码是它的本职,继续用内置 `build` 档。
+REVIEW_AGENT="aiwork-review"
+MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$HOME/.cache/aiwork/mimo-review-home}"
+if [[ "$MODE" != "fix" ]]; then
+  # 配置**每次重写**:它就是那把锁,不许留隔夜残留(判据查的也是它)。
+  umask 077
+  mkdir -p "$MIMO_CFG_HOME/mimocode"
+  python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$REVIEW_AGENT" <<'PYCFG'
+import json, sys
+cfgpath, agent = sys.argv[1:3]
+# 默认拒绝的姿态:除了 read/glob/grep/bash,能关的全关。
+# 名字是 `mimo debug agent` 解析出来的全集 —— 关不掉的会在判据里露出来。
+tools = {"write": False, "edit": False, "patch": False, "task": False,
+         "webfetch": False, "websearch": False, "skill": False,
+         "actor": False, "workflow": False, "memory": False,
+         "change_directory": False, "history": False, "plan_exit": False,
+         "question": False, "todowrite": False, "todoread": False, "invalid": False,
+         "bash": True, "read": True, "glob": True, "grep": True}
+perm = {"write": "deny", "edit": "deny", "patch": "deny", "task": "deny",
+        "webfetch": "deny", "external_directory": "deny"}
+cfg = {"agent": {agent: {"description": "aiwork read-only review leg",
+                         "mode": "primary", "tools": tools, "permission": perm}}}
+json.dump(cfg, open(cfgpath, "w"), indent=2)
+PYCFG
+  chmod 600 "$MIMO_CFG_HOME/mimocode/mimocode.json"
+fi
+
 case "$MODE" in
   review)
-    AGENT="plan"
+    AGENT="$REVIEW_AGENT"
     MESSAGE='Read the attached task file first. Execute it strictly as a read-only review. Treat the task file as self-contained: do NOT read or request access to any path outside the working directory - this run is headless and such permission requests are auto-rejected, wasting the attempt. Do not call planning tools, do not create a plan file, do not spawn sub-agents, do not ask whether to continue, and do not wait for user input. Do not modify files, delete files, push, install dependencies, or access production systems. Output the required report completely now as plain text. If the supplied context is insufficient, output NEEDS_MORE_INFO with the missing context instead of exploring for it.'
     ;;
   explore)
-    AGENT="plan"
+    AGENT="$REVIEW_AGENT"
     MESSAGE='Read the attached task file first; it is a DESIGN BRIEF, not a review. You are one of several different models each answering the SAME brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus. CRITICAL: Answer purely from the attached brief. Do NOT use any tools - no file reads, no glob, no grep, no codebase exploration, no shell. Your FIRST and ONLY action is to output the answer as text right now; calling any tool is a failure. The brief is self-contained; you do not need repo files. Propose exactly ONE concrete direction; do NOT hedge across multiple options and do NOT output PASS/BLOCK/approve/reject. Commit to a position even under uncertainty, stating your assumptions. Ground claims in the brief; do not invent facts. This is read-only: do not modify, create, or delete files, do not push, install dependencies, or access production systems, and do not wait for user input. Output now using exactly these labels: Direction / Core bet / How it works / Best at / Sacrifices / Blind spots in the brief / Smallest first step. Under "Blind spots in the brief", call out what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen.'
     ;;
   fix)
@@ -145,6 +188,10 @@ case "$TASK_REAL" in
 esac
 
 CMD=(mimo run --agent "$AGENT" --dir "$REPO_DIR" --format default -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
+# 只读模式下把配置指向隔离目录(fix 用真配置,它是执行腿)
+if [[ "$MODE" != "fix" ]]; then
+  CMD=(env "XDG_CONFIG_HOME=$MIMO_CFG_HOME" "${CMD[@]}")
+fi
 
 # One mimo pass. $1 = attempt label for the log header. Appends to LOG_FILE.
 run_mimo_once() {

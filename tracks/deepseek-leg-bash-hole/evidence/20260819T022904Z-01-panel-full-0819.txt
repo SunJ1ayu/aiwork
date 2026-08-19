@@ -1,0 +1,24 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    panel-full-0819
+cmd:     env PANEL_DIFF_BASE=a604e16 bin/panel-review --require-my-review /root/aiwork-myreviews/deepseek-leg-bash-hole-my-review.md tasks/deepseek-leg-bash-hole.md /root/aiwork logs/panel-dsbash-0819
+cwd:     /root/aiwork(仓根)
+commit:  d3e2e5a
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-19T02:29:04Z
+---------------- 输出开始 ----------------
+panel-review: task=tasks/deepseek-leg-bash-hole.md repo=/root/aiwork
+  submimo  -> logs/panel-dsbash-0819.submimo.log
+  subdeepseek -> logs/panel-dsbash-0819.subdeepseek.log (leg: subdeepseek-agent)
+  subglm   -> logs/panel-dsbash-0819.subglm.log (leg: subglm-agent)
+  subkimi  -> logs/panel-dsbash-0819.subkimi.log (leg: subkimi)
+  WARNING: anchor leak(反锚定) — 主审自己的评审可能进了评审腿的 prompt:
+    tracks/deepseek-leg-bash-hole/verify.md
+    (引擎会把未跟踪文件与整份 diff 内联进每条腿;先派发、后写 verify.md)
+  running all in parallel...
+
+panel-review: done. submimo rc=124  subdeepseek rc=0  subglm rc=0  subkimi rc=0
+  WARNING: submimo review failed (rc=124); reason in logs/panel-dsbash-0819.submimo.log.err, log logs/panel-dsbash-0819.submimo.log
+  roster -> logs/panel-dsbash-0819.roster(各腿状态一行,粘进 verify.md,别再手写)
+  read all logs above, then arbitrate.
+---------------- 输出结束 ----------------
+runlog: panel-full-0819 rc=0 commit=d3e2e5a dirty=yes at=2026-08-19T02:29:04Z file=tracks/deepseek-leg-bash-hole/evidence/20260819T022904Z-01-panel-full-0819.txt

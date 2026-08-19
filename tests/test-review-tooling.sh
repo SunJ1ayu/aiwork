@@ -2338,13 +2338,16 @@ EOF
   #    ⚠️ 写法:**先要求日志存在**。我第一版把这条插在了生成日志的那个用例之前,
   #    文件不存在 ⇒ grep 找不到 ⇒ 走 else 报绿(今天第五条假绿,同一个形状:
   #    "不含某串"的否定断言在输入缺席时会假绿)。
+  #    08-19 反转:bash 放回来了 ⇒ 能力清单要说**它有**只读 git。
+  #    这条钉的不是某个方向,是"清单和实际能力必须一致" —— 两个方向上都出过事:
+  #    宣称了没有的(08-18,腿顶回来白花几轮)、瞒着有的(腿不会去用,白扔一半能力)。
   if [[ ! -s "$d/g1.log" ]]; then
-    bad "V28: opencode 底座的提示词/视野行不许再宣称有只读 git"
+    bad "V28: opencode 底座的视野行要如实写明有只读 git"
     echo "    (日志不存在 ⇒ 这条在测空气,不许当绿)"
   elif grep -qE "read-only git|只读 git" "$d/g1.log"; then
-    bad "V28: opencode 底座的提示词/视野行不许再宣称有只读 git"
+    ok  "V28: opencode 底座的视野行要如实写明有只读 git"
   else
-    ok  "V28: opencode 底座的提示词/视野行不许再宣称有只读 git"
+    bad "V28: opencode 底座的视野行要如实写明有只读 git"
   fi
 
   # ── ⑫ 二进制存在性检查要查**这条腿真正要用的那个**。原来无条件查 claude:
@@ -2552,8 +2555,11 @@ print('OPEN' if (t.get('write') and t.get('task')) else 'LOCKED')" 2>/dev/null)"
   # ── ③ **反面对照(业主拦下的那条)**:fix 是执行腿,写代码是本职。
   #    只读锁不许连坐到它身上 —— 那等于把执行腿打死。
   rm -f "$d/c_fix"
+  # `--no-oracle` 是必须的:submimo fix 在既没 --oracle 也没 --no-oracle 时**拒绝运行**
+  # (它自己的闸,防的是"忘了给判据就裸跑一发")。第一版我没给,腿压根没起来,
+  # 于是这条对照断言红了 —— 红得对,但红的原因不是我要测的那个。
   env PATH="$b:$PATH" CAPTURE="$d/c_fix" MIMO_REVIEW_HOME="$mhome" \
-    bash "$b/submimo" fix "$d/t.md" "$d/f.log" "$repo" >/dev/null 2>&1
+    bash "$b/submimo" fix "$d/t.md" "$d/f.log" "$repo" --no-oracle >/dev/null 2>&1
   if [[ -f "$d/c_fix" ]]; then
     local ag3; ag3="$(agent_of "$d/c_fix")"
     [[ "$ag3" == "build" ]]
@@ -2565,14 +2571,14 @@ print('OPEN' if (t.get('write') and t.get('task')) else 'LOCKED')" 2>/dev/null)"
   # ── ④ 锁必须是**机械的**:拿 mimo 自己的解析器去读我们生成的配置。
   #    只查"我们往 json 里写了什么"是不够的 —— plan 档骗过我的正是这个区别:
   #    配置说一套、解析出来是另一套。
-  if [[ -f "$mhome/.config/mimocode/mimocode.json" ]]; then
-    ok "V33: 只读 agent 的配置生成在隔离 HOME(没污染 /root/.config/mimocode)"
+  if [[ -f "$mhome/mimocode/mimocode.json" ]]; then
+    ok "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染 /root/.config/mimocode)"
     if [[ -n "$REAL_MIMO" ]]; then
       # 写口必须关:write/edit/task/webfetch/skill。这几样评审腿本来就不需要,
       # 关掉是**零成本**的 —— 和关 bash 完全不同(那个的代价见文件头边界二)。
       # task 尤其要关:spawn 子代理 = 子代理有自己的工具面 = 现成的绕过通道。
       local wopen
-      wopen="$(HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
+      wopen="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
 import json,sys
 try: t=json.load(sys.stdin).get('tools',{})
 except Exception: print('ERR'); raise SystemExit
@@ -2585,7 +2591,7 @@ print(','.join(bad) if bad else 'NONE')" 2>/dev/null)"
       # 这条挡的不是攻击者,是**未来的我** —— 08-18 我就是觉得"关掉更安全"才关的,
       # 结果两条腿静默不跑、一天半白干。腿要能自己 git diff/log/show 读仓库。
       local bashon
-      bashon="$(HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
+      bashon="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
 import json,sys
 t=json.load(sys.stdin).get('tools',{})
 print('ON' if t.get('bash') else 'OFF')" 2>/dev/null)"
@@ -2593,7 +2599,7 @@ print('ON' if t.get('bash') else 'OFF')" 2>/dev/null)"
       check "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)" $?
 
       local keep
-      keep="$(HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
+      keep="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
 import json,sys
 t=json.load(sys.stdin).get('tools',{})
 print('OK' if all(t.get(k) for k in ('read','glob','grep')) else 'MISSING')" 2>/dev/null)"
@@ -2605,20 +2611,37 @@ print('OK' if all(t.get(k) for k in ('read','glob','grep')) else 'MISSING')" 2>/
       bad "V33: read/glob/grep 还在"
     fi
   else
-    bad "V33: 只读 agent 的配置生成在隔离 HOME(没污染 /root/.config/mimocode)"
+    bad "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染 /root/.config/mimocode)"
     bad "V33: 写口全关 —— write/edit/patch/task/webfetch/skill"
     bad "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)"
     bad "V33: read/glob/grep 还在"
   fi
 
+  # ── ④b 隔离必须用 XDG_CONFIG_HOME,**不许用 HOME**。
+  #    实测:mimo 的 data 路径(含 auth.json 凭证)只跟 HOME 走 —— 换 HOME 会把凭证
+  #    一起换掉,腿当场没法认证,而失败形态是"模型没回话",查起来像模型问题。
+  #    这条钉的是"隔离别把腿弄死"。
+  if [[ -f "$d/c_review" ]]; then
+    python3 -c "
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+sys.exit(0 if not any(x.startswith('HOME=') for x in a) else 1)" "$d/c_review" 2>/dev/null
+    check "V33: 隔离不许换 HOME(那会把 mimo 的凭证一起换掉)" $?
+  else
+    bad "V33: 隔离不许换 HOME(那会把 mimo 的凭证一起换掉)"
+  fi
+
   # ── ⑤ 配置每次重写(它就是锁本身,不许留隔夜残留)
-  if [[ -f "$mhome/.config/mimocode/mimocode.json" ]]; then
-    printf '{"agent":{"aiwork-review":{"tools":{"bash":true}}}}' > "$mhome/.config/mimocode/mimocode.json"
+  if [[ -f "$mhome/mimocode/mimocode.json" ]]; then
+    # 用一个**实现绝不会写**的标记键来验"被重写了"。
+    # 第一版我拿 `"bash": true` 当标记 —— 而转向后实现本来就写 bash:true,
+    # 这条断言于是永远红。标记必须选实现不可能产出的东西。
+    printf '{"__stale_marker__":true,"agent":{"aiwork-review":{"tools":{"bash":true}}}}' > "$mhome/mimocode/mimocode.json"
     rm -f "$d/c_rewrite"
     env PATH="$b:$PATH" CAPTURE="$d/c_rewrite" MIMO_REVIEW_HOME="$mhome" \
       bash "$b/submimo" review "$d/t.md" "$d/r2.log" "$repo" >/dev/null 2>&1
-    grep -q '"bash": *true' "$mhome/.config/mimocode/mimocode.json"
-    check "V33: 配置每次重写(被人改松了也会被覆盖回去)" $([[ $? -ne 0 ]]; echo $?)
+    grep -q '__stale_marker__' "$mhome/mimocode/mimocode.json"
+    check "V33: 配置每次重写(被人改过也会被覆盖回去)" $([[ $? -ne 0 ]]; echo $?)
   else
     bad "V33: 配置每次重写(被人改松了也会被覆盖回去)"
   fi
