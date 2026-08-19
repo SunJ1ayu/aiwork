@@ -6,7 +6,16 @@ worktrees/
 
 # 含登录凭证(auth.json / credentials),永不入库
 mimo-home/
-kimi-review-home/
+# kimi 评审腿的 HOME:**凭证/会话/oauth 一律不入库,但守卫要入库**。
+# 2026-08-19 发现:整个目录被忽略 ⇒ `hooks/guard.mjs`(判卷防线的一部分)
+# 从来没进过版本控制 ⇒ 它被改了不留痕,闸③亲读 diff 也照不到。
+# 写法注意:必须是 `kimi-review-home/*` 而不是 `kimi-review-home/` ——
+# 父目录被整个忽略时,里面的文件是 unignore 不回来的(gitignore 的老陷阱)。
+kimi-review-home/*
+!kimi-review-home/hooks/
+kimi-review-home/hooks/*
+!kimi-review-home/hooks/guard.mjs
+!kimi-review-home/hooks/probe.sh
 
 # 日志是流水,不入库;但 oracle 哈希存档是安全工件,留下
 logs/*
