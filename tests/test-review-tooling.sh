@@ -107,7 +107,7 @@ OCFLOOR
 _REAL_MIMO_BIN="$(command -v mimo 2>/dev/null || true)"
 cat > "$_OC_FLOOR/mimo" <<MIMOFLOOR
 #!/usr/bin/env bash
-# **`mimo debug ...` 放行给真二进制**:它是本地解析(不调模型、不花钱、不留遗孤),
+# **\`mimo debug ...\` 放行给真二进制**:它是本地解析(不调模型、不花钱、不留遗孤),
 # 而 V33 正是靠 \`mimo debug agent\` 取证只读锁 —— 查工件不查自述,那条不能拿桩糊弄
 # (拿桩验锁 = 验我自己写了什么,而 plan 档骗过我的正好是"写的和解析出来的不一样")。
 # 挡的只有 \`mimo run\` 这类真跑。
@@ -741,7 +741,10 @@ sys.exit(0 if 'Bash' in seg else 1)" "$d/a1.json" 2>/dev/null; then
   # ⇒ 白名单挡不住精巧绕过(`git diff --output=` 照样过),但**它挡得住误伤**,
   #   而"腿顺手跑个判据"正是误伤的典型形态。我拆它时只想着它挡不住什么,
   #   没想过它挡住的是别的东西。
-  if python3 -c "
+  # 这块用加引号 heredoc 喂,**不写成 `python3 -c "…"`**:双引号里的反引号会被
+  # shell 当成命令替换真去执行 —— 08-19 实证,下面那句讲 `git diff --output=`
+  # 危险的注释,自己被 shell 跑了一遍(空文件名被 git 拒了才没写成)。V41 机械查这件事。
+  if python3 - "$d/a1.json" 2>/dev/null <<'PY_ALLOWLIST'
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
 i=a.index('--allowedTools'); rest=a[i+1:]
@@ -754,7 +757,9 @@ ok_pat = ('git diff', 'git log', 'git status', 'git show', 'git blame',
           'git shortlog', 'git rev-parse', 'git ls-files', 'git describe')
 bad = [t for t in seg if t.startswith('Bash')
        and not any(t.startswith('Bash(' + p) for p in ok_pat)]
-sys.exit(0 if not bad else 1)" "$d/a1.json" 2>/dev/null; then
+sys.exit(0 if not bad else 1)
+PY_ALLOWLIST
+  then
     ok  "agent: Bash 是**带 pattern 的白名单**,不许裸放开(四审实跑:腿跑了判据)"
   else
     bad "agent: Bash 是**带 pattern 的白名单**,不许裸放开(四审实跑:腿跑了判据)"
