@@ -2969,7 +2969,8 @@ v36_wrappers_actually_use_readonly_repo() {
 
   if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local t
-    for t in "subdeepseek-agent 的腿写不了仓" "submimo review 的腿写不了仓" \
+    for t in "subdeepseek-agent 的腿写不了仓" "subglm-agent(opencode 底座)的腿写不了仓" \
+             "submimo review 的腿写不了仓" \
              "subkimi 的腿写不了仓" "submimo **fix** 仍然写得动(执行腿不许被连累)" \
              "腿在只读下仍然正常出结论(防线没把腿弄死)"; do
       bad "V36: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
@@ -2977,7 +2978,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 一个假模型:进来第一件事就是**试着写被评审的仓**,把结果落到仓外的记事本上。
@@ -2993,9 +2994,12 @@ PWN
     chmod +x "$1"
   }
   _mk_pwn_stub "$b/claude"; _mk_pwn_stub "$b/mimo"; _mk_pwn_stub "$b/kimi"
+  _mk_pwn_stub "$b/opencode"   # ← GLM 腿的底座是 opencode,不是 claude(见 ①b)
 
   local rc
-  # ── ① claude 壳(subdeepseek-agent / subglm-agent 共用躯干 subagent)
+  # ── ① claude 壳(subdeepseek-agent)
+  # ⚠️ 这行原本写的是"subdeepseek-agent / subglm-agent 共用躯干 subagent",
+  #    于是只测了一条腿就收工。**"共用躯干"不等于"共用路径"** —— 见 ①b。
   rm -f "$d/o1" "$repo/PWNED_BY_LEG"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1" CAPTURE="$d/c1.json" \
     DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
@@ -3009,6 +3013,24 @@ PWN
   check "V36: subdeepseek-agent 的腿写不了仓(假模型真的试过了:$seen1)" $r1
   [[ $rc -eq 0 ]]
   check "V36: 腿在只读下仍然正常出结论(防线没把腿弄死 —— 08-18 就是死在这)" $?
+
+  # ── ①b **opencode 底座**(subglm-agent)——— 和 ① 是**两条不同的路径**。
+  # `bin/subagent` 内部按 `AGENT_BASE` 分岔:deepseek 走 claude 壳,
+  # zhipu(GLM)走 opencode。2026-08-19 只读那一段只焊在 claude 那一支上,
+  # opencode 那一支一个字都没接 ⇒ **GLM 腿完全在防线外面**,而 V36 全绿,
+  # 因为它挑的腿恰好都在已接的那条路径上。
+  # 本仓的老账「守卫要守对门」,这次是**守卫自己守错了门**;
+  # 也是「给防线加构件却没把构件放进防线」的同一形状,而 V36 正是为防它而写的。
+  local ochome="$d/ochome"; mkdir -p "$ochome"
+  rm -f "$d/o1b" "$repo/PWNED_BY_LEG"
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1b" \
+    OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subglm-agent" review "$d/t.md" "$repo/logs/l1b.log" "$repo" >/dev/null 2>&1; rc=$?
+  [[ "$(cat "$d/o1b" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]; local r1b=$?
+  local seen1b; seen1b="$(cat "$d/o1b" 2>/dev/null || echo 没跑)"
+  check "V36: subglm-agent(**opencode 底座**)的腿写不了仓(假模型真的试过了:$seen1b)" $r1b
+  [[ $rc -eq 0 ]]
+  check "V36: opencode 底座的腿在只读下仍然正常出结论" $?
 
   # ── ② submimo review
   rm -f "$d/o2" "$repo/PWNED_BY_LEG"
