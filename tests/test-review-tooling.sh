@@ -3771,6 +3771,64 @@ HD_FIXTURE
   rm -rf "$d"
 }
 
+v42_git_common_dir_no_silent_gap() {
+  echo "[V42] 老 git 不认 --path-format ⇒ worktree 共同目录不许静默漏挂(三轮四审 subdeepseek F1)"
+  # `--path-format=absolute --git-common-dir` 要 git ≥2.31(2021-03)。老 git 不认这个参数
+  # ⇒ 报错进 /dev/null、`|| true` 吞掉 rc ⇒ 共同目录拿到空 ⇒ **不挂只读**。
+  # 后果:腿照样往 /main/.git 写(git tag / 直接写 objects),而仓根探针一路绿灯。
+  # 这是全工具唯一一处**失败被吞而不是 fail-closed** 的地方,而 fail-closed 正是本单的规格。
+  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+
+  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    bad "V42①: 老 git 下 worktree 共同目录仍然只读(缺 unshare/ro-repo-exec ⇒ 不许静默跳过)"
+    bad "V42②: 共同目录拿不到时拒跑(缺件同上)"
+    rm -rf "$d"; return
+  fi
+
+  ( cd "$d" && git init -q main && cd main && printf 'x\n' > a.txt && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm base \
+    && git worktree add -q "$d/linked" -b probe ) >/dev/null 2>&1
+  local common="$d/main/.git"
+  if [[ ! -d "$common" ]]; then
+    bad "V42: 夹具没搭起来(没有 worktree 共同目录)—— 不许静默跳过"
+    rm -rf "$d"; return
+  fi
+
+  local realgit; realgit="$(command -v git)"
+
+  # ① 老 git 的替身:**只**对 --path-format 装不认识,其余原样转给真 git
+  cat > "$b/git" <<GITSTUB
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in --path-format=*) echo "error: unknown option \$a" >&2; exit 129 ;; esac
+done
+exec "$realgit" "\$@"
+GITSTUB
+  chmod +x "$b/git"
+  rm -f "$common/PWNED_V42"
+  PATH="$b:$PATH" bash "$BIN/ro-repo-exec" "$d/linked" -- \
+    bash -c ": > '$common/PWNED_V42'" >/dev/null 2>&1
+  [[ ! -e "$common/PWNED_V42" ]]
+  check "V42①: 老 git(不认 --path-format)下,worktree 的共同目录仍然写不进去" $?
+  rm -f "$common/PWNED_V42"
+
+  # ② 连兜底也拿不到共同目录 ⇒ 必须**拒跑**。静默少挂一块 = 防线在你不知道的时候变薄。
+  local b2="$d/bin2"; mkdir -p "$b2"
+  cat > "$b2/git" <<GITSTUB2
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in --git-common-dir) echo "error: unknown option \$a" >&2; exit 129 ;; esac
+done
+exec "$realgit" "\$@"
+GITSTUB2
+  chmod +x "$b2/git"
+  PATH="$b2:$PATH" bash "$BIN/ro-repo-exec" "$d/linked" -- true >/dev/null 2>&1
+  [[ $? -ne 0 ]]
+  check "V42②: 共同目录拿不到时**拒跑**(不许静默少挂 —— 这单唯一的 fail-open)" $?
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -3814,5 +3872,6 @@ v38_leg_runtime_home_outside_repo
 v39_readonly_blind_spots
 v40_second_panel_findings
 v41_oracle_never_executes_its_own_comments
+v42_git_common_dir_no_silent_gap
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
