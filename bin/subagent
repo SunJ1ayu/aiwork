@@ -341,6 +341,16 @@ PYOC
       sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' "$ERR_FILE"; } >> "$LOG_FILE"
   fi
 else
+# ── 只读仓(track repo-write-audit,2026-08-19)────────────────────────────────
+# 评审腿在**仓是只读的** mount namespace 里跑:腿的能力一个字没改(它照样
+# `git diff/log/show`、照样自己读仓库),但写口物理消失 —— 08-18 我发现
+# `git diff --output=<path>` 能绕过任何命令行白名单,而"把 bash 整个关掉"那条路
+# 已经被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
+# `--rw` 只开一个口:**日志目录**(腿日志就在仓内 logs/)。
+# fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
+RO_EXEC=("$BIN_DIR/ro-repo-exec" --rw "$(cd "$(dirname "$LOG_FILE")" 2>/dev/null && pwd || echo /nonexistent)" "$REPO_DIR" --)
+
 # 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,
 # 否则它会盖过供应商 token。提示词走 stdin:--allowedTools/--disallowedTools 是变长
 # 参数,尾随的位置参数会被当成又一个工具名吞掉。
@@ -352,7 +362,7 @@ else
     ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
-    timeout "$TIMEOUT_SECONDS" claude -p \
+    "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" claude -p \
       --model sonnet \
       --setting-sources project \
       --max-turns "$MAX_TURNS" \

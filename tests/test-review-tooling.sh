@@ -615,6 +615,7 @@ v9_claude_shell_base() {
   # (本函数末尾那段 panel 选腿用例里的 subglm 桩保持不动:那里造的是桩,不碰真底座。)
   # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
   cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
   cat > "$b/claude" <<'PYEOF'
@@ -1045,6 +1046,7 @@ v13_subkimi_leg() {
 
   # --- subkimi wrapper against a stub kimi + fixture review home
   cp "$BIN/subkimi" "$b/subkimi"
+  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   printf 'default_model = "x"\n' > "$rh/config.toml"
   cp "$guard" "$rh/hooks/guard.mjs" 2>/dev/null || printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
@@ -1268,6 +1270,7 @@ EOF
   local ab="$d/agentbin"; mkdir -p "$ab"
   # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
   cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$ab/"
+  cp "$BIN/ro-repo-exec" "$ab/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$ab/claude" <<'PYEOF'
 #!/usr/bin/env python3
 import sys, os, json
@@ -1328,6 +1331,7 @@ v16_timeout_and_blind_chat_leg() {
   # (prompt 原文要求 "MUST end your review with a final line")。工具调用只有个位数,
   # 时间全花在长推理上 —— 所以解法不是缩小它的自读面,而是让裁决先落地。
   cp "$BIN/subkimi" "$pb/subkimi"
+  cp "$BIN/ro-repo-exec" "$pb/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   printf 'default_model = "x"\n' > "$rh/config.toml"
   printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
@@ -1418,6 +1422,7 @@ v17_explore_agent_legs() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # 假 claude:把 argv/stdin/env 落盘,输出由 STUB_REVIEW_OUT 控制。
   # 默认输出**不带任何裁决行** —— 发散的正常形态就是没有 Conclusion。
   cat > "$b/claude" <<'PYEOF'
@@ -1715,6 +1720,7 @@ v21_agent_leg_body_is_single_source() {
   # 这次刚修好的那条 deepseek 腿的首跑。⇒ 每条腿的默认值单独钉死,改要显式改判据。
   local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$ab/"
+  cp "$BIN/ro-repo-exec" "$ab/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$ab/claude" <<'CAPEOF'
 #!/usr/bin/env python3
 import sys, os, json
@@ -2038,6 +2044,7 @@ v26_glm_on_opencode_go() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" \
      "$BIN/subchat" "$BIN/subglm" "$BIN/subdeepseek" "$b/"
+  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$b/claude" <<'PYEOF2'
 #!/usr/bin/env python3
 import sys, os, json
@@ -2208,6 +2215,7 @@ v27_knockon_of_the_backend_switch() {
   #    (08-18 四审有两条腿都断言这里是 fail-closed —— **它们都错了**,我实测的。
   #     所以这条断言不是抄评审意见,是抄实测。)
   cp "$BIN/subglm-agent" "$BIN/subagent" "$b/"
+  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$b/claude" <<'EOF'
 #!/usr/bin/env bash
 touch "$CAPTURE"
@@ -2283,6 +2291,7 @@ v28_glm_on_opencode_base() {
   local d; d="$(mktemp -d)"; local b="$d/bin"; mkdir -p "$b"; local rc
   printf '# review this\n' > "$d/t.md"
   cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local ochome="$d/ochome"
 
   # stub:两个底座都放上,看它到底调哪个(自述不作数,查 argv)
@@ -2454,6 +2463,7 @@ EOF
   #    (四审两条腿独立点到:subdeepseek F2 / subglm MEDIUM。)
   local nb="$d/nobin"; mkdir -p "$nb"
   cp "$BIN/subglm-agent" "$BIN/subagent" "$nb/"
+  cp "$BIN/ro-repo-exec" "$nb/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   oc_stub "$nb"        # 只有 opencode,**没有 claude**
   env PATH="$nb:/usr/bin:/bin" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
     bash "$nb/subglm-agent" review "$d/t.md" "$d/g12.log" "$d" >/dev/null 2>"$d/g12.err"; rc=$?
@@ -2585,6 +2595,7 @@ v33_submimo_review_leg_is_read_only() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   local REAL_MIMO; REAL_MIMO="$(command -v mimo || true)"
   cp "$BIN/submimo" "$b/"
+  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   printf '# t\n' > "$d/t.md"
   local repo="$d/repo"; mkdir -p "$repo"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
@@ -2956,6 +2967,7 @@ v36_wrappers_actually_use_readonly_repo() {
   fi
 
   cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 一个假模型:进来第一件事就是**试着写被评审的仓**,把结果落到仓外的记事本上。
   # 落点必须在仓外 —— 落仓内的话它自己就被挡了,那就分不清"挡住了"和"没跑"。
