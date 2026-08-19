@@ -912,6 +912,14 @@ v13_subkimi_leg() {
 
   # --- the SHIPPED guard, invoked directly: default-deny semantics
   local guard="/root/aiwork/kimi-review-home/hooks/guard.mjs"
+
+  # 2026-08-19:**守卫本体必须在版本控制里**。发现时它整个目录被 gitignore 挡着,
+  # 从来没进过库 ⇒ 这道判卷防线被改了**不留痕**,闸③(亲读 diff)也照不到它。
+  # 判据能测出它"行为对不对",测不出"它昨天是不是别的样子" —— 那要靠 git。
+  # (凭证/oauth/sessions 仍然一律不入库,gitignore 里是精确放行两个 hooks 文件。)
+  git -C /root/aiwork ls-files --error-unmatch \
+      kimi-review-home/hooks/guard.mjs >/dev/null 2>&1
+  check "guard: 守卫本体在版本控制里(判卷防线改了必须留痕)" $?
   if [[ -f "$guard" ]]; then
     echo '{"tool_name":"Write","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: Write denied (rc=2)" $([[ $? -eq 2 ]]; echo $?)
