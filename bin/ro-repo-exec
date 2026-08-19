@@ -75,12 +75,29 @@ for p in ${RW+"${RW[@]}"}; do
   esac
 done
 
+# linked worktree:`.git` 只是个指针文件,真正的 refs/index/objects 住在**主仓**的
+# `.git/worktrees/<name>` 里 —— 只 bind 仓根盖不到它。2026-08-19 实测:腿在只读的
+# worktree 里照样 `git commit --allow-empty` / `git tag` 成功,**主仓的 git 状态被改了**。
+# (被推翻的 strace 方案当初明确计划保护 `--git-common-dir`,只读方案漏了这一处。)
+# ⇒ 真 git 目录若落在仓外,一并挂只读。
+GITDIRS=""
+if command -v git >/dev/null 2>&1; then
+  for _g in "$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null || true)" \
+            "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; do
+    [ -n "$_g" ] && [ -d "$_g" ] || continue
+    _g="$(cd "$_g" && pwd -P)" || continue
+    case "$_g" in "$REPO"|"$REPO"/*) continue ;; esac   # 在仓里 ⇒ 已经被盖住了
+    case "$GITDIRS" in *"$_g"$'\n'*) continue ;; esac   # 去重
+    GITDIRS+="$_g"$'\n'
+  done
+fi
+
 # 「挂上了没有」必须有实证,不能靠退出码猜:命令自己也可能返回 78。
 # 标记文件落在仓外(仓在 namespace 里是只读的,仓外照常可写)。
 MARK="$(mktemp)" || die "建不了标记文件"
 trap 'rm -f "$MARK"' EXIT
 
-RO_REPO="$REPO" RO_RW="$_rw_list" RO_MARK="$MARK" unshare -m /usr/bin/env bash -c '
+RO_REPO="$REPO" RO_RW="$_rw_list" RO_GITDIRS="$GITDIRS" RO_MARK="$MARK" unshare -m /usr/bin/env bash -c '
   set -uo pipefail
   fail() { printf "ro-repo-exec: %s\n" "$*" >&2; exit 78; }
   # 不传播回父 namespace —— 少了这一步,主机的仓会被一起挂成只读。
@@ -94,6 +111,28 @@ RO_REPO="$REPO" RO_RW="$_rw_list" RO_MARK="$MARK" unshare -m /usr/bin/env bash -
     mount --bind "$p" "$p"                    || fail "bind 写口失败:$p"
     mount -o remount,rw,bind "$p"             || fail "把写口 remount 成可写失败:$p"
   done <<< "$RO_RW"
+  # 仓外的真 git 目录(linked worktree)也盖成只读
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    mount --bind "$g" "$g"                    || fail "bind git 目录失败:$g"
+    mount -o remount,ro,bind "$g"             || fail "把 git 目录 remount 成只读失败:$g"
+  done <<< "$RO_GITDIRS"
+
+  # ── **挂完实测一次**,别相信退出码。
+  # `mount` 每条都 rc=0 不等于仓真的只读了,而"挂载没生效"是这道防线**最贵**的
+  # 失败形态:腿照跑、结论照出、一切看起来正常。本仓已有的同款做法是
+  # `tests/_no-egress.sh`——它在 namespace 里真的 connect 一次,而不是相信 unshare 有效。
+  # (`--rw` 指到仓根时整仓本来就是可写的,那种配置已经响亮警告过 ⇒ 跳过自检。)
+  _skip_probe=0
+  while IFS= read -r p; do [ "$p" = "$RO_REPO" ] && _skip_probe=1; done <<< "$RO_RW"
+  if [ "$_skip_probe" -eq 0 ]; then
+    _probe="$RO_REPO/.ro-selfcheck-$$"
+    if : > "$_probe" 2>/dev/null; then
+      rm -f "$_probe" 2>/dev/null
+      fail "自检:挂完之后仓**仍然可写**($RO_REPO)—— 挂载没有真的生效 ⇒ 拒跑"
+    fi
+  fi
+
   # 挂载**全部**成功之后才落标记,然后才 exec —— 顺序不能反。
   printf OK > "$RO_MARK" 2>/dev/null || fail "落不下标记文件:$RO_MARK"
   exec "$@"
