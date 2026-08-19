@@ -99,20 +99,18 @@ mkdir -p "$(dirname "$LOG_FILE")"
 # 守卫里的 Bash(含只读 git)已经整个关掉:命令行白名单挡不住 git 自己的参数
 # (`git diff --output=` 能往仓里写、`--no-index` 能读仓外)。
 # 但这条腿需要的是**那份 diff,不是一个 shell** —— 所以由我们算好喂进去。
-# 上限 200KB:提示词被巨型 diff 撑爆会把任务书挤没,比看不到 diff 更糟。
-DIFF_SECTION=""
-if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  _kd="$(git -C "$REPO_DIR" diff "${PANEL_DIFF_BASE}" 2>/dev/null | head -c 200000)"
-  if [[ -n "$_kd" ]]; then
-    DIFF_SECTION="
-
---- 改动 (diff ${PANEL_DIFF_BASE} → 工作区,含未提交) ---
-$_kd"
-    [[ ${#_kd} -ge 200000 ]] && DIFF_SECTION="$DIFF_SECTION
-(diff 被截断在 200KB —— 超出部分请用 Read/Grep 自己去看)"
-  fi
-  unset _kd
-fi
+#
+# 2026-08-19 修(同 track,四审抓出来的):这条腿把整个提示词当 `-p <prompt>`
+# **一个 argv 参数**传,卡内核的 MAX_ARG_STRLEN=131072,而原来的上限拍的是 200KB。
+# 更隐蔽的是本文件开头的 `set -euo pipefail`:老写法 `git diff | head -c N` 在 diff
+# 超过 N 时让 git 吃 SIGPIPE ⇒ **整条 wrapper 静默暴毙 rc=141,一个字都不留**。
+# 两条都由 _prompt-budget.sh 统一处理(它不用 head、按通道算预算)。
+# 找库的形状照抄 _my-review-gate.sh 那条(脚本会被判据拷到别处跑),**缺件拒跑**:
+# 悄悄退回老的 200KB 常数 = 悄悄把这道闸拆了。
+_PB="$(dirname "$0")/_prompt-budget.sh"
+[ -f "$_PB" ] || _PB=/root/aiwork/bin/_prompt-budget.sh
+[ -f "$_PB" ] || { echo "subkimi: 找不到 _prompt-budget.sh —— 提示词预算缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_PB"
 
 PROMPT="You are an independent code reviewer running inside a read-only harness.
 Explore the repository yourself with the tools you have
@@ -135,7 +133,18 @@ The verdict line must be exactly this form:
 Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 
 --- REVIEW TASK ---
-$(cat "$TASK_FILE")${DIFF_SECTION}"
+$(cat "$TASK_FILE")"
+
+# 提示词走 `-p <prompt>` ⇒ 通道恒为 argv。先量骨架,再给 diff 分剩下的空间。
+DIFF_SECTION=""
+if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  DIFF_SECTION="$(_diff_section "$REPO_DIR" "$PANEL_DIFF_BASE" \
+    "$(_diff_budget argv "$(_bytes "$PROMPT")")")"
+fi
+PROMPT="${PROMPT}${DIFF_SECTION}"
+
+# 放不下就响亮失败(见 _prompt-budget.sh 的理由:rc=126 那种失败没人看得见)。
+_assert_prompt_fits argv "$PROMPT" "subkimi" || exit 1
 
 {
   echo "# subkimi review log"

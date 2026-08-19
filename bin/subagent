@@ -215,29 +215,43 @@ Smallest first step: <the first concrete thing to build to validate this>}"
 # ── 把 diff 算好塞进提示词 ─────────────────────────────────────────────────
 # 底座腿的 Bash 关掉之后它看不了 git 了 —— 但**它需要的是那份 diff,不是一个 shell**。
 # 聊天腿一直是这么拿 diff 的(引擎替它算),底座腿以前靠自己跑 git,现在由这里补上。
-# 上限 200KB:提示词被一份巨型 diff 撑爆,比看不到 diff 更糟(会把任务书挤没)。
-DIFF_SECTION=""
-if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  _d="$(git -C "$REPO_DIR" diff "${PANEL_DIFF_BASE}" 2>/dev/null | head -c 200000)"
-  if [[ -n "$_d" ]]; then
-    DIFF_SECTION="
+#
+# 上限**不是一个常数** —— 它由提示词怎么传给底座决定:
+#   claude 底座  → stdin,不占 argv;
+#   opencode 底座 → 整个提示词是**一个 argv 参数**,卡内核的 131072。
+# 2026-08-19 修:原来两条腿共用一个拍脑袋的 200KB,比 argv 的物理上限还大 ⇒
+# 本 track 自己的四审里 opencode 腿 rc=126 起不来。两起事故的全账在 _prompt-budget.sh。
+# 找库的形状照抄 _my-review-gate.sh 那条(脚本会被判据拷到别处跑),**缺件拒跑**:
+# 悄悄退回老的 200KB 常数 = 悄悄把这道闸拆了。
+_PB="$(dirname "$0")/_prompt-budget.sh"
+[ -f "$_PB" ] || _PB=/root/aiwork/bin/_prompt-budget.sh
+[ -f "$_PB" ] || { echo "subagent: 找不到 _prompt-budget.sh —— 提示词预算缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_PB"
 
---- 改动 (diff ${PANEL_DIFF_BASE} → 工作区,含未提交) ---
-$_d"
-    [[ ${#_d} -ge 200000 ]] && DIFF_SECTION="$DIFF_SECTION
-(diff 被截断在 200KB —— 超出部分请用 Read/Grep 自己去看)"
-  fi
-  unset _d
-fi
-
+# 先拼**不带 diff** 的骨架,量出它占了多少 —— diff 能用的就是"剩下的空间"。
 if [[ "$MODE" == "explore" ]]; then
-  PROMPT="${EXPLORE_SYSTEM_PROMPT}
+  PROMPT_SKEL="${EXPLORE_SYSTEM_PROMPT}
 
 --- DESIGN BRIEF ---
-$(cat "$TASK_FILE")${DIFF_SECTION}"
+$(cat "$TASK_FILE")"
 else
-  PROMPT="${REVIEW_PROMPT}${DIFF_SECTION}"
+  PROMPT_SKEL="${REVIEW_PROMPT}"
 fi
+
+PROMPT_CHANNEL="stdin"
+[[ "$AGENT_BASE" == "opencode" ]] && PROMPT_CHANNEL="argv"
+
+DIFF_SECTION=""
+if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  DIFF_SECTION="$(_diff_section "$REPO_DIR" "$PANEL_DIFF_BASE" \
+    "$(_diff_budget "$PROMPT_CHANNEL" "$(_bytes "$PROMPT_SKEL")")")"
+fi
+
+PROMPT="${PROMPT_SKEL}${DIFF_SECTION}"
+
+# 放不下就**响亮失败**,别让 execve 去吐 rc=126 + 一句 shell 天书:
+# 那次 panel 只当"腿挂了"照常回落,真原因埋在 .err 里没人看见。
+_assert_prompt_fits "$PROMPT_CHANNEL" "$PROMPT" "$LABEL" || exit 1
 
 STREAM_FILE="${LOG_FILE%.log}.stream.jsonl"
 ERR_FILE="$(mktemp)"
