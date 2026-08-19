@@ -3419,7 +3419,8 @@ v40_second_panel_findings() {
              "home 在仓内拒跑:kimi 腿" "三条腿说的是同一件事" \
              "--rw 仓根 ⇒ 拒跑" "--rw 仓根 ⇒ 命令没跑" \
              "gitdir 静默没挂上 ⇒ 拒跑" "自检不漏 EROFS 到 stderr" \
-             "usage 的默认值和真实解析一致" "hook 指向运行期 home"; do
+             "usage 的默认值和真实解析一致" "hook 指向运行期 home" \
+             "种子 config.toml 在版本控制里"; do
       bad "V40: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
     done
     rm -rf "$d"; return
@@ -3565,13 +3566,37 @@ SEL
   check "V40⑥: subkimi 的 usage 默认值和真实解析一致(doc=$doc)" $?
 
   # ── ⑦ 同步之后,hook 命令指向**运行期 home**,不是仓内那份种子 ────────────────
-  local fakehome="$d/fh"; mkdir -p "$fakehome"
-  env PATH="$b:$PATH" HOME="$fakehome" REVIEW_NO_MY_REVIEW=1 \
-    bash "$b/subkimi" review "$d/t.md" "$d/k3.log" "$repo" >/dev/null 2>&1
-  local rt="$fakehome/.cache/aiwork/kimi-review-home"
-  [[ -f "$rt/config.toml" ]] && grep -q "$rt/hooks/guard.mjs" "$rt/config.toml" \
-    && ! grep -q '/root/aiwork/kimi-review-home/hooks' "$rt/config.toml"
-  check "V40⑦: 运行期 home 的 hook 指向自己那份 guard(不是仓内种子 ⇒ 副本不是死代码)" $?
+  # ⚠️ 种子路径是 `<wrapper 所在目录>/../kimi-review-home`。夹具把 wrapper 拷进 $b
+  #    ($d/bin)⇒ 种子得放在 $d/kimi-review-home。**第一版没放**:同步分支整段没跑,
+  #    断言红在我的夹具上 —— 而"红了就当抓到 bug"正是改考卷的第一步(2026-08-19 实证:
+  #    这个坑我在本函数 ① 那里刚写过警告,② 小时后自己又踩了一次)。
+  #    种子造**小份**(config.toml + hooks/):真种子 101MB(sessions/search-index),
+  #    照搬会让判据每轮往 /tmp 倒 100MB,而"判据把盘撑满"这台机器刚记过一笔账。
+  #    config.toml 从**真种子**拷,不是手写 —— 手写的那份形状变了不会红。
+  local seed="$d/kimi-review-home"; mkdir -p "$seed/hooks"
+  if [[ -f "$BIN/../kimi-review-home/config.toml" ]]; then
+    cp -f "$BIN/../kimi-review-home/config.toml" "$seed/config.toml"
+    cp -f "$BIN/../kimi-review-home/hooks/guard.mjs" "$seed/hooks/" 2>/dev/null || true
+    local fakehome="$d/fh"; mkdir -p "$fakehome"
+    env PATH="$b:$PATH" HOME="$fakehome" REVIEW_NO_MY_REVIEW=1 \
+      bash "$b/subkimi" review "$d/t.md" "$d/k3.log" "$repo" >/dev/null 2>&1
+    local rt="$fakehome/.cache/aiwork/kimi-review-home"
+    [[ -f "$rt/config.toml" ]] && grep -q "$rt/hooks/guard.mjs" "$rt/config.toml" \
+      && ! grep -q '/root/aiwork/kimi-review-home/hooks' "$rt/config.toml"
+    check "V40⑦: 运行期 home 的 hook 指向自己那份 guard(不是仓内种子 ⇒ 副本不是死代码)" $?
+  else
+    bad "V40⑦: hook 指向运行期 home(前置不满足:真种子里没有 config.toml)"
+  fi
+
+  # ── ⑧ 种子 config.toml 必须**在版本控制里** ─────────────────────────────────
+  # 写 ⑦ 的时候自己撞见的,不是腿指出来的:`.gitignore` 里 `kimi-review-home/*`
+  # 只给 hooks/ 开了两个口子,**config.toml 不在其中**。而"hook 挂不挂、挂的是哪个
+  # 文件"整个写在 config.toml 里 —— 判卷防线最关键的那一行
+  # (`command = "node …/guard.mjs"`)从来没进过版本控制:改了不留痕,闸③ 亲读 diff
+  # 也照不到。.gitignore 里就记着同款账(guard.mjs 曾经也整个被忽略),
+  # **补了 hooks/ 却漏了决定 hooks 挂不挂的那个开关** —— 同一个坑补了一半。
+  ( cd "$BIN/.." && git ls-files --error-unmatch kimi-review-home/config.toml ) >/dev/null 2>&1
+  check "V40⑧: 种子 config.toml 在版本控制里(hook 挂不挂全写在它里面)" $?
 
   rm -rf "$d"
 }
