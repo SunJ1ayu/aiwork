@@ -2773,6 +2773,37 @@ sys.exit(0 if o.get('XDG_CONFIG_HOME')==os.environ['WANT'] else 1)" "$d/c_review
     bad "V33: 配置每次重写(被人改松了也会被覆盖回去)"
   fi
 
+  # ── ⑥ 配置必须**原子落盘**(2026-08-19,第三轮四审 subkimi 挂掉前留下的发现)。
+  #    洞:`json.dump(cfg, open(cfgpath,"w"))` 是 truncate 之后逐步写。两个 agent
+  #    并发跑 review 时共享同一份配置(`MIMO_REVIEW_HOME` 没设时都落在
+  #    `$HOME/.cache/aiwork/mimo-review-home`)⇒ 另一边可能读到半截 JSON。
+  #    **失败形态我没验过**:mimo 解析不了这份配置会不会回退到内置 `plan` 档
+  #    (写口全开、本单整单就是在推翻它)—— 不去猜它,把窗口关掉即可。
+  #
+  #    下面三条里,前两条是**看得见的**(权限、无残留),第三条是**字面断言**:
+  #    原子性没法从结果观察(窗口只在写的那一瞬间),只能查写法。
+  #    我刚在 #8 批评过"查自己写的东西"—— 区别在那条查的是**配置内容**
+  #    (该让底座自己解析),这条查的是**写入机制**,机制不在产物里。诚实记下:
+  #    它挡的是"未来改回直写",证明不了原子性本身。
+  if [[ -f "$mhome/mimocode/mimocode.json" ]]; then
+    [[ "$(stat -c '%a' "$mhome/mimocode/mimocode.json")" == "600" ]]
+    check "V33: 配置文件权限 600(凭证级别的东西,别人读不到)" $?
+    [[ -z "$(find "$mhome/mimocode" -name '*.tmp*' -o -name '.*tmp*' 2>/dev/null)" ]]
+    check "V33: 原子写不许留下 tmp 残留(留了说明 replace 那步没走到)" $?
+  else
+    bad "V33: 配置文件权限 600(凭证级别的东西,别人读不到)"
+    bad "V33: 原子写不许留下 tmp 残留(留了说明 replace 那步没走到)"
+  fi
+  # 字面断言:必须 tmp + os.replace,不许把 open(...,"w") 直接喂给 json.dump。
+  python3 - "$BIN/submimo" <<'PYATOM'
+import re, sys
+src = open(sys.argv[1]).read()
+direct = re.search(r'json\.dump\([^)]*open\(', src)
+atomic = 'os.replace(' in src
+sys.exit(0 if (atomic and not direct) else 1)
+PYATOM
+  check "V33: 配置走 tmp + os.replace 原子落盘(并发下不许露出半截 JSON)" $?
+
   rm -rf "$d"
 }
 
