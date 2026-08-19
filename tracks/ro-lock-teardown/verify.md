@@ -22,6 +22,8 @@ runlog -t ro-lock-teardown -- <判据命令>
 ```
 runlog: oracle-red rc=1 commit=d20372b dirty=yes at=2026-08-19T15:11:30Z file=tracks/ro-lock-teardown/evidence/20260819T151130Z-01-oracle-red.txt
 runlog: capabilities-red rc=1 commit=d20372b dirty=yes at=2026-08-19T15:11:42Z file=tracks/ro-lock-teardown/evidence/20260819T151142Z-01-capabilities-red.txt
+runlog: implementation-green rc=1 commit=8b731a8 dirty=yes at=2026-08-19T15:37:57Z file=tracks/ro-lock-teardown/evidence/20260819T153757Z-01-implementation-green.txt
+runlog: implementation-green-2 rc=0 commit=dc721fa dirty=yes at=2026-08-19T15:48:01Z file=tracks/ro-lock-teardown/evidence/20260819T154801Z-01-implementation-green-2.txt
 ```
 
 红检归因:
@@ -30,6 +32,9 @@ runlog: capabilities-red rc=1 commit=d20372b dirty=yes at=2026-08-19T15:11:42Z f
 - `capabilities-red`:目标红点覆盖 Claude 裸 Bash、OpenCode/MiMo 整项 Bash、Kimi 本地测试命令、
   能力提示词和四条 wrapper 的“副本可写/原仓只读”。同一收据另含当前受限沙箱禁止本地 socket
   造成的旧 HTTP 夹具红；它们不冒充本单 oracle，最终全量绿在允许本地 namespace/socket 的环境取证。
+- `implementation-green` 首次总跑红在两处测试接线:新 suite 的守卫引入缺 `|| exit 78`，以及 V27
+  的假仓没有 HEAD、被新前置提前拒绝；均修夹具/守卫接法，没有放松生产 helper。
+- `implementation-green-2`:总入口全绿，含 review-tooling 425/0 与 review-workspace 20/0。
 
 ## Review
 
