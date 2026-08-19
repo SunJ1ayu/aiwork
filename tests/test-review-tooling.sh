@@ -3613,6 +3613,122 @@ SEL
   rm -rf "$d"
 }
 
+v41_oracle_never_executes_its_own_comments() {
+  echo "[V41] 判据自己不许把注释交给 shell 执行(08-19 实证)"
+  # 2026-08-19:V40③c 那条断言写成 `python3 -c "…"`,**双引号**里的中文注释带反引号,
+  # 被 shell 当成命令替换真跑了一遍 —— 其中一句注释正好是
+  # "`git diff --output=` 能写文件所以危险",于是判据自己把它执行了(空文件名被 git
+  # 拒了才没写成)。判定逻辑当时没坏,所以三组对照全对、收据照印 PASS ——
+  # **这种病不会让判据变红,它让判据在你背后跑命令**,只能靠机械扫描抓。
+  local d; d="$(mktemp -d)"
+  local lint="$d/lint.py"
+  cat > "$lint" <<'LINT_PY'
+# shell 引号状态机:找出「会被 shell 当成命令替换执行」的反引号。
+# 安全:单引号内 / shell 注释内 / <<'X' 这种加引号的 heredoc 内 / 反斜杠转义过的
+# 危险:双引号内(python3 -c "…" 的块正是这种)/ 裸露的 / 没加引号的 heredoc 内
+import re, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+n = len(src); i = 0; st = 'N'; hd = None; hits = []
+while i < n:
+    c = src[i]
+    if hd is not None:
+        j = src.find('\n', i); j = n if j < 0 else j
+        if src[i:j].strip() == hd[0]:
+            hd = None; i = j + 1; continue
+        if not hd[1]:
+            # 没加引号的 heredoc 里,反斜杠仍然转义 ` $ \ —— 必须逐字符走,
+            # 粗暴地 '`' in line 会把 \` 这种**已经转义好**的报成危险(08-19 实测误报 4 处)
+            k = i
+            while k < j:
+                if src[k] == '\\': k += 2; continue
+                if src[k] == '`':
+                    hits.append(src.count('\n', 0, k) + 1); break
+                k += 1
+        i = j + 1
+    elif st == 'S':
+        st = 'N' if c == "'" else 'S'; i += 1
+    elif st == 'D':
+        if c == '\\': i += 2
+        elif c == '"': st = 'N'; i += 1
+        elif c == '`': hits.append(src.count('\n', 0, i) + 1); i += 1
+        else: i += 1
+    else:
+        if c == '\\': i += 2
+        elif c == '#' and (i == 0 or src[i-1] in ' \t\n'):
+            j = src.find('\n', i); i = n if j < 0 else j
+        elif c == "'": st = 'S'; i += 1
+        elif c == '"': st = 'D'; i += 1
+        elif src.startswith('<<', i):
+            m = re.match(r"<<-?\s*('([^']+)'|\"([^\"]+)\"|([A-Za-z_]\w*))", src[i:i+64])
+            if m:
+                tok = m.group(2) or m.group(3) or m.group(4)
+                quoted = bool(m.group(2) or m.group(3))
+                j = src.find('\n', i); i = (n if j < 0 else j) + 1
+                hd = (tok, quoted); continue
+            i += 2
+        elif c == '`': hits.append(src.count('\n', 0, i) + 1); i += 1
+        else: i += 1
+lines = src.split('\n')
+for l in sorted(set(hits)):
+    print(f"{l}: {lines[l-1].strip()[:100]}")
+sys.exit(1 if hits else 0)
+LINT_PY
+
+  # ① 真身:判据文件自己必须是零处
+  local self out rc
+  self="${BASH_SOURCE[0]}"
+  if [[ ! -f "$self" ]]; then
+    bad "V41①: 找不到判据自己($self)—— 不许静默跳过"
+  else
+    out="$(python3 "$lint" "$self" 2>&1)"; rc=$?
+    [[ $rc -eq 0 ]]
+    check "V41①: 判据自己没把注释暴露给 shell(python3 的块要用加引号 heredoc 喂)" $?
+    [[ $rc -eq 0 ]] || echo "    暴露点:$out"
+  fi
+
+  # ② 检查器得咬得动 —— 埋一个和 08-19 那处同形的
+  cat > "$d/bad.sh" <<'BAD_FIXTURE'
+check_it() {
+  python3 -c "
+import sys
+# 这句注释里的 `date` 会被 shell 当命令替换真跑掉
+sys.exit(0)"
+}
+BAD_FIXTURE
+  python3 "$lint" "$d/bad.sh" >/dev/null 2>&1
+  [[ $? -eq 1 ]]
+  check "V41②: 检查器咬得动(埋进去的裸反引号必须被报出来,否则它是个瞎子)" $?
+
+  # ③ 不许误报 —— 误报会逼出「绕开它」的习惯,和假绿一样坏
+  cat > "$d/good.sh" <<'GOOD_FIXTURE'
+x="$(date)"
+y="literal \` backtick"
+# shell 注释里的 `backtick` 无害
+python3 - <<'INNER_PY'
+# 加引号 heredoc 里的 `backtick` 也无害
+print(1)
+INNER_PY
+cat <<UNQ_OK
+没加引号的 heredoc 里,**转义过的** \` 是字面量,不许报(08-19 误报 4 处的形状)
+UNQ_OK
+GOOD_FIXTURE
+  python3 "$lint" "$d/good.sh" >/dev/null 2>&1
+  [[ $? -eq 0 ]]
+  check "V41③: 不许误报(\$(cmd)、转义反引号、shell 注释、加引号 heredoc 都安全)" $?
+
+  # ④ 没加引号的 heredoc 里,反引号同样真执行
+  cat > "$d/unquoted.sh" <<'UNQ_FIXTURE'
+cat <<EOF
+里面的 `date` 会真的执行
+EOF
+UNQ_FIXTURE
+  python3 "$lint" "$d/unquoted.sh" >/dev/null 2>&1
+  [[ $? -eq 1 ]]
+  check "V41④: 没加引号的 heredoc 里的反引号也会执行,同样要报" $?
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -3655,5 +3771,6 @@ v37_wrappers_open_no_write_hole
 v38_leg_runtime_home_outside_repo
 v39_readonly_blind_spots
 v40_second_panel_findings
+v41_oracle_never_executes_its_own_comments
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
