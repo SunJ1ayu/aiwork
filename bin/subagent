@@ -263,6 +263,21 @@ ERR_FILE="$(mktemp)"
 } > "$LOG_FILE"
 
 RC=0
+# ── 只读仓(track repo-write-audit,2026-08-19)────────────────────────────────
+# 评审腿在**仓是只读的** mount namespace 里跑:腿的能力一个字没改(它照样
+# `git diff/log/show`、照样自己读仓库),但写口物理消失 —— 08-18 我发现
+# `git diff --output=<path>` 能绕过任何命令行白名单,而"把 bash 整个关掉"那条路
+# 已经被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
+# `--rw` 只开一个口:**日志目录**(腿日志就在仓内 logs/)。
+# fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
+#
+# ⚠️ **这一段刻意放在两个底座分支的外面。** 第一版把它焊在 claude 那一支里,
+# 于是走 opencode 的 GLM 腿完全在防线外面,而 V36 照样全绿(它挑的腿恰好都在
+# 已接的那条路径上)。定义一次、两支共用 ⇒ **将来再加底座也自动带上**,
+# 这比在新分支里记得抄一遍可靠。本仓的老账:同一件事写两处、只更新一处。
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
+RO_EXEC=("$BIN_DIR/ro-repo-exec" --rw "$(cd "$(dirname "$LOG_FILE")" 2>/dev/null && pwd || echo /nonexistent)" "$REPO_DIR" --)
+
 if [[ "$AGENT_BASE" == "opencode" ]]; then
   # ── opencode 底座 ───────────────────────────────────────────────────────────
   # 配置**每次重写**:这份配置就是只读锁本身,不许留隔夜残留(判据查的也是它)。
@@ -324,7 +339,7 @@ PYOC
   chmod 600 "$OC_HOME/.config/opencode/opencode.json"   # 配置里含 key
   (
     cd "$REPO_DIR"
-    HOME="$OC_HOME" timeout "$TIMEOUT_SECONDS" opencode run \
+    HOME="$OC_HOME" "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" opencode run \
       --dir "$REPO_DIR" --agent "$OC_AGENT" -m "$OC_PROVIDER/$OC_MODEL_ID" "$PROMPT"
   ) < /dev/null 2>"$ERR_FILE" | sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' >> "$LOG_FILE" || RC=$?
   # ↑ **`< /dev/null` 不是可有可无的整洁**:opencode 在 stdin 是一个还开着的管道时
@@ -341,16 +356,6 @@ PYOC
       sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' "$ERR_FILE"; } >> "$LOG_FILE"
   fi
 else
-# ── 只读仓(track repo-write-audit,2026-08-19)────────────────────────────────
-# 评审腿在**仓是只读的** mount namespace 里跑:腿的能力一个字没改(它照样
-# `git diff/log/show`、照样自己读仓库),但写口物理消失 —— 08-18 我发现
-# `git diff --output=<path>` 能绕过任何命令行白名单,而"把 bash 整个关掉"那条路
-# 已经被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
-# `--rw` 只开一个口:**日志目录**(腿日志就在仓内 logs/)。
-# fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
-[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
-RO_EXEC=("$BIN_DIR/ro-repo-exec" --rw "$(cd "$(dirname "$LOG_FILE")" 2>/dev/null && pwd || echo /nonexistent)" "$REPO_DIR" --)
-
 # 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,
 # 否则它会盖过供应商 token。提示词走 stdin:--allowedTools/--disallowedTools 是变长
 # 参数,尾随的位置参数会被当成又一个工具名吞掉。
