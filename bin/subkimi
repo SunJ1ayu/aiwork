@@ -138,8 +138,12 @@ $(cat "$TASK_FILE")"
 # 提示词走 `-p <prompt>` ⇒ 通道恒为 argv。先量骨架,再给 diff 分剩下的空间。
 DIFF_SECTION=""
 if [[ -n "${PANEL_DIFF_BASE:-}" ]] && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  DIFF_SECTION="$(_diff_section "$REPO_DIR" "$PANEL_DIFF_BASE" \
-    "$(_diff_budget argv "$(_bytes "$PROMPT")")")"
+  # 拿不到 diff 就**拒跑**,别静默评审一份看不见的改动(收四审 F4)。
+  if ! DIFF_SECTION="$(_diff_section "$REPO_DIR" "$PANEL_DIFF_BASE" \
+    "$(_diff_budget argv "$(_bytes "$PROMPT")")")"; then
+    echo "subkimi: 拿不到 diff(原因见上一行)—— 拒跑,不评审看不见的改动" >&2
+    exit 1
+  fi
 fi
 PROMPT="${PROMPT}${DIFF_SECTION}"
 

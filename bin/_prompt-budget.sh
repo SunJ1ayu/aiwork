@@ -29,6 +29,25 @@ PROMPT_ARGV_SAFE=129000
 # 那比看不到 diff 更糟(腿会去评审一份它没读懂的东西)。
 PROMPT_STDIN_DIFF_MAX=200000
 
+# ── 哪些改动不该进腿的提示词 ────────────────────────────────────────────────
+# 2026-08-19,业主一句「第一性原理别忘了」逼出来的:前面几版都在修"塞不下怎么办",
+# 而实测昨天撑爆 argv 的那份 diff(4770 行)是 evidence 收据 4011 行(84%)、
+# 判据 448 行、**代码 219 行(4%)**。腿不需要逐行读 runlog 打印的 PASS 清单,
+# 而它们正把该看的代码挤出窗口(截断从尾部砍,代码落在哪一段全看运气)。
+#
+# 只省**正文**,不省**存在**:被省掉的文件名和行数照样给,腿想看能自己 Read。
+# 静默省略比不省略更坏 —— 那会让腿以为自己看全了。
+# 路径清单可以用 PANEL_DIFF_ARTIFACT_PATHS 覆盖(空格分隔的 git pathspec)。
+# **必须是数组**,不能是"字符串 + 无引号 for":后者会让 shell 在**当前工作目录**
+# 做 pathname expansion —— 从 /root/aiwork 跑时 `tracks/*/evidence/*` 当场被展开成
+# 本仓的真实文件名,pathspec 于是变成一串和被评审仓毫无关系的具体路径,
+# 排除**静默失效**(第一版就是这样:代码在、判据红、看上去像没生效)。
+if [[ -n "${PANEL_DIFF_ARTIFACT_PATHS:-}" ]]; then
+  read -r -a PROMPT_ARTIFACT_PATHS <<< "$PANEL_DIFF_ARTIFACT_PATHS"
+else
+  PROMPT_ARTIFACT_PATHS=( 'tracks/*/evidence/*' '.mimocode/plans/*' )
+fi
+
 # 字节数,不是字符数。**`${#s}` 在 UTF-8 locale 下数的是字符** —— 中文注释和中文
 # 任务书会让它比真实字节数小一大截,而 execve 卡的是字节。这个坑不写下来必再踩。
 _bytes() { printf '%s' "$1" | wc -c; }
@@ -54,13 +73,29 @@ _diff_budget() {
 # 截断时**必须说出来**:静默丢掉一半 diff 比没有 diff 更坏 —— 腿会以为自己看全了。
 _diff_section() {
   local repo="$1" base="$2" budget="$3" out
+  # 基线解不开 ⇒ **硬失败**(2026-08-19,收四审 F4)。
+  # 聊天腿的引擎早就把非法 PANEL_DIFF_BASE 当硬错误(V5),底座腿这边却是
+  # `git diff "$base" 2>/dev/null` 一把吞掉 ⇒ 不注入、不报错。后果:基线打错一个字母,
+  # 腿就在**没有 diff** 的情况下照常评审,而日志里看不出和正常跑有什么区别。
+  # 静默变瞎的评审比没有评审更坏 —— 它还会给你一个 PASS。
+  if ! git -C "$repo" rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+    echo "  PANEL_DIFF_BASE='$base' 在 $repo 里解不开 —— 拒跑(基线打错字会让腿静默变瞎)" >&2
+    return 1
+  fi
   (( budget <= 0 )) && {
     echo "  (提示词的骨架已经占满 argv 预算,这次没有 diff 段可放)" >&2
     return 0
   }
+  # 工件路径:正文排除在主 diff 之外,另给一段 --stat 摘要(见文件头的理由)。
+  local -a ex=() only=()
+  local pth
+  for pth in "${PROMPT_ARTIFACT_PATHS[@]}"; do
+    ex+=( ":(exclude)$pth" ); only+=( "$pth" )
+  done
+
   # `if ! x="$(...)"` 而不是裸赋值:调用方可能开着 set -e,裸赋值失败会当场退出,
   # 连"为什么没有 diff"都来不及说。
-  if ! out="$(git -C "$repo" diff "$base" 2>/dev/null | \
+  if ! out="$(git -C "$repo" diff "$base" -- . "${ex[@]}" 2>/dev/null | \
       DIFF_BASE="$base" DIFF_BUDGET="$budget" python3 -c '
 import os, sys
 b = sys.stdin.buffer.read()          # 全读:用 head 会给 git SIGPIPE(见文件头 ②)
@@ -77,8 +112,18 @@ if len(b) > budget:
             % (len(b), budget))
 sys.stdout.write(out)
 ')"; then
-    echo "  (算 diff 失败:基线 '$base' 在 $repo 里解不开?这次没有 diff 段)" >&2
-    return 0
+    echo "  (算 diff 失败:基线 '$base' 在 $repo 上跑 git diff 出错)" >&2
+    return 1
+  fi
+  # 工件摘要:只在**真的有**工件改动时才追加(没有就一个字都不加 —— 硬塞一段空摘要
+  # 会让"省略要说出来"那条断言用一句永远打印的话就蒙混过关)。
+  local stat
+  stat="$(git -C "$repo" diff "$base" --stat -- "${only[@]}" 2>/dev/null)" || stat=""
+  if [[ -n "$stat" ]]; then
+    out="${out}
+
+--- 机器写的工件(**已省略正文,只给摘要**;要看请自己 Read 这些文件)---
+$stat"
   fi
   printf '%s' "$out"
 }
