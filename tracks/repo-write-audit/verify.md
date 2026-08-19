@@ -11,8 +11,10 @@
 
 - [x] build passes —— 本单全是 bash 工具,**没有 build 步骤**;等价检查是
       `bash -n` 语法 + 判据里 15 条工具层断言真起进程跑 `ro-repo-exec`。
-- [x] tests pass —— `bash tests/test-review-tooling.sh` **405 passed, 0 failed**(rc=0),
-      且这一遍跑在**最后一次编辑之后**(见下面最末那行收据 `final-green-after-mutations`)。
+- [x] tests pass —— `bash tests/test-review-tooling.sh` **426 passed, 0 failed**(rc=0),
+      且这一遍跑在**最后一次编辑之后**(见下面最末那行收据 `final-green-round4`)。
+      ⚠️ 08-19 断线后更正:这一栏原先写的 `405 passed` 是 **16:57 写下的,之后又有 7 个
+      commit** —— 典型的「我给的绿是过期的」。作数的只有 `final-green-round4` 那一行。
       收据里唯一一处 `skip` 字样是断言正文 `PASS: panel: PANEL_KIMI_LEG=off skips kimi`,
       **不是**被跳过的闸(老账:「全绿」那句话里不含整块 SKIP)。
 - [x] no secrets / unsafe ops —— 新增的写口是 `mount --bind`(在 namespace 内,
@@ -65,6 +67,22 @@ runlog: mutation2-control rc=0 commit=b789f2c dirty=no at=2026-08-19T08:36:38Z f
 runlog: mutation2-ro-removed rc=1 commit=b789f2c dirty=yes at=2026-08-19T08:36:48Z file=tracks/repo-write-audit/evidence/20260819T083648Z-01-mutation2-ro-removed.txt
 runlog: mutation3-gitdir-removed rc=1 commit=b789f2c dirty=yes at=2026-08-19T08:37:29Z file=tracks/repo-write-audit/evidence/20260819T083729Z-01-mutation3-gitdir-removed.txt
 runlog: final-green-after-mutations rc=0 commit=495251a dirty=yes at=2026-08-19T08:49:49Z file=tracks/repo-write-audit/evidence/20260819T084949Z-01-final-green-after-mutations.txt
+
+# —— 08-19 断线后补:verify.md 停在 08:49:49Z,后面这些收据当时没粘进来 ——
+runlog: panel-r2-four-legs rc=0 commit=495251a dirty=yes at=2026-08-19T08:55:25Z file=tracks/repo-write-audit/evidence/20260819T085525Z-01-panel-r2-four-legs.txt
+runlog: red-v40-panel2-findings rc=1 commit=495251a dirty=yes at=2026-08-19T09:24:06Z file=tracks/repo-write-audit/evidence/20260819T092406Z-01-red-v40-panel2-findings.txt
+runlog: green-v40-impl rc=1 commit=01c4797 dirty=yes at=2026-08-19T09:35:14Z file=tracks/repo-write-audit/evidence/20260819T093514Z-01-green-v40-impl.txt
+runlog: red-v40-7-8-mutation rc=1 commit=01c4797 dirty=yes at=2026-08-19T09:40:52Z file=tracks/repo-write-audit/evidence/20260819T094052Z-01-red-v40-7-8-mutation.txt
+runlog: green-v40-all rc=0 commit=d6797e4 dirty=yes at=2026-08-19T09:44:05Z file=tracks/repo-write-audit/evidence/20260819T094405Z-01-green-v40-all.txt
+runlog: mut-m1-guard-call-removed rc=1 commit=b9d68f6 dirty=yes at=2026-08-19T09:48:01Z file=tracks/repo-write-audit/evidence/20260819T094801Z-01-mut-m1-guard-call-removed.txt
+runlog: mut-m2-gitdir-probe-removed rc=1 commit=b9d68f6 dirty=yes at=2026-08-19T09:50:52Z file=tracks/repo-write-audit/evidence/20260819T095052Z-01-mut-m2-gitdir-probe-removed.txt
+runlog: mut-m3-erofs-noise-back rc=1 commit=b9d68f6 dirty=yes at=2026-08-19T09:53:29Z file=tracks/repo-write-audit/evidence/20260819T095329Z-01-mut-m3-erofs-noise-back.txt
+runlog: mut-m4-rootrw-warn-only rc=0 commit=b9d68f6 dirty=yes at=2026-08-19T09:56:18Z file=tracks/repo-write-audit/evidence/20260819T095618Z-01-mut-m4-rootrw-warn-only.txt
+runlog: red-v40-3c-mutation rc=1 commit=b9d68f6 dirty=yes at=2026-08-19T10:00:15Z file=tracks/repo-write-audit/evidence/20260819T100015Z-01-red-v40-3c-mutation.txt
+(无收据行)20260819T100329Z-01-VOID-断线砍半-final-green-round3.txt —— **断线砍出来的半截**,已改名标 VOID 作废:222 行 vs 完整的 478 行,无 total / 无收尾 / 无 rc。不许当绿用。
+runlog: red-v41-oracle-selfexec rc=1 commit=e05ba20 dirty=yes at=2026-08-19T10:17:09Z file=tracks/repo-write-audit/evidence/20260819T101709Z-01-red-v41-oracle-selfexec.txt
+runlog: red-v41-oracle-selfexec-v2 rc=1 commit=e05ba20 dirty=yes at=2026-08-19T10:21:50Z file=tracks/repo-write-audit/evidence/20260819T102150Z-01-red-v41-oracle-selfexec-v2.txt
+runlog: final-green-round4 rc=0 commit=1311f4d dirty=yes at=2026-08-19T10:25:45Z file=tracks/repo-write-audit/evidence/20260819T102545Z-01-final-green-round4.txt
 ```
 
 ## Review
