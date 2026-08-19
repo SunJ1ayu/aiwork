@@ -7,8 +7,8 @@
 
 - [x] S0a 主 agent 独立重审旧 track，确认旧 O1 不完整、目标与 non-goals 冲突
 - [x] S0b 写下主方向:每腿独立可写副本 + 原仓物理只读
-- [ ] S0c 用不含主答案的 brief 跑 `panel-explore`
-- [ ] S0d 主 agent 仲裁并把采纳/驳回依据写回 design
+- [x] S0c 用不含主答案的 brief 跑 `panel-explore`，另按用户要求补 Kimi 独立方向
+- [x] S0d 主 agent 仲裁并把采纳/驳回依据写回 design
 
 ## S1 判据先行(单独 commit)
 
@@ -21,11 +21,12 @@
 
 ## S2 独立 review workspace
 
-- [ ] S2a 新增共享 helper:仓外安全建目录、shared clone、明确 HEAD checkout
-- [ ] S2b 同步 tracked + untracked non-ignored 当前文件视图，处理 tracked deletion
-- [ ] S2c gitlink/submodule 首版 fail-closed
-- [ ] S2d cleanup 只接受 helper 自己创建且位于受控根下的路径
-- [ ] S2e O1/O3 转绿 + 两个变异红检
+- [ ] S2a 新增共享 helper:仓外安全建目录、shared clone、明确 source HEAD
+- [ ] S2b 用临时 index `read-tree HEAD` + `add -A -- :/` 生成 snapshot tree，双读 tree-id 对账
+- [ ] S2c 临时 commit 物化快照，再 mixed reset 回 source HEAD；删除 origin、关闭 auto gc
+- [ ] S2d gitlink/submodule 首版 fail-closed
+- [ ] S2e cleanup 只接受 helper 自己创建且位于受控根下的路径
+- [ ] S2f O1/O3 转绿 + 两个变异红检
 
 ## S3 wrapper 接入与执行能力
 

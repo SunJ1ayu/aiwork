@@ -1,12 +1,12 @@
 # Design: ro-lock-teardown
 
 - Change: ro-lock-teardown
-- Status: primary direction written; pending independent `panel-explore`
+- Status: selected after independent exploration
 
 - 规划双出:
   - 主 agent 方向:本文件(先落盘、先提交，避免看完 panel 后事后合理化)
   - 独立发散 brief:`tasks/ro-lock-teardown-isolation-explore.md`
-  - panel 输出与仲裁:待运行后回填本文件末尾
+  - panel 输出与仲裁:已回填本文第 8 节；MiMo/DeepSeek/Kimi 有效，GLM 无产出
 
 ## 0. 旧方案为什么 BLOCK
 
@@ -40,8 +40,11 @@
 1. 在仓外 `mktemp -d` 创建 workspace；
 2. `git clone --shared --no-checkout` 建独立 refs/index/config，objects 只读借用原仓；
 3. checkout 派发时的明确 HEAD；
-4. 用 `git ls-files --cached --others --exclude-standard -z` 把原仓现存源码覆盖进去；
-5. 原仓里已删除的 tracked 路径在副本同步删除；
+4. 在副本 Git dir 里用临时 index 对原仓 work tree 做 `read-tree HEAD` + `add -A -- :/`，
+   得到包含 tracked dirty/deleted + untracked non-ignored 的 snapshot tree；连续做两遍，tree id
+   不同就说明复制窗口里源视图变了，拒绝派发；
+5. 为 snapshot tree 建临时 commit，副本 `reset --hard` 到它以物化文件，再 `reset --mixed`
+   回原 HEAD；这样文件内容是派发快照，HEAD/历史仍是原仓，所有变化继续作为 diff/untracked 可见；
 6. 腿在副本 cwd 运行；外层 `ro-repo-exec` 挂的是**原仓及其 common dir**，副本不挂只读；
 7. wrapper 退出时清理副本。清理失败只告警，不把一份已完成裁决改判为失败。
 
@@ -56,9 +59,12 @@
 
 - clone 有自己的 `.git`，腿在副本 commit/tag 不会改主仓 refs；
 - `--shared` 只通过 alternates 读原仓 objects，不复制对象库；原仓挂成只读后 push/repack 也写不回去；
-- 文件清单只含 tracked + untracked non-ignored，能评当前源码，又不会复制 1GB 运行产物；
+- 临时 index 的 `git add -A` 只含 tracked + untracked non-ignored，能评当前源码，又不会复制 1GB
+  运行产物；由 Git 自己处理删除、symlink、文件模式和特殊路径，不重写一份脆弱的路径复制器；
 - 覆盖到 clone 的 index 仍保持 HEAD，所以 staged/unstaged 最终都表现为相对 HEAD 的可见差异。
-  本单承诺**文件内容视图**，不承诺保留 staged 位本身；评审不依赖 staged/unstaged 分类。
+  本单承诺**文件内容视图**，不承诺保留 staged 位本身；最终内容全部显示为相对原 HEAD 的
+  working-tree diff/untracked。若未来证明评审依赖 staged/unstaged 分类，再单独设计 index 复制；
+  首版不复制可能含 split-index/fsmonitor 扩展的二进制 index 冒充“精确”。
 
 已知边界:首版遇到 gitlink/submodule 明确拒跑，不复制一个指回主仓 `.git/modules` 的半隔离现场。
 
@@ -96,6 +102,8 @@
 - helper 校验删除目标必须位于它创建的 workspace 根下，拒绝空路径、根目录和 source 路径；
 - 正常、模型非零、timeout 都执行 cleanup；SIGKILL 可能留孤儿目录，属于可见资源债，不影响原仓；
 - workspace 路径只写进运行日志作诊断，不进入归档工件作承重证据。
+- `origin` 在物化后删除、`gc.auto=0`；对象读取仍经 alternates 指向只读原仓，refs/index/config
+  全在副本。评审窗口内主 agent 不对原仓跑 prune/gc。
 
 ## 6. Test strategy (oracle，主 agent 所有)
 
@@ -119,7 +127,8 @@
 
 ### O3 每腿隔离
 
-并行起两条假腿，各自在自己路径写唯一标记；断言路径不同、互相看不见、源仓看不见。
+并行起两条假腿，各自在自己路径写唯一标记；断言路径不同、snapshot tree id 相同、互相看不见、
+源仓看不见。复制窗口内改源文件时，两次 tree id 必须不一致并拒跑。
 
 ### O4 能力配置
 
@@ -145,7 +154,38 @@
   这个依赖可接受。若未来要长期保留现场，必须改成非 shared clone。
 - ignored 文件不复制意味着依赖只存在于 ignored 目录的测试可能跑不了；腿应如实报告环境缺件，
   不得在 review 中安装依赖。比复制 1GB 或偷偷装依赖更符合本机约束。
+- 隔离只能证明原仓不被污染，不能证明腿没有在副本里“先修再评”。提示词要求裁决引用原始 diff；
+  最终 panel 仍是第二意见，主 agent 必须亲读源仓与实现 diff。
 
 ## 8. Independent explore / arbitration
 
-- 待运行 `panel-explore` 后回填:每腿方向、采纳/驳回、是否改变主选择。
+### 运行情况
+
+- 第 1 轮:DeepSeek/GLM agent 底座启动失败，chat fallback 又被缺 my-review 闸拦；MiMo 无正文，
+  约 7 分钟后主动停止。失败日志保留，不冒充方向。
+- 第 2 轮:确认 chat 腿在默认沙箱内 DNS 被拦，停止并按权限流程转沙箱外重跑。
+- 第 3 轮(作数):MiMo 与 DeepSeek 各有完整方向；GLM 超过 7 分钟无首字节，主动停止并记无产出。
+- Kimi:现有 `panel-explore` 没有 Kimi 分支；用户点名后，用同一 brief 单独补跑一份完整方向。
+
+### 三份有效方向
+
+1. **MiMo:物化源码快照作 lower + 每腿 OverlayFS upper**。
+   - 采纳:不能以 live 原仓冒充派发瞬间快照；`.git` 写面必须独立；ignored 产物默认不复制。
+   - 驳回:源码只有几 MB 时再叠 OverlayFS 没有实质资源收益，却新增 mount/overlay 兼容与清理面。
+2. **DeepSeek(chat):live 原仓只读 lower + 每腿 OverlayFS upper**。
+   - 采纳:oracle 必须真改 tracked/refs、真跨腿找标记；四腿跑测试的 CPU/内存账独立存在。
+   - 驳回:live lower 不是严格快照，要求主 agent 整个评审窗口冻结源仓；“挂载失败回退只读模式”
+     也违反本单 fail-closed，不应静默换能力档。
+3. **Kimi(补充):每腿物化源码快照 + shared clone**。
+   - 采纳:方向与主选择一致；补充复制前后内容指纹、ignored 读依赖、shared clone 与原仓 gc 的
+     生命周期风险，以及“腿在副本先修再评”的流程盲区。
+   - 改写:不用 `rsync + cp source index`。首版由 Git 临时 index 生成 snapshot tree，连续两次
+     tree id 对账；不复制 source index，因此承诺文件内容一致、不承诺 staged 位分类一致。
+
+### 最终主裁
+
+保留方向 D，但把“显式文件清单覆盖”升级为**Git 原生 snapshot tree 物化**。本机临时探针已证明:
+modified、staged 后继续修改、deleted、untracked 均进入副本；ignored 缺席；副本 `.git` 独立；
+副本 HEAD 回到源 HEAD；源 status/HEAD 不变。第一次探针曾因 no-checkout clone 的空 index +
+缺少 `-- :/` 把全树做成删除，红得对；修正为临时 index `read-tree HEAD` 后才成立。这条失败经验
+要进入正式 oracle，不能只留在会话叙述里。
