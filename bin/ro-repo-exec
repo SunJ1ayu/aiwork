@@ -87,8 +87,25 @@ done
 # ⇒ 真 git 目录若落在仓外,一并挂只读。
 GITDIRS=""
 if command -v git >/dev/null 2>&1; then
+  # 共同目录(worktree 的 refs/objects/config 都在这里)。
+  # ⚠️ `--path-format=absolute` 要 git ≥2.31(2021-03)。**老 git 不认这个参数会静默返回空**,
+  # rc 又被 `|| true` 吞掉 ⇒ 共同目录不挂只读 ⇒ 腿照样 git tag / 直接写 objects 改主仓,
+  # 而仓根探针一路绿灯。这曾是全工具唯一一处失败被吞而不是 fail-closed 的地方
+  # (2026-08-19 第三轮四审 subdeepseek F1,我实测复现:V42 红 2 条)。
+  # 兜底:老 git 用不带 --path-format 的版本(可能给相对路径,相对 REPO 解析)。
+  _common="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -z "$_common" ]; then
+    _rel="$(git -C "$REPO" rev-parse --git-common-dir 2>/dev/null || true)"
+    [ -n "$_rel" ] && _common="$( cd "$REPO" 2>/dev/null && cd "$_rel" 2>/dev/null && pwd -P || true )"
+  fi
+  # 是 git 仓库却连共同目录都拿不到 ⇒ **拒跑**。静默少挂一块 = 防线在你不知道的时候变薄,
+  # 那正是这道防线立起来要防的形状(缺件就拒跑,别静默降级)。
+  if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -z "$_common" ]; then
+    die "拿不到 git 共同目录($REPO)—— git 太老或 rev-parse 失败。
+      少挂共同目录 = worktree 的 refs/objects 仍可写,而仓根探针看不见 ⇒ 拒跑,不静默降级。"
+  fi
   for _g in "$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null || true)" \
-            "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; do
+            "$_common"; do
     [ -n "$_g" ] && [ -d "$_g" ] || continue
     _g="$(cd "$_g" && pwd -P)" || continue
     case "$_g" in "$REPO"|"$REPO"/*) continue ;; esac   # 在仓里 ⇒ 已经被盖住了
