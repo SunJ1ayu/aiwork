@@ -3068,6 +3068,181 @@ PWN
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V37
+# **写口本身不该存在。**(track repo-write-audit,2026-08-19 第二轮,四审逼出来的)
+#
+# 第一版给每条 wrapper 开了一个写口:`--rw "$(dirname "$LOG_FILE")"`,理由写在
+# design 2c 第 1 条:「腿日志就在仓内 logs/,写不了 = 防线把腿弄死了」。
+# **那个前提是错的。** 三条 wrapper 的腿日志都是父 shell 重定向写的
+# (`>> "$LOG_FILE"` / `| tee -a`),fd 在**父 namespace** 就打开了,
+# 挂载管不着已经打开的 fd。探针证明:不开任何写口,日志照样写得出;
+# 而腿自己在 namespace 里新开仓内文件仍然 `Read-only file system`。
+#
+# 这个多余的写口不是白拿的,它带来了两条真问题(都是四审抓的,我复现过):
+#  ① `dirname` 相对**调用方 cwd** 解析 ⇒ 从仓根用裸文件名调用(`… out.log <仓>`)
+#     时 `--rw` 解析成**仓根** = 整仓开闸,而只有两行 stderr 警告。
+#     腿照跑、结论照出 —— 正是本单立项要防的那种**安静失效**。
+#  ② `RO_EXEC` 在 wrapper 自己 `mkdir -p` 日志目录**之前**构建 ⇒ 日志目录还不存在时
+#     解析成 `/nonexistent`,ro-repo-exec 拒跑。这是本单引入的**行为回归**
+#     (以前 wrapper 会把日志目录建出来)。`subagent` 的顺序是对的、另两条不是 ——
+#     又一次"两份拷贝、只更新一份"。
+#
+# ⇒ 修法是**把写口去掉**,不是把它修好:写口为零 ⇒ 上面两条一起消失,防线还更严。
+v37_wrappers_open_no_write_hole() {
+  echo "[V37] wrapper 不给腿开任何写口(腿日志靠父进程的 fd,不靠写口)"
+  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local repo="$d/repo"; mkdir -p "$repo/logs"
+  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
+  printf '# t\n' > "$d/t.md"
+
+  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    local t
+    for t in "腿日志不靠写口也写得出" "wrapper 一个 --rw 都不传" \
+             "相对日志路径 + cwd=仓根 ⇒ 防线仍然生效" \
+             "日志目录不存在 ⇒ wrapper 自己建好并跑起来"; do
+      bad "V37: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
+    done
+    rm -rf "$d"; return
+  fi
+
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/ro-repo-exec" "$b/"
+  _mk_pwn_stub2() {
+    cat > "$1" <<'PWN2'
+#!/usr/bin/env bash
+if touch "$PWN_REPO/PWNED_BY_LEG" 2>/dev/null; then echo WROTE > "$PWN_OUT"; else echo BLOCKED > "$PWN_OUT"; fi
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+echo "Conclusion: PASS"
+PWN2
+    chmod +x "$1"
+  }
+  _mk_pwn_stub2 "$b/claude"; _mk_pwn_stub2 "$b/mimo"; _mk_pwn_stub2 "$b/kimi"; _mk_pwn_stub2 "$b/opencode"
+
+  # ── ① 腿日志确实写得出来(这条立住了,写口才可以去掉)
+  rm -f "$repo/logs/l.log" "$d/o"
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o" CAPTURE="$d/c.json" \
+    DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l.log" "$repo" >/dev/null 2>&1
+  [[ -s "$repo/logs/l.log" ]]
+  check "V37: 腿日志不靠写口也写得出(fd 在父 namespace 打开)" $?
+
+  # ── ② 结构:wrapper 一个 --rw 都不许传给 ro-repo-exec。
+  #    用一个记账版 ro-repo-exec 顶替真的,把它收到的 argv 抄下来。
+  cat > "$b/ro-repo-exec" <<RECORD
+#!/usr/bin/env bash
+printf '%s\\n' "\$@" > "\${RO_ARGV_OUT:-/dev/null}"
+# 照常放行,后面还要跑真腿。**指到 \$BIN 那份**,不写死路径 ——
+# 写死的话变异测试(REVIEW_BIN 指到变异 bin)会从这里溜回未变异的实现。
+exec "$BIN/ro-repo-exec" "\$@"
+RECORD
+  chmod +x "$b/ro-repo-exec"
+  rm -f "$d/argv.txt"
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o" CAPTURE="$d/c.json" \
+    RO_ARGV_OUT="$d/argv.txt" DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
+  ! grep -q -- '^--rw$' "$d/argv.txt" 2>/dev/null
+  check "V37: wrapper 一个 --rw 都不传(写口为零 —— 多余的写口正是那两条 bug 的来源)" $?
+  cp "$BIN/ro-repo-exec" "$b/"   # 换回真的
+
+  # ── ③ 相对日志路径 + cwd=仓根:第一版在这里整仓开闸,而且**一声不响**
+  rm -f "$d/o3" "$repo/PWNED_BY_LEG"
+  ( cd "$repo" && env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" \
+      REVIEW_NO_MY_REVIEW=1 bash "$b/submimo" review "$d/t.md" "relative.log" "$repo" ) >/dev/null 2>&1
+  [[ "$(cat "$d/o3" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]
+  check "V37: 相对日志路径 + cwd=仓根 ⇒ 防线**仍然生效**(第一版这里整仓开闸,还不报错)" $?
+
+  # ── ④ 日志目录还不存在:wrapper 应当自己建好并跑起来,不是拒跑(回归)
+  rm -rf "$repo/fresh" ; rm -f "$d/o4" "$repo/PWNED_BY_LEG"
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" REVIEW_NO_MY_REVIEW=1 \
+    bash "$b/submimo" review "$d/t.md" "$repo/fresh/leg.log" "$repo" >/dev/null 2>&1
+  [[ -e "$repo/fresh/leg.log" && "$(cat "$d/o4" 2>/dev/null)" == "BLOCKED" ]]
+  check "V37: 日志目录不存在 ⇒ wrapper 建好它并正常跑(别把防线做成回归)" $?
+
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- V38
+# **腿的运行期状态目录不许住在被评审的仓里。**(2026-08-19 第二轮)
+#
+# 这条是**真 panel 跑出来的,判据里的 stub 撞不出**:V36 的夹具把 review home
+# 建在仓外的临时目录(`KIMI_REVIEW_HOME="$rh"`),而真跑时 subkimi 的默认 home 是
+# `/root/aiwork/kimi-review-home` —— **仓内**。只读一上,kimi 的 logger 当场:
+#     [logger] write failed: EROFS
+#     error: failed to run prompt: storage write failed: unrecognized I/O error
+# 腿起不来。而「防线不许把腿弄死」正是这一单 design 写死的硬要求(08-18 就死在这),
+# V36 那条"腿在只读下仍然正常出结论"却照样绿 —— **夹具覆盖了出问题的那个默认值**,
+# 四审 subglm 把这叫"结构上永远绿",说得对。
+#
+# 两条断言,第二条才是要害:错误信息里那句 "unrecognized I/O error" 谁看了都
+# 想不到是只读挂载,而 roster 记的 `FAIL(rc=1)` 和"额度耗尽"长得一模一样。
+# ⇒ 落在仓内就**拒跑并说清楚**,别让底座自己去撞一个没人看得懂的错。
+v38_leg_runtime_home_outside_repo() {
+  echo "[V38] 腿的运行期状态目录不许在被评审的仓里"
+  local d; d="$(mktemp -d)"
+  local repo="$d/repo"; mkdir -p "$repo/logs"
+  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
+  printf '# t\n' > "$d/t.md"
+
+  # ── ① 默认 home 必须在仓外。**查工件不查自述**:让 wrapper 自己把它解析出来打印,
+  #    而不是我在这儿 grep 一个字符串。
+  local home_default
+  home_default="$(REVIEW_PRINT_HOME=1 REVIEW_NO_MY_REVIEW=1 bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/x.log" "$repo" 2>/dev/null | tail -1)"
+  [[ -n "$home_default" ]] && case "$home_default" in "$repo"/*|"$repo") false ;; *) true ;; esac
+  check "V38: subkimi 的默认运行期 home 在**被评审的仓外面**(解析出来的是:${home_default:-没打印})" $?
+
+  # ── ② home 落在仓内 ⇒ 响亮拒跑,而且说得出原因(不许让底座去撞 EROFS)
+  #
+  # ⚠️ 这个 home 必须建**完整**(config + 守卫 + 凭证,照 V13/V36 的建法)。
+  # 不建全的话 subkimi 会因为 "review home config missing" 提前退出、rc 照样非零 ——
+  # 断言就**绿在不该绿的地方**了(第一版正是如此:home 目录压根不存在,
+  # 我却把它读成"防线拒跑了")。这是 V36 ③ 那条注释("红要红在该红的地方")的镜像,
+  # 同一个文件里几十行外就写着,我还是踩了。
+  _mk_kimi_home() {   # $1 = home 路径
+    mkdir -p "$1/hooks" "$1/credentials"
+    printf 'default_model = "x"\n' > "$1/config.toml"
+    printf 'process.exit(2)\n' > "$1/hooks/guard.mjs"
+    echo '{}' > "$1/credentials/kimi-code.json"
+  }
+  # ⚠️ **"非零退出"问不出任何东西**:这个 stub 环境里 subkimi 因为守卫 / 凭证 /
+  # 底座缺失,本来就会非零退出 —— 第一版那条 `[[ $rc -ne 0 ]]` 是**结构上永远绿**的
+  # (它 PASS 的原因跟 home 在哪毫无关系)。这正是我在任务书里请四审去查的那类假闸,
+  # 我自己又写了一条。⇒ 改成问**拒跑发生在什么时候**:必须在调起底座**之前**。
+  # 用一个会留痕的假 kimi 来问,和 V35 ④「挂不上时命令根本没跑」同款。
+  #
+  # ⚠️ 每一次调用都要带 REVIEW_NO_MY_REVIEW=1:**反锚定闸拦在最前面**,
+  # 不带的话 subkimi 在碰到 home 之前就退了 —— 第一版三处全漏,于是
+  # "底座没被调起"两边都成立、断言绿得毫无意义。是**对照组**把它照出来的。
+  local fb="$d/fakebin"; mkdir -p "$fb"
+  printf '#!/usr/bin/env bash\necho ran > "$KIMI_RAN_MARK"\necho "Conclusion: PASS"\n' > "$fb/kimi"
+  chmod +x "$fb/kimi"
+
+  local out
+  _mk_kimi_home "$repo/kimi-home"
+  rm -f "$d/kimi-ran"
+  out="$(PATH="$fb:$PATH" KIMI_RAN_MARK="$d/kimi-ran" KIMI_REVIEW_HOME="$repo/kimi-home" REVIEW_NO_MY_REVIEW=1 \
+         bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/y.log" "$repo" 2>&1)"
+  [[ ! -e "$d/kimi-ran" ]]
+  check "V38: home 在被评审的仓内 ⇒ **底座根本没被调起**(拒在前面,不是让它去撞 EROFS)" $?
+  grep -qE '仓内|被评审的仓|只读|read-only' <<<"$out"
+  check "V38: 拒跑时说清了是 home 在仓内(底座那句 unrecognized I/O error 没人看得懂)" $?
+
+  # ── ②b **对照组**:一模一样的 home 建在仓外 ⇒ 底座**必须**被调起。
+  #    没有它,上面两条会被"subkimi 恰好因为别的原因退了"骗过去照样绿。
+  local out2
+  _mk_kimi_home "$d/outside-home"
+  rm -f "$d/kimi-ran"
+  out2="$(PATH="$fb:$PATH" KIMI_RAN_MARK="$d/kimi-ran" KIMI_REVIEW_HOME="$d/outside-home" REVIEW_NO_MY_REVIEW=1 \
+          bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/z.log" "$repo" 2>&1)"
+  [[ -e "$d/kimi-ran" ]]
+  check "V38: 对照组 —— home 在仓外时底座照常被调起(拒的是位置,不是别的)" $?
+  ! grep -qE '仓内|被评审的仓' <<<"$out2"
+  check "V38: 对照组 —— 仓外的 home 不许报「在仓内」" $?
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
@@ -3106,5 +3281,7 @@ REVIEW_NO_MY_REVIEW=1 v28_glm_on_opencode_base
 REVIEW_NO_MY_REVIEW=1 v33_submimo_review_leg_is_read_only
 v35_legs_run_in_readonly_repo
 v36_wrappers_actually_use_readonly_repo
+v37_wrappers_open_no_write_hole
+v38_leg_runtime_home_outside_repo
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
