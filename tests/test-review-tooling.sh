@@ -3638,7 +3638,10 @@ while i < n:
     c = src[i]
     if hd is not None:
         j = src.find('\n', i); j = n if j < 0 else j
-        if src[i:j].strip() == hd[0]:
+        # bash 的规则:<< 要求结束标记**整行完全相等**,只有 <<- 才容前导 tab(且只有 tab)。
+        # 用 strip() 匹配会把缩进的 EOF 误当结束 ⇒ 提前出块、后面整段状态错位 ⇒ **漏报**。
+        _l = src[i:j]
+        if (_l.lstrip('\t') if hd[2] else _l) == hd[0]:
             hd = None; i = j + 1; continue
         if not hd[1]:
             # 没加引号的 heredoc 里,反斜杠仍然转义 ` $ \ —— 必须逐字符走,
@@ -3672,12 +3675,13 @@ while i < n:
         elif c == "'": st = 'S'; i += 1
         elif c == '"': st = 'D'; dstart = i; pend = []; i += 1
         elif src.startswith('<<', i):
-            m = re.match(r"<<-?\s*('([^']+)'|\"([^\"]+)\"|([A-Za-z_]\w*))", src[i:i+64])
+            m = re.match(r"<<(-?)\s*('([^']+)'|\"([^\"]+)\"|([A-Za-z_]\w*))", src[i:i+64])
             if m:
-                tok = m.group(2) or m.group(3) or m.group(4)
-                quoted = bool(m.group(2) or m.group(3))
+                tok = m.group(3) or m.group(4) or m.group(5)
+                quoted = bool(m.group(3) or m.group(4))
+                dash = bool(m.group(1))
                 j = src.find('\n', i); i = (n if j < 0 else j) + 1
-                hd = (tok, quoted); continue
+                hd = (tok, quoted, dash); continue
             i += 2
         elif c == '`': hits.append(src.count('\n', 0, i) + 1); i += 1
         else: i += 1
@@ -3751,6 +3755,18 @@ DOLLAR_FIXTURE
   python3 "$lint" "$d/dollar.sh" >/dev/null 2>&1
   [[ $? -eq 1 ]]
   check "V41⑤: 跨行双引号块里的 \$( ) 也要报(和反引号同罪,第一版漏了这一整类)" $?
+
+  # ⑥ heredoc 结束标记必须整行相等(<<- 才容 tab)。用 strip() 匹配会提前出块,
+  # 后面整段状态错位 —— 这类坏法造的是**漏报**,比误报更难发现。
+  cat > "$d/hd.sh" <<'HD_FIXTURE'
+cat <<'EOF'
+  EOF
+`safe_inside_quoted_heredoc`
+EOF
+HD_FIXTURE
+  python3 "$lint" "$d/hd.sh" >/dev/null 2>&1
+  [[ $? -eq 0 ]]
+  check "V41⑥: 缩进的 EOF 不算结束标记 —— 不许提前出 heredoc(错位=漏报)" $?
 
   rm -rf "$d"
 }
