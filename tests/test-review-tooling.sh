@@ -1094,6 +1094,8 @@ sys.exit(0 if any('tests' in str(x) and 'Bash' in str(x) for x in a) else 1)" "$
   if [[ -e "$d/k4.json" ]]; then bad "subkimi: kimi never invoked on bad guard"; else ok "subkimi: kimi never invoked on bad guard"; fi
 
   bash "$b/subkimi" -h >/dev/null 2>&1; check "subkimi: -h exits 0" $?
+  grep -Fq 'p + ".tmp." + str(os.getpid())' "$BIN/subkimi"
+  check "subkimi: seed config rewrite uses a per-process atomic temp" $?
 
   # --- panel-review 4th-leg selection
   local pb="$d/panelbin"; mkdir -p "$pb"
@@ -3033,7 +3035,7 @@ done
 work=BLOCKED; source=BLOCKED
 touch "$target/PWNED_IN_WORKSPACE" 2>/dev/null && work=WROTE
 touch "$PWN_REPO/PWNED_IN_SOURCE" 2>/dev/null && source=WROTE
-printf 'repo=%s\nwork=%s\nsource=%s\n' "$target" "$work" "$source" > "$PWN_OUT"
+printf 'repo=%s\ncwd=%s\nwork=%s\nsource=%s\n' "$target" "$PWD" "$work" "$source" > "$PWN_OUT"
 # claude 壳要 stream-json;别的腿吃纯文本。两种都吐,谁读谁的。
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
 echo "Conclusion: PASS"
@@ -3091,6 +3093,7 @@ PWN
     bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o2" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o2" 2>/dev/null \
+    && [[ "$(sed -n 's/^cwd=//p' "$d/o2")" == "$(sed -n 's/^repo=//p' "$d/o2")" ]] \
     && [[ "$(sed -n 's/^repo=//p' "$d/o2")" != "$repo" ]] \
     && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r2=$?
   local seen2; seen2="$(cat "$d/o2" 2>/dev/null || echo 没跑)"

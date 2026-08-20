@@ -25,6 +25,7 @@ runlog: final-review-env-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:41:3
 runlog: base-inside-source-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:45:26Z file=tracks/ro-lock-teardown/evidence/20260820T044526Z-01-base-inside-source-red.txt
 runlog: base-inside-source-green rc=0 commit=883b938 dirty=yes at=2026-08-20T04:46:35Z file=tracks/ro-lock-teardown/evidence/20260820T044635Z-01-base-inside-source-green.txt
 runlog: final-three-leg-green rc=0 commit=9ef17bc dirty=yes at=2026-08-20T04:48:44Z file=tracks/ro-lock-teardown/evidence/20260820T044844Z-01-final-three-leg-green.txt
+runlog: final-low-findings-red rc=1 commit=123a360 dirty=yes at=2026-08-20T05:20:14Z file=tracks/ro-lock-teardown/evidence/20260820T052014Z-01-final-low-findings-red.txt
 ```
 
 Red-run attribution:
@@ -45,6 +46,8 @@ Red-run attribution:
   expanded workspace suite is `24/0`.
 - `final-three-leg-green`: all 12 suites pass with the actual Kimi waiver plus contaminated XDG and
   reviewer-budget inputs; review-tooling is `426/0` and the expanded review-workspace suite is `24/0`.
+- `final-low-findings-red`: two assertions derived from DeepSeek's final LOW findings fail (`425/2`):
+  MiMo's child cwd is still the caller directory, and Kimi seed sync uses a fixed atomic temp name.
 - The earlier final receipt deliberately injects `ZHIPU_MAX_TURNS=80` and
   `DEEPSEEK_MAX_TURNS=25`; all 12 suites still pass, including review-tooling `426/0` and
   review-workspace `23/0`.
