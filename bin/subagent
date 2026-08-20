@@ -48,7 +48,7 @@ Usage:
 
 Providers (thin shims in parentheses; callers normally use the shim):
   deepseek  (subdeepseek-agent)  default deepseek-v4-flash, env DEEPSEEK_*
-  zhipu     (subglm-agent)       default glm-5.2,           env ZHIPU_*
+  zhipu     (subglm-agent)       default glm-5.3,           env ZHIPU_*
 
 Environment (PREFIX = DEEPSEEK | ZHIPU):
   <PREFIX>_MODEL          model id
@@ -117,7 +117,7 @@ case "$PROVIDER" in
     # ⚠️ 下面这两个是**休眠值**:GLM 腿现在走 opencode 底座(见下面 AGENT_BASE),
     # 它用的是 OC_MODEL_ID / OC_BASE_URL,**不是这两个**。留着是为了将来切回 claude 底座
     # 时不用重新考古 —— 但别照着改它们然后指望有反应(改了没反应是最耗时的一类 bug)。
-    DEFAULT_MODEL="glm-5.2"                        # 休眠:claude 底座才读
+    DEFAULT_MODEL="glm-5.3"                        # 休眠:claude 底座才读
     # **不带尾部 /v1**:claude CLI 自己会补 `/v1/messages`。写成 .../go/v1 会发到
     # /zen/go/v1/v1/messages(实测 404),而 CLI 把 404 报成"模型不存在",
     # 于是看起来像模型名错了 —— 实际是地址多了一层。
@@ -139,7 +139,7 @@ case "$PROVIDER" in
     # provider 必须自定义指到**订阅端点**:opencode 默认的 provider 走按量付费网关,
     # 实测直接 `Insufficient balance`(订阅和按量是两笔账)。
     OC_PROVIDER="go"
-    OC_MODEL_ID="glm-5.2"
+    OC_MODEL_ID="glm-5.3"
     OC_BASE_URL="https://opencode.ai/zen/go/v1"
     # 我们自配的只读 agent。**绝不用 opencode 内置的 `plan` 档**:它自称
     # "禁掉所有编辑工具",而解析出来的配置是 write/edit/bash 全开 + 权限 `*` allow;

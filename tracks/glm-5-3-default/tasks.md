@@ -6,6 +6,7 @@
 > 交给它;oracle/测试文件对它 off-limits;~2 次红了收回主 agent。
 
 - [x] 把 agent/chat 默认模型断言改为 5.3，保存修复前红收据并单独 commit
-- [ ] 切换 `subagent` 与 `subchat` 默认值，保留 override
-- [ ] 跑全量工具回归与真实 `subglm-agent` 5.3 冒烟
-- [ ] fast review、主裁、归档
+- [x] 切换 `subagent` 与 `subchat` 默认值，保留 override
+- [x] 跑全量工具回归与真实 `subglm-agent` 5.3 冒烟
+- [x] 主 agent 自审与主裁
+- [ ] 归档
