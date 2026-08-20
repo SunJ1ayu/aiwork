@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# track-guard — pre-commit 守卫:两条机械规矩,红一条挡一条。
+# track-guard — pre-commit 守卫:暂存工件和证据卫生,红一条挡一条。
 #   规矩1: bump 版本号的 commit 必须挂在一个 track 下(本次提交里 tracks/ 有动静,
 #          或最近一次 verify.md 改动落在 7 天内 —— 兜住「归进现成 track」的情况)。
 #   规矩2: 最近被改动的 track 的 verify.md 里,lane 和 派给 不许空着。
-# 只查工件,不查自述;误报时可用 --no-verify 走,但那本身会留在 reflog 里。
+# 这里只做提交信息生成前能做的早期提醒；关键 commit 与具体轮次的硬绑定由
+# commit-msg 阶段的 track-commit-msg 负责。`--no-verify` 可以绕过本地 hook，
+# 所以历史审计仍需调用 `track-commit-msg --audit <range>`，不能把 hook 当权限边界。
 set -u
 
 fail=0

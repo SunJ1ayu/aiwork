@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# commit-msg 守卫:判卷/派活控制面和版本号变更必须用 `Track: <name>`
+# 精确绑定到一个轮次。普通业务提交不问，避免把守卫变成噪音。
+set -uo pipefail
+
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/root/aiwork/bin/_tooling-paths.sh
+. "$BIN/_tooling-paths.sh" 2>/dev/null || {
+  echo "track-commit-msg: 🔴 找不到 _tooling-paths.sh，拒绝放行(fail closed)" >&2
+  exit 1
+}
+
+say() { printf 'track-commit-msg: %s\n' "$1" >&2; }
+
+version_bump_in_staged() {  # version_bump_in_staged <path>
+  local f="$1"
+  case "$f" in
+    *package.json)
+      git diff --cached -U0 -- "$f" 2>/dev/null | grep -qE '^\+.*"version"[[:space:]]*:'
+      ;;
+    *)
+      git diff --cached -U0 -- "$f" 2>/dev/null \
+        | grep -qE '^\+[[:space:]]*VERSION[[:space:]]*=[[:space:]]*["'"'"']'
+      ;;
+  esac
+}
+
+staged_needs_track() {
+  local f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    is_judging_surface "$f" && return 0
+    version_bump_in_staged "$f" && return 0
+  done < <(git diff --cached --name-only 2>/dev/null)
+  return 1
+}
+
+message_tracks() {  # message_tracks <message-file>
+  git interpret-trailers --parse "$1" 2>/dev/null \
+    | sed -nE 's/^Track:[[:space:]]*(.*)$/\1/p'
+}
+
+valid_name() {
+  local name="$1"
+  [[ -n "$name" && "$name" != */* && "$name" != *..* && "$name" != "." \
+     && "$name" != "archive" && "$name" != -* ]]
+}
+
+verify_ready() {  # verify_ready <verify-file>
+  local v="$1"
+  [[ -f "$v" ]] || return 1
+  grep -qE '^-[[:space:]]*lane:[[:space:]]*[^<[:space:]]' "$v" || return 1
+  grep -qE '^-[[:space:]]*派给:[[:space:]]*[^<[:space:]]' "$v" || return 1
+}
+
+validate_track() {  # validate_track <name> <allow-archive:0|1>
+  local name="$1" allow_archive="$2" v=""
+  valid_name "$name" || { say "🔴 非法 Track 名:$name"; return 1; }
+  if [[ -f "tracks/$name/verify.md" ]]; then
+    v="tracks/$name/verify.md"
+  elif [[ "$allow_archive" -eq 1 && -f "tracks/archive/$name/verify.md" ]]; then
+    v="tracks/archive/$name/verify.md"
+  else
+    say "🔴 Track: $name 没有对应的${allow_archive:+ active/archived} verify.md。"
+    return 1
+  fi
+  if ! verify_ready "$v"; then
+    say "🔴 $v 的 lane 或 派给 仍为空；先把本轮验收责任写清。"
+    return 1
+  fi
+}
+
+check_message() {  # check_message <message-file> <allow-archive:0|1>
+  local msg="$1" allow_archive="$2" tracks count name
+  tracks="$(message_tracks "$msg")"
+  count="$(printf '%s\n' "$tracks" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [[ "$count" -ne 1 ]]; then
+    say "🔴 关键 commit 必须且只能有一条 trailer: Track: <active-track>（当前 $count 条）。"
+    return 1
+  fi
+  name="$(printf '%s\n' "$tracks" | sed -n '1p')"
+  validate_track "$name" "$allow_archive"
+}
+
+commit_needs_track() {  # commit_needs_track <commit>
+  local commit="$1" f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    is_judging_surface "$f" && return 0
+    case "$f" in
+      *package.json)
+        git show --format= --unified=0 "$commit" -- "$f" 2>/dev/null \
+          | grep -qE '^\+.*"version"[[:space:]]*:' && return 0
+        ;;
+      *)
+        git show --format= --unified=0 "$commit" -- "$f" 2>/dev/null \
+          | grep -qE '^\+[[:space:]]*VERSION[[:space:]]*=[[:space:]]*["'"'"']' && return 0
+        ;;
+    esac
+  done < <(git diff-tree --root --no-commit-id --name-only -r "$commit" 2>/dev/null)
+  return 1
+}
+
+audit_range() {  # audit_range <rev-range>
+  local range="$1" commit msg fail=0
+  if ! git rev-list "$range" >/dev/null 2>&1; then
+    say "🔴 无法解析审计范围:$range"
+    return 1
+  fi
+  while IFS= read -r commit; do
+    [[ -n "$commit" ]] || continue
+    commit_needs_track "$commit" || continue
+    msg="$(mktemp)"
+    git show -s --format=%B "$commit" > "$msg"
+    if ! check_message "$msg" 1; then
+      say "🔴 历史审计失败:${commit:0:12}"
+      fail=1
+    fi
+    rm -f "$msg"
+  done < <(git rev-list --reverse "$range")
+  return "$fail"
+}
+
+if [[ "${1:-}" == "--audit" ]]; then
+  [[ -n "${2:-}" ]] || { say "用法: track-commit-msg --audit <rev-range>"; exit 2; }
+  audit_range "$2"
+  exit $?
+fi
+
+msgfile="${1:-}"
+[[ -n "$msgfile" && -f "$msgfile" ]] || { say "用法: track-commit-msg <commit-message-file>"; exit 2; }
+staged_needs_track || exit 0
+check_message "$msgfile" 0

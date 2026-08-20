@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # track — lightweight artifact scaffold borrowed from Comet, without the state
-# machine / guards. Driven by the main agent's judgment + the panel workflow.
+# machine. Driven by the main agent's judgment + the panel workflow.
 #
 #   track new <name> [project-dir]      scaffold tracks/<name>/ from templates
-#   track archive <name> [project-dir]  move tracks/<name>/ -> tracks/archive/
+#   track archive <name> [project-dir] [--keep-trees|--discard-ignored]
+#                                        move tracks/<name>/ -> tracks/archive/
 #   track list [project-dir]            list active + archived tracks
 #
 # project-dir defaults to the current directory. No phases are enforced — write
@@ -52,8 +53,9 @@ _wt_default_branch() {  # _wt_default_branch <repo>
   return 1
 }
 
-_track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <keep:0|1> <proj>
-  local track="$1" keep="$2" proj_abs="$3" root track_dir tree entry base total=0 tree_repo
+_track_archive_sweep_worktrees() {  # <track> <keep:0|1> <discard-ignored:0|1> <proj>
+  local track="$1" keep="$2" discard_ignored="$3" proj_abs="$4"
+  local root track_dir tree entry base total=0 tree_repo
   root="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
   [[ -d "$root" ]] || return 0
   track_dir="$root/$track"
@@ -154,17 +156,30 @@ _track_archive_sweep_worktrees() {  # _track_archive_sweep_worktrees <track> <ke
     return 1
   fi
 
-  local record remove_out branch_out ignored_out
+  # `status -uall` 看不见 ignored 文件，但 worktree remove 会连它们一起删。
+  # 必须先把**所有树**预检完再做第一次删除，避免前一棵已删、后一棵才发现唯一副本。
+  local record remove_out branch_out ignored_out ignored_blocked=0
   for record in "${clean_entries[@]}"; do
     IFS=$'\t' read -r tree repo branch <<< "$record"
-    # 【四审 subdeepseek 发现 3】被 ignore 的东西 `status -uall` 看不见,却会跟着树一起被删。
-    # design 原来辩护说"它在主仓里同样会丢" —— **那句不对**:主仓没有任何动作会自动删它,
-    # 而这里有(一个不相干的 `track archive`)。不拦(生成物是常态),但**动手前先说出来**。
-    ignored_out="$(git -C "$tree" status --porcelain -uall --ignored 2>/dev/null | grep "^!!" | cut -c4- || true)"
+    ignored_out="$(git -C "$tree" status --porcelain -uall --ignored 2>/dev/null \
+      | grep '^!!' | cut -c4- || true)"
     if [[ -n "$ignored_out" ]]; then
-      echo "  ⚠️ 这棵树里被 ignore 的东西会跟着一起删(生成物是常态,但先让你看见):"
+      ignored_blocked=1
+      echo "  ⚠️ $tree 中会随树删除的 ignored 文件:"
       printf '%s\n' "$ignored_out" | sed 's/^/       /'
     fi
+  done
+  if [[ "$ignored_blocked" -ne 0 && "$discard_ignored" -ne 1 ]]; then
+    echo "🔴 拒绝归档:ignored 文件会随 worktree 删除。所有树仍在原地。" >&2
+    echo "   确认这些文件可丢弃后，显式重跑: track archive ... --discard-ignored" >&2
+    return 1
+  fi
+  if [[ "$ignored_blocked" -ne 0 ]]; then
+    echo "  --discard-ignored: 已显式确认删除以上 ignored 文件。"
+  fi
+
+  for record in "${clean_entries[@]}"; do
+    IFS=$'\t' read -r tree repo branch <<< "$record"
     if ! remove_out="$(git -C "$repo" worktree remove "$tree" 2>&1)"; then
       echo "🔴 git worktree remove 拒绝清理:$tree(注意:排在它前面的树可能已经收掉了)" >&2
       printf '%s\n' "$remove_out" >&2
@@ -215,10 +230,11 @@ case "$cmd" in
     ls -1 "$dir"
     ;;
   archive)
-    keep_trees=0; archive_args=()
+    keep_trees=0; discard_ignored=0; archive_args=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --keep-trees) keep_trees=1; shift ;;
+        --discard-ignored) discard_ignored=1; shift ;;
         *) archive_args+=("$1"); shift ;;
       esac
     done
@@ -262,7 +278,7 @@ case "$cmd" in
       echo "🔴 拒绝归档:工件引用了会话临时目录(见上)。目录留在原地,没有半归档状态。" >&2
       exit 1
     fi
-    _track_archive_sweep_worktrees "$name" "$keep_trees" "$proj"
+    _track_archive_sweep_worktrees "$name" "$keep_trees" "$discard_ignored" "$proj"
     mkdir -p "$proj/tracks/archive"
     mv "$src" "$proj/tracks/archive/$name"
     echo "archived -> $proj/tracks/archive/$name"
