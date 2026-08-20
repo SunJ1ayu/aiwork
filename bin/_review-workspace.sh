@@ -76,7 +76,7 @@ review_workspace__scan_view() { # path-prefix
 }
 
 review_workspace_prepare() { # source-repo leg-name
-  local source="${1:-}" leg="${2:-review}" top base safe_leg scan1 scan2
+  local source="${1:-}" leg="${2:-review}" top base base_preflight safe_leg scan1 scan2
   local head tree1 tree2 index_tree1 index_tree2 snapshot_commit marker source_index
   local source_index1 source_index2 tree_entries tree_to_check
 
@@ -86,6 +86,8 @@ review_workspace_prepare() { # source-repo leg-name
     || { review_workspace__say '找不到 git，建不了 review 副本'; return 78; }
   command -v mktemp >/dev/null 2>&1 \
     || { review_workspace__say '找不到 mktemp，建不了受控临时目录'; return 78; }
+  command -v realpath >/dev/null 2>&1 \
+    || { review_workspace__say '找不到 realpath，无法在写入前校验 workspace 根'; return 78; }
 
   top="$(git -C "$source" rev-parse --show-toplevel 2>/dev/null)" \
     || { review_workspace__say "不是 Git 工作树:$source"; return 78; }
@@ -103,6 +105,14 @@ review_workspace_prepare() { # source-repo leg-name
   fi
 
   base="${REVIEW_WORKSPACE_BASE:-${TMPDIR:-/tmp}/aiwork-review-workspaces}"
+  base_preflight="$(realpath -m -- "$base" 2>/dev/null)" \
+    || { review_workspace__say "workspace 根预检失败:$base"; return 78; }
+  case "$base_preflight" in
+    /|"$REVIEW_SOURCE_REPO"|"$REVIEW_SOURCE_REPO"/*)
+      review_workspace__say "workspace 根不许落在源仓内:$base_preflight"
+      return 78
+      ;;
+  esac
   mkdir -p -m 700 -- "$base" \
     || { review_workspace__say "建不了 workspace 根:$base"; return 78; }
   REVIEW_WORKSPACE_BASE_REAL="$(cd "$base" && pwd -P)" \

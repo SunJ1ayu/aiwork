@@ -22,8 +22,8 @@
 ## S2 独立 review workspace
 
 - [x] S2a 新增共享 helper:仓外安全建目录、shared clone、明确 source HEAD
-- [x] S2b 用临时 index `read-tree HEAD` + `add -A -- :/` 生成 snapshot tree，双读 tree-id 对账
-- [x] S2c 临时 commit 物化快照，再 soft reset 回 source HEAD；删除 origin、关闭 auto gc
+- [x] S2b 从源 `ls-files --stage` 重建 index tree，再以 `add -A -- :/` 派生 worktree tree；双读两者对账
+- [x] S2c 临时 commit/hard reset 物化 worktree，再 soft reset 回 source HEAD 并安装源 index 快照；删除 origin、关闭 auto gc
 - [x] S2d gitlink/submodule 首版 fail-closed
 - [x] S2e cleanup 只接受 helper 自己创建且位于受控根下的路径
 - [x] S2f O1/O3 转绿 + 两个变异红检

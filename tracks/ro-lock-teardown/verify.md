@@ -23,6 +23,7 @@ runlog: rereview-findings-green rc=0 commit=ed0e8f0 dirty=yes at=2026-08-20T02:0
 runlog: final-contaminated-green rc=0 commit=559a4b6 dirty=yes at=2026-08-20T03:11:25Z file=tracks/ro-lock-teardown/evidence/20260820T031125Z-01-final-contaminated-green.txt
 runlog: final-review-env-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:41:38Z file=tracks/ro-lock-teardown/evidence/20260820T044138Z-01-final-review-env-red.txt
 runlog: base-inside-source-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:45:26Z file=tracks/ro-lock-teardown/evidence/20260820T044526Z-01-base-inside-source-red.txt
+runlog: base-inside-source-green rc=0 commit=883b938 dirty=yes at=2026-08-20T04:46:35Z file=tracks/ro-lock-teardown/evidence/20260820T044635Z-01-base-inside-source-green.txt
 ```
 
 Red-run attribution:
@@ -39,7 +40,9 @@ Red-run attribution:
   correctly; the fixtures did not isolate the default they claimed to test.
 - `base-inside-source-red`: the new path oracle proved the helper rejected an in-source workspace base
   only after `mkdir` had already created it (`23/1`), violating the no-source-write boundary.
-- All later receipts are green. The final receipt deliberately injects `ZHIPU_MAX_TURNS=80` and
+- `base-inside-source-green`: preflight canonicalization now rejects that base before `mkdir`; the
+  expanded workspace suite is `24/0`.
+- The earlier final receipt deliberately injects `ZHIPU_MAX_TURNS=80` and
   `DEEPSEEK_MAX_TURNS=25`; all 12 suites still pass, including review-tooling `426/0` and
   review-workspace `23/0`.
 
@@ -78,6 +81,8 @@ Findings disposition:
   `core.excludesFile`, helper-failure zero-call coverage for all four wrappers, disposable-snapshot
   path self-containment, and atomic per-process-temp config replacement.
 - Fixed: V8/V14/V21 default-value fixtures now clear inherited reviewer timeout/max-turn inputs.
+- Fixed: default-Kimi fixtures clear an inherited `PANEL_KIMI_LEG`, OpenCode config parsing clears the
+  reviewer's XDG/config overrides, and an in-source workspace base is rejected before any directory write.
 - No unresolved correctness or source-write finding remains from MiMo, DeepSeek, or GLM.
 
 Arbitrated verdict: **NEEDS_MORE_INFO**. The implementation and mechanical evidence are green, and the
@@ -92,8 +97,9 @@ from the then-current HEAD, arbitrate any Kimi finding, and replace this verdict
 - Bash inside a disposable clone is not a host/network sandbox; same-uid/root adversaries can discover
   sibling temporary paths, and ignored dependency caches may be absent. These are documented non-goals.
 - Concurrent `review` and `explore` runs sharing one MiMo/OpenCode config HOME use atomic replace but
-  remain last-writer-wins. The only observed direction is loss of Bash capability (safe failure / reduced
-  availability), because both modes deny direct write tools. Per-invocation auth/config HOME isolation is
-  deferred rather than expanded into this track.
+  remain last-writer-wins. Either mode can inherit the other's Bash setting: `review` may lose Bash, while
+  `explore` may gain Bash inside its disposable clone. Direct write tools remain denied in both modes, and
+  Bash is already outside the documented host-sandbox guarantee. Per-invocation auth/config HOME isolation
+  is deferred rather than expanded into this track.
 - `_my-review-gate.sh` retains its pre-existing `/root/aiwork` convention. `panel-review` portability was
   fixed in scope; refactoring the separate gate is not required for the repository-isolation objective.

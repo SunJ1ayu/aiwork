@@ -183,13 +183,14 @@
 3. **Kimi(补充):每腿物化源码快照 + shared clone**。
    - 采纳:方向与主选择一致；补充复制前后内容指纹、ignored 读依赖、shared clone 与原仓 gc 的
      生命周期风险，以及“腿在副本先修再评”的流程盲区。
-   - 改写:不用 `rsync + cp source index`。首版由 Git 临时 index 生成 snapshot tree，连续两次
-     tree id 对账；不复制 source index，因此承诺文件内容一致、不承诺 staged 位分类一致。
+   - 改写:不用 `rsync + cp source index`。最终实现用 `ls-files --stage` 在 clone 自有临时
+     index 中重建 source index，再从它派生 worktree tree；连续两次同时对账两棵 tree，既承诺
+     文件内容一致，也保留 staged 位分类。
 
 ### 最终主裁
 
 保留方向 D，但把“显式文件清单覆盖”升级为**Git 原生 snapshot tree 物化**。本机临时探针已证明:
 modified、staged 后继续修改、deleted、untracked 均进入副本；ignored 缺席；副本 `.git` 独立；
 副本 HEAD 回到源 HEAD；源 status/HEAD 不变。第一次探针曾因 no-checkout clone 的空 index +
-缺少 `-- :/` 把全树做成删除，红得对；修正为临时 index `read-tree HEAD` 后才成立。这条失败经验
-要进入正式 oracle，不能只留在会话叙述里。
+缺少 `-- :/` 把全树做成删除，红得对；后续进一步改成从源 `ls-files --stage` 重建 index tree、
+再由其派生 worktree tree。这条失败经验进入正式 oracle，不能只留在会话叙述里。
