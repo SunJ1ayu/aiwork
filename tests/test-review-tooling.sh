@@ -538,7 +538,8 @@ PYEOF
   # deepseek leg: base-URL style endpoint, default model, label; a stray
   # engine endpoint var inherited from the caller must NOT leak through; an
   # EMPTY (set-but-null) model var must still fall back to the default
-  env CAPTURE="$d/c1.json" DEEPSEEK_MODEL= \
+  env CAPTURE="$d/c1.json" DEEPSEEK_MODEL= DEEPSEEK_TIMEOUT= \
+    DEEPSEEK_API_BASE= DEEPSEEK_INCLUDE= \
     MIMO_CHAT_COMPLETIONS_URL=http://stray.example/chat DEEPSEEK_API_KEY=sk-dummy \
     bash "$b/subchat" deepseek review "$d/t.md" "$d/o1.log" "$d" >/dev/null 2>&1; rc=$?
   check "subchat deepseek review exits 0" $([[ $rc -eq 0 ]]; echo $?)

@@ -42,7 +42,10 @@ new_repo() { # new_repo PATH
   printf 'info-only.cache\n' >> "$(git -C "$repo" rev-parse --path-format=absolute --git-path info/exclude)"
   printf 'must-not-copy\n' > "$repo/info-only.cache"
   printf 'global-only.cache\n' > "$repo/../source-global-excludes"
-  git -C "$repo" config core.excludesFile "$repo/../source-global-excludes"
+  # A repository-local relative core.excludesFile is resolved from the source
+  # worktree by Git.  The helper must preserve that meaning even when its own
+  # caller is somewhere else.
+  git -C "$repo" config core.excludesFile ../source-global-excludes
   printf 'must-not-copy\n' > "$repo/global-only.cache"
 }
 

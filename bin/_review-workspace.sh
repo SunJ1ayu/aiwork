@@ -39,6 +39,10 @@ review_workspace__sync_ignores() {
   fi
 
   source_excludes="$(git -C "$REVIEW_SOURCE_REPO" config --path --get core.excludesFile 2>/dev/null || true)"
+  case "$source_excludes" in
+    ""|/*) ;;
+    *) source_excludes="$REVIEW_SOURCE_REPO/$source_excludes" ;;
+  esac
   if [[ -n "$source_excludes" && -f "$source_excludes" ]]; then
     cp -- "$source_excludes" "$clone_info/source-core-excludes" || return 1
     git -C "$REVIEW_WORK_REPO" config core.excludesFile "$clone_info/source-core-excludes" \
