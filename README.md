@@ -2,7 +2,9 @@
 
 Multi-model review/execution tooling for the main agent (the frontier model
 driving the session). The full workflow doctrine — when to use what, panel
-protocol, safety rules — lives in `/root/CLAUDE.md`. `/root/AGENTS.md` is
+protocol, safety rules — is versioned under `workflow/`; `/root/CLAUDE.md` and
+`/root/.claude/skills/{track,panel,delegate}` are deployment copies checked by
+`bin/sync-workflow-docs --check`. `/root/AGENTS.md` is
 deliberately absent so Codex does not automatically load these Claude-specific
 instructions; this README only maps the machinery.
 
@@ -15,6 +17,7 @@ instructions; this README only maps the machinery.
 - `tests/` regression oracles for this tooling itself
 - `track/` lightweight change-workflow convention + templates (`bin/track` CLI)
 - `tracks/` the change artifacts themselves (proposal/design/tasks/verify + evidence)
+- `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - `worktrees/` per-job isolated checkouts created by `delegate-codex` (gitignored)
 - `reports/`, `review/`, `mimo-home/`, `quicklook/` project-specific areas
 
@@ -65,7 +68,9 @@ agent to verify, never a verdict to adopt.
   baseline, rebuilds, reruns the oracle, and REQUIRES red (`--must-fail` pins
   where the red must land). Restores unconditionally and proves the tree is clean.
 - `bin/runlog` — makes the MACHINE write down what it ran: receipt files under
-  `tracks/<track>/evidence/` plus one line to paste into verify.md.
+  `tracks/<track>/evidence/` plus one line to paste into verify.md. `--final`
+  binds the same run (no extra execution) to full HEAD + before/after source-view
+  hashes and refuses secret-shaped argv/output before it can become a receipt.
 - `bin/track-guard` — pre-commit guard for the track conventions.
 - `bin/track archive` also SWEEPS the worktrees of the track being archived, but only
   those that are provably redundant: working tree clean AND their HEAD already an
@@ -76,9 +81,12 @@ agent to verify, never a verdict to adopt.
 
 ## Panel fan-out
 
-- `bin/panel-review TASK [REPO] [LOG_PREFIX]` — convergent: all three
-  reviewers in parallel on one diff/design; main agent arbitrates. Exits
-  non-zero only if ALL THREE legs fail; failed legs keep a `.err` sidecar.
+- `bin/panel-review --risk self|standard|high TASK [REPO] [LOG_PREFIX]` —
+  convergent review. Default high rotates two healthy model families; standard
+  uses one and self uses none. Failure/degradation/conflict can add one spare;
+  `--all` explicitly requests every available reviewer. Main agent arbitrates.
+  It exits non-zero only if every actually dispatched leg fails; failed legs
+  keep a `.err` sidecar.
 - `bin/panel-explore BRIEF [REPO] [LOG_PREFIX]` — divergent: three model
   families each propose ONE direction; no verdict by design.
 

@@ -4,6 +4,9 @@
 外部模型(MiMo / DeepSeek / GLM / Kimi / GPT-Codex)都是**员工**——它们的输出是待评估的证据,
 永远不是自动生效的决定。工具在 `/root/aiwork/bin/`,任务存 `/root/aiwork/tasks/`,
 日志存 `/root/aiwork/logs/`。
+本文件的唯一规范源在 `/root/aiwork/workflow/CLAUDE.md`；这里是 Claude Code 的部署副本。
+工作流 skill 同理以 `/root/aiwork/workflow/skills/` 为准，用
+`/root/aiwork/bin/sync-workflow-docs --check` 查逐字节漂移。
 
 ## 随身规矩(这几条不看抽屉也必须守)
 
@@ -30,9 +33,13 @@
 闸①问的是「执行腿有没有动判卷」,不是「文件有没有变过」——判据和它的修复揉进一个
 commit,闸①就退化成翻执行腿日志人工找补,而且 git 历史里再也证明不了「红过」。
 
-**lane 和 派给**:守卫查它们非空,我要答的是内容。硬的只有一条:
-**碰了新写口 / 权限 / auth / 钱 / 数据一致性 → full,针孔再薄也不打折**;
-fast/self 的判据写在 verify 模板里,填空现场就能看到。
+**风险和方向不确定性是两个轴，别再让 lane 一词兼任两件事。**
+`impact-risk`:self / standard / high，外部评审预算分别是 self=0、standard=1、high=2；
+新写口 / 权限 / auth / 钱 / 数据一致性默认 high。high 从健康池轮换两个不同模型家族，
+失败、降级、冲突、NEEDS_MORE_INFO 或我仍不确定才追加第三腿；判卷/沙箱/权限边界等
+特殊控制面才显式 `panel-review --all`。`design-uncertainty`:low / high，只决定是否做
+premise attack / 双出 / panel-explore，不因实现风险高就自动花一次规划双出。
+`lane:` 和 `派给:` 守卫仍查非空，但我要填写的是上述真实判断，不是沿用旧 full/fast 标签。
 **oracle 是我写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
 
 **bump 版本号、或动判卷防线的 commit,必须挂在一个 track 下**(归进现成 track 也算)。
@@ -72,8 +79,8 @@ gateway 内存里跑 6.8 而装好的 dist 是 6.10(07-07 全 cron 崩)。同一
 
 - **派活给执行腿** → `delegate` skill:分层选档、oracle 先行、派活三件套、收货三闸、
   `submimo fix` 的全部参数与边界、codex(GPT)腿怎么调。
-- **多模型评审/发散** → `panel` skill:`panel-review` 五步协议、`panel-explore` 纪律、
-  三条护栏、信任校准;各腿后端细节在它的 `references/legs.md`。
+- **多模型评审/发散** → `panel` skill:`panel-review` 健康池预算与五步协议、
+  `panel-explore` 纪律、三条护栏、信任校准;各腿后端细节在它的 `references/legs.md`。
 - **track 轻量工作流**(一个 PR 级改动的工件链 proposal→design→tasks→verify→archive)
   → `/track` skill;完整约定在 `/root/aiwork/track/CONVENTION.md`。
   CLI:`track new|archive|list <name> [project-dir]`。

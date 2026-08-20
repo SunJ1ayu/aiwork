@@ -14,9 +14,10 @@
 
 is_judging_surface() {  # is_judging_surface <仓内相对路径>
   case "$1" in
-    bin/panel-*|bin/sub*|bin/delegate-*|bin/redcheck|bin/runlog|bin/ro-repo-exec|bin/track|bin/track-*|bin/rust-check-*|bin/_*) return 0 ;;
+    bin/panel-*|bin/sub*|bin/delegate-*|bin/redcheck|bin/runlog|bin/ro-repo-exec|bin/track|bin/track-*|bin/rust-check-*|bin/sync-workflow-docs|bin/_*) return 0 ;;
     tests/test-*|tests/test_*)                                                                          return 0 ;;
     track/templates/*|track/CONVENTION.md)                                                              return 0 ;;
+    workflow/*)                                                                                          return 0 ;;
   esac
   return 1
 }

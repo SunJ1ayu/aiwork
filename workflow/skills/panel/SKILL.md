@@ -1,6 +1,6 @@
 ---
 name: panel
-description: 多模型评审/发散的完整协议与工具用法(panel-review 四腿合议、panel-explore 发散、各评审腿的后端细节)。当要对一份 diff/设计做第二意见、跑 verify lane、开 full/fast 审、或面对开放架构分叉需要角度扩展时读它。主 agent 永远是唯一仲裁者。
+description: 多模型评审/发散的完整协议与工具用法(panel-review 健康池预算评审、panel-explore 发散、各评审腿的后端细节)。当要对一份 diff/设计做第二意见、按 impact-risk 取证、或面对开放架构分叉需要角度扩展时读它。主 agent 永远是唯一仲裁者。
 ---
 
 # panel — 多模型评审与发散
@@ -46,12 +46,15 @@ description: 多模型评审/发散的完整协议与工具用法(panel-review �
 prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 
 ### 2. 评审员独立审
-`panel-review TASK_FILE [REPO_DIR] [LOG_PREFIX]` 并行拉起所有腿,各写各的
+先分开判断两个轴:`impact-risk` 决定证据预算(self=0、standard=1、high=2)，
+`design-uncertainty` 决定是否需要 premise attack / 双出 / `panel-explore`；二者不能互相代替。
+`panel-review --risk self|standard|high TASK_FILE [REPO_DIR] [LOG_PREFIX]` 默认 high=2，
+从健康池轮换不同模型家族。失败、降级、没有裁决、NEEDS_MORE_INFO 或裁决冲突时只追加
+一个健康 spare；`--all` 才是显式全审，留给判卷、沙箱、权限边界或二审无法收敛的特殊面。
+每条实际派出的腿各写各的
 `<prefix>.<leg>.log`(默认前缀 `/root/aiwork/logs/panel-<task>-<ts>`)。一条腿失败不阻断
-其他腿;只有全部腿都失败才非零退出。
-
-**推荐节奏:先后台拉起 panel-review,趁它跑的时候写自己的 my-review,然后再读日志**
-——同样的协议,省掉 5-15 分钟干等。
+其他腿;只有所有实际派出的腿都失败才非零退出。主自审必须在派发前已落盘，DEFAULT-ON
+闸会机械检查；不能为了省等待把顺序倒过来。
 
 **断线之后先去看日志,别默认重跑。** 各腿自 2026-08-17 起用 `setsid --wait` 起在
 自己的会话里(判据 V25),所以会话被砍时**腿会继续跑完并写完自己的日志** ——

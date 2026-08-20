@@ -87,8 +87,10 @@ fork 把它判成"评审腿篡改",恢复了文件并 kill 掉主 agent 的判�
    - ③ **亲读 diff**(安全面逐行)。顺带盯 `create mode 120000`——执行腿在 worktree 建的
      符号链接被 merge 带回主仓会**覆盖掉真目录**(出过事故;`.gitignore` 带尾斜杠只匹配
      目录,挡不住链接)。
-4. **verify lane 硬规矩:新写口/权限/auth/钱/数据一致性面 = full 全腿审,针孔再薄也不打折**;
-   fast lane 只给纯展示/纯逻辑改动。
+4. **verify 的 `impact-risk` 硬规矩:新写口/权限/auth/钱/数据一致性面 = high，针孔再薄
+   也不打折。** 默认预算 self=0、standard=1、high=2；high 取两条健康跨家族腿，失败/
+   降级/冲突才追加。判卷、沙箱、权限控制面才显式 `panel-review --all`。
+   `design-uncertainty` 另判 low/high，只决定是否需要 premise attack / 双出，不拿人数代替。
    切记 **oracle 是主 agent 写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
    (07-18 实锤:错误编码进 oracle,fast lane 的 submimo 对着错考卷判 PASS,双漏。)
 5. 主 agent 仲裁 → 修(自己或回派)→ merge → e2e → push → 归档。

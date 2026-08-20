@@ -22,10 +22,11 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - **agent 腿(默认)**:`subdeepseek-agent`,DeepSeek 跑在 Claude Code 壳上,打
   Anthropic 兼容端点 `api.deepseek.com/anthropic`。评审员**自己读仓库**(只读工具白名单),
   所以没有盲评、也没有"commit 之后 diff 变空"的问题。`panel-review` 自动选它;
-  `PANEL_DEEPSEEK_LEG=chat` 强制回落 chat 腿。默认轮次上限 **80**(40 撞过墙)。
+  `PANEL_DEEPSEEK_LEG=chat` 强制回落 chat 腿。默认轮次上限 **200**(40、80 都撞过墙，
+  后按单文件实测 56 轮外推并钉住)。
 - **chat 腿(回落)**:`subdeepseek review TASK LOG REPO`,走官方 chat-completions
   (`api.deepseek.com`),自动附上 REPO 的 `git diff`。
-  默认模型 **`deepseek-v4-flash`**(2026-07-25 起;官方端点只认 `deepseek-v4-flash` /
+  默认模型 **`deepseek-v4-flash`**，轮次上限 **200**(2026-07-25 起;官方端点只认 `deepseek-v4-flash` /
   `deepseek-v4-pro`,老的 `deepseek-chat`/`deepseek-reasoner` 已下架——两条腿当天双双 400
   就是这个原因)。要更强一档用 `DEEPSEEK_MODEL=deepseek-v4-pro`。
   加文件用 `DEEPSEEK_INCLUDE`(panel 里用 `PANEL_INCLUDE` 一次喂两条 chat 腿)。
@@ -40,7 +41,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 `/root/aiwork/bin/subglm-agent`(底座腿,默认)/ `bin/subglm`(聊天腿),**只读评审**。
 
 - **后端 = OpenCode Go**(2026-08-18 从智谱开放平台 bigmodel 换过来,业主的 $10/月订阅),
-  **默认模型 `glm-5.2`**。换的理由是 bigmodel 那把 key 欠费(1113),这条腿 08-04 起
+  **默认模型 `glm-5.3`**。换的理由是 bigmodel 那把 key 欠费(1113),这条腿 08-04 起
   默认关着、四审实际只有三腿两周。后端沿革:bigmodel → 百炼(429)→ 火山方舟(07-17)
   → 07-25 切回 bigmodel → **08-18 OpenCode Go**。
   旧 key 原样留在 `~/.config/zhipu/auth.json`(另一家的账,充值可切回),方舟 key 在
@@ -58,8 +59,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - **Go 上有哪些 glm 档**(08-18 实测 `/v1/models`):`glm-5` `glm-5.1` `glm-5.2` `glm-5.3`。
   **`glm-4.6` 系在 Go 上不支持**(报 `ModelError: Model glm-4.6 is not supported`)——
   所以这次不是"顺便升个档",是老默认值在新后端上根本跑不起来。
-  默认停在 `glm-5.2` 是**业主 08-18 点名的**,不是测出来的上限;`glm-5.3` 也在册,
-  要换先问他。
+  默认已在 08-20 经业主确认切到 `glm-5.3`；模型变化必须同时改实现、判据与本唯一源。
 - key 来自 `ZHIPU_API_KEY` 或 `~/.config/opencode-go/auth.json`(`{"key":"..."}`,权限 600);
   模型覆盖 `ZHIPU_MODEL`,加文件 `ZHIPU_INCLUDE`。
   (**env 变量名仍是 `ZHIPU_*`**:它是"第三条腿"的前缀,不是"智谱"的缩写。改名要动
@@ -102,7 +102,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 
 - `subkimi review TASK LOG REPO`,裁决 gate 为 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。
   默认模型 `kimi-code/k3`(K3,1M 上下文,effort=max);
-  `KIMI_MODEL=kimi-code/kimi-for-coding` 切到 K2.7 编程调优版。超时 `KIMI_TIMEOUT`(默认 900s)。
+  `KIMI_MODEL=kimi-code/kimi-for-coding` 切到 K2.7 编程调优版。超时 `KIMI_TIMEOUT`(默认 1500s)。
 - **隔离**:跑在 `KIMI_CODE_HOME=/root/aiwork/kimi-review-home`(绝不碰全局 `~/.kimi-code`)。
   该 home 的配置带一个 PreToolUse 守卫 hook(`hooks/guard.mjs`,**默认 DENY**):只放行
   Read/Glob/Grep/todo 类工具 + 不含元字符的只读 git;Write/Edit/Agent/AgentSwarm/Skill/
@@ -111,8 +111,8 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
   一次 canary Write 预检守卫,**不 DENY 就拒绝派发**——沙箱坏了要让工具停,而不是悄悄变弱。
 - auth:Kimi 会员 OAuth token,通过 `credentials` 符号链接共享进评审 home(`kimi login`
   刷新一次即可)。烧 Kimi 会员额度,不烧 Claude。
-- `panel-review` 在装了 `subkimi` 时自动带上这条腿(`PANEL_KIMI_LEG=off` 关闭;
-  **没有 chat 回落**——它不在就是退回经典三腿 panel)。
+- `panel-review` 把它纳入健康轮换池(`PANEL_KIMI_LEG=off` 关闭)，只有被预算选中或条件
+  升级时才实际派出；**没有 chat 回落**。
 
 ## codex (GPT-5.6-Sol) — 第五条腿,frontier 档,2026-07-26 起
 

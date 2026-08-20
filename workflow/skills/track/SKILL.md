@@ -1,16 +1,17 @@
 ---
 name: track
-description: Lightweight, traceable change workflow for a PR-sized unit of work in an existing project — borrows Comet's proposal→design→tasks→verify→archive artifact chain WITHOUT the rigid state machine, guards, or blocking gates. Use when the user says /track, "起一个 track", "建个 track / change", "新建/归档 track", or wants a durable artifact trail for a feature/modification (not for scaffolding a brand-new project). The flow is guidance the main agent applies with judgment — it is NOT a forced wizard.
+description: Lightweight, traceable change workflow for a PR-sized unit of work in an existing project — proposal→design→tasks→verify→archive artifacts plus narrow mechanical guards. Use when the user says /track, "起一个 track", "建个 track / change", "新建/归档 track", or wants a durable artifact trail for a feature/modification (not for scaffolding a brand-new project). The artifact depth remains judgment-based; safety and evidence guards are real.
 ---
 
 # track — lightweight change workflow
 
 A **track** = one PR-sized feature/modification in an existing repo, with a
 durable artifact trail under `<project>/tracks/<name>/`. This skill is a guide
-the main agent (Opus, sole arbiter) follows **with judgment** — there are no
-HARD STOPs, no guard scripts, no mandatory phases. Small/obvious work skips
-artifacts entirely, consistent with the "don't spend a panel on trivial things"
-rule. Full convention: `/root/aiwork/track/CONVENTION.md`.
+the main agent (sole arbiter) follows **with judgment**. Artifact depth is not a
+rigid state machine, but `track-guard`, commit trailers, evidence checks and safe
+archive behavior are mechanical gates, not optional prose. Small/obvious work
+may skip creating a track entirely; once a track exists, its guards tell the
+truth about that track. Full convention: `/root/aiwork/track/CONVENTION.md`.
 
 CLI helper (assume `/root/aiwork/bin` is on PATH, else call by full path):
 
@@ -69,12 +70,16 @@ conversation history; reconstruct from the folder:
    first, then hands the narrow file scope to submimo; oracle/test files are
    off-limits to it; verify with `git diff` they're untouched; cap ~2 retries
    then take it back. See main CLAUDE.md `submimo fix` rules.
-5. **verify.md (judgment branch).** Run mechanical checks (build/test/secrets),
-   then the soft review by lane:
-   - `full` (main + 全部评审腿 MiMo/DeepSeek/GLM/Kimi via `panel-review`) for high-risk tracks
-     (auth / money / migration / data-consistency / cross-module / CI-risk);
-   - `fast` (main + `submimo review`) for medium tracks;
-   - `self` (main self-review) for small tracks / hotfixes.
+5. **verify.md (two independent judgments).** Run mechanical checks
+   (build/test/secrets), then classify two orthogonal axes:
+   - `impact-risk`: self / standard / high, with external-review budgets
+     self=0, standard=1, high=2. High rotates two healthy, different model
+     families; failure/degradation/conflict/NEEDS_MORE_INFO adds a spare.
+     Use explicit `panel-review --all` only for exceptional judging/sandbox/
+     permission-control surfaces, not as the default meaning of high.
+   - `design-uncertainty`: low / high. High uncertainty triggers premise attack,
+     independent dual planning or `panel-explore`; high implementation impact
+     alone does not.
    Main agent reviews first and commits findings BEFORE reading any panel output,
    then arbitrates a single verdict (PASS / BLOCK / NEEDS_MORE_INFO). A panel
    verdict never auto-advances anything — the main agent is sole arbiter.
