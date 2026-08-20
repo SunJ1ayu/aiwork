@@ -31,6 +31,7 @@ newrepo() {  # 干净仓 + 一个现成 track,**工作树全干净**(R3 靠这�
     git init -q; git config user.email t@t; git config user.name t
     mkdir -p tracks/t bin
     printf '# Verify: t\n\n- Verdict: **PASS**\n\n## Review\n\n- lane: **self**\n- 派给: **主 agent 直接干**\n' > tracks/t/verify.md
+    printf 'base\n' > app.txt
     git add -A >/dev/null; git commit -qm init )
   echo "$d"
 }
@@ -192,6 +193,72 @@ r7_end_to_end_with_the_guard() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- R8
+r8_final_binds_the_existing_last_run() {
+  echo "[R8] --final 复用这一次命令，并绑定完整 HEAD + 前后源码视图"
+  local d counter rc f before after head line
+  d="$(newrepo)"; counter="$(mktemp)"
+  ( cd "$d" && "$RUNLOG" --final -t t -n final-green -- \
+      bash -c 'printf "called\\n" >> "$1"' _ "$counter" ) >/dev/null 2>&1; rc=$?
+  check "R8: final 绿时原命令 rc 原样为 0" $([[ $rc -eq 0 ]]; echo $?)
+  check "R8: final 没有额外重跑，命令只执行一次" $([[ "$(wc -l < "$counter")" -eq 1 ]]; echo $?)
+  f="$(receipt_of "$d")"
+  head="$(git -C "$d" rev-parse HEAD)"
+  grep -qx "head-before: $head" "$f"; check "R8: 收据绑定完整 HEAD（不是 7 位短号）" $?
+  before="$(sed -n 's/^source-view-before: sha256://p' "$f")"
+  after="$(sed -n 's/^source-view-after:  sha256://p' "$f")"
+  check "R8: 源码视图摘要是 64 位 sha256" $([[ "$before" =~ ^[0-9a-f]{64}$ ]]; echo $?)
+  check "R8: 只新增本次 receipt 不算源码漂移" $([[ -n "$before" && "$before" == "$after" ]]; echo $?)
+  grep -q '^source-stable: yes$' "$f"; check "R8: 稳定身份明确记 yes" $?
+  line="$(grep -a '^runlog: ' "$f" | tail -1)"
+  grep -q ' final=yes ' <<< "$line"; check "R8: 单行收据能机械识别 final" $?
+
+  # 命令本身绿，但运行期间改了 tracked 源码：final 必须红，且保留红证据。
+  rm -rf "$d"; d="$(newrepo)"
+  ( cd "$d" && "$RUNLOG" --final -t t -n moving -- \
+      bash -c 'printf "mutation\\n" >> app.txt' ) >/dev/null 2>&1; rc=$?
+  check "R8: 命令 rc=0 但源码视图变化 ⇒ final 非零" $([[ $rc -ne 0 ]]; echo $?)
+  f="$(receipt_of "$d")"
+  grep -q '^command-rc: 0$' "$f"; check "R8: 仍如实保留原命令 rc，没伪装成测试失败" $?
+  grep -q '^source-stable: no$' "$f"; check "R8: 红因明确是源码漂移" $?
+
+  # ignored 运行产物不属于源码视图，常见缓存不制造误红。
+  rm -rf "$d"; d="$(newrepo)"
+  printf 'runtime/\n' > "$d/.gitignore"; git -C "$d" add .gitignore; git -C "$d" commit -qm ignore
+  ( cd "$d" && "$RUNLOG" --final -t t -n ignored -- \
+      bash -c 'mkdir -p runtime; printf cache > runtime/cache.bin' ) >/dev/null 2>&1; rc=$?
+  check "R8: 只生成 ignored 运行产物 ⇒ final 仍绿" $([[ $rc -eq 0 ]]; echo $?)
+  rm -rf "$d" "$counter"
+}
+
+# ---------------------------------------------------------------- R9
+r9_secret_shapes_never_become_receipts() {
+  echo "[R9] 命令参数/输出像秘密 ⇒ 拒绝形成可提交 receipt"
+  local d marker rc out secret
+  secret='sk-abcdefghijklmnopqrstuvwxyz012345'
+
+  d="$(newrepo)"; marker="$(mktemp)"; : > "$marker"
+  ( cd "$d" && "$RUNLOG" --final -t t -n arg-secret -- \
+      bash -c 'printf called >> "$1"' _ "$marker" "$secret" ) >/dev/null 2>&1; rc=$?
+  check "R9: argv 命中秘密形状 ⇒ 开跑前拒绝" $([[ $rc -ne 0 && ! -s "$marker" ]]; echo $?)
+  check "R9: argv 被拒后 evidence/ 仍为空" $([[ -z "$(receipt_of "$d")" ]]; echo $?)
+
+  : > "$marker"
+  out="$(cd "$d" && RUNLOG_TEST_SECRET="$secret" RUNLOG_TEST_MARKER="$marker" \
+      "$RUNLOG" --final -t t -n output-secret -- \
+      bash -c 'printf called >> "$RUNLOG_TEST_MARKER"; printf "api_key=%s\\n" "$RUNLOG_TEST_SECRET"' 2>&1)"; rc=$?
+  check "R9: 输出扫描发生在原命令真实执行之后" $([[ -s "$marker" ]]; echo $?)
+  check "R9: 输出命中秘密形状 ⇒ 非零" $([[ $rc -ne 0 ]]; echo $?)
+  check "R9: 含秘密输出的 receipt 被拒绝入库" $([[ -z "$(receipt_of "$d")" ]]; echo $?)
+  if grep -qF "$secret" <<< "$out"; then bad "R9: 终端输出也不回显秘密原文"
+  else ok "R9: 终端输出也不回显秘密原文"; fi
+
+  ( cd "$d" && "$RUNLOG" --final -t t -n benign -- \
+      bash -c 'echo "token budget=200"' ) >/dev/null 2>&1; rc=$?
+  check "R9: 普通 token 用词不误杀" $([[ $rc -eq 0 ]]; echo $?)
+  rm -rf "$d" "$marker"
+}
+
 echo "=== runlog oracle ==="
 r1_writes_a_receipt
 r2_exit_code_passthrough
@@ -200,5 +267,7 @@ r4_filenames_sort_chronologically
 r5_refuses_bad_usage
 r6_works_on_archived_tracks
 r7_end_to_end_with_the_guard
+r8_final_binds_the_existing_last_run
+r9_secret_shapes_never_become_receipts
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
