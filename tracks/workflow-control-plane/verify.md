@@ -1,55 +1,43 @@
 # Verify: workflow-control-plane
 
 - Date: 2026-08-20
-- Verdict: <PASS | BLOCK | NEEDS_MORE_INFO>
-
-> Panel hook — 软判断(correctness/security/edge/spec-drift)走 panel-review:
-> 主 agent 先独立审并落 findings,再跑 panel-review 的全部评审腿,主 agent 主裁。
-> build/test 跑通是机械检查。
+- Verdict: PASS
 
 ## Mechanical checks
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+- [x] build passes
+- [x] tests pass
+- [x] no secrets / unsafe ops
 
-**机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
-
-```
-runlog -t workflow-control-plane -- <判据命令>
-```
+Final machine evidence (exact line printed by `runlog --final`):
 
 ```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
+runlog: final-green rc=0 commit=6e386d4 dirty=yes final=yes at=2026-08-20T14:16:38Z file=tracks/workflow-control-plane/evidence/20260820T141638Z-01-final-green.txt
 ```
+
+The receipt binds full HEAD `6e386d4c2c719f8079d0e5028b9e17454709f291`; before/after source view is
+`sha256:a9999be434a2180d9a84929227253ebd3b0eafc00d22846d403708729ceed204`,
+`source-stable: yes`, and `command-rc: 0`.
 
 ## Review
 
-- lane: full
-  > **碰了新写口 / 权限 / auth / 钱 / 数据一致性 → full,针孔再薄也不打折**(硬规矩,别在这降档)。
-  > fast = 主+1,中等风险;self = 主自审(闸③ + 截图 + 全量回归),
-  > 限纯前端/纯观感、后端一字未动、只新增已过审针孔的调用方。
-- 派给: 主 agent 直接干 —— 修改的是评审、证据和归档防线本身，且当前执行环境不应把
-  主 Agent 的判据所有权再次包进外部执行黑箱。
-- 规格自查(读任何 panel 输出之前先答):如果规格本身错了，最可能错成“为了省额度把独立
-  覆盖也一起删掉”或“为了证据身份额外制造一轮慢测试”。通过保留主 Agent 自审、跨家族
-  二审、条件升级、显式四审入口，以及 final 复用现有最后一遍来发现。
-  panel 只验“实现合不合规格”，验不了“规格对不对”；多腿一致 PASS 也不等于题是对的。
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
-  > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
-  > 08-06 立这条的理由:08-05 我在这里手写了"三条腿一致 PASS",而 Kimi 根本没出结论
-  > (同一页第 90 行我自己还写着它没出报告)—— 手抄一份终端上的东西,抄错那次没人会发现。
+- lane: high
+  - impact-risk: high (review/evidence/archive control plane)
+  - design-uncertainty: low (owner-approved direction; implementation and edge cases under review)
+- 派给: 主 agent 直接实现与主裁；外腿只读复核。
+- 规格自查: 最可能的规格错误是“为省额度一并删掉独立覆盖”或“为证据身份额外重跑一次慢测试”。实现保留主审、跨家族健康池、条件第三腿和显式 `--all`；final 收据复用原有最后一遍全量回归。
+- 腿的花名册: submimo=SKIP(health:quota) subdeepseek=PASS(verdict=BLOCK) subglm=FAIL(rc=1,降级:回落聊天腿也没成) subkimi=SKIP(health:quota)
 - findings:
-  - <...>
-  > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
-  > 花名册在上一格,查工件不查自述。
-- arbitrated verdict (主裁): <...>
-  > **归档时这一条和顶部的 `Verdict:` 都不许还是占位符**,`track-guard` 规矩3 会挡;
-  > 没归档但已经合并上线的,`track list` 会打 ⚠️(stage-timer 就这么漏了两个月)。
+  - 主审在首次 panel 前发现并修复了 ignored cache 白名单语义偏差与 submodule HEAD 漏哈希。
+  - 首次 panel 发现 non-final 秘密输出可入收据；进一步证明当时 DeepSeek/GLM 的名义裁决均是提示词/推理回声。已用红测试统一所有 runlog 输出扫描，并改为只认独立裁决行。
+  - 本地最小实验确认 merge commit 会被历史审计漏掉；已改为显式对第一父提交比较并有 merge-only 红测试。
+  - 有效复审 DeepSeek BLOCK 指出尾随空白裁决误判、降级+不完整状态丢维、`mktemp` 失败未 fail-closed；三项均先红后绿。
+  - 复审过程又暴露 panel 控制变量污染 oracle；已加污染父环境探针并在判据入口一次性清理。
+  - DeepSeek 声称嵌套 `package.json` 因 `diff-tree` 缺 `-r` 而漏审；该候选红测试在未修实现上即为绿，显式 pathspec 会产出嵌套 patch，因此驳回。
+- arbitrated verdict (主裁): PASS。不以腿数投票；所有可复现 finding 均已有对应红测试和修复，驳回项在原实现上即不会失败，最终绑定源码视图的全套机械判据全绿。
 
 ## Accepted deviations
 
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
+- 高风险复审只取得一条有效外部裁决：MiMo 上轮超时、Kimi 明确额度不足，GLM agent 失败后 chat 回落遇上游 HTTP 503。它们均如实记在 roster，没有冒充 PASS。影响是缺少第二家族的最终确认；用主审仲裁、每项 finding 的红-绿判据和全套 final 收据补偿，不额外烧第三家额度。
+- Final 收据的 `dirty=yes` 来自用户原有未跟踪 `tasks/lock-teardown-adversarial.md`。runlog 将它纳入前后源码视图且摘要稳定；本轮未修改、未删除该文件。
+- 输出扫描为了“回显前拒绝秘密”需要在仓外完整缓冲，未设内容尺寸上限。缓冲创建/权限失败已 fail-closed；极大输出仍可耗尽临时空间，影响限于本次判据失败，不会将未扫描内容写入收据或回放到终端。

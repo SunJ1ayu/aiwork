@@ -13,4 +13,4 @@
 - [x] T7 把 CLAUDE/skills/README 迁入唯一规范源，增加同步/漂移红判据
 - [x] T8 修复已知文档漂移，并安全部署到当前 `/root`、`/root/.claude`
 - [x] T9 聚焦回归、全量防锈、主自审、健康池二审与仲裁
-- [ ] T10 填 verify、归档；不删除现有 logs/out/用户未跟踪任务
+- [x] T10 填 verify、归档；不删除现有 logs/out/用户未跟踪任务
