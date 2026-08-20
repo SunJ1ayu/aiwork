@@ -50,4 +50,4 @@
 - [x] S5b 最终三腿 panel + 业主批准的 Kimi 配额豁免，花名册原样落 verify
 - [x] S5c 仲裁 → 两个 LOW 红检/返工 → 最后一次全量回归/收据
 - [x] S5d verify 填真实 verdict、接受偏差和资源边界
-- [ ] S5e 归档
+- [x] S5e 归档
