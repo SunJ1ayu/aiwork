@@ -28,20 +28,27 @@ has_secret_shape() {
     'sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 }
 
-source_view() {  # source_view <本次 receipt 的仓内路径>; tracked + non-ignored untracked
-  local receipt_rel="$1" rel path kind mode digest
+source_view_repo() {  # source_view_repo <repo> [排除的仓内路径]
+  local repo="$1" exclude_rel="${2:-}" rel path kind mode digest nested head
   {
-    git -C "$REPO" ls-files -co --exclude-standard -z \
+    git -C "$repo" ls-files -co --exclude-standard -z \
       | LC_ALL=C sort -z \
       | while IFS= read -r -d '' rel; do
-          [ "$rel" = "$receipt_rel" ] && continue
-          path="$REPO/$rel"
+          [[ -n "$exclude_rel" && "$rel" = "$exclude_rel" ]] && continue
+          path="$repo/$rel"
           if [ -L "$path" ]; then
             kind=symlink; mode="$(stat -c '%A' -- "$path" 2>/dev/null || echo missing)"
             digest="$(readlink -- "$path" 2>/dev/null | sha256sum | awk '{print $1}')"
           elif [ -f "$path" ]; then
             kind=file; mode="$(stat -c '%A' -- "$path" 2>/dev/null || echo missing)"
             digest="$(sha256sum < "$path" | awk '{print $1}')"
+          elif [ -d "$path" ] && [ -e "$path/.git" ]; then
+            # 外仓把 submodule 记成一个 gitlink；实际测试视图还要绑定它当前
+            # checkout 的 HEAD 和内部 tracked/non-ignored 内容，不能只哈目录名。
+            kind=gitlink; mode="$(stat -c '%A' -- "$path" 2>/dev/null || echo missing)"
+            head="$(git -C "$path" rev-parse HEAD 2>/dev/null || echo nocommit)"
+            nested="$(source_view_repo "$path")"
+            digest="$(printf '%s\0%s' "$head" "$nested" | sha256sum | awk '{print $1}')"
           elif [ -d "$path" ]; then
             kind=directory; mode="$(stat -c '%A' -- "$path" 2>/dev/null || echo missing)"; digest=-
           else
@@ -50,6 +57,10 @@ source_view() {  # source_view <本次 receipt 的仓内路径>; tracked + non-i
           printf '%s\0%s\0%s\0%s\0' "$rel" "$kind" "$mode" "$digest"
         done
   } | sha256sum | awk '{print $1}'
+}
+
+source_view() {  # tracked + non-ignored untracked；排除本次 receipt 本身
+  source_view_repo "$REPO" "$1"
 }
 
 TRACK=""; SLUG=""; REPO=""; FINAL=0

@@ -53,6 +53,16 @@ _wt_default_branch() {  # _wt_default_branch <repo>
   return 1
 }
 
+_track_disposable_ignored() {  # 窄白名单:只有明确的解释器/测试缓存
+  case "$1" in
+    __pycache__/|__pycache__/*|*/__pycache__/|*/__pycache__/*|\
+    .pytest_cache/|.pytest_cache/*|*/.pytest_cache/|*/.pytest_cache/*|\
+    .mypy_cache/|.mypy_cache/*|*/.mypy_cache/|*/.mypy_cache/*|\
+    .ruff_cache/|.ruff_cache/*|*/.ruff_cache/|*/.ruff_cache/*) return 0 ;;
+  esac
+  return 1
+}
+
 _track_archive_sweep_worktrees() {  # <track> <keep:0|1> <discard-ignored:0|1> <proj>
   local track="$1" keep="$2" discard_ignored="$3" proj_abs="$4"
   local root track_dir tree entry base total=0 tree_repo
@@ -158,11 +168,17 @@ _track_archive_sweep_worktrees() {  # <track> <keep:0|1> <discard-ignored:0|1> <
 
   # `status -uall` 看不见 ignored 文件，但 worktree remove 会连它们一起删。
   # 必须先把**所有树**预检完再做第一次删除，避免前一棵已删、后一棵才发现唯一副本。
-  local record remove_out branch_out ignored_out ignored_blocked=0
+  local record remove_out branch_out ignored_out all_ignored ignored ignored_blocked=0
   for record in "${clean_entries[@]}"; do
     IFS=$'\t' read -r tree repo branch <<< "$record"
-    ignored_out="$(git -C "$tree" status --porcelain -uall --ignored 2>/dev/null \
+    all_ignored="$(git -C "$tree" status --porcelain -uall --ignored 2>/dev/null \
       | grep '^!!' | cut -c4- || true)"
+    ignored_out=""
+    while IFS= read -r ignored; do
+      [[ -n "$ignored" ]] || continue
+      _track_disposable_ignored "$ignored" && continue
+      ignored_out+="${ignored_out:+$'\n'}$ignored"
+    done <<< "$all_ignored"
     if [[ -n "$ignored_out" ]]; then
       ignored_blocked=1
       echo "  ⚠️ $tree 中会随树删除的 ignored 文件:"
