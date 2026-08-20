@@ -205,7 +205,7 @@ cfg = {"agent": {agent: {"description": "aiwork isolated review leg",
 # 另一边可能读到半截 JSON。窗口小,但**失败形态没验过**:mimo 解析不了这份配置
 # 会不会回退到内置 plan 档(写口全开的那个,本单整单就是在推翻它)—— 不去猜它,
 # 直接把窗口关掉。tmp 由上面的 umask 077 保证也是 600,replace 是 POSIX 原子改名。
-tmpath = cfgpath + ".tmp"
+tmpath = cfgpath + ".tmp." + str(os.getpid())
 with open(tmpath, "w") as fh:
     json.dump(cfg, fh, indent=2)
 os.replace(tmpath, cfgpath)

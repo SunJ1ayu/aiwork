@@ -7,8 +7,8 @@
 #   review_workspace_cleanup
 #
 # The source repository is never checked out or indexed through its own .git.
-# A temporary index owned by the clone snapshots tracked dirty/deleted files and
-# untracked non-ignored files.  Two complete scans must produce the same tree.
+# Clone-owned temporary indexes preserve the source index and separately snapshot
+# the worktree/untracked view. Two complete scans must produce the same pair.
 
 review_workspace__say() {
   printf 'review-workspace: %s\n' "$*" >&2
@@ -18,25 +18,63 @@ review_workspace__safe_leg() {
   printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '_'
 }
 
-review_workspace__scan_tree() { # index-path head
-  local index_path="$1" head="$2"
-  rm -f -- "$index_path" "$index_path.lock"
-  GIT_INDEX_FILE="$index_path" \
-    git --git-dir="$REVIEW_WORK_REPO/.git" --work-tree="$REVIEW_SOURCE_REPO" \
-      read-tree "$head" >/dev/null \
+review_workspace__sync_ignores() {
+  local source_info source_excludes clone_info
+  clone_info="$REVIEW_WORK_REPO/.git/info"
+  mkdir -p -- "$clone_info" || return 1
+
+  source_info="$(git -C "$REVIEW_SOURCE_REPO" \
+    rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)" || {
+      source_info="$(git -C "$REVIEW_SOURCE_REPO" rev-parse --git-path info/exclude 2>/dev/null)" \
+        || return 1
+      case "$source_info" in
+        /*) ;;
+        *) source_info="$REVIEW_SOURCE_REPO/$source_info" ;;
+      esac
+    }
+  if [[ -f "$source_info" ]]; then
+    cp -- "$source_info" "$clone_info/exclude" || return 1
+  else
+    : > "$clone_info/exclude" || return 1
+  fi
+
+  source_excludes="$(git -C "$REVIEW_SOURCE_REPO" config --path --get core.excludesFile 2>/dev/null || true)"
+  if [[ -n "$source_excludes" && -f "$source_excludes" ]]; then
+    cp -- "$source_excludes" "$clone_info/source-core-excludes" || return 1
+    git -C "$REVIEW_WORK_REPO" config core.excludesFile "$clone_info/source-core-excludes" \
+      || return 1
+  fi
+}
+
+review_workspace__scan_view() { # path-prefix
+  local prefix="$1" source_index="$1.source" work_index="$1.work" entries="$1.entries"
+  rm -f -- "$source_index" "$source_index.lock" "$work_index" "$work_index.lock" "$entries"
+
+  GIT_INDEX_FILE="$source_index" \
+    git --git-dir="$REVIEW_WORK_REPO/.git" read-tree --empty >/dev/null \
     || return 1
-  GIT_INDEX_FILE="$index_path" \
+  git -C "$REVIEW_SOURCE_REPO" ls-files --stage -z > "$entries" || return 1
+  GIT_INDEX_FILE="$source_index" \
+    git --git-dir="$REVIEW_WORK_REPO/.git" update-index -z --index-info < "$entries" \
+    || return 1
+  REVIEW_SCAN_INDEX_TREE="$(GIT_INDEX_FILE="$source_index" \
+    git --git-dir="$REVIEW_WORK_REPO/.git" write-tree)" || return 1
+
+  cp -- "$source_index" "$work_index" || return 1
+  GIT_INDEX_FILE="$work_index" \
     git --git-dir="$REVIEW_WORK_REPO/.git" --work-tree="$REVIEW_SOURCE_REPO" \
       add -A -- :/ >/dev/null \
     || return 1
-  GIT_INDEX_FILE="$index_path" \
+  REVIEW_SCAN_WORKTREE_TREE="$(GIT_INDEX_FILE="$work_index" \
     git --git-dir="$REVIEW_WORK_REPO/.git" --work-tree="$REVIEW_SOURCE_REPO" \
-      write-tree
+      write-tree)" || return 1
+  REVIEW_SCAN_SOURCE_INDEX="$source_index"
 }
 
 review_workspace_prepare() { # source-repo leg-name
-  local source="${1:-}" leg="${2:-review}" top base safe_leg index1 index2
-  local head tree1 tree2 snapshot_commit marker source_index tree_entries
+  local source="${1:-}" leg="${2:-review}" top base safe_leg scan1 scan2
+  local head tree1 tree2 index_tree1 index_tree2 snapshot_commit marker source_index
+  local source_index1 source_index2 tree_entries tree_to_check
 
   [[ -n "$source" && -d "$source" ]] \
     || { review_workspace__say "源仓不存在:$source"; return 78; }
@@ -78,13 +116,16 @@ review_workspace_prepare() { # source-repo leg-name
     || { review_workspace__say "mktemp 失败:$REVIEW_WORKSPACE_BASE_REAL"; return 78; }
   REVIEW_WORK_REPO="$REVIEW_WORKSPACE_DIR/repo"
   REVIEW_SNAPSHOT_TREE=""
+  REVIEW_SNAPSHOT_INDEX_TREE=""
   marker="$REVIEW_WORKSPACE_DIR/.aiwork-review-workspace"
   {
     printf 'source=%s\n' "$REVIEW_SOURCE_REPO"
     printf 'pid=%s\n' "$$"
   } > "$marker" || {
     review_workspace__say "写不了 workspace marker:$marker"
-    review_workspace_cleanup >/dev/null 2>&1 || true
+    rmdir -- "$REVIEW_WORKSPACE_DIR" >/dev/null 2>&1 || true
+    REVIEW_WORKSPACE_DIR=""
+    REVIEW_WORK_REPO=""
     return 78
   }
 
@@ -104,23 +145,36 @@ review_workspace_prepare() { # source-repo leg-name
     review_workspace_cleanup >/dev/null 2>&1 || true
     return 78
   }
+  review_workspace__sync_ignores || {
+    review_workspace__say '同步源仓 ignore 语义失败；拒绝猜 untracked 边界'
+    review_workspace_cleanup >/dev/null 2>&1 || true
+    return 78
+  }
 
-  index1="$REVIEW_WORKSPACE_DIR/index.first"
-  index2="$REVIEW_WORKSPACE_DIR/index.second"
-  tree1="$(review_workspace__scan_tree "$index1" "$head")" || {
+  scan1="$REVIEW_WORKSPACE_DIR/scan.first"
+  scan2="$REVIEW_WORKSPACE_DIR/scan.second"
+  review_workspace__scan_view "$scan1" || {
     review_workspace__say '第一次源视图扫描失败；模型不会启动'
     review_workspace_cleanup >/dev/null 2>&1 || true
     return 78
   }
-  tree2="$(review_workspace__scan_tree "$index2" "$head")" || {
+  index_tree1="$REVIEW_SCAN_INDEX_TREE"
+  tree1="$REVIEW_SCAN_WORKTREE_TREE"
+  source_index1="$REVIEW_SCAN_SOURCE_INDEX"
+  review_workspace__scan_view "$scan2" || {
     review_workspace__say '第二次源视图扫描失败；模型不会启动'
     review_workspace_cleanup >/dev/null 2>&1 || true
     return 78
   }
-  rm -f -- "$index1" "$index1.lock" "$index2" "$index2.lock"
+  index_tree2="$REVIEW_SCAN_INDEX_TREE"
+  tree2="$REVIEW_SCAN_WORKTREE_TREE"
+  source_index2="$REVIEW_SCAN_SOURCE_INDEX"
+  rm -f -- "$source_index1" "$source_index1.lock" \
+    "$scan1.work" "$scan1.work.lock" "$scan1.entries" \
+    "$scan2.work" "$scan2.work.lock" "$scan2.entries"
 
-  [[ "$tree1" == "$tree2" ]] || {
-    review_workspace__say "复制窗口内源视图发生变化($tree1 != $tree2)，拒绝派发"
+  [[ "$index_tree1" == "$index_tree2" && "$tree1" == "$tree2" ]] || {
+    review_workspace__say "复制窗口内源 index/worktree 发生变化($index_tree1/$tree1 != $index_tree2/$tree2)，拒绝派发"
     review_workspace_cleanup >/dev/null 2>&1 || true
     return 78
   }
@@ -129,16 +183,18 @@ review_workspace_prepare() { # source-repo leg-name
     review_workspace_cleanup >/dev/null 2>&1 || true
     return 78
   }
-  tree_entries="$(git --git-dir="$REVIEW_WORK_REPO/.git" ls-tree -r "$tree1")" || {
-    review_workspace__say '读取 snapshot tree 失败；拒绝派发'
-    review_workspace_cleanup >/dev/null 2>&1 || true
-    return 78
-  }
-  if awk '$1 == "160000" { found=1 } END { exit(found ? 0 : 1) }' <<< "$tree_entries"; then
-    review_workspace__say '源视图包含 gitlink/submodule；首版隔离语义未定义，拒绝派发'
-    review_workspace_cleanup >/dev/null 2>&1 || true
-    return 78
-  fi
+  for tree_to_check in "$index_tree2" "$tree2"; do
+    tree_entries="$(git --git-dir="$REVIEW_WORK_REPO/.git" ls-tree -r "$tree_to_check")" || {
+      review_workspace__say '读取 snapshot tree 失败；拒绝派发'
+      review_workspace_cleanup >/dev/null 2>&1 || true
+      return 78
+    }
+    if awk '$1 == "160000" { found=1 } END { exit(found ? 0 : 1) }' <<< "$tree_entries"; then
+      review_workspace__say '源视图包含 gitlink/submodule；首版隔离语义未定义，拒绝派发'
+      review_workspace_cleanup >/dev/null 2>&1 || true
+      return 78
+    fi
+  done
 
   snapshot_commit="$(printf 'aiwork review snapshot\n' | \
     GIT_AUTHOR_NAME=aiwork GIT_AUTHOR_EMAIL=review@localhost \
@@ -153,15 +209,21 @@ review_workspace_prepare() { # source-repo leg-name
     review_workspace_cleanup >/dev/null 2>&1 || true
     return 78
   }
-  git -C "$REVIEW_WORK_REPO" reset --mixed --quiet "$head" || {
+  git -C "$REVIEW_WORK_REPO" reset --soft --quiet "$head" || {
     review_workspace__say '把 clone HEAD 恢复到源 HEAD 失败'
+    review_workspace_cleanup >/dev/null 2>&1 || true
+    return 78
+  }
+  mv -f -- "$source_index2" "$REVIEW_WORK_REPO/.git/index" || {
+    review_workspace__say '安装源 index 快照失败；拒绝派发'
     review_workspace_cleanup >/dev/null 2>&1 || true
     return 78
   }
 
   REVIEW_SNAPSHOT_TREE="$tree1"
+  REVIEW_SNAPSHOT_INDEX_TREE="$index_tree1"
   export REVIEW_SOURCE_REPO REVIEW_WORKSPACE_BASE_REAL REVIEW_WORKSPACE_DIR
-  export REVIEW_WORK_REPO REVIEW_SNAPSHOT_TREE
+  export REVIEW_WORK_REPO REVIEW_SNAPSHOT_TREE REVIEW_SNAPSHOT_INDEX_TREE
   return 0
 }
 
@@ -207,5 +269,6 @@ review_workspace_cleanup() {
   REVIEW_WORKSPACE_DIR=""
   REVIEW_WORK_REPO=""
   REVIEW_SNAPSHOT_TREE=""
+  REVIEW_SNAPSHOT_INDEX_TREE=""
   return 0
 }

@@ -24,11 +24,11 @@ Runs all reviewers in parallel on TASK_FILE:
 Args:
   TASK_FILE    markdown task/review brief (required)
   REPO_DIR     repo to review (default: $PWD)
-  LOG_PREFIX   log path prefix (default: /root/aiwork/logs/panel-<taskname>-<ts>)
+  LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
 
 Options / env:
   (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
-                             convention file /root/aiwork/tasks/<taskname>-my-review.md
+                             convention file <tool-root>/tasks/<taskname>-my-review.md
                              (taskname = TASK_FILE basename) and REFUSES to dispatch
                              if it is absent - so forgetting to write your own review
                              stops the panel instead of silently skipping the gate.
@@ -65,6 +65,7 @@ set -- "${POSARGS[@]}"
 if [[ $# -lt 1 || $# -gt 3 ]]; then usage; exit 2; fi
 
 BIN="$(dirname "$0")"
+TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
 TASK_FILE="$1"
 REPO_DIR="${2:-$PWD}"
 
@@ -76,7 +77,7 @@ REPO_DIR="${2:-$PWD}"
 # the task name. Then require it to exist and to live outside the repo. This flips
 # the anti-anchoring discipline from "remember to arm it" to "forgetting stops you".
 if [[ $NO_MY_REVIEW -eq 0 && -z "$MY_REVIEW" ]]; then
-  MY_REVIEW="/root/aiwork/tasks/$(basename "${TASK_FILE%.*}")-my-review.md"
+  MY_REVIEW="$TOOL_ROOT/tasks/$(basename "${TASK_FILE%.*}")-my-review.md"
 fi
 if [[ $NO_MY_REVIEW -eq 0 ]]; then
   if [[ ! -f "$MY_REVIEW" ]]; then
@@ -97,7 +98,7 @@ if [[ $NO_MY_REVIEW -eq 0 ]]; then
         echo "panel-review: my-review file is INSIDE the repo under review: $MRV" >&2
         echo "  the engine inlines untracked repo files into reviewer prompts and would leak it" >&2
         echo "  (a symlink physically in the repo counts too). Move it outside," >&2
-        echo "  e.g. /root/aiwork/tasks/<name>-my-review.md" >&2
+        echo "  e.g. $TOOL_ROOT/tasks/<name>-my-review.md" >&2
         exit 1 ;;
     esac
   done
@@ -105,7 +106,7 @@ fi
 
 TS="$(date +%Y%m%d-%H%M%S)"
 TASKNAME="$(basename "${TASK_FILE%.*}")"
-LOG_PREFIX="${3:-/root/aiwork/logs/panel-${TASKNAME}-${TS}}"
+LOG_PREFIX="${3:-$TOOL_ROOT/logs/panel-${TASKNAME}-${TS}}"
 mkdir -p "$(dirname "$LOG_PREFIX")"
 
 # GLM leg selection.

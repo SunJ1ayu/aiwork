@@ -393,12 +393,16 @@ cfg = {"$schema": "https://opencode.ai/config.json",
                          # 没有它,这条腿在 opencode 上就只剩挂钟超时兜着 = 上限丢了。
                          "steps": int(steps),
                          "tools": tools, "permission": perm}}}
-json.dump(cfg, open(cfgpath, "w"), indent=2)
+tmpath = cfgpath + ".tmp." + str(os.getpid())
+with open(tmpath, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+os.replace(tmpath, cfgpath)
 PYOC
   chmod 600 "$OC_HOME/.config/opencode/opencode.json"   # 配置里含 key
   (
     cd "$REPO_DIR"
-    HOME="$OC_HOME" "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" opencode run \
+    AIWORK_CALLER_HOME="${AIWORK_CALLER_HOME:-$HOME}" \
+      HOME="$OC_HOME" "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" opencode run \
       --dir "$REPO_DIR" --agent "$OC_AGENT" -m "$OC_PROVIDER/$OC_MODEL_ID" "$PROMPT"
   ) < /dev/null 2>"$ERR_FILE" | sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' >> "$LOG_FILE" || RC=$?
   # ↑ **`< /dev/null` 不是可有可无的整洁**:opencode 在 stdin 是一个还开着的管道时
