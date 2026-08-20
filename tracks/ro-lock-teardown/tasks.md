@@ -42,12 +42,12 @@
 - [x] S4a 逐条调整 V35/V36 等旧语义，不按编号/差值批量删除
 - [x] S4b 保留 `ro-repo-exec` unit coverage 与 V37/V38/V41
 - [x] S4c `tests/test-review-tooling.sh` 全量绿，最终收据在最后一次编辑之后
-- [ ] S4d 三条 agent wrapper 各真跑一次 review，确认有裁决且原仓未变
+- [x] S4d MiMo/DeepSeek/GLM 各真跑当前代码 review，均有 PASS 裁决且原仓未变
 
 ## S5 收口
 
 - [x] S5a 主 agent 自审先落仓外 `/root/ro-lock-teardown-review-my-review.md`，不进入腿的快照
-- [ ] S5b `panel-review` full 四腿，花名册原样落 verify
-- [ ] S5c 仲裁 → 必要返工 → 最后一次全量回归/收据
+- [x] S5b 最终三腿 panel + 业主批准的 Kimi 配额豁免，花名册原样落 verify
+- [x] S5c 仲裁 → 两个 LOW 红检/返工 → 最后一次全量回归/收据
 - [x] S5d verify 填真实 verdict、接受偏差和资源边界
 - [ ] S5e 归档

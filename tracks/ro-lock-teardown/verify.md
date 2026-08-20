@@ -1,7 +1,7 @@
 # Verify: ro-lock-teardown
 
 - Date: 2026-08-20
-- Verdict: NEEDS_MORE_INFO
+- Verdict: PASS
 
 ## Mechanical checks
 
@@ -26,6 +26,7 @@ runlog: base-inside-source-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:45
 runlog: base-inside-source-green rc=0 commit=883b938 dirty=yes at=2026-08-20T04:46:35Z file=tracks/ro-lock-teardown/evidence/20260820T044635Z-01-base-inside-source-green.txt
 runlog: final-three-leg-green rc=0 commit=9ef17bc dirty=yes at=2026-08-20T04:48:44Z file=tracks/ro-lock-teardown/evidence/20260820T044844Z-01-final-three-leg-green.txt
 runlog: final-low-findings-red rc=1 commit=123a360 dirty=yes at=2026-08-20T05:20:14Z file=tracks/ro-lock-teardown/evidence/20260820T052014Z-01-final-low-findings-red.txt
+runlog: final-closure-green rc=0 commit=8254dd5 dirty=yes at=2026-08-20T05:25:19Z file=tracks/ro-lock-teardown/evidence/20260820T052519Z-01-final-closure-green.txt
 ```
 
 Red-run attribution:
@@ -48,6 +49,8 @@ Red-run attribution:
   reviewer-budget inputs; review-tooling is `426/0` and the expanded review-workspace suite is `24/0`.
 - `final-low-findings-red`: two assertions derived from DeepSeek's final LOW findings fail (`425/2`):
   MiMo's child cwd is still the caller directory, and Kimi seed sync uses a fixed atomic temp name.
+- `final-closure-green`: those two findings are repaired; all 12 suites pass under the same contaminated
+  environment, with review-tooling `427/0` and review-workspace `24/0`.
 - The earlier final receipt deliberately injects `ZHIPU_MAX_TURNS=80` and
   `DEEPSEEK_MAX_TURNS=25`; all 12 suites still pass, including review-tooling `426/0` and
   review-workspace `23/0`.
@@ -68,18 +71,28 @@ Red-run attribution:
 submimo=PASS subdeepseek=PASS(降级:回落聊天腿,只看得见 diff) subglm=PASS(降级:回落聊天腿,只看得见 diff) subkimi=FAIL(rc=1)
 ```
 
+- final current-code panel roster from `123a360` (verbatim):
+
+```text
+submimo=PASS subdeepseek=PASS subglm=PASS subkimi=off
+```
+
 Independent agent reruns and arbitration:
 
-- MiMo: `Conclusion: PASS`; no code finding in its completed review.
-- DeepSeek agent: `Conclusion: PASS`; found a Medium relative `core.excludesFile` resolution bug and
-  a Low inherited-timeout oracle leak. Both were independently reproduced and fixed. It also confirmed
-  unmerged-index fail-closed behavior and both full local suites.
-- GLM agent: `Conclusion: PASS` on `aa9bc49`; independently confirmed relative excludes handling,
-  linked worktrees, unmerged index rejection, `426/0`, and `23/0`. Its Low inherited-max-turn oracle
-  leak and stale “mixed reset” task text were fixed in `559a4b6` and revalidated under polluted env.
+- MiMo: `Conclusion: PASS` on the final panel; independently ran review-workspace `24/0` and
+  review-tooling `426/0`, then found no unresolved code issue.
+- DeepSeek agent: `Conclusion: PASS` on the final panel; independently checked staged/index fidelity,
+  relative excludes, linked worktrees, unmerged-index fail-closed behavior, and all wrapper boundaries.
+  Its two final LOW findings (MiMo child cwd and Kimi fixed temp name) were made red, repaired, and covered
+  by `final-closure-green` (`427/0`, `24/0`).
+- GLM agent: `Conclusion: PASS` on the final panel; independently ran both suites and the 12-suite entry,
+  plus linked-worktree, unmerged-index, alternates, and concurrent-config probes. It reported no
+  WARNING/BLOCK finding.
 - Kimi: device authorization now succeeds in the actual isolated review HOME, and the model began
   reading the final repository. It then returned `403 You've reached your usage limit for this billing
-  cycle` before producing a verdict. Repeating the call cannot add review evidence until quota refreshes.
+  cycle` before producing a verdict. On 2026-08-20 the owner explicitly approved closing with
+  MiMo/DeepSeek/GLM rather than waiting four days for quota refresh. The roster records Kimi as `off`,
+  never as PASS.
 
 Findings disposition:
 
@@ -89,16 +102,19 @@ Findings disposition:
 - Fixed: V8/V14/V21 default-value fixtures now clear inherited reviewer timeout/max-turn inputs.
 - Fixed: default-Kimi fixtures clear an inherited `PANEL_KIMI_LEG`, OpenCode config parsing clears the
   reviewer's XDG/config overrides, and an in-source workspace base is rejected before any directory write.
+- Fixed: MiMo review launches with its real cwd inside the disposable clone; Kimi seed config rewriting
+  uses a per-process temporary name before atomic replace.
 - No unresolved correctness or source-write finding remains from MiMo, DeepSeek, or GLM.
 
-Arbitrated verdict: **NEEDS_MORE_INFO**. The implementation and mechanical evidence are green, and the
-three completed independent reviews are PASS after their findings were repaired. However, the selected
-full lane requires all four review legs. Kimi produced no verdict because the account quota is exhausted,
-so this track remains active and must not be archived as PASS. Once quota refreshes, rerun the full panel
-from the then-current HEAD, arbitrate any Kimi finding, and replace this verdict with the actual result.
+Arbitrated verdict: **PASS**. The final three completed independent reviews are PASS; every actionable
+finding was repaired through a failing oracle and a post-fix 12-suite receipt. Kimi supplied no verdict
+and is not counted as PASS; its absence is the owner's explicit quota waiver. The main agent accepts that
+review-coverage deviation and finds no remaining correctness, source-write, or fail-open issue.
 
 ## Accepted deviations
 
+- Full-lane policy normally uses four model legs. This close uses MiMo/DeepSeek/GLM plus main arbitration;
+  Kimi is explicitly waived by the owner because its billing-cycle quota needs four days to refresh.
 - The double scan detects drift across two complete reads but is not an atomic source freeze.
 - Bash inside a disposable clone is not a host/network sandbox; same-uid/root adversaries can discover
   sibling temporary paths, and ignored dependency caches may be absent. These are documented non-goals.

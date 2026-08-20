@@ -124,7 +124,7 @@ except OSError:
 s2 = re.sub(r'(command\s*=\s*"node )[^"]*/hooks/guard\.mjs"',
             lambda m: m.group(1) + home + '/hooks/guard.mjs"', s)
 if s2 != s:
-    tmp = p + ".tmp"
+    tmp = p + ".tmp." + str(os.getpid())
     with open(tmp, "w") as fh:
         fh.write(s2)
     os.replace(tmp, p)      # 原子改名:别让并发的另一条腿读到半截 config

@@ -299,7 +299,10 @@ run_mimo_once() {
     # -k 30:TERM 后 30 秒仍活着就 KILL(node 底座曾在启动阶段挂死,TERM 可能被吞)
     # </dev/null:mimo 是交互优先 CLI,stdin 若是"开着但无数据"的管道会等输入 →
     # 挂死或启动后静默退出(2026-07-02 实测复现+对照确认);显式关死 stdin 免疫之。
-    ${RO_EXEC[@]+"${RO_EXEC[@]}"} timeout -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
+    (
+      [[ "$MODE" != "review" ]] || cd "$REPO_DIR" || exit 78
+      ${RO_EXEC[@]+"${RO_EXEC[@]}"} timeout -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
+    )
   } 2>&1 | tee -a "$LOG_FILE"
 }
 
