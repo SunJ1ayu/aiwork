@@ -49,5 +49,5 @@
 - [x] S5a 主 agent 自审先落仓外 `/root/ro-lock-teardown-review-my-review.md`，不进入腿的快照
 - [ ] S5b `panel-review` full 四腿，花名册原样落 verify
 - [ ] S5c 仲裁 → 必要返工 → 最后一次全量回归/收据
-- [ ] S5d verify 填真实 verdict、接受偏差和资源边界
+- [x] S5d verify 填真实 verdict、接受偏差和资源边界
 - [ ] S5e 归档
