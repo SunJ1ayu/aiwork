@@ -9,4 +9,4 @@
 - [x] 切换 `subagent` 与 `subchat` 默认值，保留 override
 - [x] 跑全量工具回归与真实 `subglm-agent` 5.3 冒烟
 - [x] 主 agent 自审与主裁
-- [ ] 归档
+- [x] 归档
