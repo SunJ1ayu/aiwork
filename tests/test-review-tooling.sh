@@ -1270,7 +1270,7 @@ print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", 
 PYEOF
   chmod +x "$ab/claude"
   turns() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];print(a[a.index('--max-turns')+1])" "$1"; }
-  env PATH="$ab:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY=dk     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d/repo" >/dev/null 2>&1
+  env -u DEEPSEEK_MAX_TURNS PATH="$ab:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY=dk     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d/repo" >/dev/null 2>&1
   [[ "$(turns "$d/ds1.json")" -ge 80 ]]
   check "V14: subdeepseek-agent 默认轮次上限 ≥80(40 撞墙实事故)" $?
   env PATH="$ab:$PATH" CAPTURE="$d/ds2.json" DEEPSEEK_API_KEY=dk DEEPSEEK_MAX_TURNS=25     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds2.log" "$d/repo" >/dev/null 2>&1
@@ -1737,7 +1737,7 @@ CAPEOF
   # 预算顺手翻倍"立的;换底座把上限弄丢,是同一种病的新形态。
   oc_stub "$ab"
   local zochome="$d/ochome21"
-  env PATH="$ab:$PATH" OPENCODE_REVIEW_HOME="$zochome" ZHIPU_API_KEY=zk \
+  env -u ZHIPU_MAX_TURNS PATH="$ab:$PATH" OPENCODE_REVIEW_HOME="$zochome" ZHIPU_API_KEY=zk \
     bash "$ab/subglm-agent" review "$d/t.md" "$d/z.log" "$d/repo" >/dev/null 2>&1
   local zcfg="$zochome/.config/opencode/opencode.json"
   if [[ -f "$zcfg" ]]; then
@@ -1747,7 +1747,7 @@ CAPEOF
     bad "V21: zhipu 默认轮次上限仍是历史值 40(换底座不许把上限弄丢)"
     echo "    (没生成 opencode 配置 ⇒ 这条是在测空气)"
   fi
-  env PATH="$ab:$PATH" CAPTURE="$d/s.json" DEEPSEEK_API_KEY=dk \
+  env -u DEEPSEEK_MAX_TURNS PATH="$ab:$PATH" CAPTURE="$d/s.json" DEEPSEEK_API_KEY=dk \
     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/s.log" "$d/repo" >/dev/null 2>&1
   # deepseek 的上限是**凭测量**定的:08-03 实测一个只看单文件的琐碎任务就用掉 56 轮
   # (log: scratchpad/smoke.log),而它 07-21 撞过 40、08-03 撞过 80。翻倍法到此为止。
