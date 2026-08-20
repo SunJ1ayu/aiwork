@@ -51,7 +51,7 @@ r1_writes_a_receipt() {
   [[ "$(basename "$f")" == *hello* ]]; check "R1: 文件名带 slug" $?
   grep -q "你好" "$f"; check "R1: stdout 进了收据" $?
   grep -q "到 stderr 去" "$f"; check "R1: stderr 也进了收据(合并捕获)" $?
-  grep -q "你好" <<<"$out"; check "R1: 输出同时还流到终端(不是闷头吞掉)" $?
+  grep -q "你好" <<<"$out"; check "R1: 安全扫描后输出仍回显到终端" $?
 
   local sha; sha="$(cd "$d" && git rev-parse --short=7 HEAD)"
   grep -qE "^runlog: hello rc=0 commit=$sha dirty=no at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z file=tracks/t/evidence/.+\.txt$" "$f"

@@ -10,7 +10,7 @@
 #
 # 它做四件事:
 #   1. 在**跑之前**记下 commit 和工作树脏不脏(顺序不能反 —— 收据文件本身会弄脏工作树);
-#   2. 跑命令,输出同时流到终端和收据文件(stdout/stderr 合并);
+#   2. 跑命令,输出先在仓外缓冲；扫描安全后再回显并写入收据(stdout/stderr 合并);
 #   3. 收据落进 tracks/<track>/evidence/<UTC时间戳>-<序号>-<slug>.txt,
 #      文件名字典序 = 时间序(track-guard 规矩5b 取「最后一份」靠这个);
 #   4. 末行打印一行**收据行**,粘进 verify.md。守卫会逐字节比对。
@@ -162,28 +162,21 @@ fi
 # 顺手粘错一行就是一次莫名其妙的 5a 挡下(四审 subdeepseek L7)。
 printf '[runlog] 跑 %s @%s dirty=%s → %s\n' "$CMDSTR" "$COMMIT" "$DIRTY" "$RELFILE" >&2
 
-RCF="$(mktemp)"; OUTFILE=""
-if [ "$FINAL" -eq 1 ]; then
-  OUTFILE="$(mktemp)"; chmod 600 "$OUTFILE"
-  trap 'rm -f "${OUTFILE:-}"' EXIT HUP INT TERM
-  ( cd "$REPO" && "$@" ) > "$OUTFILE" 2>&1
-  RC="$?"
+OUTFILE="$(mktemp)"; chmod 600 "$OUTFILE"
+trap 'rm -f "${OUTFILE:-}"' EXIT HUP INT TERM
+( cd "$REPO" && "$@" ) > "$OUTFILE" 2>&1
+RC="$?"
 
-  # final 的输出先在仓外缓冲；确认安全后才同时回显、写入可提交 receipt。
-  if has_secret_shape < "$OUTFILE"; then
-    rm -f "$FILE" "$OUTFILE" "$RCF"
-    printf 'runlog: 命令输出疑似包含秘密；已抑制原文并拒绝形成收据，请先脱敏\n' >&2
-    exit 65
-  fi
-  tee -a "$FILE" < "$OUTFILE"
-  rm -f "$OUTFILE"; OUTFILE=""
-  trap - EXIT HUP INT TERM
-else
-  ( cd "$REPO" && "$@" 2>&1; printf '%s' "$?" > "$RCF" ) | tee -a "$FILE"
-  RC="$(cat "$RCF" 2>/dev/null)"
-  [ -n "$RC" ] || RC=127
+# 所有 receipt 都可能进 Git，所以 final / non-final 不能有两套秘密边界。
+# 确认安全前也不回显：否则虽然删了 receipt，秘密仍已经泄到终端日志。
+if has_secret_shape < "$OUTFILE"; then
+  rm -f "$FILE" "$OUTFILE"
+  printf 'runlog: 命令输出疑似包含秘密；已抑制原文并拒绝形成收据，请先脱敏\n' >&2
+  exit 65
 fi
-rm -f "$RCF"
+tee -a "$FILE" < "$OUTFILE"
+rm -f "$OUTFILE"; OUTFILE=""
+trap - EXIT HUP INT TERM
 
 COMMAND_RC="$RC"
 FINAL_FIELD=""; SOURCE_STABLE=""

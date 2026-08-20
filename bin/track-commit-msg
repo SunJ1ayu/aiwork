@@ -89,15 +89,17 @@ commit_needs_track() {  # commit_needs_track <commit>
     is_judging_surface "$f" && return 0
     case "$f" in
       *package.json)
-        git show --format= --unified=0 "$commit" -- "$f" 2>/dev/null \
+        git diff-tree --root --first-parent -m -p --format= "$commit" -- "$f" 2>/dev/null \
           | grep -qE '^\+.*"version"[[:space:]]*:' && return 0
         ;;
       *)
-        git show --format= --unified=0 "$commit" -- "$f" 2>/dev/null \
+        git diff-tree --root --first-parent -m -p --format= "$commit" -- "$f" 2>/dev/null \
           | grep -qE '^\+[[:space:]]*VERSION[[:space:]]*=[[:space:]]*["'"'"']' && return 0
         ;;
     esac
-  done < <(git diff-tree --root --no-commit-id --name-only -r "$commit" 2>/dev/null)
+  # merge diff 默认被 git diff-tree 压掉。历史审计看主线引入了什么，
+  # 所以显式与第一父提交比；否则 --no-verify 的 merge 会整块隐形。
+  done < <(git diff-tree --root --first-parent -m --no-commit-id --name-only -r "$commit" 2>/dev/null)
   return 1
 }
 

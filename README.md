@@ -70,7 +70,8 @@ agent to verify, never a verdict to adopt.
 - `bin/runlog` — makes the MACHINE write down what it ran: receipt files under
   `tracks/<track>/evidence/` plus one line to paste into verify.md. `--final`
   binds the same run (no extra execution) to full HEAD + before/after source-view
-  hashes and refuses secret-shaped argv/output before it can become a receipt.
+  hashes; every mode refuses secret-shaped argv/output before it can become a receipt
+  or be replayed to the terminal.
 - `bin/track-guard` — pre-commit guard for the track conventions.
 - `bin/track archive` also SWEEPS the worktrees of the track being archived, but only
   those that are provably redundant: working tree clean AND their HEAD already an

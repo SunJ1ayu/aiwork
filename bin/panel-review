@@ -501,7 +501,9 @@ done
 
 verdict_of() {  # verdict_of <log>; PASS/BLOCK/NEEDS_MORE_INFO/UNKNOWN
   local found
-  found="$(grep -Eio '(Conclusion|Verdict|结论)[[:space:]]*[：:][[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)' "$1" 2>/dev/null \
+  # 只认独立裁决行。提示词和推理日志都可能原样出现
+  # "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"，子串匹配会把没交卷误记成 PASS。
+  found="$(grep -Eio '^[[:space:]]*(Conclusion|Verdict|结论)[[:space:]]*[：:][[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)[[:space:]]*$' "$1" 2>/dev/null \
     | tail -n 1 | grep -Eio '(PASS|BLOCK|NEEDS_MORE_INFO)$' || true)"
   [[ -n "$found" ]] && printf '%s\n' "${found^^}" || printf 'UNKNOWN\n'
 }
@@ -562,6 +564,8 @@ record_health() {  # record_health <leg>
     status="FAIL"
     if grep -Eqi 'quota|额度|rate.?limit|too many requests|429|balance|billing' "$err" "$log" 2>/dev/null; then status="quota"; fi
     if grep -Eqi 'unauthori[sz]ed|forbidden|invalid.*key|auth|401|403' "$err" "$log" 2>/dev/null; then status="auth"; fi
+  elif [[ "$(verdict_of "$log")" == "UNKNOWN" ]]; then
+    status="INCOMPLETE"
   elif [[ -e "${log%.log}.agent.log" || -e "${log%.log}.agent.log.err" ]]; then
     status="DEGRADED"
   fi
@@ -677,8 +681,10 @@ echo "  roster -> $ROSTER_FILE(各腿状态一行,粘进 verify.md,别再手写)
 
 echo "  read all logs above, then arbitrate."
 
-# Non-zero only if every dispatched reviewer failed (no evidence). self=0 is a
-# deliberate no-external-review mode and therefore succeeds without a process.
+# Non-zero only if every dispatched reviewer process failed. A standalone verdict
+# remains a separate evidence property in roster/health: process success lets the
+# main agent inspect a partial report, but never turns UNKNOWN into a verdict.
+# self=0 is a deliberate no-external-review mode and succeeds without a process.
 if [[ "$REVIEW_BUDGET" -eq 0 ]]; then exit 0; fi
 _evidence=0
 for _leg in "${LEGS[@]}"; do

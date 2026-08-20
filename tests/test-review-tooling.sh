@@ -3972,7 +3972,7 @@ EOF
     PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
     STUB_MIMO_VERDICT='PASS | BLOCK | NEEDS_MORE_INFO' \
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/I2" >/dev/null 2>&1; rc=$?
-  check "V43: rc=0 但无有效裁决不算证据" $([[ $rc -ne 0 ]]; echo $?)
+  check "V43: 进程 rc=0 仍可供主审读局部报告" $([[ $rc -eq 0 ]]; echo $?)
   grep -q $'^submimo\tINCOMPLETE\t' "$state/health.tsv"
   check "V43: 无有效裁决的腿进入 incomplete 冷却" $?
 
