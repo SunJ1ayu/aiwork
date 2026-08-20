@@ -26,6 +26,7 @@ SUITES=(
   "no-egress|bash|/root/aiwork/tests/test-no-egress.sh"
   "evidence-lifetime|bash|/root/aiwork/tests/test-evidence-lifetime.sh"
   "review-workspace|bash|/root/aiwork/tests/test-review-workspace.sh"
+  "workflow-docs|bash|/root/aiwork/tests/test-workflow-docs.sh"
 )
 
 # ── 名单漏网报告(2026-08-06)────────────────────────────────────────────
