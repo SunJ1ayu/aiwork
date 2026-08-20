@@ -6,7 +6,7 @@
 # 这个形状:我写「python 866/0」,听起来完美,实际上回归用的解释器没装 mcp,
 # 一整块闸被整块 SKIP,汇总照印 OK。**汇总会撒谎,细节不会。**
 #
-#   runlog -t <track> [-n <slug>] [--repo <dir>] -- <命令...>
+#   runlog [--final] -t <track> [-n <slug>] [--repo <dir>] -- <命令...>
 #
 # 它做四件事:
 #   1. 在**跑之前**记下 commit 和工作树脏不脏(顺序不能反 —— 收据文件本身会弄脏工作树);
@@ -23,9 +23,39 @@ set -uo pipefail
 
 die() { printf 'runlog: %s\n' "$*" >&2; exit 64; }
 
-TRACK=""; SLUG=""; REPO=""
+has_secret_shape() {
+  LC_ALL=C grep -aEq \
+    'sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+}
+
+source_view() {  # source_view <本次 receipt 的仓内路径>; tracked + non-ignored untracked
+  local receipt_rel="$1" rel path kind mode digest
+  {
+    git -C "$REPO" ls-files -co --exclude-standard -z \
+      | LC_ALL=C sort -z \
+      | while IFS= read -r -d '' rel; do
+          [ "$rel" = "$receipt_rel" ] && continue
+          path="$REPO/$rel"
+          if [ -L "$path" ]; then
+            kind=symlink; mode="$(stat -c '%A' -- "$path" 2>/dev/null || echo missing)"
+            digest="$(readlink -- "$path" 2>/dev/null | sha256sum | awk '{print $1}')"
+          elif [ -f "$path" ]; then
+            kind=file; mode="$(stat -c '%A' -- "$path" 2>/dev/null || echo missing)"
+            digest="$(sha256sum < "$path" | awk '{print $1}')"
+          elif [ -d "$path" ]; then
+            kind=directory; mode="$(stat -c '%A' -- "$path" 2>/dev/null || echo missing)"; digest=-
+          else
+            kind=missing; mode=-; digest=-
+          fi
+          printf '%s\0%s\0%s\0%s\0' "$rel" "$kind" "$mode" "$digest"
+        done
+  } | sha256sum | awk '{print $1}'
+}
+
+TRACK=""; SLUG=""; REPO=""; FINAL=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --final)     FINAL=1; shift ;;
     -t|--track) TRACK="${2:-}"; shift 2 || die "-t 后面要跟 track 名" ;;
     -n|--name)  SLUG="${2:-}";  shift 2 || die "-n 后面要跟 slug" ;;
     --repo)     REPO="${2:-}";  shift 2 || die "--repo 后面要跟目录" ;;
@@ -54,6 +84,14 @@ fi
 REL="tracks/$TRACK"
 [ -d "$REPO/$REL" ] || REL="tracks/archive/$TRACK"
 [ -d "$REPO/$REL" ] || die "找不到 track:$REPO/tracks/$TRACK(也不在 archive/ 里)"
+
+# argv 会原样进入 cmd 字段。先扫、后运行、后写文件；命中时不回显原文。
+for ARG in "$@"; do
+  if printf '%s' "$ARG" | has_secret_shape; then
+    die "命令参数疑似包含秘密，已在执行和写收据前拒绝；请改用脱敏参数"
+  fi
+done
+unset ARG
 
 # slug 默认取命令的第一个词,清干净只留 [A-Za-z0-9._-]
 if [ -z "$SLUG" ]; then
@@ -88,6 +126,12 @@ RELFILE="$REL/evidence/$(basename "$FILE")"
 
 CMDSTR="$(printf '%q ' "$@")"; CMDSTR="${CMDSTR% }"
 
+HEAD_BEFORE=""; SOURCE_BEFORE=""
+if [ "$FINAL" -eq 1 ]; then
+  HEAD_BEFORE="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo nocommit)"
+  SOURCE_BEFORE="$(source_view "$RELFILE")"
+fi
+
 {
   printf '# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)\n'
   printf 'slug:    %s\n' "$SLUG"
@@ -95,6 +139,10 @@ CMDSTR="$(printf '%q ' "$@")"; CMDSTR="${CMDSTR% }"
   printf 'cwd:     %s(仓根)\n' "$REPO"
   printf 'commit:  %s\n' "$COMMIT"
   printf 'dirty:   %s(跑之前采的;含未跟踪文件)\n' "$DIRTY"
+  if [ "$FINAL" -eq 1 ]; then
+    printf 'head-before: %s\n' "$HEAD_BEFORE"
+    printf 'source-view-before: sha256:%s\n' "$SOURCE_BEFORE"
+  fi
   printf 'started: %s\n' "$AT"
   printf -- '---------------- 输出开始 ----------------\n'
 } > "$FILE"
@@ -103,13 +151,50 @@ CMDSTR="$(printf '%q ' "$@")"; CMDSTR="${CMDSTR% }"
 # 顺手粘错一行就是一次莫名其妙的 5a 挡下(四审 subdeepseek L7)。
 printf '[runlog] 跑 %s @%s dirty=%s → %s\n' "$CMDSTR" "$COMMIT" "$DIRTY" "$RELFILE" >&2
 
-RCF="$(mktemp)"
-( cd "$REPO" && "$@" 2>&1; printf '%s' "$?" > "$RCF" ) | tee -a "$FILE"
-RC="$(cat "$RCF" 2>/dev/null)"; rm -f "$RCF"
-[ -n "$RC" ] || RC=127
+RCF="$(mktemp)"; OUTFILE=""
+if [ "$FINAL" -eq 1 ]; then
+  OUTFILE="$(mktemp)"; chmod 600 "$OUTFILE"
+  trap 'rm -f "${OUTFILE:-}"' EXIT HUP INT TERM
+  ( cd "$REPO" && "$@" ) > "$OUTFILE" 2>&1
+  RC="$?"
 
-LINE="runlog: $SLUG rc=$RC commit=$COMMIT dirty=$DIRTY at=$AT file=$RELFILE"
+  # final 的输出先在仓外缓冲；确认安全后才同时回显、写入可提交 receipt。
+  if has_secret_shape < "$OUTFILE"; then
+    rm -f "$FILE" "$OUTFILE" "$RCF"
+    printf 'runlog: 命令输出疑似包含秘密；已抑制原文并拒绝形成收据，请先脱敏\n' >&2
+    exit 65
+  fi
+  tee -a "$FILE" < "$OUTFILE"
+  rm -f "$OUTFILE"; OUTFILE=""
+  trap - EXIT HUP INT TERM
+else
+  ( cd "$REPO" && "$@" 2>&1; printf '%s' "$?" > "$RCF" ) | tee -a "$FILE"
+  RC="$(cat "$RCF" 2>/dev/null)"
+  [ -n "$RC" ] || RC=127
+fi
+rm -f "$RCF"
+
+COMMAND_RC="$RC"
+FINAL_FIELD=""; SOURCE_STABLE=""
+if [ "$FINAL" -eq 1 ]; then
+  HEAD_AFTER="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo nocommit)"
+  SOURCE_AFTER="$(source_view "$RELFILE")"
+  SOURCE_STABLE=yes
+  if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ] || [ "$SOURCE_BEFORE" != "$SOURCE_AFTER" ]; then
+    SOURCE_STABLE=no
+    [ "$RC" -ne 0 ] || RC=65
+  fi
+  FINAL_FIELD=" final=yes"
+fi
+
+LINE="runlog: $SLUG rc=$RC commit=$COMMIT dirty=$DIRTY${FINAL_FIELD} at=$AT file=$RELFILE"
 {
+  if [ "$FINAL" -eq 1 ]; then
+    printf 'command-rc: %s\n' "$COMMAND_RC"
+    printf 'head-after: %s\n' "$HEAD_AFTER"
+    printf 'source-view-after:  sha256:%s\n' "$SOURCE_AFTER"
+    printf 'source-stable: %s\n' "$SOURCE_STABLE"
+  fi
   printf -- '---------------- 输出结束 ----------------\n'
   printf '%s\n' "$LINE"
 } >> "$FILE"
