@@ -3956,6 +3956,26 @@ EOF
   count="$(wc -l < "$d/calls" | tr -d ' ')"
   check "V43: --all 显式保留四审路径" $([[ $count -eq 4 ]]; echo $?)
 
+  # ⑦ 提示词里的格式示例不是裁决；没有独立裁决行就没有有效证据。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_MIMO_VERDICT='PASS | BLOCK | NEEDS_MORE_INFO' \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/I1" >/dev/null 2>&1
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: 格式示例不冒充裁决，触发 incomplete 第三审" $([[ $count -eq 3 ]]; echo $?)
+  grep -q 'submimo=PASS(verdict=UNKNOWN)' "$d/I1.roster"
+  check "V43: roster 如实记录无独立裁决行" $?
+
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=standard PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_MIMO_VERDICT='PASS | BLOCK | NEEDS_MORE_INFO' \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/I2" >/dev/null 2>&1; rc=$?
+  check "V43: rc=0 但无有效裁决不算证据" $([[ $rc -ne 0 ]]; echo $?)
+  grep -q $'^submimo\tINCOMPLETE\t' "$state/health.tsv"
+  check "V43: 无有效裁决的腿进入 incomplete 冷却" $?
+
   rm -rf "$d"
 }
 

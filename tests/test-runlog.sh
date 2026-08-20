@@ -271,6 +271,16 @@ r9_secret_shapes_never_become_receipts() {
   if grep -qF "$secret" <<< "$out"; then bad "R9: 终端输出也不回显秘密原文"
   else ok "R9: 终端输出也不回显秘密原文"; fi
 
+  : > "$marker"
+  out="$(cd "$d" && RUNLOG_TEST_SECRET="$secret" RUNLOG_TEST_MARKER="$marker" \
+      "$RUNLOG" -t t -n non-final-output-secret -- \
+      bash -c 'printf called >> "$RUNLOG_TEST_MARKER"; printf "api_key=%s\\n" "$RUNLOG_TEST_SECRET"' 2>&1)"; rc=$?
+  check "R9: 非 final 输出扫描也在原命令执行后发生" $([[ -s "$marker" ]]; echo $?)
+  check "R9: 非 final 输出命中秘密形状 ⇒ 非零" $([[ $rc -ne 0 ]]; echo $?)
+  check "R9: 非 final 也不留含秘密的 receipt" $([[ -z "$(receipt_of "$d")" ]]; echo $?)
+  if grep -qF "$secret" <<< "$out"; then bad "R9: 非 final 终端也不回显秘密原文"
+  else ok "R9: 非 final 终端也不回显秘密原文"; fi
+
   ( cd "$d" && "$RUNLOG" --final -t t -n benign -- \
       bash -c 'echo "token budget=200"' ) >/dev/null 2>&1; rc=$?
   check "R9: 普通 token 用词不误杀" $([[ $rc -eq 0 ]]; echo $?)

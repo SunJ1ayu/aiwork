@@ -105,11 +105,31 @@ g5_history_audit_catches_bypass() {
   rm -rf "$d"
 }
 
+g6_history_audit_catches_bypass_merge() {
+  echo '[G6] 历史审计不能跳过 merge commit'
+  local d rc
+  d="$(newrepo)"
+  git -C "$d" switch -qc feature
+  printf '# feature\n' >> "$d/bin/ro-repo-exec"
+  git -C "$d" add bin/ro-repo-exec
+  git -C "$d" commit -qm 'feature changes judging surface'
+  git -C "$d" switch -q main
+  printf 'main\n' >> "$d/README.md"
+  git -C "$d" add README.md
+  git -C "$d" commit -qm 'main moves too'
+  git -C "$d" merge -q --no-ff feature -m 'bypassed merge guard'
+
+  (cd "$d" && bash "$LINK" --audit 'HEAD^!' >/dev/null 2>&1); rc=$?
+  check 'G6: 无 trailer 的关键 merge commit ⇒ 审计红' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
 echo '=== track-link oracle ==='
 g1_ro_repo_exec_is_protected
 g2_commit_message_binds_exact_track
 g3_recent_verify_is_not_a_global_pass
 g4_unrelated_commit_is_quiet
 g5_history_audit_catches_bypass
+g6_history_audit_catches_bypass_merge
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
