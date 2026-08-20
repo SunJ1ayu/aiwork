@@ -40,11 +40,12 @@
 1. 在仓外 `mktemp -d` 创建 workspace；
 2. `git clone --shared --no-checkout` 建独立 refs/index/config，objects 只读借用原仓；
 3. checkout 派发时的明确 HEAD；
-4. 在副本 Git dir 里用临时 index 对原仓 work tree 做 `read-tree HEAD` + `add -A -- :/`，
-   得到包含 tracked dirty/deleted + untracked non-ignored 的 snapshot tree；连续做两遍，tree id
-   不同就说明复制窗口里源视图变了，拒绝派发；
-5. 为 snapshot tree 建临时 commit，副本 `reset --hard` 到它以物化文件，再 `reset --mixed`
-   回原 HEAD；这样文件内容是派发快照，HEAD/历史仍是原仓，所有变化继续作为 diff/untracked 可见；
+4. 把源 index 条目导入 clone-owned 临时 index，再复制一份对源 worktree 做 `add -A -- :/`；
+   前者保留 staged 内容，后者得到 tracked dirty/deleted + untracked non-ignored 的 worktree tree；
+   连续做两遍，任一 tree id 不同就说明复制窗口里源视图变了，拒绝派发；
+5. 为 worktree tree 建临时 commit并 `reset --hard` 物化文件，再把 HEAD 软复位到原 HEAD、安装
+   第二遍捕获的 source-index；这样 clone 的 HEAD/index/worktree 分别对应原仓三层，staged-only
+   不会被工作树内容覆盖；
 6. 腿在副本 cwd 运行；外层 `ro-repo-exec` 挂的是**原仓及其 common dir**，副本不挂只读；
 7. wrapper 退出时清理副本。清理失败只告警，不把一份已完成裁决改判为失败。
 
@@ -60,11 +61,11 @@
 - clone 有自己的 `.git`，腿在副本 commit/tag 不会改主仓 refs；
 - `--shared` 只通过 alternates 读原仓 objects，不复制对象库；原仓挂成只读后 push/repack 也写不回去；
 - 临时 index 的 `git add -A` 只含 tracked + untracked non-ignored，能评当前源码，又不会复制 1GB
-  运行产物；由 Git 自己处理删除、symlink、文件模式和特殊路径，不重写一份脆弱的路径复制器；
-- 覆盖到 clone 的 index 仍保持 HEAD，所以 staged/unstaged 最终都表现为相对 HEAD 的可见差异。
-  本单承诺**文件内容视图**，不承诺保留 staged 位本身；最终内容全部显示为相对原 HEAD 的
-  working-tree diff/untracked。若未来证明评审依赖 staged/unstaged 分类，再单独设计 index 复制；
-  首版不复制可能含 split-index/fsmonitor 扩展的二进制 index 冒充“精确”。
+  运行产物；clone 还快照源 `.git/info/exclude` 与有效 `core.excludesFile`，避免在 clone 语境把
+  源仓已忽略的运行物误收进来；
+- 不复制可能含 split-index/fsmonitor 扩展的二进制 index；改为用 `ls-files --stage -z` 把条目
+  导入 clone-owned index。这样保留 staged 内容和 staged/unstaged 分类，同时 Git 自己处理删除、
+  symlink、文件模式和特殊路径；unmerged index 无法 `write-tree` 时响亮拒跑。
 
 已知边界:首版遇到 gitlink/submodule 明确拒跑，不复制一个指回主仓 `.git/modules` 的半隔离现场。
 
@@ -104,16 +105,19 @@
 - workspace 路径只写进运行日志作诊断，不进入归档工件作承重证据。
 - `origin` 在物化后删除、`gc.auto=0`；对象读取仍经 alternates 指向只读原仓，refs/index/config
   全在副本。评审窗口内主 agent 不对原仓跑 prune/gc。
+- workspace 根的 0700 只挡其他 uid；四腿同 uid。wrapper 不互传路径，足以防正常并发串味，
+  但有动机的同 uid/root 腿可扫描其他临时目录，属于“不防强敌”边界。
 
 ## 6. Test strategy (oracle，主 agent 所有)
 
 ### O1 视图完整
 
-临时仓构造 committed、tracked modified、staged、deleted、untracked、ignored 六类文件。副本必须:
+临时仓构造 committed、tracked modified、staged+unstaged、staged-only、deleted、untracked，以及
+`.gitignore` / `.git/info/exclude` / `core.excludesFile` 三路 ignored。副本必须:
 
 - HEAD 与源一致；
-- 前五类最终内容/缺失状态一致；
-- ignored 不出现；
+- worktree 内容/缺失状态一致，clone index 仍能读到 staged-only 内容；
+- 三路 ignored 都不出现；
 - `.git` 是副本自己的目录，不是指向源仓的 gitfile/common dir。
 
 ### O2 写入边界

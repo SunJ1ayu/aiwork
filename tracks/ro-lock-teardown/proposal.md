@@ -10,7 +10,8 @@
 1. 每条 agent 评审腿各拿一份可丢弃的 review workspace，能运行本地判据、编译和诊断；
 2. workspace 必须包含当前 HEAD 上的 tracked 内容、工作树修改、删除和未忽略的 untracked 文件；
 3. 原仓工作树与 Git common dir 对腿仍物理只读，腿的副作用只能落在自己的副本；
-4. 四腿并行时互相看不见对方的临时写入，主 agent 仍只接收文本裁决，不接收副本里的改动。
+4. 四腿并行时 wrapper 不共享路径或内容，正常运行不会串入对方的临时写入；主 agent 仍只接收
+   文本裁决，不接收副本里的改动。
 
 这不是“保留原锁不动”:锁不再焊住腿的工作现场。它只保护原仓，腿实际工作的副本是可写的。
 
@@ -33,8 +34,10 @@
 
 - **能力落在副本**:评审腿运行本地命令造成的写必须成功，但只在自己的 workspace 成功。
 - **原仓不承受副作用**:包括工作树、`.git`、linked-worktree common dir、ignored 文件。
-- **评审视图不丢内容**:tracked 修改/删除、staged 内容和未忽略的 untracked 文件都要进入副本。
-- **四腿不串味**:每腿独立副本，A 的临时写不能被 B 读到。
+- **评审视图不丢内容**:tracked 修改/删除、staged 内容和未忽略的 untracked 文件都要进入副本；
+  clone 的 index/worktree 分别保留源 index/worktree，不能用工作树覆盖掉 staged-only 内容。
+- **四腿不串味**:每腿独立副本，wrapper 不向 B 暴露 A 的路径或内容；同 uid 的有动机进程仍可
+  主动扫描临时目录，这一单不把 Unix uid 边界伪装成强敌隔离。
 - **失败响亮**:副本建不出来或原仓保护挂不上就拒跑，不回退到直接在原仓执行。
 - **不伪装成强敌沙箱**:本单防误伤和仓内提示注入导致的原仓污染；不声称能约束有动机的 root 对手。
 
@@ -60,7 +63,8 @@
 
 ## Success criteria
 
-- agent 腿看到的文件内容等价于派发瞬间的原仓源码视图(HEAD + tracked dirty + untracked non-ignored)
+- agent 腿看到的 index/worktree 等价于派发瞬间的原仓源码视图
+  (HEAD + staged + tracked dirty + untracked non-ignored)
 - 腿能在副本创建文件并运行会写生成物的本地判据
 - 同一次命令写原仓绝对路径失败，原仓前后内容与 Git 状态不变
 - 四条并行腿拿到四个不同路径，任一腿写入后其他腿不可见

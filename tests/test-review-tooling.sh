@@ -956,7 +956,7 @@ v11_panel_gates() {
 # ---------------------------------------------------------------- V12
 v12_gate_default_on() {
   echo "[V12] panel-review my-review gate is DEFAULT-ON (opt-out), auto-arms on convention path"
-  local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
+  local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo" "$d/tasks"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
   for leg in submimo subdeepseek subglm; do
@@ -965,7 +965,7 @@ v12_gate_default_on() {
   ( cd "$d/repo"; git init -q )
   # task file basename drives the convention path the tool looks for
   local t="$d/mytask.md"; printf '# t\n' > "$t"
-  local conv="/root/aiwork/tasks/mytask-my-review.md"
+  local conv="$d/tasks/mytask-my-review.md"
 
   # no flag + no convention file present -> REFUSE (forgetting = tool stops you)
   rm -f "$conv"
@@ -996,13 +996,14 @@ v13_subkimi_leg() {
   fixture_git_repo "$d/repo"
 
   # --- the SHIPPED guard, invoked directly: default-deny semantics
-  local guard="/root/aiwork/kimi-review-home/hooks/guard.mjs"
+  local tool_root; tool_root="$(cd "$BIN/.." && pwd -P)"
+  local guard="$tool_root/kimi-review-home/hooks/guard.mjs"
 
   # 2026-08-19:**守卫本体必须在版本控制里**。发现时它整个目录被 gitignore 挡着,
   # 从来没进过库 ⇒ 这道判卷防线被改了**不留痕**,闸③(亲读 diff)也照不到它。
   # 判据能测出它"行为对不对",测不出"它昨天是不是别的样子" —— 那要靠 git。
   # (凭证/oauth/sessions 仍然一律不入库,gitignore 里是精确放行两个 hooks 文件。)
-  git -C /root/aiwork ls-files --error-unmatch \
+  git -C "$tool_root" ls-files --error-unmatch \
       kimi-review-home/hooks/guard.mjs >/dev/null 2>&1
   check "guard: 守卫本体在版本控制里(判卷防线改了必须留痕)" $?
   if [[ -f "$guard" ]]; then
@@ -2121,7 +2122,7 @@ PYEOF2
   check "V26: deepseek 聊天腿端点没被顺手改" $?
 
   # ── ④ 机上真 key 落位:文件在、只有属主读得了、是合法 JSON 且 key 非空
-  local authf="$HOME/.config/opencode-go/auth.json"
+  local authf="${AIWORK_CALLER_HOME:-$HOME}/.config/opencode-go/auth.json"
   if [[ -f "$authf" ]]; then
     ok "V26: OpenCode Go key 文件就位($authf)"
     [[ "$(stat -c '%a' "$authf")" == "600" ]]
@@ -2196,7 +2197,8 @@ PYUA
   #    这里故意**不写出那把真 key**(判据自己会变成泄漏点),只查形状。
   #    不给任何文件开豁免 —— 判据自己是最可能被粘进真 key 的那个文件,而这条正则
   #    实测不会匹配到它自身(方括号不在字符集里)。豁免白给,却正好豁免掉高危文件。
-  local repo="/root/aiwork" hits grc
+  local repo; repo="$(cd "$BIN/.." && pwd -P)"
+  local hits grc
   hits="$(git -C "$repo" grep -nIE 'sk-[A-Za-z0-9_-]{40,}' -- .)"; grc=$?
   # git grep: 0=有命中 1=无命中 其它=它自己坏了。坏了必须红,不许静默报绿
   #(本机记过账:闸在自己跑不起来的时候报绿,比不装这道闸更坏)。
@@ -2503,6 +2505,17 @@ PYARGV
   else bad "V28: key 不经 argv 传给写配置那步(ps 看得见)"; echo "    (找不到那段 argv ⇒ 判据自己坏了,不许当绿)"; fi
   grep -q "umask 077" "$BIN/subagent"
   check "V28: 写配置前设 umask 077(创建即 600,没有 644 窗口)" $?
+  # 两条 OpenCode 腿可能共享同一个 review HOME。配置必须经每进程唯一的临时文件
+  # 原子替换；固定 .tmp 虽避免半截 JSON，仍会让并发 writer 互相抢走临时文件。
+  python3 - "$BIN/subagent" <<'PYATOMOC'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+direct = re.search(r'json\.dump\([^)]*open\(', src)
+atomic = 'os.replace(' in src
+per_process = 'os.getpid()' in src
+sys.exit(0 if (atomic and per_process and not direct) else 1)
+PYATOMOC
+  check "V28: OpenCode 配置经每进程唯一 tmp + os.replace 原子落盘" $?
 
   # ── ⑨ **stdin 必须接到 /dev/null**。2026-08-18 真事故:opencode 在 stdin 是
   #    一个还开着的管道时会**一直等输入**——在 runlog(经 tee 管道)下这条腿挂死了
@@ -2825,9 +2838,10 @@ import re, sys
 src = open(sys.argv[1]).read()
 direct = re.search(r'json\.dump\([^)]*open\(', src)
 atomic = 'os.replace(' in src
-sys.exit(0 if (atomic and not direct) else 1)
+per_process = 'os.getpid()' in src
+sys.exit(0 if (atomic and per_process and not direct) else 1)
 PYATOM
-  check "V33: 配置走 tmp + os.replace 原子落盘(并发下不许露出半截 JSON)" $?
+  check "V33: 配置走每进程唯一 tmp + os.replace 原子落盘" $?
 
   rm -rf "$d"
 }
@@ -3458,6 +3472,8 @@ RECORD
   #    ro-repo-exec 一次都没被调到 —— 断言照样红,但**红在我的夹具上**,
   #    而"红了就当抓到 bug"正是改考卷的第一步。2026-08-19 第一版就是这样。
   cp -a "$BIN/../kimi-review-home/." "$kihome/" 2>/dev/null || true
+  mkdir -p "$kihome/credentials"
+  printf '{}\n' > "$kihome/credentials/kimi-code.json"
 
   rm -f "$d/argv1.txt"
   env PATH="$b:$PATH" RO_ARGV_OUT="$d/argv1.txt" CAPTURE="$d/c1.json" \

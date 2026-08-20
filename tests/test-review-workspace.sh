@@ -21,6 +21,7 @@ new_repo() { # new_repo PATH
   printf 'committed\n' > "$repo/committed.txt"
   printf 'old-modified\n' > "$repo/modified.txt"
   printf 'old-staged\n' > "$repo/staged.txt"
+  printf 'old-staged-only\n' > "$repo/staged-only.txt"
   printf 'delete-me\n' > "$repo/deleted.txt"
   printf 'ignored.cache\n' > "$repo/.gitignore"
   mkdir -p "$repo/nested"
@@ -32,9 +33,17 @@ new_repo() { # new_repo PATH
   printf 'staged-version\n' > "$repo/staged.txt"
   git -C "$repo" add staged.txt
   printf 'working-version\n' >> "$repo/staged.txt"
+  printf 'staged-only-version\n' > "$repo/staged-only.txt"
+  git -C "$repo" add staged-only.txt
+  git -C "$repo" show HEAD:staged-only.txt > "$repo/staged-only.txt"
   rm "$repo/deleted.txt"
   printf 'untracked\n' > "$repo/untracked.txt"
   printf 'must-not-copy\n' > "$repo/ignored.cache"
+  printf 'info-only.cache\n' >> "$(git -C "$repo" rev-parse --path-format=absolute --git-path info/exclude)"
+  printf 'must-not-copy\n' > "$repo/info-only.cache"
+  printf 'global-only.cache\n' > "$repo/../source-global-excludes"
+  git -C "$repo" config core.excludesFile "$repo/../source-global-excludes"
+  printf 'must-not-copy\n' > "$repo/global-only.cache"
 }
 
 test_snapshot_view() {
@@ -57,9 +66,13 @@ test_snapshot_view() {
   cmp -s "$repo/committed.txt" "$clone/committed.txt" \
     && cmp -s "$repo/modified.txt" "$clone/modified.txt" \
     && cmp -s "$repo/staged.txt" "$clone/staged.txt" \
+    && cmp -s "$repo/staged-only.txt" "$clone/staged-only.txt" \
+    && [[ "$(git -C "$clone" show :staged-only.txt 2>/dev/null)" == staged-only-version ]] \
+    && [[ "$(git -C "$clone" diff --cached --name-only -- staged-only.txt)" == staged-only.txt ]] \
     && cmp -s "$repo/untracked.txt" "$clone/untracked.txt" \
-    && [[ ! -e "$clone/deleted.txt" && ! -e "$clone/ignored.cache" ]]
-  check 'RW1: committed/modified/staged-final/deleted/untracked match; ignored is absent' $?
+    && [[ ! -e "$clone/deleted.txt" && ! -e "$clone/ignored.cache" \
+       && ! -e "$clone/info-only.cache" && ! -e "$clone/global-only.cache" ]]
+  check 'RW1: worktree plus staged-only index match; all source ignore channels stay absent' $?
   [[ -d "$clone/.git" && ! -f "$clone/.git" ]]
   check 'RW1: clone owns a real, independent .git directory' $?
   [[ -n "${REVIEW_SNAPSHOT_TREE:-}" \
@@ -169,7 +182,7 @@ if [[ " $* " == *" write-tree "* ]]; then
   out="$("$REAL_GIT" "$@")"; rc=$?
   n=0; [[ -f "$RACE_COUNT" ]] && read -r n < "$RACE_COUNT"
   n=$((n+1)); printf '%s\n' "$n" > "$RACE_COUNT"
-  [[ $n -eq 1 ]] && printf 'changed-between-scans\n' >> "$RACE_SOURCE/modified.txt"
+  [[ $n -eq 2 ]] && printf 'changed-between-scans\n' >> "$RACE_SOURCE/modified.txt"
   printf '%s\n' "$out"; exit "$rc"
 fi
 exec "$REAL_GIT" "$@"
@@ -214,10 +227,11 @@ test_gitlink_fails_closed() {
 }
 
 test_wrapper_helper_failure() {
-  echo '[RW6] wrapper does not invoke a model when workspace preparation fails'
-  local d b repo rc
+  echo '[RW6] no wrapper invokes a model when workspace preparation fails'
+  local d b repo rc mimo_rc deepseek_rc glm_rc kimi_rc
   d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
-  cp "$BIN/submimo" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$b/"
+  cp "$BIN/submimo" "$BIN/subagent" "$BIN/subdeepseek-agent" "$BIN/subglm-agent" \
+     "$BIN/subkimi" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
 review_workspace_prepare() { return 78; }
 review_workspace_repo() { return 78; }
@@ -230,17 +244,62 @@ exec "$@"
 RO_STUB
   cat > "$b/mimo" <<'MODEL_STUB'
 #!/usr/bin/env bash
-printf called > "$MODEL_COUNT"
+printf mimo > "$MODEL_COUNT"
 echo 'Conclusion: PASS'
 MODEL_STUB
-  chmod +x "$b/ro-repo-exec" "$b/mimo"
+  cat > "$b/claude" <<'MODEL_STUB'
+#!/usr/bin/env bash
+printf claude > "$MODEL_COUNT"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Conclusion: PASS"}]}}'
+MODEL_STUB
+  cat > "$b/opencode" <<'MODEL_STUB'
+#!/usr/bin/env bash
+printf opencode > "$MODEL_COUNT"
+echo 'Conclusion: PASS'
+MODEL_STUB
+  cat > "$b/kimi" <<'MODEL_STUB'
+#!/usr/bin/env bash
+printf kimi > "$MODEL_COUNT"
+echo 'Conclusion: PASS'
+MODEL_STUB
+  cat > "$b/node" <<'MODEL_STUB'
+#!/usr/bin/env bash
+exit 2
+MODEL_STUB
+  chmod +x "$b/ro-repo-exec" "$b/mimo" "$b/claude" "$b/opencode" "$b/kimi" "$b/node"
   printf '# review\n' > "$d/task.md"
+
   env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
     MIMO_REVIEW_HOME="$d/mimo-home" \
     bash "$b/submimo" review "$d/task.md" "$d/out.log" "$repo" >/dev/null 2>&1
-  rc=$?
-  [[ $rc -ne 0 && ! -e "$d/model-called" ]]
-  check 'RW6: helper failure returns nonzero and model call count stays zero' $?
+  mimo_rc=$?
+  [[ $mimo_rc -ne 0 && ! -e "$d/model-called" ]]
+  check 'RW6: submimo helper failure is nonzero with zero model calls' $?
+
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+    DEEPSEEK_API_KEY=test \
+    bash "$b/subdeepseek-agent" review "$d/task.md" "$d/deepseek.log" "$repo" >/dev/null 2>&1
+  deepseek_rc=$?
+  [[ $deepseek_rc -ne 0 && ! -e "$d/model-called" ]]
+  check 'RW6: Claude-base helper failure is nonzero with zero model calls' $?
+
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+    ZHIPU_API_KEY=test OPENCODE_REVIEW_HOME="$d/opencode-home" \
+    bash "$b/subglm-agent" review "$d/task.md" "$d/glm.log" "$repo" >/dev/null 2>&1
+  glm_rc=$?
+  [[ $glm_rc -ne 0 && ! -e "$d/model-called" ]]
+  check 'RW6: OpenCode-base helper failure is nonzero with zero model calls' $?
+
+  mkdir -p "$d/kimi-home/hooks" "$d/kimi-home/credentials"
+  printf '[hooks]\n' > "$d/kimi-home/config.toml"
+  printf 'guard\n' > "$d/kimi-home/hooks/guard.mjs"
+  printf '{}\n' > "$d/kimi-home/credentials/kimi-code.json"
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+    KIMI_REVIEW_HOME="$d/kimi-home" \
+    bash "$b/subkimi" review "$d/task.md" "$d/kimi.log" "$repo" >/dev/null 2>&1
+  kimi_rc=$?
+  [[ $kimi_rc -ne 0 && ! -e "$d/model-called" ]]
+  check 'RW6: Kimi helper failure is nonzero with zero model calls' $?
   rm -rf "$d"
 }
 
