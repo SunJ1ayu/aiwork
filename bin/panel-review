@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# panel-review - run the review employees in parallel on one task, then let the
-# main agent (the frontier model driving the session) arbitrate.
+# panel-review - select healthy review employees for one task, run them in
+# parallel, then let the main agent (the frontier model) arbitrate.
 #   submimo (MiMo) + subdeepseek (DeepSeek) + subglm (Zhipu GLM) [+ subkimi (Moonshot)]
 #
 # Each reviewer writes its own log; this script does NOT decide anything - it just
@@ -13,10 +13,14 @@ usage() {
 Usage:
   panel-review TASK_FILE [REPO_DIR] [LOG_PREFIX]
 
-Runs all reviewers in parallel on TASK_FILE:
+Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
+Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO or conflict adds
+one healthy spare. `--all` explicitly requests every available reviewer.
+
+Reviewer pool:
   submimo review  -> <LOG_PREFIX>.submimo.log
   subdeepseek review -> <LOG_PREFIX>.subdeepseek.log
-  subglm review   -> <LOG_PREFIX>.subglm.log   (默认**聊天腿**,后端 OpenCode Go;
+  subglm review   -> <LOG_PREFIX>.subglm.log   (默认 agent 腿,后端 OpenCode Go;
                                                  PANEL_GLM_LEG=agent 切底座腿 / off 关掉)
   subkimi review  -> <LOG_PREFIX>.subkimi.log   (4th leg, only if installed;
                                                  PANEL_KIMI_LEG=off disables)
@@ -27,6 +31,12 @@ Args:
   LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
 
 Options / env:
+  --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
+  --budget N                 explicit initial budget, 0..4
+  --all                      explicit all-available review (special high risk)
+  PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
+  PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
+  PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
   (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
                              convention file <tool-root>/tasks/<taskname>-my-review.md
                              (taskname = TASK_FILE basename) and REFUSES to dispatch
@@ -49,6 +59,9 @@ EOF
 
 MY_REVIEW=""
 NO_MY_REVIEW=0
+IMPACT_RISK="${PANEL_IMPACT_RISK:-high}"
+REVIEW_BUDGET="${PANEL_REVIEW_BUDGET:-}"
+ALL_REVIEWERS=0
 POSARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,11 +71,35 @@ while [[ $# -gt 0 ]]; do
       [[ -n "$MY_REVIEW" ]] || { echo "panel-review: --require-my-review needs a path" >&2; exit 2; }
       shift 2 ;;
     --no-my-review) NO_MY_REVIEW=1; shift ;;
+    --risk)
+      IMPACT_RISK="${2:-}"
+      [[ -n "$IMPACT_RISK" ]] || { echo "panel-review: --risk needs self|standard|high" >&2; exit 2; }
+      shift 2 ;;
+    --budget)
+      REVIEW_BUDGET="${2:-}"
+      [[ -n "$REVIEW_BUDGET" ]] || { echo "panel-review: --budget needs 0..4" >&2; exit 2; }
+      shift 2 ;;
+    --all) ALL_REVIEWERS=1; shift ;;
     *) POSARGS+=("$1"); shift ;;
   esac
 done
 set -- "${POSARGS[@]}"
 if [[ $# -lt 1 || $# -gt 3 ]]; then usage; exit 2; fi
+
+case "$IMPACT_RISK" in
+  self) RISK_BUDGET=0 ;;
+  standard) RISK_BUDGET=1 ;;
+  high) RISK_BUDGET=2 ;;
+  *) echo "panel-review: invalid --risk '$IMPACT_RISK' (need self|standard|high)" >&2; exit 2 ;;
+esac
+[[ -n "$REVIEW_BUDGET" ]] || REVIEW_BUDGET="$RISK_BUDGET"
+[[ "$REVIEW_BUDGET" =~ ^[0-4]$ ]] || {
+  echo "panel-review: invalid review budget '$REVIEW_BUDGET' (need 0..4)" >&2; exit 2; }
+if [[ "$ALL_REVIEWERS" -eq 1 ]]; then REVIEW_BUDGET=4; fi
+# budget=4 is the explicit compatibility/high-risk path: retry every available
+# leg even when a previous round cooled it down. Explicit off still wins.
+FORCE_ALL=0
+[[ "$REVIEW_BUDGET" -eq 4 ]] && FORCE_ALL=1
 
 BIN="$(dirname "$0")"
 TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
@@ -145,10 +182,19 @@ fi
 # (subdeepseek -> DeepSeek official chat API), which goes
 # blind on an empty diff. Mirrors the GLM leg above.
 DEEPSEEK_LEG="${PANEL_DEEPSEEK_LEG:-agent}"
-if [[ "$DEEPSEEK_LEG" == "agent" && -x "$BIN/subdeepseek-agent" ]]; then
+if [[ "$DEEPSEEK_LEG" == "off" ]]; then
+  DEEPSEEK_CMD=""
+elif [[ "$DEEPSEEK_LEG" == "agent" && -x "$BIN/subdeepseek-agent" ]]; then
   DEEPSEEK_CMD="$BIN/subdeepseek-agent"
 else
   DEEPSEEK_CMD="$BIN/subdeepseek"
+fi
+
+# MiMo has one agent implementation; expose the same explicit off switch as the
+# other providers so a known-empty quota is configuration, not a wasted timeout.
+MIMO_CMD=""
+if [[ "${PANEL_MIMO_LEG:-agent}" != "off" && -x "$BIN/submimo" ]]; then
+  MIMO_CMD="$BIN/submimo"
 fi
 
 # Kimi leg (4th reviewer, Moonshot kimi-code agent base): auto-enabled when
@@ -167,6 +213,84 @@ SUBMIMO_ERR="${SUBMIMO_LOG}.err"
 SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
 SUBGLM_ERR="${SUBGLM_LOG}.err"
 SUBKIMI_ERR="${SUBKIMI_LOG}.err"
+
+# ── 健康池 + 轮换选择 ────────────────────────────────────────────────────
+# 不额外发探活请求；只吃显式状态和最近一次真实评审结果。未知视为可尝试。
+PANEL_STATE_DIR="${PANEL_STATE_DIR:-$TOOL_ROOT/logs/.panel-state}"
+HEALTH_FILE="$PANEL_STATE_DIR/health.tsv"
+CURSOR_FILE="$PANEL_STATE_DIR/cursor"
+HEALTH_COOLDOWN="${PANEL_HEALTH_COOLDOWN_SEC:-21600}"
+mkdir -p "$PANEL_STATE_DIR"
+
+LEGS=(submimo subdeepseek subglm subkimi)
+declare -A LEG_CMD LEG_LOG LEG_ERR LEG_AVAILABLE LEG_HEALTH LEG_SELECTED LEG_RC
+LEG_CMD[submimo]="$MIMO_CMD";             LEG_LOG[submimo]="$SUBMIMO_LOG";         LEG_ERR[submimo]="$SUBMIMO_ERR"
+LEG_CMD[subdeepseek]="$DEEPSEEK_CMD";     LEG_LOG[subdeepseek]="$SUBDEEPSEEK_LOG"; LEG_ERR[subdeepseek]="$SUBDEEPSEEK_ERR"
+LEG_CMD[subglm]="$GLM_CMD";               LEG_LOG[subglm]="$SUBGLM_LOG";           LEG_ERR[subglm]="$SUBGLM_ERR"
+LEG_CMD[subkimi]="$KIMI_CMD";             LEG_LOG[subkimi]="$SUBKIMI_LOG";         LEG_ERR[subkimi]="$SUBKIMI_ERR"
+
+override_health() {  # override_health <leg>; prints explicit status or nothing
+  local leg="$1" pair key value
+  IFS=',' read -r -a _pairs <<< "${PANEL_HEALTH_OVERRIDE:-}"
+  for pair in "${_pairs[@]}"; do
+    key="${pair%%=*}"; value="${pair#*=}"
+    [[ "$key" == "$leg" && "$pair" == *=* ]] && { printf '%s\n' "$value"; return 0; }
+  done
+  return 1
+}
+
+recent_health() {  # recent_health <leg>; prints status if still cooling down
+  local leg="$1" row status at now
+  [[ -f "$HEALTH_FILE" ]] || return 1
+  row="$(awk -F '\t' -v n="$leg" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
+  [[ -n "$row" ]] || return 1
+  IFS=$'\t' read -r _ status at <<< "$row"
+  case "$status" in PASS|healthy) return 1 ;; esac
+  [[ "$at" =~ ^[0-9]+$ && "$HEALTH_COOLDOWN" =~ ^[0-9]+$ ]] || return 1
+  now="$(date +%s)"
+  (( now - at < HEALTH_COOLDOWN )) || return 1
+  printf '%s\n' "$status"
+}
+
+for _leg in "${LEGS[@]}"; do
+  LEG_SELECTED[$_leg]=0
+  if [[ -z "${LEG_CMD[$_leg]}" || ! -x "${LEG_CMD[$_leg]}" ]]; then
+    LEG_AVAILABLE[$_leg]=0; LEG_HEALTH[$_leg]="off"
+    continue
+  fi
+  LEG_AVAILABLE[$_leg]=1; LEG_HEALTH[$_leg]="healthy"
+  _health="$(override_health "$_leg" 2>/dev/null || true)"
+  if [[ -n "$_health" ]]; then
+    case "${_health,,}" in healthy|pass|up|ok) : ;; *) LEG_HEALTH[$_leg]="$_health" ;; esac
+  elif [[ "$FORCE_ALL" -ne 1 ]]; then
+    _health="$(recent_health "$_leg" 2>/dev/null || true)"
+    [[ -n "$_health" ]] && LEG_HEALTH[$_leg]="cooldown:$_health"
+  fi
+done
+unset _leg _health
+
+if [[ "${PANEL_SELECTION_START:-}" =~ ^[0-9]+$ ]]; then
+  SELECT_START=$((PANEL_SELECTION_START % ${#LEGS[@]}))
+elif [[ -f "$CURSOR_FILE" ]] && read -r SELECT_START < "$CURSOR_FILE" \
+     && [[ "$SELECT_START" =~ ^[0-9]+$ ]]; then
+  SELECT_START=$((SELECT_START % ${#LEGS[@]}))
+else
+  SELECT_START=$((RANDOM % ${#LEGS[@]}))
+fi
+
+SELECTED_COUNT=0
+for ((_off=0; _off<${#LEGS[@]} && SELECTED_COUNT<REVIEW_BUDGET; _off++)); do
+  _idx=$(((SELECT_START + _off) % ${#LEGS[@]})); _leg="${LEGS[$_idx]}"
+  [[ "${LEG_AVAILABLE[$_leg]}" -eq 1 ]] || continue
+  if [[ "$FORCE_ALL" -ne 1 && "${LEG_HEALTH[$_leg]}" != "healthy" ]]; then continue; fi
+  LEG_SELECTED[$_leg]=1
+  SELECTED_COUNT=$((SELECTED_COUNT + 1))
+done
+if [[ "$FORCE_ALL" -ne 1 ]]; then
+  _cursor_tmp="$CURSOR_FILE.tmp.$$"
+  printf '%s\n' "$(((SELECT_START + 1) % ${#LEGS[@]}))" > "$_cursor_tmp" && mv -f "$_cursor_tmp" "$CURSOR_FILE"
+fi
+unset _off _idx _leg _cursor_tmp
 
 # Oracle record slot: run BEFORE dispatch so the arbiter never reads reviewer
 # verdicts without knowing whether the objective check is green. Records only -
@@ -212,16 +336,24 @@ if [[ -z "${PANEL_DIFF_BASE:-}" ]]; then
 fi
 
 echo "panel-review: task=$TASK_FILE repo=$REPO_DIR"
-echo "  submimo  -> $SUBMIMO_LOG"
-echo "  subdeepseek -> $SUBDEEPSEEK_LOG (leg: $(basename "$DEEPSEEK_CMD"))"
-echo "  subglm   -> $SUBGLM_LOG (leg: $(basename "$GLM_CMD"))"
-if [[ -n "$KIMI_CMD" ]]; then
-  echo "  subkimi  -> $SUBKIMI_LOG (leg: $(basename "$KIMI_CMD"))"
-fi
+echo "  impact-risk=$IMPACT_RISK requested-budget=$REVIEW_BUDGET selected=$SELECTED_COUNT"
+for _leg in "${LEGS[@]}"; do
+  if [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
+    echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: ${_leg#sub})"
+  elif [[ "${LEG_HEALTH[$_leg]}" == "off" ]]; then
+    echo "  $_leg = off/unavailable"
+  elif [[ "${LEG_HEALTH[$_leg]}" != "healthy" ]]; then
+    echo "  $_leg = skipped(${LEG_HEALTH[$_leg]})"
+  else
+    echo "  $_leg = skipped(rotation/budget)"
+  fi
+done
+unset _leg
 # A chat leg with nothing attached beyond the diff cannot review the oracle itself
 # ("是规格错还是实现错"就查不了)。Nudge, never block — the arbiter decides.
 if [[ -z "${PANEL_INCLUDE:-}" ]] \
-   && { [[ "$(basename "$GLM_CMD")" == "subglm" ]] || [[ "$(basename "$DEEPSEEK_CMD")" == "subdeepseek" ]]; }; then
+   && { { [[ "${LEG_SELECTED[subglm]}" -eq 1 ]] && [[ "$(basename "$GLM_CMD")" == "subglm" ]]; } \
+     || { [[ "${LEG_SELECTED[subdeepseek]}" -eq 1 ]] && [[ "$(basename "$DEEPSEEK_CMD")" == "subdeepseek" ]]; }; }; then
   echo "  HINT: chat leg in play and PANEL_INCLUDE is empty — it only sees the incremental diff."
   echo "        Pass PANEL_INCLUDE=\"tests/test_x.py tests/e2e/y.mjs\" so it can review the oracle too."
 fi
@@ -333,32 +465,115 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
 # 注意 subkimi 里那套"先写裁决、超时也不亏"的兜底**防不了这个** ——
 # 被 SIGTERM 打死时那段抢救代码根本没机会跑。兜底装在了另一种失败模式上。
 LEG=(setsid --wait)
-"${LEG[@]}" "$BIN/submimo"  review "$TASK_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" --panel-dispatch >/dev/null 2>"$SUBMIMO_ERR"  &
-PID_MIMO=$!
-stagger
-run_leg "$DEEPSEEK_CMD" "$BIN/subdeepseek" "$SUBDEEPSEEK_LOG" "$SUBDEEPSEEK_ERR" subdeepseek &
-PID_DEEPSEEK=$!
-stagger
-PID_GLM=""
-if [[ -n "$GLM_CMD" ]]; then
-  run_leg "$GLM_CMD" "$BIN/subglm" "$SUBGLM_LOG" "$SUBGLM_ERR" subglm &
-  PID_GLM=$!
-fi
-PID_KIMI=""
-if [[ -n "$KIMI_CMD" ]]; then
-  stagger
-  "${LEG[@]}" "$KIMI_CMD"   review "$TASK_FILE" "$SUBKIMI_LOG"  "$REPO_DIR" --panel-dispatch >/dev/null 2>"$SUBKIMI_ERR"  &
-  PID_KIMI=$!
-fi
+declare -A LEG_PID
+launch_leg() {  # launch_leg <name>
+  local name="$1" cmd="${LEG_CMD[$1]}" log="${LEG_LOG[$1]}" err="${LEG_ERR[$1]}"
+  case "$name" in
+    submimo|subkimi)
+      "${LEG[@]}" "$cmd" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err" &
+      ;;
+    subdeepseek)
+      run_leg "$cmd" "$BIN/subdeepseek" "$log" "$err" "$name" &
+      ;;
+    subglm)
+      run_leg "$cmd" "$BIN/subglm" "$log" "$err" "$name" &
+      ;;
+  esac
+  LEG_PID[$name]=$!
+}
 
-wait "$PID_MIMO";  RC_MIMO=$?
-wait "$PID_DEEPSEEK"; RC_DEEPSEEK=$?
-RC_GLM=0
-if [[ -n "$PID_GLM" ]]; then wait "$PID_GLM"; RC_GLM=$?; fi
-RC_KIMI=0
-if [[ -n "$PID_KIMI" ]]; then
-  wait "$PID_KIMI"; RC_KIMI=$?
+wait_leg() {  # wait_leg <name>
+  local name="$1" rc
+  wait "${LEG_PID[$name]}"; rc=$?
+  LEG_RC[$name]="$rc"
+}
+
+_launched=0
+for _leg in "${LEGS[@]}"; do
+  [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
+  [[ "$_launched" -eq 0 ]] || stagger
+  launch_leg "$_leg"
+  _launched=$((_launched + 1))
+done
+for _leg in "${LEGS[@]}"; do
+  [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] && wait_leg "$_leg"
+done
+
+verdict_of() {  # verdict_of <log>; PASS/BLOCK/NEEDS_MORE_INFO/UNKNOWN
+  local found
+  found="$(grep -Eio '(Conclusion|Verdict|结论)[[:space:]]*[：:][[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)' "$1" 2>/dev/null \
+    | tail -n 1 | grep -Eio '(PASS|BLOCK|NEEDS_MORE_INFO)$' || true)"
+  [[ -n "$found" ]] && printf '%s\n' "${found^^}" || printf 'UNKNOWN\n'
+}
+
+# Default high lane starts with two. Only evidence problems add one spare; we do
+# not turn a single provider failure into a mandatory all-four wait.
+ESCALATION_REASON="none"
+if [[ "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]; then
+  _seen_verdict=""; _has_failure=0; _has_degraded=0; _has_incomplete=0; _has_need_more=0; _has_conflict=0
+  for _leg in "${LEGS[@]}"; do
+    [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
+    if [[ "${LEG_RC[$_leg]}" -ne 0 ]]; then _has_failure=1; continue; fi
+    if [[ -e "${LEG_LOG[$_leg]%.log}.agent.log" || -e "${LEG_LOG[$_leg]%.log}.agent.log.err" ]]; then
+      _has_degraded=1
+    fi
+    _verdict="$(verdict_of "${LEG_LOG[$_leg]}")"
+    case "$_verdict" in
+      UNKNOWN) _has_incomplete=1 ;;
+      NEEDS_MORE_INFO) _has_need_more=1 ;;
+      *)
+        if [[ -n "$_seen_verdict" && "$_seen_verdict" != "$_verdict" ]]; then _has_conflict=1; fi
+        _seen_verdict="$_verdict"
+        ;;
+    esac
+  done
+  if [[ "$_has_failure" -eq 1 ]]; then ESCALATION_REASON="failure"
+  elif [[ "$_has_degraded" -eq 1 ]]; then ESCALATION_REASON="degraded"
+  elif [[ "$_has_incomplete" -eq 1 ]]; then ESCALATION_REASON="incomplete"
+  elif [[ "$_has_need_more" -eq 1 ]]; then ESCALATION_REASON="needs-more-info"
+  elif [[ "$_has_conflict" -eq 1 ]]; then ESCALATION_REASON="conflict"
+  fi
+
+  if [[ "$ESCALATION_REASON" != "none" ]]; then
+    _spare=""
+    for ((_off=0; _off<${#LEGS[@]}; _off++)); do
+      _idx=$(((SELECT_START + _off) % ${#LEGS[@]})); _leg="${LEGS[$_idx]}"
+      [[ "${LEG_SELECTED[$_leg]}" -eq 0 && "${LEG_AVAILABLE[$_leg]}" -eq 1 \
+         && "${LEG_HEALTH[$_leg]}" == "healthy" ]] || continue
+      _spare="$_leg"; break
+    done
+    if [[ -n "$_spare" ]]; then
+      echo "  escalation: $ESCALATION_REASON -> add $_spare"
+      LEG_SELECTED[$_spare]=1; SELECTED_COUNT=$((SELECTED_COUNT + 1))
+      stagger; launch_leg "$_spare"; wait_leg "$_spare"
+    else
+      ESCALATION_REASON="$ESCALATION_REASON(no-healthy-spare)"
+      echo "  escalation: $ESCALATION_REASON"
+    fi
+  fi
 fi
+unset _launched _leg _seen_verdict _has_failure _has_degraded _has_incomplete _has_need_more _has_conflict _verdict _spare _off _idx
+
+# Parent process records only actual review outcomes; no extra provider probe.
+record_health() {  # record_health <leg>
+  local name="$1" status tmp now rc="${LEG_RC[$1]}" log="${LEG_LOG[$1]}" err="${LEG_ERR[$1]}"
+  now="$(date +%s)"; status="PASS"
+  if [[ "$rc" -ne 0 ]]; then
+    status="FAIL"
+    if grep -Eqi 'quota|额度|rate.?limit|too many requests|429|balance|billing' "$err" "$log" 2>/dev/null; then status="quota"; fi
+    if grep -Eqi 'unauthori[sz]ed|forbidden|invalid.*key|auth|401|403' "$err" "$log" 2>/dev/null; then status="auth"; fi
+  elif [[ -e "${log%.log}.agent.log" || -e "${log%.log}.agent.log.err" ]]; then
+    status="DEGRADED"
+  fi
+  tmp="$HEALTH_FILE.tmp.$$"
+  { [[ -f "$HEALTH_FILE" ]] && awk -F '\t' -v n="$name" '$1!=n' "$HEALTH_FILE"
+    printf '%s\t%s\t%s\n' "$name" "$status" "$now"
+  } > "$tmp" && mv -f "$tmp" "$HEALTH_FILE"
+}
+for _leg in "${LEGS[@]}"; do
+  [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] && record_health "$_leg"
+done
+unset _leg
 
 echo
 # ── 派发期间 HEAD 动了没有 ────────────────────────────────────────────
@@ -379,63 +594,81 @@ if [[ -n "$HEAD_BEFORE" && -n "$HEAD_AFTER" && "$HEAD_BEFORE" != "$HEAD_AFTER" ]
   unset _log
 fi
 
-GLM_REPORT=" subglm rc=$RC_GLM"
-[[ -z "$GLM_CMD" ]] && GLM_REPORT=" subglm=off(是有人显式设了 PANEL_GLM_LEG=off)"
-if [[ -n "$KIMI_CMD" ]]; then
-  echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK $GLM_REPORT  subkimi rc=$RC_KIMI"
-else
-  echo "panel-review: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK $GLM_REPORT"
-fi
-# On success, drop the (empty) stderr sidecar; on failure keep it and point to it.
-if [[ $RC_MIMO -eq 0 ]]; then
-  [[ -s "$SUBMIMO_ERR" ]] || rm -f "$SUBMIMO_ERR"
-else
-  echo "  WARNING: submimo review failed (rc=$RC_MIMO); reason in $SUBMIMO_ERR, log $SUBMIMO_LOG"
-fi
-if [[ $RC_DEEPSEEK -eq 0 ]]; then
-  [[ -s "$SUBDEEPSEEK_ERR" ]] || rm -f "$SUBDEEPSEEK_ERR"
-else
-  echo "  WARNING: subdeepseek review failed (rc=$RC_DEEPSEEK); reason in $SUBDEEPSEEK_ERR, log $SUBDEEPSEEK_LOG"
-fi
-if [[ -z "$GLM_CMD" ]]; then
-  :   # 腿关着,没有 rc 可报(报了会被误读成"跑过且通过")
-elif [[ $RC_GLM -eq 0 ]]; then
-  [[ -s "$SUBGLM_ERR" ]] || rm -f "$SUBGLM_ERR"
-else
-  echo "  WARNING: subglm review failed (rc=$RC_GLM); reason in $SUBGLM_ERR, log $SUBGLM_LOG"
-fi
-if [[ -n "$KIMI_CMD" ]]; then
-  if [[ $RC_KIMI -eq 0 ]]; then
-    [[ -s "$SUBKIMI_ERR" ]] || rm -f "$SUBKIMI_ERR"
+echo -n "panel-review: done."
+for _leg in "${LEGS[@]}"; do
+  if [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
+    echo -n " $_leg rc=${LEG_RC[$_leg]}"
+  elif [[ "${LEG_HEALTH[$_leg]}" == "off" ]]; then
+    echo -n " $_leg=off"
+  elif [[ "${LEG_HEALTH[$_leg]}" != "healthy" ]]; then
+    echo -n " $_leg=skip(${LEG_HEALTH[$_leg]})"
   else
-    echo "  WARNING: subkimi review failed (rc=$RC_KIMI); reason in $SUBKIMI_ERR, log $SUBKIMI_LOG"
+    echo -n " $_leg=skip(rotation)"
   fi
-fi
+done
+echo
+# On success, drop the empty stderr sidecar; on failure keep it and point to it.
+for _leg in "${LEGS[@]}"; do
+  [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
+  if [[ "${LEG_RC[$_leg]}" -eq 0 ]]; then
+    [[ -s "${LEG_ERR[$_leg]}" ]] || rm -f "${LEG_ERR[$_leg]}"
+  else
+    echo "  WARNING: $_leg review failed (rc=${LEG_RC[$_leg]}); reason in ${LEG_ERR[$_leg]}, log ${LEG_LOG[$_leg]}"
+  fi
+done
+unset _leg
 # ── 花名册落盘 ────────────────────────────────────────────────────────
 # 2026-08-05 实事故:各腿状态只活在终端里,事后我在 verify.md 写下"三条腿一致 PASS",
 # 而 Kimi 那条腿根本没出结论(同一页第 90 行我自己还写着它没出报告)—— 同页自相矛盾。
 # 手抄一份终端上的东西,抄错的那次不会有人发现。⇒ 机器写一行,verify.md 直接粘。
 # 注意:这里的 PASS 只表示**进程 rc=0**,不表示它给了裁决;裁决永远要自己读日志。
 ROSTER_FILE="${LOG_PREFIX}.roster"
-roster_entry() {  # roster_entry <名字> <rc> <这条腿派没派> <log>
-  local name="$1" rc="$2" enabled="$3" log="$4" state
-  if [[ "$enabled" != 1 ]]; then printf '%s=off' "$name"; return; fi
-  if [[ "$rc" -eq 0 ]]; then state="PASS"; else state="FAIL(rc=$rc)"; fi
+roster_entry() {  # roster_entry <name>
+  local name="$1" rc log state verdict
+  if [[ "${LEG_SELECTED[$name]}" -ne 1 ]]; then
+    if [[ "${LEG_HEALTH[$name]}" == "off" ]]; then printf '%s=off' "$name"
+    elif [[ "${LEG_HEALTH[$name]}" == "healthy" ]]; then printf '%s=SKIP(rotation)' "$name"
+    else printf '%s=SKIP(health:%s)' "$name" "${LEG_HEALTH[$name]}"; fi
+    return
+  fi
+  rc="${LEG_RC[$name]}"; log="${LEG_LOG[$name]}"
+  if [[ "$rc" -eq 0 ]]; then
+    verdict="$(verdict_of "$log")"
+    state="PASS(verdict=$verdict)"
+  else
+    state="FAIL(rc=$rc)"
+  fi
   # 底座腿死了、聊天腿顶上来的:结论可以旅行,资格要跟着走(同 V19 的降级横幅)
   if [[ -e "${log%.log}.agent.log" || -e "${log%.log}.agent.log.err" ]]; then
-    if [[ "$rc" -eq 0 ]]; then state="PASS(降级:回落聊天腿,只看得见 diff)"
+    if [[ "$rc" -eq 0 ]]; then state="PASS(verdict=$verdict,降级:回落聊天腿,只看得见 diff)"
     else state="FAIL(rc=$rc,降级:回落聊天腿也没成)"; fi
   fi
   printf '%s=%s' "$name" "$state"
 }
+selected_identities() {
+  local name out="" family cmd
+  for name in "${LEGS[@]}"; do
+    [[ "${LEG_SELECTED[$name]}" -eq 1 ]] || continue
+    case "$name" in
+      submimo) family=xiaomi ;;
+      subdeepseek) family=deepseek ;;
+      subglm) family=zhipu ;;
+      subkimi) family=moonshot ;;
+    esac
+    cmd="$(basename "${LEG_CMD[$name]}")"
+    out+="${out:+,}$name($family/$cmd)"
+  done
+  printf '%s\n' "${out:-none}"
+}
 {
   echo "# panel-review 花名册($(date '+%F %T'))task=$TASKNAME"
   echo "# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。"
+  echo "# impact-risk=$IMPACT_RISK requested-budget=$REVIEW_BUDGET selected-count=$SELECTED_COUNT"
+  echo "# selected=$(selected_identities)"
+  echo "# escalation=$ESCALATION_REASON"
+  echo "# snapshot=head:$HEAD_BEFORE"
   echo "# 日志:${LOG_PREFIX}.*.log"
-  echo "$(roster_entry submimo     "$RC_MIMO"     1 "$SUBMIMO_LOG") \
-$(roster_entry subdeepseek "$RC_DEEPSEEK" 1 "$SUBDEEPSEEK_LOG") \
-$(roster_entry subglm      "$RC_GLM"      "$([[ -n "$GLM_CMD"  ]] && echo 1 || echo 0)" "$SUBGLM_LOG") \
-$(roster_entry subkimi     "$RC_KIMI"     "$([[ -n "$KIMI_CMD" ]] && echo 1 || echo 0)" "$SUBKIMI_LOG")"
+  echo "$(roster_entry submimo) $(roster_entry subdeepseek) $(roster_entry subglm) $(roster_entry subkimi)"
   if [[ -n "$HEAD_BEFORE" && -n "$HEAD_AFTER" && "$HEAD_BEFORE" != "$HEAD_AFTER" ]]; then
     echo "# ⚠️ 评审期间 HEAD 从 $HEAD_BEFORE 移到 $HEAD_AFTER —— 各腿未必评的同一棵树。"
   fi
@@ -444,8 +677,11 @@ echo "  roster -> $ROSTER_FILE(各腿状态一行,粘进 verify.md,别再手写)
 
 echo "  read all logs above, then arbitrate."
 
-# Non-zero only if ALL dispatched reviewers failed (panel produced no evidence).
-if [[ $RC_MIMO -ne 0 && $RC_DEEPSEEK -ne 0 && $RC_GLM -ne 0 ]]; then
-  if [[ -z "$KIMI_CMD" || $RC_KIMI -ne 0 ]]; then exit 1; fi
-fi
-exit 0
+# Non-zero only if every dispatched reviewer failed (no evidence). self=0 is a
+# deliberate no-external-review mode and therefore succeeds without a process.
+if [[ "$REVIEW_BUDGET" -eq 0 ]]; then exit 0; fi
+_evidence=0
+for _leg in "${LEGS[@]}"; do
+  [[ "${LEG_SELECTED[$_leg]}" -eq 1 && "${LEG_RC[$_leg]}" -eq 0 ]] && _evidence=$((_evidence + 1))
+done
+[[ "$_evidence" -gt 0 ]]
