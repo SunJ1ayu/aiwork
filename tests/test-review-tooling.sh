@@ -78,6 +78,18 @@ set -uo pipefail
 # 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78   # source 失败=裸跑,必须硬退
 
+# panel-review 的 oracle 和外腿都会继承调用者环境。判据若吃到它的
+# 选腿/基线/健康覆盖，测到的就不再是默认合约。只在入口重进一次，
+# 且只清理本套件会消费的面板控制变量。
+if [[ "${REVIEW_TOOLING_ENV_SCRUBBED:-}" != "1" ]]; then
+  exec env -u PANEL_DIFF_BASE -u PANEL_INCLUDE -u ZHIPU_INCLUDE -u DEEPSEEK_INCLUDE \
+    -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
+    -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
+    -u PANEL_ORACLE_CMD -u PANEL_GLM_LEG -u PANEL_DEEPSEEK_LEG \
+    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG \
+    REVIEW_TOOLING_ENV_SCRUBBED=1 bash "$0" "$@"
+fi
+
 # 短路探针：正常套件会在下面用污染的 PANEL_* 环境重进本文件。
 # 它不得递归跑全套，只检查重进后这些控制变量是否已清理。
 if [[ "${REVIEW_TOOLING_ENV_PROBE:-}" == "1" ]]; then
@@ -4012,6 +4024,7 @@ EOF
   # ⑨ 回落腿若同时没交裁决，健康状态必须保留两个事实。
   cat > "$pb/subdeepseek-agent" <<'EOF'
 #!/usr/bin/env bash
+echo 'agent failed' >&2
 exit 7
 EOF
   chmod +x "$pb/subdeepseek-agent"

@@ -504,7 +504,8 @@ verdict_of() {  # verdict_of <log>; PASS/BLOCK/NEEDS_MORE_INFO/UNKNOWN
   # 只认独立裁决行。提示词和推理日志都可能原样出现
   # "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"，子串匹配会把没交卷误记成 PASS。
   found="$(grep -Eio '^[[:space:]]*(Conclusion|Verdict|结论)[[:space:]]*[：:][[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)[[:space:]]*$' "$1" 2>/dev/null \
-    | tail -n 1 | grep -Eio '(PASS|BLOCK|NEEDS_MORE_INFO)$' || true)"
+    | tail -n 1 | sed -E 's/[[:space:]]+$//' \
+    | grep -Eio '(PASS|BLOCK|NEEDS_MORE_INFO)$' || true)"
   [[ -n "$found" ]] && printf '%s\n' "${found^^}" || printf 'UNKNOWN\n'
 }
 
@@ -564,10 +565,11 @@ record_health() {  # record_health <leg>
     status="FAIL"
     if grep -Eqi 'quota|额度|rate.?limit|too many requests|429|balance|billing' "$err" "$log" 2>/dev/null; then status="quota"; fi
     if grep -Eqi 'unauthori[sz]ed|forbidden|invalid.*key|auth|401|403' "$err" "$log" 2>/dev/null; then status="auth"; fi
+  elif [[ -e "${log%.log}.agent.log" || -e "${log%.log}.agent.log.err" ]]; then
+    if [[ "$(verdict_of "$log")" == "UNKNOWN" ]]; then status="DEGRADED_INCOMPLETE"
+    else status="DEGRADED"; fi
   elif [[ "$(verdict_of "$log")" == "UNKNOWN" ]]; then
     status="INCOMPLETE"
-  elif [[ -e "${log%.log}.agent.log" || -e "${log%.log}.agent.log.err" ]]; then
-    status="DEGRADED"
   fi
   tmp="$HEALTH_FILE.tmp.$$"
   { [[ -f "$HEALTH_FILE" ]] && awk -F '\t' -v n="$name" '$1!=n' "$HEALTH_FILE"

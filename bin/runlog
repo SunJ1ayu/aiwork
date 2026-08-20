@@ -162,7 +162,15 @@ fi
 # 顺手粘错一行就是一次莫名其妙的 5a 挡下(四审 subdeepseek L7)。
 printf '[runlog] 跑 %s @%s dirty=%s → %s\n' "$CMDSTR" "$COMMIT" "$DIRTY" "$RELFILE" >&2
 
-OUTFILE="$(mktemp)"; chmod 600 "$OUTFILE"
+OUTFILE=""
+if ! OUTFILE="$(mktemp)" || [ -z "$OUTFILE" ]; then
+  rm -f "$FILE"
+  die "建不了仓外输出缓冲，原命令未执行"
+fi
+if ! chmod 600 "$OUTFILE"; then
+  rm -f "$FILE" "$OUTFILE"
+  die "锁不住仓外输出缓冲权限，原命令未执行"
+fi
 trap 'rm -f "${OUTFILE:-}"' EXIT HUP INT TERM
 ( cd "$REPO" && "$@" ) > "$OUTFILE" 2>&1
 RC="$?"
