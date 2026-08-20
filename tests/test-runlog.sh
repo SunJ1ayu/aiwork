@@ -287,6 +287,24 @@ r9_secret_shapes_never_become_receipts() {
   rm -rf "$d" "$marker"
 }
 
+# ---------------------------------------------------------------- R10
+r10_temp_buffer_failure_is_pre_run() {
+  echo "[R10] 仓外缓冲创建失败 ⇒ 开跑前 fail-closed"
+  local d marker stub rc
+  d="$(newrepo)"; marker="$(mktemp)"; stub="$(mktemp -d)"; : > "$marker"
+  cat > "$stub/mktemp" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$stub/mktemp"
+  ( cd "$d" && PATH="$stub:$PATH" "$RUNLOG" -t t -n no-buffer -- \
+      bash -c 'printf called > "$1"' _ "$marker" ) >/dev/null 2>&1; rc=$?
+  check "R10: mktemp 失败以用法层退出码 64 拒绝" $([[ $rc -eq 64 ]]; echo $?)
+  check "R10: 缓冲不存在时原命令没开跑" $([[ ! -s "$marker" ]]; echo $?)
+  check "R10: 失败前的占位 receipt 已清理" $([[ -z "$(receipt_of "$d")" ]]; echo $?)
+  rm -rf "$d" "$marker" "$stub"
+}
+
 echo "=== runlog oracle ==="
 r1_writes_a_receipt
 r2_exit_code_passthrough
@@ -297,5 +315,6 @@ r6_works_on_archived_tracks
 r7_end_to_end_with_the_guard
 r8_final_binds_the_existing_last_run
 r9_secret_shapes_never_become_receipts
+r10_temp_buffer_failure_is_pre_run
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

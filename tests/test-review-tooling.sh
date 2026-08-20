@@ -78,6 +78,18 @@ set -uo pipefail
 # 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78   # source 失败=裸跑,必须硬退
 
+# 短路探针：正常套件会在下面用污染的 PANEL_* 环境重进本文件。
+# 它不得递归跑全套，只检查重进后这些控制变量是否已清理。
+if [[ "${REVIEW_TOOLING_ENV_PROBE:-}" == "1" ]]; then
+  for _v in PANEL_DIFF_BASE PANEL_INCLUDE ZHIPU_INCLUDE DEEPSEEK_INCLUDE \
+    PANEL_HEALTH_OVERRIDE PANEL_SELECTION_START PANEL_STATE_DIR PANEL_STAGGER_MAX \
+    PANEL_IMPACT_RISK PANEL_REVIEW_BUDGET PANEL_ORACLE_CMD PANEL_GLM_LEG \
+    PANEL_DEEPSEEK_LEG PANEL_MIMO_LEG PANEL_KIMI_LEG; do
+    [[ -z "${!_v+x}" ]] || exit 1
+  done
+  exit 0
+fi
+
 # **判据里绝不许调到真的 opencode 底座**(2026-08-18,track opencode-agent-base)。
 # 起因:GLM 腿的底座换成 opencode CLI 之后,所有跑 subglm-agent 的老用例(V9/V21/V23…)
 # 都会去调**真**的 opencode。断网闸(上面那行)保证了它出不去、不花钱,但症状不是
@@ -192,6 +204,18 @@ ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 check(){ # check "desc" COND_RC   (0 => pass)
   if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi
+}
+
+v0_parent_panel_env_is_scrubbed() {
+  echo "[V0] 判据不继承调用面板的选择环境"
+  env -u REVIEW_TOOLING_ENV_SCRUBBED REVIEW_TOOLING_ENV_PROBE=1 \
+    PANEL_DIFF_BASE=bad-base PANEL_INCLUDE=bad-include \
+    PANEL_HEALTH_OVERRIDE='submimo=quota' PANEL_SELECTION_START=3 \
+    PANEL_STATE_DIR=/tmp/bad-panel-state PANEL_STAGGER_MAX=9 \
+    PANEL_IMPACT_RISK=self PANEL_REVIEW_BUDGET=4 PANEL_ORACLE_CMD=false \
+    PANEL_GLM_LEG=off PANEL_DEEPSEEK_LEG=off PANEL_MIMO_LEG=off PANEL_KIMI_LEG=off \
+    bash "$0" >/dev/null 2>&1
+  check "V0: 套件入口一次性清理 PANEL_* 控制变量" $?
 }
 
 # Agent wrappers now require a real HEAD because their review workspace is a
@@ -3976,10 +4000,34 @@ EOF
   grep -q $'^submimo\tINCOMPLETE\t' "$state/health.tsv"
   check "V43: 无有效裁决的腿进入 incomplete 冷却" $?
 
+  # ⑧ 独立裁决行允许常见的尾随空白，但仍不允许格式示例。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=standard PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_MIMO_VERDICT='PASS   ' \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/W1" >/dev/null 2>&1
+  grep -q 'submimo=PASS(verdict=PASS)' "$d/W1.roster"
+  check "V43: 尾随空白不会把独立裁决行变成 UNKNOWN" $?
+
+  # ⑨ 回落腿若同时没交裁决，健康状态必须保留两个事实。
+  cat > "$pb/subdeepseek-agent" <<'EOF'
+#!/usr/bin/env bash
+exit 7
+EOF
+  chmod +x "$pb/subdeepseek-agent"
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=1 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_DEEPSEEK_VERDICT='PASS | BLOCK | NEEDS_MORE_INFO' \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/DI1" >/dev/null 2>&1
+  grep -q $'^subdeepseek\tDEGRADED_INCOMPLETE\t' "$state/health.tsv"
+  check "V43: 回落且无裁决的腿保留 degraded+incomplete" $?
+
   rm -rf "$d"
 }
 
 echo "=== review-tooling regression oracle ==="
+v0_parent_panel_env_is_scrubbed
 # 老判据逐条复核四腿各自的安全合约；显式要求 all，避免它们偷偷依赖新的二审默认值。
 export PANEL_REVIEW_BUDGET=4
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
