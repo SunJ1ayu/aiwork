@@ -372,6 +372,21 @@ s11_warn_ignored_before_remove() {
   rm -rf "$d"
 }
 
+# --------------------------------------- S12 窄缓存白名单不制造归档噪音
+s12_disposable_cache_is_allowlisted() {
+  echo "[S12] 明确的解释器/测试缓存可重建 ⇒ 不要求 --discard-ignored"
+  local d; d="$(mktemp -d)"; local p="$d/proj" root="$d/wt" rc
+  make_proj "$p" mytrack
+  printf '__pycache__/\n' > "$p/.gitignore"; git -C "$p" add -A; git -C "$p" commit -qm ignore-cache
+  local tree; tree="$(make_tree "$p" "$root" mytrack job-cache HEAD)"
+  mkdir -p "$tree/__pycache__"; printf 'bytecode\n' > "$tree/__pycache__/app.pyc"
+
+  DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/track" archive mytrack "$p" >"$d/o12" 2>&1; rc=$?
+  check "S12: 只有白名单缓存 ⇒ 默认归档成功" $([[ $rc -eq 0 ]]; echo $?)
+  check "S12: 缓存随冗余 worktree 清理" $([[ ! -d "$tree" ]]; echo $?)
+  rm -rf "$d"
+}
+
 echo "=== worktree-sweep oracle ==="
 s1_clean_tree_swept
 s2_dirty_tree_blocks
@@ -384,5 +399,6 @@ s8_no_force
 s9_stray_file_in_track_dir
 s10_track_must_be_explicit
 s11_warn_ignored_before_remove
+s12_disposable_cache_is_allowlisted
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

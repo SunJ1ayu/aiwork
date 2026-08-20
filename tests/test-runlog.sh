@@ -228,7 +228,25 @@ r8_final_binds_the_existing_last_run() {
   ( cd "$d" && "$RUNLOG" --final -t t -n ignored -- \
       bash -c 'mkdir -p runtime; printf cache > runtime/cache.bin' ) >/dev/null 2>&1; rc=$?
   check "R8: 只生成 ignored 运行产物 ⇒ final 仍绿" $([[ $rc -eq 0 ]]; echo $?)
-  rm -rf "$d" "$counter"
+
+  # Git submodule 是 tracked 源码的一部分；只哈外层目录名会漏掉子模块 HEAD 漂移。
+  local sub second
+  sub="$(mktemp -d)"
+  ( cd "$sub"; git init -q; git config user.email t@t; git config user.name t
+    printf 'one\n' > sub.txt; git add -A; git commit -qm one
+    printf 'two\n' >> sub.txt; git commit -qam two
+    second="$(git rev-parse HEAD)"; git checkout -q HEAD^; printf '%s\n' "$second" > "$sub/second" )
+  second="$(cat "$sub/second")"; rm -f "$sub/second"
+  rm -rf "$d"; d="$(newrepo)"
+  git -C "$d" -c protocol.file.allow=always submodule add -q "$sub" vendor
+  git -C "$d" commit -qam submodule
+  ( cd "$d" && "$RUNLOG" --final -t t -n submodule-moving -- \
+      git -C vendor checkout -q "$second" ) >/dev/null 2>&1; rc=$?
+  check "R8: 运行期间只切换 submodule HEAD ⇒ final 非零" $([[ $rc -ne 0 ]]; echo $?)
+  f="$(receipt_of "$d")"
+  grep -q '^source-stable: no$' "$f"
+  check "R8: submodule 漂移明确记 source-stable=no" $?
+  rm -rf "$d" "$sub" "$counter"
 }
 
 # ---------------------------------------------------------------- R9
