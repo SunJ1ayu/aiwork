@@ -24,6 +24,7 @@ runlog: final-contaminated-green rc=0 commit=559a4b6 dirty=yes at=2026-08-20T03:
 runlog: final-review-env-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:41:38Z file=tracks/ro-lock-teardown/evidence/20260820T044138Z-01-final-review-env-red.txt
 runlog: base-inside-source-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:45:26Z file=tracks/ro-lock-teardown/evidence/20260820T044526Z-01-base-inside-source-red.txt
 runlog: base-inside-source-green rc=0 commit=883b938 dirty=yes at=2026-08-20T04:46:35Z file=tracks/ro-lock-teardown/evidence/20260820T044635Z-01-base-inside-source-green.txt
+runlog: final-three-leg-green rc=0 commit=9ef17bc dirty=yes at=2026-08-20T04:48:44Z file=tracks/ro-lock-teardown/evidence/20260820T044844Z-01-final-three-leg-green.txt
 ```
 
 Red-run attribution:
@@ -42,6 +43,8 @@ Red-run attribution:
   only after `mkdir` had already created it (`23/1`), violating the no-source-write boundary.
 - `base-inside-source-green`: preflight canonicalization now rejects that base before `mkdir`; the
   expanded workspace suite is `24/0`.
+- `final-three-leg-green`: all 12 suites pass with the actual Kimi waiver plus contaminated XDG and
+  reviewer-budget inputs; review-tooling is `426/0` and the expanded review-workspace suite is `24/0`.
 - The earlier final receipt deliberately injects `ZHIPU_MAX_TURNS=80` and
   `DEEPSEEK_MAX_TURNS=25`; all 12 suites still pass, including review-tooling `426/0` and
   review-workspace `23/0`.
