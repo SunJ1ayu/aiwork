@@ -6,7 +6,7 @@
 
 - [x] T1 为 `ro-repo-exec` judging-surface、具体 track 绑定和 ignored worktree 删除补红判据
 - [x] T2 实现 T1，安装/验证 commit-msg 与历史审计入口
-- [ ] T3 为健康池轮换二审、风险档预算、失败升级和扩展 roster 补红判据
+- [x] T3 为健康池轮换二审、风险档预算、失败升级和扩展 roster 补红判据
 - [ ] T4 实现 T3，并保持显式四审覆盖路径
 - [ ] T5 为 `runlog --final` 源码身份和秘密形状拦截补红判据
 - [ ] T6 实现 T5，不增加一次机械检查或模型调用

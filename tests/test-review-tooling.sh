@@ -3850,7 +3850,118 @@ GITSTUB2
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- V43
+# 用户 2026-08-20 拍板:常态不再固定四审。默认从健康池轮换两条不同家族的腿，
+# 失败/冲突才加第三条；四审保留显式入口。额度不足是腿的健康状态，不是实现 BLOCK。
+v43_health_aware_rotating_budget() {
+  echo "[V43] panel-review:健康池轮换二审 + 条件升级 + 显式四审"
+  local d pb repo state rc count
+  d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; state="$d/state"
+  mkdir -p "$pb" "$repo" "$state"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  printf '# review\n' > "$d/t.md"
+  ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
+    echo base > f.txt; git add -A; git commit -qm init )
+
+  local leg
+  for leg in submimo subdeepseek subdeepseek-agent subglm subglm-agent subkimi; do
+    cat > "$pb/$leg" <<'EOF'
+#!/usr/bin/env bash
+name="$(basename "$0")"
+case "$name" in
+  subdeepseek-agent) name=subdeepseek ;;
+  subglm-agent) name=subglm ;;
+esac
+case "$name" in
+  submimo) verdict="${STUB_MIMO_VERDICT:-PASS}"; rc="${STUB_MIMO_RC:-0}" ;;
+  subdeepseek) verdict="${STUB_DEEPSEEK_VERDICT:-PASS}"; rc="${STUB_DEEPSEEK_RC:-0}" ;;
+  subglm) verdict="${STUB_GLM_VERDICT:-PASS}"; rc="${STUB_GLM_RC:-0}" ;;
+  subkimi) verdict="${STUB_KIMI_VERDICT:-PASS}"; rc="${STUB_KIMI_RC:-0}" ;;
+esac
+printf '%s\n' "$name" >> "${STUB_CALLS:?}"
+printf 'Conclusion: %s\n' "$verdict" > "$3"
+exit "$rc"
+EOF
+    chmod +x "$pb/$leg"
+  done
+
+  # ① 默认 high=2，不再全派；花名册必须说清选择与跳过。
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/D1" >/dev/null 2>&1; rc=$?
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: high 默认只派两条腿" $([[ $rc -eq 0 && $count -eq 2 ]]; echo $?)
+  grep -q 'requested-budget=2' "$d/D1.roster"; check "V43: roster 记录请求预算=2" $?
+  grep -q 'subglm=SKIP(rotation)' "$d/D1.roster"; check "V43: 未选中的健康腿明确记 rotation skip" $?
+
+  # ② 同一健康池下一轮移动起点，不固定烧同一对额度。
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_STATE_DIR="$state" \
+    PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/D2" >/dev/null 2>&1
+  grep -q '^subglm$' "$d/calls"; check "V43: 下一轮轮到新的腿" $?
+  if cmp -s "$d/D1.roster" "$d/D2.roster"; then bad "V43: 轮换不能永远固定同一对"
+  else ok "V43: 轮换不能永远固定同一对"; fi
+
+  # ③ 明确额度/认证不健康的腿不调用，也不把它冒充成审查失败。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_HEALTH_OVERRIDE='submimo=quota' PANEL_STATE_DIR="$state" \
+    PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/H1" >/dev/null 2>&1; rc=$?
+  if grep -q '^submimo$' "$d/calls"; then bad "V43: quota 腿不会被派发"
+  else ok "V43: quota 腿不会被派发"; fi
+  grep -q 'submimo=SKIP(health:quota)' "$d/H1.roster"; check "V43: roster 如实记 quota skip" $?
+  check "V43: 少一条额度腿不阻断有证据的本轮" $([[ $rc -eq 0 ]]; echo $?)
+
+  # ④ 初始两条结论冲突 ⇒ 只追加第三条，不直接四条全开。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_MIMO_VERDICT=PASS STUB_DEEPSEEK_VERDICT=BLOCK \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/C1" >/dev/null 2>&1
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: 冲突时追加到三审而非四审" $([[ $count -eq 3 ]]; echo $?)
+  grep -q 'escalation=conflict' "$d/C1.roster"; check "V43: roster 记下冲突升级原因" $?
+
+  # ⑤ 一条腿进程失败同样加第三条；主 Agent仍按现有证据裁，不要求全票。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_MIMO_RC=7 \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/F1" >/dev/null 2>&1; rc=$?
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: 失败腿触发第三审" $([[ $count -eq 3 ]]; echo $?)
+  check "V43: 仍有有效评审时 panel 本身不因单腿失败 BLOCK" $([[ $rc -eq 0 ]]; echo $?)
+
+  # ⑥ 两个风险轴里人数预算只由 impact-risk 决定；显式 --all 仍能走四审。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=standard PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/S1" >/dev/null 2>&1
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: standard 默认一条外腿" $([[ $count -eq 1 ]]; echo $?)
+
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=self PANEL_STATE_DIR="$state" \
+    PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/S0" >/dev/null 2>&1; rc=$?
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: self 不调用外腿" $([[ $rc -eq 0 && $count -eq 0 ]]; echo $?)
+
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/A1" >/dev/null 2>&1
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: --all 显式保留四审路径" $([[ $count -eq 4 ]]; echo $?)
+
+  rm -rf "$d"
+}
+
 echo "=== review-tooling regression oracle ==="
+# 老判据逐条复核四腿各自的安全合约；显式要求 all，避免它们偷偷依赖新的二审默认值。
+export PANEL_REVIEW_BUDGET=4
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
 REVIEW_NO_MY_REVIEW=1 v2_glob_not_pre_expanded
@@ -3894,5 +4005,6 @@ v39_readonly_blind_spots
 v40_second_panel_findings
 v41_oracle_never_executes_its_own_comments
 v42_git_common_dir_no_silent_gap
+v43_health_aware_rotating_budget
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
