@@ -177,6 +177,12 @@ test_source_race_and_cleanup_guard() {
   echo '[RW4] a changing source and unsafe cleanup target both fail closed'
   local d repo fake real_git count rc actual
   d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
+
+  REVIEW_WORKSPACE_BASE="$repo/in-source"
+  review_workspace_prepare "$repo" unsafe-base >/dev/null 2>&1; rc=$?
+  [[ $rc -ne 0 && ! -e "$repo/in-source" ]]
+  check 'RW4: workspace base inside source is rejected before any source write' $?
+
   fake="$d/bin"; mkdir -p "$fake"; real_git="$(command -v git)"; count="$d/count"
   cat > "$fake/git" <<'GIT_STUB'
 #!/usr/bin/env bash

@@ -21,6 +21,8 @@ runlog: panel-findings-red rc=1 commit=6ec2c61 dirty=yes at=2026-08-19T16:34:22Z
 runlog: panel-findings-green rc=0 commit=52a443c dirty=yes at=2026-08-20T00:55:52Z file=tracks/ro-lock-teardown/evidence/20260820T005552Z-01-panel-findings-green.txt
 runlog: rereview-findings-green rc=0 commit=ed0e8f0 dirty=yes at=2026-08-20T02:01:08Z file=tracks/ro-lock-teardown/evidence/20260820T020108Z-01-rereview-findings-green.txt
 runlog: final-contaminated-green rc=0 commit=559a4b6 dirty=yes at=2026-08-20T03:11:25Z file=tracks/ro-lock-teardown/evidence/20260820T031125Z-01-final-contaminated-green.txt
+runlog: final-review-env-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:41:38Z file=tracks/ro-lock-teardown/evidence/20260820T044138Z-01-final-review-env-red.txt
+runlog: base-inside-source-red rc=1 commit=113bf38 dirty=yes at=2026-08-20T04:45:26Z file=tracks/ro-lock-teardown/evidence/20260820T044526Z-01-base-inside-source-red.txt
 ```
 
 Red-run attribution:
@@ -32,6 +34,11 @@ Red-run attribution:
   HEAD). The fixture/entry wiring was repaired without weakening the helper.
 - `panel-findings-red`: first-panel regression fixtures made source index and ignore-channel drift red
   (`22/1`) before the production fix.
+- `final-review-env-red`: with the owner's real `PANEL_KIMI_LEG=off` policy inherited, three fixtures
+  that were intended to assert the default Kimi behavior went red (`423/3`). The product switch behaved
+  correctly; the fixtures did not isolate the default they claimed to test.
+- `base-inside-source-red`: the new path oracle proved the helper rejected an in-source workspace base
+  only after `mkdir` had already created it (`23/1`), violating the no-source-write boundary.
 - All later receipts are green. The final receipt deliberately injects `ZHIPU_MAX_TURNS=80` and
   `DEEPSEEK_MAX_TURNS=25`; all 12 suites still pass, including review-tooling `426/0` and
   review-workspace `23/0`.

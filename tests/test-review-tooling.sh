@@ -1110,7 +1110,9 @@ EOF
 echo "KIMI-LEG" > "$3"; exit 0
 EOF
   chmod +x "$pb/subkimi"
-  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K1" >/dev/null 2>&1
+  # These cases assert the panel's Kimi default.  A caller may deliberately
+  # disable the real Kimi leg; that policy must not rewrite this fixture.
+  env -u PANEL_KIMI_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K1" >/dev/null 2>&1
   grep -q KIMI-LEG "$d/K1.subkimi.log" 2>/dev/null; check "panel: subkimi auto-enabled when installed" $?
   PANEL_KIMI_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K2" >/dev/null 2>&1
   if [[ -e "$d/K2.subkimi.log" ]]; then bad "panel: PANEL_KIMI_LEG=off skips kimi"; else ok "panel: PANEL_KIMI_LEG=off skips kimi"; fi
@@ -1149,7 +1151,7 @@ echo "stub result" > "$3"; echo fail >&2; exit 7
 EOF
     chmod +x "$pb/$stubname"
   done
-  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K3" >/dev/null 2>&1; rc=$?
+  env -u PANEL_KIMI_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K3" >/dev/null 2>&1; rc=$?
   check "panel: 3 legs fail + kimi passes -> rc=0" $([[ $rc -eq 0 ]]; echo $?)
   # all 4 fail -> rc=1
   cat > "$pb/subkimi" <<'EOF'
@@ -1157,7 +1159,7 @@ EOF
 echo "stub result" > "$3"; echo fail >&2; exit 7
 EOF
   chmod +x "$pb/subkimi"
-  bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K4" >/dev/null 2>&1; rc=$?
+  env -u PANEL_KIMI_LEG bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/K4" >/dev/null 2>&1; rc=$?
   check "panel: all 4 legs fail -> rc=1" $([[ $rc -ne 0 ]]; echo $?)
   # kimi absent -> classic 3-leg panel still works
   rm -f "$pb/subkimi"
@@ -1847,7 +1849,8 @@ v22_roster_file() {
   # 那天默认翻成 agent,这条判据就跟着红了。它要问的是**关着的腿怎么记账**
   # (08-05 那笔账),不是"默认开还是关"(那条归 V13 管)。把关法写明,
   # 别让一条判据挂在一个会漂的默认值上。
-  PANEL_GLM_LEG=off bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/R1" >"$d/r1.out" 2>&1
+  env -u PANEL_KIMI_LEG PANEL_GLM_LEG=off \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/R1" >"$d/r1.out" 2>&1
   [[ -s "$d/R1.roster" ]]; check "V22c: 收尾写出 <prefix>.roster" $?
   grep -q "submimo=PASS" "$d/R1.roster";      check "V22c: 绿腿记 PASS" $?
   grep -q "subdeepseek=FAIL(rc=5)" "$d/R1.roster"; check "V22c: 死腿记 FAIL 且带 rc" $?
@@ -2392,7 +2395,9 @@ PYCFG
     # **让 opencode 自己解析**，确认 Bash 是整项 allow；不是查我们写进去的 JSON。
     # 真正的写边界已移到“原仓只读 + 每腿可丢弃副本”，这里要让测试/build 真能跑。
     if [[ -n "${_REAL_OC_BIN:-}" ]]; then
-      HOME="$(dirname "$(dirname "$(dirname "$cfg")")")" timeout 60 "$_REAL_OC_BIN" debug config 2>/dev/null \
+      env -u XDG_CONFIG_HOME -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT \
+        HOME="$(dirname "$(dirname "$(dirname "$cfg")")")" \
+        timeout 60 "$_REAL_OC_BIN" debug config 2>/dev/null \
         | python3 -c "
 import json,sys
 try: c=json.load(sys.stdin)
