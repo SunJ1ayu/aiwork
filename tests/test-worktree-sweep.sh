@@ -263,7 +263,7 @@ EOF
 
 # ---------------------------------------------------------- S8 不许偷偷 --force
 s8_no_force() {
-  echo '[S8] 树里只剩被 ignore 的东西(生成物)⇒ 照收 —— 这是设计里写明的取舍,钉住它' 
+  echo '[S8] 树里只剩被 ignore 的东西 ⇒ 默认不删；显式 --discard-ignored 才收'
   local d; d="$(mktemp -d)"; local p="$d/proj" root="$d/wt" rc
   make_proj "$p" mytrack
   # ⚠️ .gitignore 必须**先提交再建树**:后提交的话树里没有它,junk/ 就成了未跟踪文件,
@@ -276,13 +276,14 @@ s8_no_force() {
   mkdir -p "$tree/junk"; printf 'build artifact\n' > "$tree/junk/a.o"
 
   DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/track" archive mytrack "$p" >"$d/o8" 2>&1; rc=$?
-  # 【2026-08-11 实测纠正】我原本以为"被 ignore 的文件会让 git worktree remove 拒绝,
-  #  那是第二道免费保险"。**不成立**:git 只对 modified/untracked 拒,ignored 它连着一起删。
-  #  而干净判据在前面已经把 modified/untracked 全拦下了 ⇒ 正常流程里 git 那道拒绝**够不着**,
-  #  它只在"干净判据本身被拆掉"时才兜底(变异 W1 实测到的正是这一幕)。
-  #  所以这一幕改成钉住**真正会发生的那件事**:生成物不算"别处没有的东西",树照收。
-  check "S8: 树里只有被 ignore 的生成物 ⇒ 归档通过" $([[ $rc -eq 0 ]]; echo $?)
-  check "S8: 树被收掉(生成物删了能长回来,这是设计里写明的取舍)" $([[ ! -d "$tree" ]]; echo $?)
+  check "S8: 有 ignored 文件且未确认丢弃 ⇒ 归档拒绝" $([[ $rc -ne 0 ]]; echo $?)
+  check "S8: 默认拒绝时树和 ignored 文件都还在" $([[ -f "$tree/junk/a.o" ]]; echo $?)
+  grep -q -- '--discard-ignored' "$d/o8"
+  check "S8: 报告给出显式丢弃开关" $?
+
+  DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/track" archive mytrack "$p" --discard-ignored >"$d/o8b" 2>&1; rc=$?
+  check "S8: 显式 --discard-ignored ⇒ 归档通过" $([[ $rc -eq 0 ]]; echo $?)
+  check "S8: 显式确认后树被收掉" $([[ ! -d "$tree" ]]; echo $?)
   rm -rf "$d"
 }
 
@@ -353,17 +354,21 @@ calls_of_s10() { [[ -f "$1/calls" ]] && wc -l < "$1/calls" | tr -d ' ' || echo 0
 
 # --------------------------------------- S11 删之前把"会被一起带走的"说出来
 s11_warn_ignored_before_remove() {
-  echo "[S11] 树里被 ignore 的东西会跟着一起删 ⇒ 动手前必须先把它们列出来"
+  echo "[S11] 任一树有 ignored 文件 ⇒ 删除任何树之前整体阻断并逐个列出"
   local d; d="$(mktemp -d)"; local p="$d/proj" root="$d/wt" rc
   make_proj "$p" mytrack
   printf 'junk/\n' > "$p/.gitignore"; git -C "$p" add -A; git -C "$p" commit -qm ignore
-  local tree; tree="$(make_tree "$p" "$root" mytrack job-1 HEAD)"
+  local clean tree
+  clean="$(make_tree "$p" "$root" mytrack job-0 HEAD)"
+  tree="$(make_tree "$p" "$root" mytrack job-1 HEAD)"
   mkdir -p "$tree/junk"; printf 'MAYBE_THE_ONLY_COPY\n' > "$tree/junk/notes.txt"
 
   DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/track" archive mytrack "$p" >"$d/o11" 2>&1; rc=$?
-  check "S11: 照收(生成物不算「别处没有的东西」——设计取舍)" $([[ $rc -eq 0 ]]; echo $?)
+  check "S11: ignored 文件使归档失败" $([[ $rc -ne 0 ]]; echo $?)
+  check "S11: 预检整体阻断，排在前面的干净树也没被删" $([[ -d "$clean" ]]; echo $?)
+  check "S11: ignored 文件的树原封不动" $([[ -f "$tree/junk/notes.txt" ]]; echo $?)
   grep -q "junk/notes.txt" "$d/o11"
-  check "S11: **但动手前把会被带走的那些文件逐个列出来**(四审 subdeepseek 发现 3)" $?
+  check "S11: 把会被带走的文件逐个列出来" $?
   rm -rf "$d"
 }
 

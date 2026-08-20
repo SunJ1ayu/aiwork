@@ -30,6 +30,13 @@ for repo in /root/aiwork /root/.openclaw/workspace/projects/design-studio; do
   else
     bad "$name: hook 没调 track-guard(装了个别的东西 = 这条防线仍然是空的)"
   fi
+  commit_hook="$repo/.git/hooks/commit-msg"
+  if [[ -x "$commit_hook" ]]; then ok "$name: 装了可执行的 commit-msg"; else bad "$name: **没装** commit-msg($commit_hook)"; fi
+  if [[ -f "$commit_hook" ]] && grep -q "track-commit-msg" "$commit_hook"; then
+    ok "$name: commit-msg 确实校验 Track trailer"
+  else
+    bad "$name: commit-msg 没调 track-commit-msg(关键 commit 仍可借 recent verify 混过去)"
+  fi
 done
 # 一个仓都没查到 ⇒ 判绿是假绿(四审 subkimi:`continue` + `FAIL -eq 0` 会让 0/0 报通过)。
 if [[ $((PASS + FAIL)) -eq 0 ]]; then
