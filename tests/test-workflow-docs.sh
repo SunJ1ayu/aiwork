@@ -94,5 +94,13 @@ grep -q 'DEFAULT_MODEL="xiaomi/mimo-v2.5-pro"' "$ROOT/bin/submimo" \
   && grep -q 'xiaomi/mimo-v2.5-pro' "$SOURCE/skills/panel/references/legs.md"
 check "W3: MiMo 唯一源与实现模型一致" $?
 
+echo "[W4] 唯一源与同步器本身属于 judging surface"
+. "$ROOT/bin/_tooling-paths.sh"
+is_judging_surface "bin/sync-workflow-docs"
+check "W4: 同步写口受 track 归属守卫保护" $?
+is_judging_surface "workflow/CLAUDE.md" \
+  && is_judging_surface "workflow/skills/panel/SKILL.md"
+check "W4: 唯一规范源受 track 归属守卫保护" $?
+
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
