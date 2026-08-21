@@ -30,6 +30,12 @@ for track_dir in $(active_typed_dirs_changed); do
   git cat-file -e ":$track_dir/decision.json" 2>/dev/null && staged_active=1
   git cat-file -e ":tracks/archive/$name/decision.json" 2>/dev/null && staged_archive=1
   if [[ "$staged_archive" -eq 1 && "$staged_active" -eq 0 ]]; then
+    active_left="$(git ls-files -- "$track_dir" 2>/dev/null)"
+    if [[ -z "$active_left" ]]; then
+      continue
+    fi
+    fail=1
+    say "🔴 archive destination 已存在，但 staged active 目录仍有残留:$track_dir（归档必须完整 move）。"
     continue
   fi
   if [[ "$staged_archive" -eq 1 && "$staged_active" -eq 1 ]]; then
@@ -55,6 +61,7 @@ for track_dir in $(active_typed_dirs_changed); do
     say "🔴 typed active 机器源的 staged snapshot 未通过 shape:$track_dir"
   fi
 done
+unset active_left staged_active staged_archive
 
 # 逃生口(规矩1 与规矩4 共用):本次提交带了 track 工件,或近 7 天有 verify.md 改动。
 # **只此一份** —— 08-06 第一版把这五行在两条规矩里各抄了一遍,而"两份拷贝总有一份
