@@ -22,11 +22,16 @@ runlog -t workflow-observability -- <判据命令>
 ```
 
 ```
+runlog: track-record-red rc=1 commit=ca6166f dirty=no at=2026-08-21T11:42:04Z file=tracks/workflow-observability/evidence/20260821T114204Z-01-track-record-red.txt
 runlog: review-tooling-final rc=1 commit=7578a3c dirty=no final=yes at=2026-08-21T12:59:21Z file=tracks/workflow-observability/evidence/20260821T125921Z-01-review-tooling-final.txt
 runlog: review-tooling-final-r2 rc=0 commit=4fd811d dirty=no final=yes at=2026-08-21T13:09:46Z file=tracks/workflow-observability/evidence/20260821T130946Z-01-review-tooling-final-r2.txt
 runlog: review-tooling-final-r3 rc=0 commit=d112347 dirty=no final=yes at=2026-08-21T13:59:27Z file=tracks/workflow-observability/evidence/20260821T135927Z-01-review-tooling-final-r3.txt
 runlog: review-tooling-final-r4 rc=0 commit=0c33338 dirty=no final=yes at=2026-08-21T14:05:56Z file=tracks/workflow-observability/evidence/20260821T140556Z-01-review-tooling-final-r4.txt
 ```
+
+- `track-record-red` 是实现前的预期 TDD 红，目标断言随后转绿并进入 71/71。
+- `review-tooling-final rc=1` 是受限沙箱无法创建 network namespace / 访问本地测试桩的环境红；
+  在判据自身 no-egress 的允许环境中重跑 r2/r3/r4 均为绿色，最后以 r4 为准。
 
 ## Review
 
