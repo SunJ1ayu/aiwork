@@ -19,6 +19,7 @@ SUITES=(
   "retry|python3|/root/aiwork/tests/test_submimo_retry.py"
   "track-guard|bash|/root/aiwork/tests/test-track-guard.sh"
   "track-record|bash|/root/aiwork/tests/test-track-record.sh"
+  "ledger|bash|/root/aiwork/tests/test-ledger.sh"
   "track-links|bash|/root/aiwork/tests/test-track-links.sh"
   "delegate-entry|bash|/root/aiwork/tests/test-delegate-entry.sh"
   "delegate-observation|bash|/root/aiwork/tests/test-delegate-observation.sh"
