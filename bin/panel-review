@@ -11,7 +11,7 @@ set -uo pipefail
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  panel-review TASK_FILE [REPO_DIR] [LOG_PREFIX]
+  panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
 
 Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
 Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO or conflict adds
@@ -34,6 +34,8 @@ Options / env:
   --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
   --budget N                 explicit initial budget, 0..4
   --all                      explicit all-available review (special high risk)
+  --track NAME               bind dispatch/observation to a typed track in the main repo
+  --no-track                 explicitly state that this review belongs to no track
   PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
   PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
   PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
@@ -62,6 +64,8 @@ NO_MY_REVIEW=0
 IMPACT_RISK="${PANEL_IMPACT_RISK:-high}"
 REVIEW_BUDGET="${PANEL_REVIEW_BUDGET:-}"
 ALL_REVIEWERS=0
+TRACK_NAME=""
+NO_TRACK=0
 POSARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -80,6 +84,11 @@ while [[ $# -gt 0 ]]; do
       [[ -n "$REVIEW_BUDGET" ]] || { echo "panel-review: --budget needs 0..4" >&2; exit 2; }
       shift 2 ;;
     --all) ALL_REVIEWERS=1; shift ;;
+    --track)
+      TRACK_NAME="${2:-}"
+      [[ -n "$TRACK_NAME" ]] || { echo "panel-review: --track needs a name" >&2; exit 2; }
+      shift 2 ;;
+    --no-track) NO_TRACK=1; shift ;;
     *) POSARGS+=("$1"); shift ;;
   esac
 done
@@ -108,6 +117,44 @@ REPO_DIR="${2:-$PWD}"
 
 [[ -f "$TASK_FILE" ]] || { echo "panel-review: task file not found: $TASK_FILE" >&2; exit 1; }
 [[ -d "$REPO_DIR" ]]  || { echo "panel-review: repo dir not found: $REPO_DIR" >&2; exit 1; }
+
+[[ -z "$TRACK_NAME" || "$NO_TRACK" -eq 0 ]] || {
+  echo "panel-review: --track and --no-track are mutually exclusive" >&2; exit 2; }
+
+# A review may target an isolated worktree, but durable controller facts must land in
+# the main checkout that owns the common Git dir; otherwise archive sweep deletes them.
+CONTROL_REPO="$(realpath "$REPO_DIR")"
+_common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ -n "$_common" && "$(basename "$_common")" == ".git" ]]; then
+  CONTROL_REPO="$(dirname "$_common")"
+fi
+unset _common
+
+TRACK_RECORD_BIN="${TRACK_RECORD_BIN:-$(dirname "$0")/track-record}"
+_typed_active=()
+if [[ -d "$CONTROL_REPO/tracks" ]]; then
+  while IFS= read -r _decision; do
+    _typed_active+=("$(basename "$(dirname "$_decision")")")
+  done < <(find "$CONTROL_REPO/tracks" -mindepth 2 -maxdepth 2 -type f -name decision.json \
+           -not -path '*/archive/*' -print 2>/dev/null | sort)
+fi
+if [[ -z "$TRACK_NAME" && "$NO_TRACK" -eq 0 && "${#_typed_active[@]}" -gt 0 ]]; then
+  echo "panel-review: typed active track exists; choose --track NAME or --no-track before dispatch" >&2
+  printf '  active: %s\n' "${_typed_active[*]}" >&2
+  exit 2
+fi
+if [[ -n "$TRACK_NAME" ]]; then
+  case "$TRACK_NAME" in
+    */*|*..*|-*|.|archive) echo "panel-review: invalid --track '$TRACK_NAME'" >&2; exit 2 ;;
+  esac
+  TRACK_DIR="$CONTROL_REPO/tracks/$TRACK_NAME"
+  [[ -d "$TRACK_DIR" ]] || { echo "panel-review: active track not found: $TRACK_DIR" >&2; exit 2; }
+  if ! "$TRACK_RECORD_BIN" validate --phase dispatch --expected-impact "$IMPACT_RISK" "$TRACK_DIR"; then
+    echo "panel-review: typed track is not dispatch-ready or --risk mismatches; no leg was started" >&2
+    exit 2
+  fi
+fi
+unset _decision _typed_active
 
 # The my-review gate is DEFAULT-ON. Unless explicitly opted out, resolve a path:
 # an explicit --require-my-review wins; otherwise derive the convention path from
@@ -142,6 +189,8 @@ if [[ $NO_MY_REVIEW -eq 0 ]]; then
 fi
 
 TS="$(date +%Y%m%d-%H%M%S)"
+PANEL_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+PANEL_START_NS="$(date +%s%N)"
 TASKNAME="$(basename "${TASK_FILE%.*}")"
 LOG_PREFIX="${3:-$TOOL_ROOT/logs/panel-${TASKNAME}-${TS}}"
 mkdir -p "$(dirname "$LOG_PREFIX")"
@@ -687,9 +736,54 @@ echo "  read all logs above, then arbitrate."
 # remains a separate evidence property in roster/health: process success lets the
 # main agent inspect a partial report, but never turns UNKNOWN into a verdict.
 # self=0 is a deliberate no-external-review mode and succeeds without a process.
-if [[ "$REVIEW_BUDGET" -eq 0 ]]; then exit 0; fi
-_evidence=0
-for _leg in "${LEGS[@]}"; do
-  [[ "${LEG_SELECTED[$_leg]}" -eq 1 && "${LEG_RC[$_leg]}" -eq 0 ]] && _evidence=$((_evidence + 1))
-done
-[[ "$_evidence" -gt 0 ]]
+PANEL_RC=0
+if [[ "$REVIEW_BUDGET" -ne 0 ]]; then
+  _evidence=0
+  for _leg in "${LEGS[@]}"; do
+    [[ "${LEG_SELECTED[$_leg]}" -eq 1 && "${LEG_RC[$_leg]}" -eq 0 ]] && _evidence=$((_evidence + 1))
+  done
+  [[ "$_evidence" -gt 0 ]] || PANEL_RC=1
+fi
+
+# Controller-side compact observation. The roster/raw logs stay outside the repo;
+# only whitelisted actual facts enter the main track. Missing model/usage remain null.
+if [[ -n "$TRACK_NAME" ]]; then
+  _obs_legs=(); _obs_degraded=false
+  for _leg in "${LEGS[@]}"; do
+    [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
+    case "$_leg" in
+      submimo) _family=xiaomi ;;
+      subdeepseek) _family=deepseek ;;
+      subglm) _family=zhipu ;;
+      subkimi) _family=moonshot ;;
+    esac
+    _adapter="$(basename "${LEG_CMD[$_leg]}")"
+    _degraded=false
+    if [[ -e "${LEG_LOG[$_leg]%.log}.agent.log" || -e "${LEG_LOG[$_leg]%.log}.agent.log.err" ]]; then
+      _degraded=true; _obs_degraded=true
+      case "$_leg" in
+        subdeepseek) _adapter=subdeepseek ;;
+        subglm) _adapter=subglm ;;
+      esac
+    fi
+    _verdict="$(verdict_of "${LEG_LOG[$_leg]}")"
+    [[ "$_verdict" == UNKNOWN ]] && _verdict=null
+    _obs_legs+=(--leg "$_leg,$_family,$_adapter,${LEG_RC[$_leg]},$_verdict,$_degraded")
+  done
+  PANEL_FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  PANEL_END_NS="$(date +%s%N)"
+  PANEL_DURATION_MS=$(( (PANEL_END_NS - PANEL_START_NS) / 1000000 ))
+  _obs_label="$(printf '%s' "$TASKNAME" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//;s/-*$//')"
+  [[ -n "$_obs_label" ]] || _obs_label=panel
+  _run_id="$TS-$$-panel-review"
+  if ! "$TRACK_RECORD_BIN" observe --repo "$CONTROL_REPO" --track "$TRACK_NAME" \
+      --run-id "$_run_id" --controller panel-review --event execution_finished \
+      --label "$_obs_label" --started-at "$PANEL_STARTED_AT" --finished-at "$PANEL_FINISHED_AT" \
+      --duration-ms "$PANEL_DURATION_MS" --exit-code "$PANEL_RC" --adapter panel-review \
+      --work-exit-code "$PANEL_RC" --risk "$IMPACT_RISK" --degraded "$_obs_degraded" \
+      "${_obs_legs[@]}" >/dev/null; then
+    echo "panel-review: OBSERVATION_WRITE_FAILED track=$TRACK_NAME run_id=$_run_id (controller rc 保持 $PANEL_RC)" >&2
+  fi
+fi
+
+exit "$PANEL_RC"

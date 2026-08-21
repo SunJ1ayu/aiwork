@@ -82,10 +82,11 @@ agent to verify, never a verdict to adopt.
 
 ## Panel fan-out
 
-- `bin/panel-review --risk self|standard|high TASK [REPO] [LOG_PREFIX]` —
+- `bin/panel-review --track NAME --risk self|standard|high TASK [REPO] [LOG_PREFIX]` —
   convergent review. Default high rotates two healthy model families; standard
   uses one and self uses none. Failure/degradation/conflict can add one spare;
-  `--all` explicitly requests every available reviewer. Main agent arbitrates.
+  `--all` explicitly requests every available reviewer. Use `--no-track`
+  explicitly when the review belongs to no typed active track. Main agent arbitrates.
   It exits non-zero only if every actually dispatched leg fails; failed legs
   keep a `.err` sidecar.
 - `bin/panel-explore BRIEF [REPO] [LOG_PREFIX]` — divergent: three model

@@ -280,13 +280,15 @@ def validate_dispatch(data: dict[str, Any], track_dir: Path) -> None:
                 raise DecisionError("evidence.exists", "design.premise_attack.evidence[]", rel, "existing non-symlink file")
 
 
-def validate(track_dir: Path, phase: str, source: str) -> int:
+def validate(track_dir: Path, phase: str, source: str, expected_impact: str | None = None) -> int:
     try:
         data = load_decision(track_dir, source)
         if data is None:
             print(f"track-record: status=legacy phase={phase} source={source} track={track_dir.name}")
             return 0
         validate_shape(data, track_dir)
+        if expected_impact is not None and data["impact"]["level"] != expected_impact:
+            raise DecisionError("impact.expected", "impact.level", data["impact"]["level"], expected_impact)
         if phase in ("dispatch", "archive"):
             validate_dispatch(data, track_dir)
         if phase == "archive" and data["outcome"]["verdict"] is None:
@@ -394,6 +396,56 @@ def observe(args: argparse.Namespace) -> int:
         if args.risk is not None and args.risk not in IMPACT_LEVELS:
             raise DecisionError("field.enum", "actual.risk", args.risk, "|".join(IMPACT_LEVELS))
         degraded = {None: None, "null": None, "true": True, "false": False}[args.degraded]
+        nullable_nonnegative(args.exit_code, "exit_code")
+        nullable_nonnegative(args.work_exit_code, "actual.work_exit_code")
+        legs: list[dict[str, Any]] | None = [] if args.controller == "panel-review" else None
+        for spec in args.leg or []:
+            parts = spec.split(",")
+            if len(parts) != 6:
+                raise DecisionError(
+                    "observation.leg",
+                    "actual.legs[]",
+                    spec,
+                    "name,family,adapter,exit_code,verdict|null,degraded(true|false)",
+                )
+            name, family, leg_adapter, leg_rc_text, verdict, leg_degraded = parts
+            safe_identifier(name, "actual.legs[].name", LABEL_RE)
+            safe_identifier(family, "actual.legs[].family", LABEL_RE)
+            safe_identifier(leg_adapter, "actual.legs[].adapter", TOKEN_RE)
+            try:
+                leg_rc = int(leg_rc_text)
+            except ValueError as exc:
+                raise DecisionError("observation.leg", "actual.legs[].exit_code", leg_rc_text, "integer") from exc
+            nullable_nonnegative(leg_rc, "actual.legs[].exit_code")
+            if verdict == "null":
+                leg_verdict = None
+            elif verdict in ("PASS", "BLOCK", "NEEDS_MORE_INFO"):
+                leg_verdict = verdict
+            else:
+                raise DecisionError("field.enum", "actual.legs[].verdict", verdict, "null|PASS|BLOCK|NEEDS_MORE_INFO")
+            if leg_degraded not in ("true", "false"):
+                raise DecisionError("field.enum", "actual.legs[].degraded", leg_degraded, "true|false")
+            assert legs is not None
+            legs.append(
+                {
+                    "name": name,
+                    "family": family,
+                    "adapter": leg_adapter,
+                    "model": None,
+                    "state": "completed" if leg_rc == 0 else "failed",
+                    "exit_code": leg_rc,
+                    "verdict": leg_verdict,
+                    "degraded": leg_degraded == "true",
+                    "duration_ms": None,
+                    "usage": {
+                        "input_tokens": None,
+                        "output_tokens": None,
+                        "total_tokens": None,
+                        "api_cost": None,
+                        "billing_mode": None,
+                    },
+                }
+            )
         payload = {
             "schema_version": 1,
             "track": args.track,
@@ -411,7 +463,7 @@ def observe(args: argparse.Namespace) -> int:
                 "risk": args.risk,
                 "degraded": degraded,
                 "work_exit_code": args.work_exit_code,
-                "legs": None,
+                "legs": legs,
             },
             "usage": {
                 "input_tokens": args.input_tokens,
@@ -436,6 +488,7 @@ def parser() -> argparse.ArgumentParser:
     check = commands.add_parser("validate", help="validate a track decision")
     check.add_argument("--phase", required=True, choices=("shape", "dispatch", "archive"))
     check.add_argument("--source", default="working", choices=("working", "staged"))
+    check.add_argument("--expected-impact", choices=IMPACT_LEVELS)
     check.add_argument("track_dir", type=Path)
     event = commands.add_parser("observe", help="write one compact controller observation")
     event.add_argument("--repo", required=True, type=Path)
@@ -458,6 +511,11 @@ def parser() -> argparse.ArgumentParser:
     event.add_argument("--total-tokens", type=int)
     event.add_argument("--api-cost", type=float)
     event.add_argument("--billing-mode", choices=BILLING_MODES)
+    event.add_argument(
+        "--leg",
+        action="append",
+        help="panel leg: name,family,adapter,exit_code,verdict|null,degraded(true|false)",
+    )
     return top
 
 
@@ -466,7 +524,7 @@ def main() -> int:
     if args.command == "validate":
         if not args.track_dir.is_dir():
             return block(DecisionError("track.directory", "track_dir", os.fspath(args.track_dir), "existing directory"))
-        return validate(args.track_dir.resolve(), args.phase, args.source)
+        return validate(args.track_dir.resolve(), args.phase, args.source, args.expected_impact)
     if args.command == "observe":
         return observe(args)
     return 2

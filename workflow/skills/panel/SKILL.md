@@ -37,7 +37,7 @@ description: 多模型评审/发散的完整协议与工具用法(panel-review �
 
 ### 1. 主 agent 先审并落盘自己的发现
 读真 diff/代码,写下 PASS/BLOCK/NEEDS_MORE_INFO + 具体条目,**在读任何评审报告之前**。
-**这道闸在工具里是 DEFAULT-ON,不是要你记得加的 flag**:裸跑 `panel-review TASK REPO PREFIX`
+**这道闸在工具里是 DEFAULT-ON,不是要你记得加的 flag**:运行 `panel-review --track NAME TASK REPO PREFIX`
 会自动找 `/root/aiwork/tasks/<taskname>-my-review.md`,**找不到就拒绝派发**(或它躺在被审
 仓库里也拒——那会经 `collect_untracked` 泄漏)。非约定路径用 `--require-my-review PATH`;
 `--no-my-review` 只作为清醒的例外(比如根本没有 diff 可自审的任务)。
@@ -48,9 +48,13 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 ### 2. 评审员独立审
 先分开判断两个轴:`impact-risk` 决定证据预算(self=0、standard=1、high=2)，
 `design-uncertainty` 决定是否需要 premise attack / 双出 / `panel-explore`；二者不能互相代替。
-`panel-review --risk self|standard|high TASK_FILE [REPO_DIR] [LOG_PREFIX]` 默认 high=2，
+`panel-review --track NAME --risk self|standard|high TASK_FILE [REPO_DIR] [LOG_PREFIX]` 默认 high=2，
 从健康池轮换不同模型家族。失败、降级、没有裁决、NEEDS_MORE_INFO 或裁决冲突时只追加
 一个健康 spare；`--all` 才是显式全审，留给判卷、沙箱、权限边界或二审无法收敛的特殊面。
+仓里有 typed active track 时，派发前必须显式给 `--track NAME` 或 `--no-track`；前者会在
+任何腿启动前校验 decision 已满足 dispatch 且 `impact.level == --risk`。实际腿、回落降级、
+总耗时、rc 与真实可得 usage 在全部腿结束后写回主仓 track 的紧凑 observation；prompt 和
+完整日志仍在仓外，不复制进 Git。
 每条实际派出的腿各写各的
 `<prefix>.<leg>.log`(默认前缀 `/root/aiwork/logs/panel-<task>-<ts>`)。一条腿失败不阻断
 其他腿;只有所有实际派出的腿都失败才非零退出。主自审必须在派发前已落盘，DEFAULT-ON
