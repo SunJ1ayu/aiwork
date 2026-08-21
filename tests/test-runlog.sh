@@ -385,6 +385,21 @@ EOF
   rm -rf "$d" "$stub"
 }
 
+# ---------------------------------------------------------------- R13
+r13_worktree_observation_lands_in_main_track() {
+  echo "[R13] 从 attached worktree 跑 runlog，紧凑观测仍落主仓 track"
+  local d wt rc
+  d="$(newrepo)"; wt="$d-wt"
+  git -C "$d" worktree add -q -b runlog-worktree-test "$wt" HEAD
+  ( cd "$wt" && "$RUNLOG" -t t -n from-worktree -- true ) >/dev/null 2>&1; rc=$?
+  check "R13: worktree 内原命令正常成功" $([[ $rc -eq 0 ]]; echo $?)
+  check "R13: observation 写进 main checkout 的 track" \
+    $([[ "$(find "$d/tracks/t/observations" -name '*.json' 2>/dev/null | wc -l)" -eq 1 ]]; echo $?)
+  check "R13: execution worktree 没有 observation 副本" \
+    $([[ "$(find "$wt/tracks/t/observations" -name '*.json' 2>/dev/null | wc -l)" -eq 0 ]]; echo $?)
+  rm -rf "$d" "$wt"
+}
+
 echo "=== runlog oracle ==="
 r1_writes_a_receipt
 r2_exit_code_passthrough
@@ -398,5 +413,6 @@ r9_secret_shapes_never_become_receipts
 r10_temp_buffer_failure_is_pre_run
 r11_writes_compact_typed_observation
 r12_observation_is_atomic_and_failure_preserves_rc
+r13_worktree_observation_lands_in_main_track
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

@@ -148,6 +148,25 @@ check "R4: 缺覆盖的 rule trace 明确" $?
 write_observation "$d/t" t run-1 runlog execution_finished 0
 $RECORD validate --phase archive "$d/t" >/dev/null 2>&1
 check "R4: PASS 且 execution coverage 完整才可归档" $?
+python3 - "$d/t/observations/run-1-execution_finished.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["transcript"]="SECRET_SHOULD_NEVER_BE_ACCEPTED"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4: observation 顶层夹带 transcript/额外字段时 archive fail closed" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=field.unknown' <<<"$out"
+check "R4: observation 白名单违规给结构化 rule trace" $?
+write_observation "$d/t" t run-1 panel-review execution_finished 0
+python3 - "$d/t/observations/run-1-execution_finished.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["actual"]["adapter"]="panel-review"; p["actual"]["legs"]=["not-an-object"]
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4: malformed panel leg 被干净阻断而不是让 ledger 崩溃" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=field.type' <<<"$out"
+check "R4: malformed leg trace 点名类型错误" $?
 rm -rf "$d/t/observations"
 low_decision "$d/t" t '"ARCHIVED-SUPERSEDED"'
 $RECORD validate --phase archive "$d/t" >/dev/null 2>&1

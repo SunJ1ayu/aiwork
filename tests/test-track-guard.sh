@@ -585,6 +585,26 @@ g9_typed_shape_uses_staged_decision() {
   (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
   check 'G9: staged 合法、working 非法 ⇒ guard 按 staged 放行' $([[ $rc -eq 0 ]]; echo $?)
   rm -rf "$d"
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    git add tracks/t/verify.md )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G9: working 有新 decision 但没 staged ⇒ 不许降级成 legacy 放行' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    git add tracks/t; git commit -qm typed
+    git rm -q tracks/t/decision.json
+    printf '# changed\n' >> tracks/t/verify.md; git add tracks/t/verify.md )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G9: staged 删除已跟踪 decision ⇒ 不许伪装成 legacy' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
 }
 
 # ---------------------------------------------------------------- G7

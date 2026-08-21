@@ -156,6 +156,25 @@ g7_typed_track_must_be_dispatch_ready() {
   (cd "$d" && bash "$LINK" "$msg" >/dev/null 2>&1); rc=$?
   check 'G7: decision 完整后无需 Markdown 复制 lane/派给即可放行' $([[ $rc -eq 0 ]]; echo $?)
   rm -rf "$d"
+
+  d="$(newrepo)"; msg="$d/msg"
+  printf '# changed\n' >> "$d/bin/ro-repo-exec"
+  typed_decision '"self"' > "$d/tracks/current/decision.json"
+  git -C "$d" add bin/ro-repo-exec
+  message "$msg" current
+  (cd "$d" && bash "$LINK" "$msg" >/dev/null 2>&1); rc=$?
+  check 'G7: 新 decision 只在 working、没进 index ⇒ 关键 commit 拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  d="$(newrepo)"; msg="$d/msg"
+  typed_decision '"self"' > "$d/tracks/current/decision.json"
+  git -C "$d" add tracks/current/decision.json; git -C "$d" commit -qm typed
+  git -C "$d" rm -q tracks/current/decision.json
+  printf '# changed\n' >> "$d/bin/ro-repo-exec"; git -C "$d" add bin/ro-repo-exec
+  message "$msg" current
+  (cd "$d" && bash "$LINK" "$msg" >/dev/null 2>&1); rc=$?
+  check 'G7: staged 删除已跟踪 decision ⇒ commit-msg 不能退回 legacy' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
 }
 
 echo '=== track-link oracle ==='

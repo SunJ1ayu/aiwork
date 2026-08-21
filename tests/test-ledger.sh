@@ -59,6 +59,10 @@ observe "$repo" local-pass local-1 execution_finished runlog null 200 0 local 10
 # PASS without controller coverage must be listed missing, never silently aggregated.
 write_decision "$repo/tracks/missing-pass" missing-pass main null PASS
 
+# Planned delegate execution cannot be substituted by an unrelated green runlog.
+write_decision "$repo/tracks/delegate-missing" delegate-missing delegate-codex '"gpt-5.5"' PASS
+observe "$repo" delegate-missing unrelated execution_finished runlog null 50 0 local
+
 # A failed outcome may be reported but must not enter successful-task cost.
 write_decision "$repo/tracks/blocked" blocked main null BLOCK
 observe "$repo" blocked blocked-1 execution_finished runlog null 300 1 local
@@ -114,6 +118,10 @@ assert missing["successful_cost_eligible"] is False
 assert "execution_finished" in missing["missing"]
 assert missing["cost"]["execution_duration_ms"] is None
 
+delegate_missing=tracks["delegate-missing"]
+assert delegate_missing["successful_cost_eligible"] is False
+assert "delegate_execution_finished" in delegate_missing["missing"]
+
 legacy=tracks["legacy"]
 assert legacy["record_status"] == "legacy"
 assert legacy["impact_level"] is None and legacy["outcome"] is None
@@ -123,9 +131,9 @@ assert legacy["successful_cost_eligible"] is False
 
 assert tracks["blocked"]["successful_cost_eligible"] is False
 s=p["summary"]
-assert s["tracks_total"] == 5 and s["typed_tracks"] == 4 and s["legacy_tracks"] == 1
-assert s["successful_tracks"] == 3 and s["successful_cost_eligible"] == 2
-assert s["successful_cost_missing"] == ["missing-pass"]
+assert s["tracks_total"] == 6 and s["typed_tracks"] == 5 and s["legacy_tracks"] == 1
+assert s["successful_tracks"] == 4 and s["successful_cost_eligible"] == 2
+assert s["successful_cost_missing"] == ["delegate-missing", "missing-pass"]
 assert s["successful_cost"]["execution_duration_ms"] == 300
 assert s["successful_cost"]["total_tokens"]["value"] is None
 assert s["successful_cost"]["total_tokens"]["known_total"] == 15
@@ -181,6 +189,27 @@ assert bi==ai
 assert before["summary"]==after["summary"]
 PY
 check "L4: 除 lifecycle location 外，逐项成本/质量与总聚合不变" $?
+
+echo "[L5] 同一 controller/event/run_id 重复导入不许双计成本"
+source_obs="$(find "$repo/tracks/archive/local-pass/observations" -name '*.json' | head -1)"
+cp "$source_obs" "$repo/tracks/archive/local-pass/observations/duplicate.json"
+dupe_ledger="$($RECORD ledger --repo "$repo" --format json)"; rc=$?
+check "L5: 重复事件不会让 ledger 崩溃" $([[ $rc -eq 0 ]]; echo $?)
+LEDGER="$dupe_ledger" python3 - <<'PY'
+import json, os
+p=json.loads(os.environ["LEDGER"])
+t=next(x for x in p["tracks"] if x["track"]=="local-pass")
+assert t["coverage"]["invalid_observations"] == 1
+assert t["coverage"]["execution_finished"] == 1
+assert t["cost"]["execution_duration_ms"] == 200
+assert t["successful_cost_eligible"] is False
+assert "valid_observations" in t["missing"]
+PY
+check "L5: 重复事件标 invalid/missing，第一份只算一次" $?
+out="$($RECORD validate --phase archive "$repo/tracks/archive/local-pass" 2>&1)"; rc=$?
+check "L5: PASS archive validator 同样拒绝重复事件" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=observation.duplicate' <<<"$out"
+check "L5: duplicate trace 明确" $?
 
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="

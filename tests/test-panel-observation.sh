@@ -142,6 +142,22 @@ grep -q 'OBSERVATION_WRITE_FAILED' <<<"$out"
 check "P4: writer 失败明确报警" $?
 check "P4: writer 失败不伪造事件" $([[ "$(obs_count "$d")" -eq "$before" ]]; echo $?)
 
+echo "[P5] self budget=0 有 controller event，但 external dispatch_count 必须为 0"
+PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-4" PANEL_STAGGER_MAX=0 \
+  bash "$d/bin/panel-review" --track current --risk high --budget 0 \
+  "${common[@]}" "$d/raw/self" >/dev/null 2>&1; rc=$?
+check "P5: self/no-external-review 正常成功" $([[ $rc -eq 0 ]]; echo $?)
+ledger="$($ROOT/bin/track-record ledger --repo "$d/repo" --format json)"
+LEDGER="$ledger" python3 - <<'PY'
+import json, os
+p=json.loads(os.environ["LEDGER"])
+t=next(x for x in p["tracks"] if x["track"]=="current")
+assert t["quality"]["controller_runs"] == 3
+assert t["quality"]["panel_legs"] == 3
+assert t["quality"]["dispatch_count"] == 3
+PY
+check "P5: 空 legs 的 panel run 不被伪记成一次外腿 dispatch" $?
+
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
