@@ -26,9 +26,18 @@ active_typed_dirs_changed() {
 for track_dir in $(active_typed_dirs_changed); do
   name="${track_dir#tracks/}"
   # 合法 archive move：staged destination 的 typed facts 会在归档循环完整校验。
-  git cat-file -e ":tracks/archive/$name/decision.json" 2>/dev/null && continue
+  staged_active=0; staged_archive=0
+  git cat-file -e ":$track_dir/decision.json" 2>/dev/null && staged_active=1
+  git cat-file -e ":tracks/archive/$name/decision.json" 2>/dev/null && staged_archive=1
+  if [[ "$staged_archive" -eq 1 && "$staged_active" -eq 0 ]]; then
+    continue
+  fi
+  if [[ "$staged_archive" -eq 1 && "$staged_active" -eq 1 ]]; then
+    fail=1
+    say "🔴 track 名全生命周期必须唯一，staged active/archive 同名:$name（归档必须 move，不能 copy）。"
+  fi
   known_decision=0
-  git cat-file -e ":$track_dir/decision.json" 2>/dev/null && known_decision=1
+  [[ "$staged_active" -eq 1 ]] && known_decision=1
   [ -f "$track_dir/decision.json" ] && known_decision=1
   git cat-file -e "HEAD:$track_dir/decision.json" 2>/dev/null && known_decision=1
   [[ "$known_decision" -eq 1 ]] || continue

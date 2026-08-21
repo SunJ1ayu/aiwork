@@ -732,6 +732,32 @@ PY
   rm -rf "$d"
 
   d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t/observations
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    python3 - tracks/t/decision.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["outcome"]["verdict"]="PASS"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+    cat > tracks/t/observations/ok.json <<'JSON'
+{"schema_version":1,"track":"t","run_id":"r1","controller":"runlog","event":"execution_finished","label":"r1","started_at":"2026-08-21T00:00:00Z","finished_at":"2026-08-21T00:00:01Z","duration_ms":1,"exit_code":0,"actual":{"adapter":"runlog","model":null,"risk":null,"degraded":null,"work_exit_code":0,"legs":null},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+JSON
+    git add tracks/t; git commit -qm active
+    mkdir -p tracks/archive; cp -R tracks/t tracks/archive/t
+    python3 - tracks/t/observations/ok.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["transcript"]="FULL_TRANSCRIPT"
+json.dump(p, open(sys.argv[1], "w"), separators=(",", ":"))
+PY
+    git add tracks/archive/t tracks/t/observations/ok.json; git rm -q tracks/t/verify.md )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check 'G11: copy-not-move 留下 active/archive 同名 ⇒ 生命周期唯一闸拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  grep -q '必须唯一' <<<"$out"
+  check 'G11: copy-not-move 报警明确要求 move' $?
+  rm -rf "$d"
+
+  d="$(newrepo)"
   ( cd "$d"; mkdir -p tracks/archive/t/observations
     printf '# Verify\n- 无机器证据:fixture\n' > tracks/archive/t/verify.md
     typed_decision '"self"' > tracks/archive/t/decision.json

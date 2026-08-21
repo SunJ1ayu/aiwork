@@ -160,6 +160,22 @@ $RECORD validate --phase dispatch "$d/t" >/dev/null 2>&1
 check "R3: high uncertainty + 持久 evidence 后可 dispatch" $?
 rm -rf "$d"
 
+echo "[R3b] staged dispatch 的 premise evidence 只认 index，不让 working 文件替提交应试"
+d="$(mktemp -d)"; mkdir -p "$d/tracks/t"
+( cd "$d"; git init -q; git config user.email t@t; git config user.name t )
+write_decision "$d/tracks/t" t '"high"' '["new_write_surface"]' '"high"' '"done"' \
+  '["premise.md"]' '"main"' null null
+printf 'staged premise\n' > "$d/tracks/t/premise.md"
+( cd "$d"; git add tracks/t/decision.json )
+out="$($RECORD validate --phase dispatch --source staged "$d/tracks/t" 2>&1)"; rc=$?
+check "R3b: 仅 working/untracked 的 premise evidence 不能冒充 staged" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=evidence.staged' <<<"$out"
+check "R3b: 未 staged evidence 的 trace 明确" $?
+( cd "$d"; git add tracks/t/premise.md; rm tracks/t/premise.md )
+$RECORD validate --phase dispatch --source staged "$d/tracks/t" >/dev/null 2>&1; rc=$?
+check "R3b: evidence 已 staged、working 已删仍按 index 放行" $([[ $rc -eq 0 ]]; echo $?)
+rm -rf "$d"
+
 echo "[R4] archive 要求真实 outcome，保留 superseded 而不伪造 PASS"
 d="$(mktemp -d)"; low_decision "$d/t" t null
 out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?

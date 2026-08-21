@@ -274,7 +274,7 @@ def require_value(data: dict[str, Any], path: tuple[str, ...], expected: str) ->
     return value
 
 
-def validate_dispatch(data: dict[str, Any], track_dir: Path) -> None:
+def validate_dispatch(data: dict[str, Any], track_dir: Path, source: str) -> None:
     level = require_value(data, ("impact", "level"), "self|standard|high before dispatch")
     factors = require_value(data, ("impact", "factors"), "array before dispatch")
     uncertainty = require_value(data, ("design", "uncertainty"), "low|high before dispatch")
@@ -302,13 +302,45 @@ def validate_dispatch(data: dict[str, Any], track_dir: Path) -> None:
         raise DecisionError("design.premise_status", "design.premise_attack.status", status, "not_required|done")
     if status == "done":
         for rel in evidence:
-            candidate = track_dir / rel
+            if source == "working":
+                candidate = track_dir / rel
+                try:
+                    candidate.resolve().relative_to(track_dir.resolve())
+                except ValueError as exc:
+                    raise DecisionError("evidence.path", "design.premise_attack.evidence[]", rel, "path inside track") from exc
+                if candidate.is_symlink() or not candidate.is_file():
+                    raise DecisionError("evidence.exists", "design.premise_attack.evidence[]", rel, "existing non-symlink file")
+                continue
+
+            repo = git_root(track_dir)
+            if repo is None:
+                raise DecisionError("git.repository", "track_dir", os.fspath(track_dir), "track inside a git repository")
             try:
-                candidate.resolve().relative_to(track_dir.resolve())
+                track_rel = track_dir.resolve().relative_to(repo.resolve()).as_posix()
             except ValueError as exc:
-                raise DecisionError("evidence.path", "design.premise_attack.evidence[]", rel, "path inside track") from exc
-            if candidate.is_symlink() or not candidate.is_file():
-                raise DecisionError("evidence.exists", "design.premise_attack.evidence[]", rel, "existing non-symlink file")
+                raise DecisionError("git.repository", "track_dir", os.fspath(track_dir), "track inside a git repository") from exc
+            evidence_path = f"{track_rel}/{rel}"
+            listed = subprocess.run(
+                ["git", "-C", os.fspath(repo), "ls-files", "--stage", "-z", "--", evidence_path],
+                check=False,
+                capture_output=True,
+            )
+            entries = [entry for entry in listed.stdout.split(b"\0") if entry]
+            mode = None
+            staged_path = None
+            if listed.returncode == 0 and len(entries) == 1:
+                try:
+                    metadata, staged_path = entries[0].decode("utf-8").split("\t", 1)
+                    mode = metadata.split(" ", 1)[0]
+                except (UnicodeDecodeError, ValueError):
+                    mode = None
+            if mode != "100644" or staged_path != evidence_path:
+                raise DecisionError(
+                    "evidence.staged",
+                    "design.premise_attack.evidence[]",
+                    {"path": evidence_path, "mode": mode},
+                    "exact staged 100644 evidence blob",
+                )
 
 
 def validate_archive_observations(data: dict[str, Any], track_dir: Path, source: str) -> None:
@@ -386,7 +418,7 @@ def validate(track_dir: Path, phase: str, source: str, expected_impact: str | No
         if expected_impact is not None and data["impact"]["level"] != expected_impact:
             raise DecisionError("impact.expected", "impact.level", data["impact"]["level"], expected_impact)
         if phase in ("dispatch", "archive"):
-            validate_dispatch(data, track_dir)
+            validate_dispatch(data, track_dir, source)
         if phase == "archive" and data["outcome"]["verdict"] is None:
             raise DecisionError("field.decided", "outcome.verdict", None, "PASS|BLOCK|NEEDS_MORE_INFO|ARCHIVED-SUPERSEDED")
         if phase == "archive":
