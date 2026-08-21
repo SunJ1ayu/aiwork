@@ -14,6 +14,7 @@ set -uo pipefail
 
 SUITES=(
   "review-tooling|bash|/root/aiwork/tests/test-review-tooling.sh"
+  "panel-observation|bash|/root/aiwork/tests/test-panel-observation.sh"
   "fix-oracle|bash|/root/aiwork/tests/test-submimo-fix-oracle.sh"
   "retry|python3|/root/aiwork/tests/test_submimo_retry.py"
   "track-guard|bash|/root/aiwork/tests/test-track-guard.sh"
