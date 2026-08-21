@@ -56,6 +56,30 @@ write_observation() { # track-dir track run-id controller event rc
 EOF
 }
 
+write_panel_observation() { # track-dir track run-id family1 family2
+  mkdir -p "$1/observations"
+  cat > "$1/observations/$3-panel.json" <<EOF
+{
+  "schema_version": 1, "track": "$2", "run_id": "$3",
+  "controller": "panel-review", "event": "execution_finished", "label": "$3",
+  "started_at": "2026-08-21T01:00:00.000Z",
+  "finished_at": "2026-08-21T01:00:01.000Z",
+  "duration_ms": 100, "exit_code": 0,
+  "actual": {"adapter": "panel-review", "model": null, "risk": "high",
+    "degraded": false, "work_exit_code": 0, "legs": [
+      {"name":"leg1","family":"$4","adapter":"agent","model":null,"state":"completed",
+       "exit_code":0,"verdict":"PASS","degraded":false,"duration_ms":null,
+       "usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}},
+      {"name":"leg2","family":"$5","adapter":"agent","model":null,"state":"completed",
+       "exit_code":0,"verdict":"PASS","degraded":false,"duration_ms":null,
+       "usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+    ]},
+  "usage": {"input_tokens": null, "output_tokens": null, "total_tokens": null,
+    "api_cost": null, "billing_mode": null}
+}
+EOF
+}
+
 echo "=== typed track record oracle ==="
 
 if [[ ! -x "$RECORD" ]]; then
@@ -255,6 +279,26 @@ out="$($RECORD validate --phase shape "$d/t" 2>&1)"; rc=$?
 check "R4: 自造 verdict 枚举被挡" $([[ $rc -ne 0 ]]; echo $?)
 rm -rf "$d"
 
+echo "[R4b] PASS archive 机械核对 impact-risk 的 0/1/2 外审家族预算"
+d="$(mktemp -d)"
+write_decision "$d/t" t '"high"' '["judging_control"]' '"low"' '"not_required"' '[]' '"main"' null '"PASS"'
+write_observation "$d/t" t run-1 runlog execution_finished 0
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4b: high PASS 只有 runlog、零外审腿 ⇒ archive BLOCK" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=observation.review_budget' <<<"$out" && grep -q 'required.*2' <<<"$out"
+check "R4b: 外审缺口 trace 点名 required=2" $?
+write_panel_observation "$d/t" t panel-1 xiaomi deepseek
+$RECORD validate --phase archive "$d/t" >/dev/null 2>&1; rc=$?
+check "R4b: high PASS 有成功 panel + 两个不同模型家族才可归档" $([[ $rc -eq 0 ]]; echo $?)
+python3 - "$d/t/observations/panel-1-panel.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["actual"]["legs"][1]["family"]="xiaomi"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4b: high 的两腿来自同一 family 仍不算双家族" $([[ $rc -ne 0 ]]; echo $?)
+rm -rf "$d"
+
 echo "[R5] legacy 明示兼容；曾跟踪过的 decision 删除后不能降级逃闸"
 d="$(mktemp -d)"; mkdir -p "$d/tracks/legacy"
 out="$($RECORD validate --phase archive "$d/tracks/legacy" 2>&1)"; rc=$?
@@ -322,6 +366,10 @@ for n in 1 2 3 4 5; do legs+=(--leg "leg$n,family,agent,0,PASS,false"); done
 out="$($RECORD "${common_obs[@]}" --controller panel-review --adapter panel-review "${legs[@]}" 2>&1)"; rc=$?
 check "R8: writer 收到 5 panel legs 在写盘前拒绝" $([[ $rc -ne 0 ]]; echo $?)
 check "R8: legs 超限不留下 observation" $([[ ! -d "$d/tracks/t/observations" ]]; echo $?)
+out="$($RECORD "${common_obs[@]}" --controller runlog --adapter runlog \
+  --leg x,family,agent,0,PASS,false 2>&1)"; rc=$?
+check "R8: 非 panel controller 带 --leg 给结构化 BLOCK、不是 traceback" \
+  $([[ $rc -ne 0 && "$out" == *'rule=observation.leg_controller'* && "$out" != *Traceback* ]]; echo $?)
 rm -rf "$d"
 
 echo "=== total: $PASS passed, $FAIL failed ==="

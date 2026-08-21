@@ -72,7 +72,8 @@ agent to verify, never a verdict to adopt.
   The `observations/` directory accepts only direct regular JSON events (64 KiB
   per event; at most four panel legs). Writers and readers share the same strict
   schema, and staged machine facts remain guarded both before and after archive.
-  Both CLI archive and staged manual archive validate coverage before any sweep/move.
+  Both CLI archive and staged manual archive validate execution plus the declared
+  self/standard/high review floor (0/1/2 distinct model families) before any sweep/move.
 - `bin/redcheck` — revert-the-implementation red check: puts the impl back to a
   baseline, rebuilds, reruns the oracle, and REQUIRES red (`--must-fail` pins
   where the red must land). Restores unconditionally and proves the tree is clean.

@@ -52,6 +52,7 @@ CONTROLLERS = ("runlog", "panel-review", "delegate-codex")
 EVENTS = ("execution_finished", "received")
 BILLING_MODES = ("subscription", "api", "local")
 EXECUTION_ADAPTERS = ("main", "submimo", "delegate-codex", "claude-worktree")
+REVIEW_BUDGETS = {"self": 0, "standard": 1, "high": 2}
 MAX_OBSERVATION_BYTES = 64 * 1024
 MAX_OBSERVATION_LEGS = 4
 
@@ -370,6 +371,29 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
             [item["exit_code"] for item in executions],
             "at least one execution_finished with exit_code=0 before PASS archive",
         )
+    required_reviews = REVIEW_BUDGETS[data["impact"]["level"]]
+    if required_reviews:
+        panel_runs = [item for item in executions if item["controller"] == "panel-review"]
+        panel_families = sorted(
+            {
+                leg["family"]
+                for item in panel_runs
+                for leg in (item["actual"].get("legs") or [])
+            }
+        )
+        successful_panel_runs = sum(item["exit_code"] == 0 for item in panel_runs)
+        if successful_panel_runs == 0 or len(panel_families) < required_reviews:
+            raise DecisionError(
+                "observation.review_budget",
+                "observations[].actual.legs[].family",
+                {
+                    "impact": data["impact"]["level"],
+                    "required": required_reviews,
+                    "distinct_families": panel_families,
+                    "successful_panel_runs": successful_panel_runs,
+                },
+                f">= {required_reviews} distinct external review families in a successful panel-review run",
+            )
     if data["execution_plan"]["adapter"] == "main" and not any(
         item["controller"] == "runlog" and item["exit_code"] == 0 for item in executions
     ):
@@ -557,6 +581,13 @@ def observe(args: argparse.Namespace) -> int:
         nullable_nonnegative(args.exit_code, "exit_code")
         nullable_nonnegative(args.work_exit_code, "actual.work_exit_code")
         legs: list[dict[str, Any]] | None = [] if args.controller == "panel-review" else None
+        if args.controller != "panel-review" and args.leg:
+            raise DecisionError(
+                "observation.leg_controller",
+                "actual.legs",
+                len(args.leg),
+                "--leg is valid only for controller=panel-review",
+            )
         for spec in args.leg or []:
             parts = spec.split(",")
             if len(parts) != 6:
@@ -1096,6 +1127,8 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
     )
 
     panel_legs = [leg for item in executions for leg in (item["actual"].get("legs") or [])]
+    panel_runs = [item for item in executions if item["controller"] == "panel-review"]
+    panel_families = sorted({leg["family"] for item in panel_runs for leg in (item["actual"].get("legs") or [])})
     fallback_dispatches = sum(
         1
         for item in executions
@@ -1153,6 +1186,12 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
             missing.append("main_execution_finished")
         if planned["adapter"] in ("submimo", "claude-worktree"):
             missing.append(f"planned_adapter_observation:{planned['adapter']}")
+        required_reviews = REVIEW_BUDGETS[impact]
+        if required_reviews and (
+            not any(item["exit_code"] == 0 for item in panel_runs)
+            or len(panel_families) < required_reviews
+        ):
+            missing.append(f"review_budget:{required_reviews}")
         received_ok = {
             item["run_id"]
             for item in receives
@@ -1182,6 +1221,7 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
             "dispatch_count": dispatch_count,
             "failed_controller_runs": sum(1 for item in executions if item["exit_code"] != 0),
             "panel_legs": len(panel_legs),
+            "panel_families": panel_families,
             "fallback_dispatches": fallback_dispatches,
             "failed_panel_legs": failed_legs,
             "degraded_runs_or_legs": degraded,

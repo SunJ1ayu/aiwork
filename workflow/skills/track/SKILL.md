@@ -89,7 +89,9 @@ conversation history; reconstruct from the folder:
    arbitrates one outcome into `decision.json` (PASS / BLOCK / NEEDS_MORE_INFO or
    ARCHIVED-SUPERSEDED). A panel verdict never auto-advances anything — the main agent
    is sole arbiter. Never copy these enums into verify.md as a second machine source.
-6. **Archive.** On PASS, offer `track archive <name>`.
+6. **Archive.** On PASS, offer `track archive <name>`. Archive mechanically requires a
+   successful panel observation covering 0 / 1 / 2 distinct external model families for
+   self / standard / high; dispatching a panel without binding the track cannot satisfy it.
 
 ## Cost-quality ledger
 
@@ -99,7 +101,7 @@ conversation history; reconstruct from the folder:
 稳定，适合留给后续 trial 比较。
 
 账本把最终 `PASS`、controller/leg dispatch 次数、失败/降级、实际模型、耗时和可得 usage 放在
-同一行，但不把 dispatch_count 解释成“返工轮数”。只有 PASS 且 execution coverage 完整的 track
+同一行，但不把 dispatch_count 解释成“返工轮数”。只有 PASS 且 execution/review coverage 完整的 track
 进入 successful-cost 聚合；缺 event 的 PASS 单独列 missing。订阅拿不到 token/API 现金成本、
 或历史 track 根本没有 typed facts 时都保留 `null/unknown`，绝不能补成 0，也不从旧 prose 猜。
 planned/actual model 或 Adapter **可比较时**由 mismatch 明示，不相互覆盖；main 的 runlog 是验证

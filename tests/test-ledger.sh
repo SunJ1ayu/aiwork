@@ -59,6 +59,15 @@ observe "$repo" local-pass local-1 execution_finished runlog null 200 0 local 10
 # PASS without controller coverage must be listed missing, never silently aggregated.
 write_decision "$repo/tracks/missing-pass" missing-pass main null PASS
 
+# High PASS with execution but no two-family panel evidence is under-reviewed.
+write_decision "$repo/tracks/under-reviewed" under-reviewed main null PASS
+python3 - "$repo/tracks/under-reviewed/decision.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["impact"]={"level":"high","factors":["judging_control"]}
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+observe "$repo" under-reviewed under-1 execution_finished runlog null 40 0 local
+
 # Planned delegate execution cannot be substituted by an unrelated green runlog.
 write_decision "$repo/tracks/delegate-missing" delegate-missing delegate-codex '"gpt-5.5"' PASS
 observe "$repo" delegate-missing unrelated execution_finished runlog null 50 0 local
@@ -122,6 +131,11 @@ delegate_missing=tracks["delegate-missing"]
 assert delegate_missing["successful_cost_eligible"] is False
 assert "delegate_execution_finished" in delegate_missing["missing"]
 
+under=tracks["under-reviewed"]
+assert under["successful_cost_eligible"] is False
+assert "review_budget:2" in under["missing"]
+assert under["quality"]["panel_families"] == []
+
 legacy=tracks["legacy"]
 assert legacy["record_status"] == "legacy"
 assert legacy["impact_level"] is None and legacy["outcome"] is None
@@ -131,9 +145,9 @@ assert legacy["successful_cost_eligible"] is False
 
 assert tracks["blocked"]["successful_cost_eligible"] is False
 s=p["summary"]
-assert s["tracks_total"] == 6 and s["typed_tracks"] == 5 and s["legacy_tracks"] == 1
-assert s["successful_tracks"] == 4 and s["successful_cost_eligible"] == 2
-assert s["successful_cost_missing"] == ["delegate-missing", "missing-pass"]
+assert s["tracks_total"] == 7 and s["typed_tracks"] == 6 and s["legacy_tracks"] == 1
+assert s["successful_tracks"] == 5 and s["successful_cost_eligible"] == 2
+assert s["successful_cost_missing"] == ["delegate-missing", "missing-pass", "under-reviewed"]
 assert s["successful_cost"]["execution_duration_ms"] == 300
 assert s["successful_cost"]["total_tokens"]["value"] is None
 assert s["successful_cost"]["total_tokens"]["known_total"] == 15
