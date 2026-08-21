@@ -297,6 +297,17 @@ json.dump(p, open(sys.argv[1], "w"), indent=2)
 PY
 out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
 check "R4b: high 的两腿来自同一 family 仍不算双家族" $([[ $rc -ne 0 ]]; echo $?)
+cp "$d/t/observations/panel-1-panel.json" "$d/t/observations/panel-2-failed.json"
+python3 - "$d/t/observations/panel-2-failed.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["run_id"]="panel-2"; p["label"]="panel-2"
+p["exit_code"]=1; p["actual"]["work_exit_code"]=1
+p["actual"]["legs"]=p["actual"]["legs"][:1]
+p["actual"]["legs"][0].update(family="deepseek", state="failed", exit_code=1, verdict="BLOCK")
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4b: 失败 panel 的第二 family 不能与成功单家族拼成 high 双家族" $([[ $rc -ne 0 ]]; echo $?)
 rm -rf "$d"
 
 echo "[R5] legacy 明示兼容；曾跟踪过的 decision 删除后不能降级逃闸"

@@ -373,7 +373,11 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
         )
     required_reviews = REVIEW_BUDGETS[data["impact"]["level"]]
     if required_reviews:
-        panel_runs = [item for item in executions if item["controller"] == "panel-review"]
+        panel_runs = [
+            item
+            for item in executions
+            if item["controller"] == "panel-review" and item["exit_code"] == 0
+        ]
         panel_families = sorted(
             {
                 leg["family"]
@@ -381,7 +385,7 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
                 for leg in (item["actual"].get("legs") or [])
             }
         )
-        successful_panel_runs = sum(item["exit_code"] == 0 for item in panel_runs)
+        successful_panel_runs = len(panel_runs)
         if successful_panel_runs == 0 or len(panel_families) < required_reviews:
             raise DecisionError(
                 "observation.review_budget",
@@ -1127,7 +1131,11 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
     )
 
     panel_legs = [leg for item in executions for leg in (item["actual"].get("legs") or [])]
-    panel_runs = [item for item in executions if item["controller"] == "panel-review"]
+    panel_runs = [
+        item
+        for item in executions
+        if item["controller"] == "panel-review" and item["exit_code"] == 0
+    ]
     panel_families = sorted({leg["family"] for item in panel_runs for leg in (item["actual"].get("legs") or [])})
     fallback_dispatches = sum(
         1
@@ -1188,8 +1196,7 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
             missing.append(f"planned_adapter_observation:{planned['adapter']}")
         required_reviews = REVIEW_BUDGETS[impact]
         if required_reviews and (
-            not any(item["exit_code"] == 0 for item in panel_runs)
-            or len(panel_families) < required_reviews
+            not panel_runs or len(panel_families) < required_reviews
         ):
             missing.append(f"review_budget:{required_reviews}")
         received_ok = {

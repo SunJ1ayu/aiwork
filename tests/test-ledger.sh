@@ -42,6 +42,16 @@ observe() { # repo track run event adapter model duration rc billing [tokens]
   "$RECORD" "${args[@]}" >/dev/null
 }
 
+panel_observe() { # repo track run family rc
+  local repo="$1" track="$2" run="$3" family="$4" rc="$5" verdict=PASS
+  [[ "$rc" -eq 0 ]] || verdict=BLOCK
+  "$RECORD" observe --repo "$repo" --track "$track" --run-id "$run" \
+    --controller panel-review --event execution_finished --label "$run" \
+    --started-at 2026-08-21T01:00:00.000Z --finished-at 2026-08-21T01:00:01.000Z \
+    --duration-ms 100 --exit-code "$rc" --adapter panel-review --work-exit-code "$rc" \
+    --risk high --degraded false --leg "leg-$run,$family,agent,$rc,$verdict,false" >/dev/null
+}
+
 echo "=== read-only cost/quality ledger oracle ==="
 d="$(mktemp -d)"; repo="$d/repo"
 mkdir -p "$repo/tracks/archive" "$repo/logs"
@@ -67,6 +77,8 @@ p=json.load(open(sys.argv[1])); p["impact"]={"level":"high","factors":["judging_
 json.dump(p, open(sys.argv[1], "w"), indent=2)
 PY
 observe "$repo" under-reviewed under-1 execution_finished runlog null 40 0 local
+panel_observe "$repo" under-reviewed panel-ok xiaomi 0
+panel_observe "$repo" under-reviewed panel-red deepseek 1
 
 # Planned delegate execution cannot be substituted by an unrelated green runlog.
 write_decision "$repo/tracks/delegate-missing" delegate-missing delegate-codex '"gpt-5.5"' PASS
@@ -134,7 +146,7 @@ assert "delegate_execution_finished" in delegate_missing["missing"]
 under=tracks["under-reviewed"]
 assert under["successful_cost_eligible"] is False
 assert "review_budget:2" in under["missing"]
-assert under["quality"]["panel_families"] == []
+assert under["quality"]["panel_families"] == ["xiaomi"]
 
 legacy=tracks["legacy"]
 assert legacy["record_status"] == "legacy"
