@@ -1,0 +1,37 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    review-tooling-final
+cmd:     bash bin/rust-check-review-tooling
+cwd:     /root/aiwork(仓根)
+commit:  7578a3c
+dirty:   no(跑之前采的;含未跟踪文件)
+head-before: 7578a3c2ceff828b566b7c71ce46a4c3c4777a00
+source-view-before: sha256:06c42678a2e121b74b638daf83454a57c4d1fab4305019a29a2acae4616a15f9
+started: 2026-08-21T12:59:21Z
+---------------- 输出开始 ----------------
+ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**,没扫 tests/ 与 track/templates/;只报不拦):
+    check-gateway-version openclaw-up
+❌ 工具链防锈失败(外部漂移/环境升级?先跑本地判据复现):
+--- review-tooling (rc=1) ---
+  FAIL: log still written on empty content
+  FAIL: reason on stderr (sidecar)
+  FAIL: log still written on null content
+  FAIL: reasoning_content fallback exits 0
+  FAIL: reasoning_content text lands in log
+  FAIL: explore mode exempt from verdict check
+  FAIL: --mode flag overrides REVIEW_MODE env
+  FAIL: verdict output exits 0
+  FAIL: V18: 端点报错打印真实端点 URL
+  PASS: V22c: 死腿记 FAIL 且带 rc
+  FAIL: V26: 聊天腿带自己的 User-Agent(urllib 默认 UA 会被 Cloudflare 403)
+=== total: 439 passed, 10 failed ===
+--- retry (rc=1) ---
+--- no-egress (rc=1) ---
+  FAIL: C0: 不引守卫时连得出去(它红 ⇒ 本判据问不出任何东西,下面全部不算数)
+  FAIL: N2: 守卫下 127.0.0.1 的桩服务器仍连得上
+=== total: 16 passed, 2 failed ===
+command-rc: 1
+head-after: 7578a3c2ceff828b566b7c71ce46a4c3c4777a00
+source-view-after:  sha256:06c42678a2e121b74b638daf83454a57c4d1fab4305019a29a2acae4616a15f9
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: review-tooling-final rc=1 commit=7578a3c dirty=no final=yes at=2026-08-21T12:59:21Z file=tracks/workflow-observability/evidence/20260821T125921Z-01-review-tooling-final.txt
