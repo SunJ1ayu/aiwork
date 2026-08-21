@@ -21,6 +21,7 @@ SUITES=(
   "track-record|bash|/root/aiwork/tests/test-track-record.sh"
   "track-links|bash|/root/aiwork/tests/test-track-links.sh"
   "delegate-entry|bash|/root/aiwork/tests/test-delegate-entry.sh"
+  "delegate-observation|bash|/root/aiwork/tests/test-delegate-observation.sh"
   "delegate-isolate|bash|/root/aiwork/tests/test-delegate-isolate.sh"
   "worktree-sweep|bash|/root/aiwork/tests/test-worktree-sweep.sh"
   "hooks-installed|bash|/root/aiwork/tests/test-hooks-installed.sh"
