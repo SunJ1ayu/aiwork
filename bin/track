@@ -321,7 +321,7 @@ case "$cmd" in
       v="$proj/tracks/$t/verify.md"
       if [ -f "$proj/tracks/$t/decision.json" ]; then
         if ! "$(dirname "$0")/track-record" validate --phase archive "$proj/tracks/$t" >/dev/null 2>&1; then
-          echo "  $t  ⚠️ typed outcome 还没满足归档条件"
+          echo "  $t  ⚠️ typed outcome/coverage 还没满足归档条件"
         else
           echo "  $t"
         fi

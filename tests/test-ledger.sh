@@ -6,6 +6,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RECORD="${TRACK_RECORD_BIN:-$ROOT/bin/track-record}"
+TRACK="${TRACK_BIN:-$ROOT/bin/track}"
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -153,6 +154,33 @@ md="$($RECORD ledger --repo "$repo" --format markdown)"; rc=$?
 check "L3: Markdown 输出成功" $([[ $rc -eq 0 ]]; echo $?)
 grep -q 'delegated' <<<"$md" && grep -q 'legacy' <<<"$md" && grep -q 'unknown' <<<"$md"
 check "L3: Markdown 含 typed/legacy 与 unknown，不粉饰缺失" $?
+
+echo "[L4] 真 archive+sweep 只回收执行现场，持久成本质量事实不丢"
+printf '# Verify\n- 无机器证据:fixture 只验证 archive/sweep 生命周期。\n' > "$repo/tracks/delegated/verify.md"
+( cd "$repo"; git add tracks/delegated/verify.md; git commit -qm verify )
+wt="$d/wt/delegated/ledger-job"
+mkdir -p "$(dirname "$wt")"
+git -C "$repo" worktree add -q -b delegate/delegated/ledger-job "$wt" main
+before_lifecycle="$($RECORD ledger --repo "$repo" --format json)"
+archive_out="$(DELEGATE_WORKTREE_ROOT="$d/wt" "$TRACK" archive delegated "$repo" 2>&1)"; rc=$?
+check "L4: typed facts/coverage 完整时真归档成功" $([[ $rc -eq 0 ]]; echo $?)
+check "L4: 原机械闸确实收掉已进主线的干净 worktree" $([[ ! -d "$wt" ]]; echo $?)
+check "L4: observations 随 track 持久移入 archive" \
+  $([[ -d "$repo/tracks/archive/delegated/observations" && ! -d "$repo/tracks/delegated" ]]; echo $?)
+after_lifecycle="$($RECORD ledger --repo "$repo" --format json)"
+BEFORE="$before_lifecycle" AFTER="$after_lifecycle" python3 - <<'PY'
+import copy, json, os
+before=json.loads(os.environ["BEFORE"]); after=json.loads(os.environ["AFTER"])
+def delegated(data):
+    item=next(x for x in data["tracks"] if x["track"]=="delegated")
+    location=item.pop("location")
+    return location, item
+bl, bi=delegated(before); al, ai=delegated(after)
+assert bl=="active" and al=="archive"
+assert bi==ai
+assert before["summary"]==after["summary"]
+PY
+check "L4: 除 lifecycle location 外，逐项成本/质量与总聚合不变" $?
 
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="

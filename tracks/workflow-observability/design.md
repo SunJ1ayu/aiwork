@@ -107,7 +107,8 @@ commit。v1 不宣称 D1 已全局解决。
 6. ledger 只读 decision/observations，不读 raw logs/receipt、不猜 legacy 数值、unknown 缺失率
    准确、重复运行字节稳定，运行前后 git status 与源哈希不变。
 7. typed record 损坏时在 sweep 前 BLOCK；现有 worktree-sweep 全套判据逐字行为不回归；
-   删除 raw logs 后、真 sweep + archive 后 ledger 结果不变；总工具链全绿。
+   删除 raw logs 后 ledger 字节不变；真 sweep + archive 后仅 lifecycle location 改变，成本/质量
+   指标与总聚合不变；总工具链全绿。
 
 **这个 oracle 能被什么骗过?**
 
