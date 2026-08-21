@@ -242,6 +242,11 @@ case "$cmd" in
           -e "s|__BASEREF__|$baseref|g" \
           "$TEMPLATES/$f.md" > "$dir/$f.md"
     done
+    sed -e "s|__NAME__|$name|g" "$TEMPLATES/decision.json" > "$dir/decision.json"
+    if ! "$(dirname "$0")/track-record" validate --phase shape "$dir" >/dev/null; then
+      echo "ERROR: 新建 decision.json 未通过 shape 校验:$dir" >&2
+      exit 1
+    fi
     echo "created $dir"
     ls -1 "$dir"
     ;;

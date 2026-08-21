@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Typed track facts: validate now; observations and ledger are added by later slices."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from typing import Any
+
+
+MISSING = object()
+IMPACT_LEVELS = ("self", "standard", "high")
+IMPACT_FACTORS = (
+    "new_write_surface",
+    "permissions",
+    "auth",
+    "money",
+    "data_consistency",
+    "migration",
+    "cross_module",
+    "judging_control",
+    "sandbox_boundary",
+    "production_side_effect",
+    "sensitive_data",
+)
+HIGH_IMPACT_FACTORS = {
+    "new_write_surface",
+    "permissions",
+    "auth",
+    "money",
+    "data_consistency",
+    "migration",
+    "judging_control",
+    "sandbox_boundary",
+    "production_side_effect",
+    "sensitive_data",
+}
+UNCERTAINTY_LEVELS = ("low", "high")
+PREMISE_STATUSES = ("pending", "not_required", "done")
+VERDICTS = ("PASS", "BLOCK", "NEEDS_MORE_INFO", "ARCHIVED-SUPERSEDED")
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+class DecisionError(Exception):
+    def __init__(self, rule: str, path: str, actual: Any, expected: Any):
+        self.rule = rule
+        self.path = path
+        self.actual = actual
+        self.expected = expected
+
+
+def rendered(value: Any) -> str:
+    if value is MISSING:
+        return '"<missing>"'
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def block(error: DecisionError) -> int:
+    print(
+        "track-record: "
+        f"rule={error.rule} path={error.path} actual={rendered(error.actual)} "
+        f"expected={rendered(error.expected)} verdict=BLOCK",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def required(obj: dict[str, Any], key: str, path: str) -> Any:
+    if key not in obj:
+        raise DecisionError("field.required", f"{path}.{key}".lstrip("."), MISSING, "present (null allowed by shape)")
+    return obj[key]
+
+
+def exact_object(value: Any, path: str, keys: tuple[str, ...]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise DecisionError("field.type", path, value, "object")
+    missing = [key for key in keys if key not in value]
+    if missing:
+        raise DecisionError("field.required", f"{path}.{missing[0]}".lstrip("."), MISSING, "present (null allowed by shape)")
+    extra = sorted(set(value) - set(keys))
+    if extra:
+        raise DecisionError("field.unknown", f"{path}.{extra[0]}".lstrip("."), value[extra[0]], "no unknown fields in schema v1")
+    return value
+
+
+def nullable_enum(value: Any, path: str, choices: tuple[str, ...]) -> None:
+    if value is not None and value not in choices:
+        raise DecisionError("field.enum", path, value, "|".join(choices))
+
+
+def nullable_token(value: Any, path: str) -> None:
+    if value is not None and (not isinstance(value, str) or not TOKEN_RE.fullmatch(value)):
+        raise DecisionError("field.type", path, value, "null or non-empty identifier")
+
+
+def git_root(track_dir: Path) -> Path | None:
+    result = subprocess.run(
+        ["git", "-C", os.fspath(track_dir), "rev-parse", "--show-toplevel"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    return Path(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def decision_was_tracked(track_dir: Path) -> bool:
+    repo = git_root(track_dir)
+    if repo is None:
+        return False
+    try:
+        rel = (track_dir / "decision.json").resolve().relative_to(repo.resolve())
+    except ValueError:
+        return False
+    rel_text = rel.as_posix()
+    in_index = subprocess.run(
+        ["git", "-C", os.fspath(repo), "ls-files", "--error-unmatch", "--", rel_text],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+    if in_index:
+        return True
+    history = subprocess.run(
+        ["git", "-C", os.fspath(repo), "log", "--all", "-1", "--format=%H", "--", rel_text],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    return history.returncode == 0 and bool(history.stdout.strip())
+
+
+def load_decision(track_dir: Path) -> dict[str, Any] | None:
+    path = track_dir / "decision.json"
+    if not path.is_file():
+        if decision_was_tracked(track_dir):
+            raise DecisionError("decision.required", "decision.json", MISSING, "tracked typed decision must exist")
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DecisionError("json.parse", "decision.json", str(exc), "valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise DecisionError("field.type", "decision.json", value, "object")
+    return value
+
+
+def validate_shape(data: dict[str, Any], track_dir: Path) -> None:
+    root = exact_object(
+        data,
+        "",
+        ("schema_version", "track", "impact", "design", "execution_plan", "outcome"),
+    )
+    version = required(root, "schema_version", "")
+    if type(version) is not int or version != 1:
+        raise DecisionError("schema.version", "schema_version", version, 1)
+    track = required(root, "track", "")
+    if not isinstance(track, str) or not NAME_RE.fullmatch(track):
+        raise DecisionError("field.type", "track", track, "single safe track name")
+    if track != track_dir.name:
+        raise DecisionError("track.identity", "track", track, track_dir.name)
+
+    impact = exact_object(required(root, "impact", ""), "impact", ("level", "factors"))
+    level = required(impact, "level", "impact")
+    nullable_enum(level, "impact.level", IMPACT_LEVELS)
+    factors = required(impact, "factors", "impact")
+    if factors is not None:
+        if not isinstance(factors, list):
+            raise DecisionError("field.type", "impact.factors", factors, "null or array")
+        if any(not isinstance(item, str) or item not in IMPACT_FACTORS for item in factors):
+            bad = next(item for item in factors if not isinstance(item, str) or item not in IMPACT_FACTORS)
+            raise DecisionError("field.enum", "impact.factors[]", bad, "|".join(IMPACT_FACTORS))
+        if len(factors) != len(set(factors)):
+            raise DecisionError("field.unique", "impact.factors", factors, "unique values")
+
+    design = exact_object(required(root, "design", ""), "design", ("uncertainty", "premise_attack"))
+    uncertainty = required(design, "uncertainty", "design")
+    nullable_enum(uncertainty, "design.uncertainty", UNCERTAINTY_LEVELS)
+    premise = exact_object(
+        required(design, "premise_attack", "design"),
+        "design.premise_attack",
+        ("status", "evidence"),
+    )
+    nullable_enum(required(premise, "status", "design.premise_attack"), "design.premise_attack.status", PREMISE_STATUSES)
+    evidence = required(premise, "evidence", "design.premise_attack")
+    if not isinstance(evidence, list):
+        raise DecisionError("field.type", "design.premise_attack.evidence", evidence, "array")
+    for item in evidence:
+        if not isinstance(item, str) or not item or Path(item).is_absolute() or ".." in Path(item).parts:
+            raise DecisionError("evidence.path", "design.premise_attack.evidence[]", item, "safe track-relative path")
+
+    execution = exact_object(required(root, "execution_plan", ""), "execution_plan", ("adapter", "model"))
+    nullable_token(required(execution, "adapter", "execution_plan"), "execution_plan.adapter")
+    nullable_token(required(execution, "model", "execution_plan"), "execution_plan.model")
+    outcome = exact_object(required(root, "outcome", ""), "outcome", ("verdict",))
+    nullable_enum(required(outcome, "verdict", "outcome"), "outcome.verdict", VERDICTS)
+
+
+def require_value(data: dict[str, Any], path: tuple[str, ...], expected: str) -> Any:
+    value: Any = data
+    for key in path:
+        value = value[key]
+    if value is None:
+        raise DecisionError("field.decided", ".".join(path), value, expected)
+    return value
+
+
+def validate_dispatch(data: dict[str, Any], track_dir: Path) -> None:
+    level = require_value(data, ("impact", "level"), "self|standard|high before dispatch")
+    factors = require_value(data, ("impact", "factors"), "array before dispatch")
+    uncertainty = require_value(data, ("design", "uncertainty"), "low|high before dispatch")
+    status = require_value(data, ("design", "premise_attack", "status"), "not_required|done before dispatch")
+    require_value(data, ("execution_plan", "adapter"), "non-empty adapter before dispatch")
+    high_factors = sorted(set(factors) & HIGH_IMPACT_FACTORS)
+    if high_factors and level != "high":
+        raise DecisionError("impact.high_factor", "impact.level", level, f"high because factors={','.join(high_factors)}")
+    evidence = data["design"]["premise_attack"]["evidence"]
+    if uncertainty == "high" and (status != "done" or not evidence):
+        raise DecisionError(
+            "design.premise_required",
+            "design.premise_attack",
+            {"status": status, "evidence": evidence},
+            "status=done and non-empty evidence when uncertainty=high",
+        )
+    if uncertainty == "low" and status not in ("not_required", "done"):
+        raise DecisionError("design.premise_status", "design.premise_attack.status", status, "not_required|done")
+    if status == "done":
+        for rel in evidence:
+            candidate = track_dir / rel
+            try:
+                candidate.resolve().relative_to(track_dir.resolve())
+            except ValueError as exc:
+                raise DecisionError("evidence.path", "design.premise_attack.evidence[]", rel, "path inside track") from exc
+            if candidate.is_symlink() or not candidate.is_file():
+                raise DecisionError("evidence.exists", "design.premise_attack.evidence[]", rel, "existing non-symlink file")
+
+
+def validate(track_dir: Path, phase: str) -> int:
+    try:
+        data = load_decision(track_dir)
+        if data is None:
+            print(f"track-record: status=legacy phase={phase} track={track_dir.name}")
+            return 0
+        validate_shape(data, track_dir)
+        if phase in ("dispatch", "archive"):
+            validate_dispatch(data, track_dir)
+        if phase == "archive" and data["outcome"]["verdict"] is None:
+            raise DecisionError("field.decided", "outcome.verdict", None, "PASS|BLOCK|NEEDS_MORE_INFO|ARCHIVED-SUPERSEDED")
+    except DecisionError as exc:
+        return block(exc)
+    print(f"track-record: status=valid phase={phase} track={data['track']}")
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    top = argparse.ArgumentParser(prog="track-record")
+    commands = top.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("validate", help="validate a track decision")
+    check.add_argument("--phase", required=True, choices=("shape", "dispatch", "archive"))
+    check.add_argument("track_dir", type=Path)
+    return top
+
+
+def main() -> int:
+    args = parser().parse_args()
+    if args.command == "validate":
+        if not args.track_dir.is_dir():
+            return block(DecisionError("track.directory", "track_dir", os.fspath(args.track_dir), "existing directory"))
+        return validate(args.track_dir.resolve(), args.phase)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
