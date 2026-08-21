@@ -37,7 +37,8 @@ commit,闸①就退化成翻执行腿日志人工找补,而且 git 历史里再�
 `impact-risk`:self / standard / high，外部评审预算分别是 self=0、standard=1、high=2；
 新写口 / 权限 / auth / 钱 / 数据一致性默认 high。high 从健康池轮换两个不同模型家族，
 失败、降级、冲突、NEEDS_MORE_INFO 或我仍不确定才追加第三腿；判卷/沙箱/权限边界等
-特殊控制面才显式 `panel-review --all`。`design-uncertainty`:low / high，只决定是否做
+特殊控制面才显式 `panel-review --all`。绑定 typed track 时，`--budget` 只能加证据，不能低于
+该 risk 的 0/1/2 预算绕闸。`design-uncertainty`:low / high，只决定是否做
 premise attack / 双出 / panel-explore，不因实现风险高就自动花一次规划双出。
 新 track 的机器字段只写同目录 `decision.json`，unknown 用 null，不在 verify.md 复制
 `Verdict:` / `lane:` / `派给:`。真实 controller dispatch 前先跑

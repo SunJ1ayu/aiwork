@@ -64,6 +64,14 @@ grep -q 'rule=impact.expected' <<<"$out" && grep -q 'actual=.*high' <<<"$out" \
   && grep -q 'expected=.*standard' <<<"$out"
 check "P1: risk mismatch 给 rule/actual/expected trace" $?
 
+out="$(PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
+  bash "$d/bin/panel-review" --track current --risk high --budget 0 \
+  "${common[@]}" "$d/raw/under-budget" 2>&1)"; rc=$?
+check "P1: typed high 显式 --budget 0 也不许绕空两条评审腿" $([[ $rc -ne 0 ]]; echo $?)
+check "P1: typed budget 降档仍在任何腿调用前拒绝" $([[ ! -s "$calls" ]]; echo $?)
+grep -q 'below impact-risk=high minimum=2' <<<"$out"
+check "P1: budget 降档报警给 actual risk/minimum" $?
+
 PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
   bash "$d/bin/panel-review" --no-track --risk standard --budget 1 \
   "${common[@]}" "$d/raw/no-track" >/dev/null 2>&1; rc=$?
@@ -103,6 +111,11 @@ PY
 check "P2: schema 只含 compact actual facts，不复制 prompt/log" $?
 
 echo "[P3] agent→chat 回落必须在 observation 中降级，不只留在实时 stdout"
+python3 - "$d/repo/tracks/current/decision.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["impact"]["level"]="standard"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
 cat > "$d/bin/subdeepseek-agent" <<'EOF'
 #!/usr/bin/env bash
 printf 'agent failed\n' >&2
@@ -111,7 +124,7 @@ EOF
 chmod +x "$d/bin/subdeepseek-agent"
 : > "$calls"
 PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-2" PANEL_STAGGER_MAX=0 PANEL_SELECTION_START=1 \
-  bash "$d/bin/panel-review" --track current --risk high --budget 1 \
+  bash "$d/bin/panel-review" --track current --risk standard --budget 1 \
   "${common[@]}" "$d/raw/degraded" >/dev/null 2>&1; rc=$?
 check "P3: 回落聊天腿后 controller 仍成功" $([[ $rc -eq 0 ]]; echo $?)
 f="$(latest_obs "$d")"
@@ -135,7 +148,7 @@ EOF
 chmod +x "$wrapper"
 before="$(obs_count "$d")"
 out="$(PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-3" PANEL_STAGGER_MAX=0 \
-  TRACK_RECORD_BIN="$wrapper" bash "$d/bin/panel-review" --track current --risk high --budget 0 \
+  TRACK_RECORD_BIN="$wrapper" bash "$d/bin/panel-review" --track current --risk standard --budget 1 \
   "${common[@]}" "$d/raw/writer-fail" 2>&1)"; rc=$?
 check "P4: writer 失败不把原本 rc=0 的 panel 改红" $([[ $rc -eq 0 ]]; echo $?)
 grep -q 'OBSERVATION_WRITE_FAILED' <<<"$out"
@@ -143,8 +156,13 @@ check "P4: writer 失败明确报警" $?
 check "P4: writer 失败不伪造事件" $([[ "$(obs_count "$d")" -eq "$before" ]]; echo $?)
 
 echo "[P5] self budget=0 有 controller event，但 external dispatch_count 必须为 0"
+python3 - "$d/repo/tracks/current/decision.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["impact"]["level"]="self"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
 PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-4" PANEL_STAGGER_MAX=0 \
-  bash "$d/bin/panel-review" --track current --risk high --budget 0 \
+  bash "$d/bin/panel-review" --track current --risk self --budget 0 \
   "${common[@]}" "$d/raw/self" >/dev/null 2>&1; rc=$?
 check "P5: self/no-external-review 正常成功" $([[ $rc -eq 0 ]]; echo $?)
 ledger="$($ROOT/bin/track-record ledger --repo "$d/repo" --format json)"
@@ -158,6 +176,20 @@ assert t["quality"]["fallback_dispatches"] == 1
 assert t["quality"]["dispatch_count"] == 4
 PY
 check "P5: 空 legs 的 panel run 不被伪记成一次外腿 dispatch" $?
+
+echo "[P6] task basename 过长也不许让成功 controller 丢 observation"
+long="$(printf 'x%.0s' {1..160})"
+printf '# long label\n' > "$d/$long.md"
+PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-5" PANEL_STAGGER_MAX=0 \
+  bash "$d/bin/panel-review" --track current --risk self --budget 0 --no-my-review \
+  "$d/$long.md" "$d/repo" "$d/raw/long-label" >/dev/null 2>&1; rc=$?
+f="$(latest_obs "$d")"
+python3 - "$f" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1], encoding="utf-8"))
+assert len(p["label"]) == 128 and set(p["label"]) == {"x"}
+PY
+check "P6: panel label 在 producer 端截到 schema 的 128 字节上限" $?
 
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="

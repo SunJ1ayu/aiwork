@@ -136,6 +136,11 @@ check "R3: null 的 BLOCK trace 明确" $?
 low_decision "$d/t" t null
 $RECORD validate --phase dispatch "$d/t" >/dev/null 2>&1
 check "R3: 完整 low/self 计划可 dispatch" $?
+write_decision "$d/t" t '"self"' '[]' '"low"' '"done"' '[]' '"main"' null null
+out="$($RECORD validate --phase dispatch "$d/t" 2>&1)"; rc=$?
+check "R3: low uncertainty 也不许把无 evidence 的 premise 标成 done" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=design.premise_evidence' <<<"$out"
+check "R3: done 无 evidence 的 trace 明确" $?
 write_decision "$d/t" t '"standard"' '["permissions"]' '"low"' '"not_required"' '[]' '"main"' null null
 out="$($RECORD validate --phase dispatch "$d/t" 2>&1)"; rc=$?
 check "R3: 高危因子不许降成 standard" $([[ $rc -ne 0 ]]; echo $?)
@@ -178,6 +183,17 @@ out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
 check "R4: observation 顶层夹带 transcript/额外字段时 archive fail closed" $([[ $rc -ne 0 ]]; echo $?)
 grep -q 'rule=field.unknown' <<<"$out"
 check "R4: observation 白名单违规给结构化 rule trace" $?
+! grep -q 'SECRET_SHOULD_NEVER_BE_ACCEPTED' <<<"$out" && grep -q 'actual="<redacted>"' <<<"$out"
+check "R4: 拒绝 secret/transcript 时 trace 只报字段、不回显内容" $?
+write_observation "$d/t" t run-1 runlog execution_finished 0
+python3 - "$d/t/observations/run-1-execution_finished.json" <<'PY'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as f: f.write(" " * 70000)
+PY
+out="$($RECORD validate --phase shape "$d/t" 2>&1)"; rc=$?
+check "R4: 单 observation 超过 64 KiB 即使只是合法 JSON whitespace 也拒绝" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=observation.size' <<<"$out"
+check "R4: 超限 trace 只报字节数" $?
 write_observation "$d/t" t run-1 runlog execution_finished 0
 python3 - "$d/t/observations/run-1-execution_finished.json" <<'PY'
 import json,sys
@@ -201,6 +217,19 @@ out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
 check "R4: malformed panel leg 被干净阻断而不是让 ledger 崩溃" $([[ $rc -ne 0 ]]; echo $?)
 grep -q 'rule=field.type' <<<"$out"
 check "R4: malformed leg trace 点名类型错误" $?
+python3 - "$d/t/observations/run-1-execution_finished.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["actual"]["legs"]=[{
+  "name":"leg","family":"family","adapter":"agent","model":None,"state":"completed",
+  "exit_code":0,"verdict":"PASS","degraded":False,"duration_ms":None,
+  "usage":{"input_tokens":None,"output_tokens":None,"total_tokens":None,"api_cost":None,"billing_mode":None}
+} for _ in range(5)]
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase shape "$d/t" 2>&1)"; rc=$?
+check "R4: panel observation 超过 4 legs ⇒ 拒绝伪装成 compact" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=observation.legs_limit' <<<"$out"
+check "R4: legs 上限 trace 明确" $?
 rm -rf "$d/t/observations"
 low_decision "$d/t" t '"ARCHIVED-SUPERSEDED"'
 $RECORD validate --phase archive "$d/t" >/dev/null 2>&1
@@ -262,6 +291,21 @@ out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
 check "R7: 同 execution_finished 重复导入仍拒绝双计" $([[ $rc -ne 0 ]]; echo $?)
 grep -q 'rule=observation.duplicate' <<<"$out"
 check "R7: 重复 execution trace 明确" $?
+rm -rf "$d"
+
+echo "[R8] observation writer 自己不制造 reader 随后会拒绝的记录"
+d="$(mktemp -d)"; mkdir -p "$d/tracks/t"
+common_obs=(observe --repo "$d" --track t --run-id r1 --event execution_finished --label r1 \
+  --started-at 2026-08-21T00:00:00Z --finished-at 2026-08-21T00:00:01Z \
+  --duration-ms 1 --exit-code 0 --work-exit-code 0)
+out="$($RECORD "${common_obs[@]}" --controller runlog --adapter foo 2>&1)"; rc=$?
+check "R8: controller/adapter mismatch 在写盘前拒绝" $([[ $rc -ne 0 ]]; echo $?)
+check "R8: adapter mismatch 不留下 observation" $([[ ! -d "$d/tracks/t/observations" ]]; echo $?)
+legs=()
+for n in 1 2 3 4 5; do legs+=(--leg "leg$n,family,agent,0,PASS,false"); done
+out="$($RECORD "${common_obs[@]}" --controller panel-review --adapter panel-review "${legs[@]}" 2>&1)"; rc=$?
+check "R8: writer 收到 5 panel legs 在写盘前拒绝" $([[ $rc -ne 0 ]]; echo $?)
+check "R8: legs 超限不留下 observation" $([[ ! -d "$d/tracks/t/observations" ]]; echo $?)
 rm -rf "$d"
 
 echo "=== total: $PASS passed, $FAIL failed ==="

@@ -153,6 +153,10 @@ if [[ -n "$TRACK_NAME" ]]; then
     echo "panel-review: typed track is not dispatch-ready or --risk mismatches; no leg was started" >&2
     exit 2
   fi
+  if [[ "$REVIEW_BUDGET" -lt "$RISK_BUDGET" ]]; then
+    echo "panel-review: typed track budget=$REVIEW_BUDGET is below impact-risk=$IMPACT_RISK minimum=$RISK_BUDGET; no leg was started" >&2
+    exit 2
+  fi
 fi
 unset _decision _typed_active
 
@@ -775,6 +779,7 @@ if [[ -n "$TRACK_NAME" ]]; then
   PANEL_DURATION_MS=$(( (PANEL_END_NS - PANEL_START_NS) / 1000000 ))
   _obs_label="$(printf '%s' "$TASKNAME" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//;s/-*$//')"
   [[ -n "$_obs_label" ]] || _obs_label=panel
+  _obs_label="${_obs_label:0:128}"
   _run_id="$TS-$$-panel-review"
   if ! "$TRACK_RECORD_BIN" observe --repo "$CONTROL_REPO" --track "$TRACK_NAME" \
       --run-id "$_run_id" --controller panel-review --event execution_finished \

@@ -51,10 +51,12 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 `panel-review --track NAME --risk self|standard|high TASK_FILE [REPO_DIR] [LOG_PREFIX]` 默认 high=2，
 从健康池轮换不同模型家族。失败、降级、没有裁决、NEEDS_MORE_INFO 或裁决冲突时只追加
 一个健康 spare；`--all` 才是显式全审，留给判卷、沙箱、权限边界或二审无法收敛的特殊面。
+`--track` 绑定 typed track 时，显式 `--budget` 只能增加证据，不能低于 self/standard/high 的
+0/1/2 机械预算；要做无归属实验必须明确 `--no-track`，不能把 high track 伪装成 self。
 仓里有 typed active track 时，派发前必须显式给 `--track NAME` 或 `--no-track`；前者会在
 任何腿启动前校验 decision 已满足 dispatch 且 `impact.level == --risk`。实际腿、回落降级、
 总耗时、rc 与真实可得 usage 在全部腿结束后写回主仓 track 的紧凑 observation；prompt 和
-完整日志仍在仓外，不复制进 Git。
+完整日志仍在仓外，不复制进 Git。单事件最多 64 KiB、panel 最多记录 4 条实际腿。
 每条实际派出的腿各写各的
 `<prefix>.<leg>.log`(默认前缀 `/root/aiwork/logs/panel-<task>-<ts>`)。一条腿失败不阻断
 其他腿;只有所有实际派出的腿都失败才非零退出。主自审必须在派发前已落盘，DEFAULT-ON

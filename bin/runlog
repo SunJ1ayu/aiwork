@@ -111,6 +111,9 @@ if [ -z "$SLUG" ]; then
 fi
 SLUG="$(printf '%s' "$SLUG" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//; s/-*$//')"
 [ -n "$SLUG" ] || SLUG="run"
+# observation schema 的 label 上限是 128；这里先收口，不能让命令成功后
+# 只因 producer 生成了过长标签而丢失账本事件。清洗后只剩 ASCII，按字节截安全。
+SLUG="${SLUG:0:128}"
 
 # ---- 身份:必须在跑之前、写任何文件之前采 ----
 COMMIT="$(git -C "$REPO" rev-parse --short=7 HEAD 2>/dev/null || echo nocommit)"

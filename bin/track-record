@@ -52,6 +52,8 @@ CONTROLLERS = ("runlog", "panel-review", "delegate-codex")
 EVENTS = ("execution_finished", "received")
 BILLING_MODES = ("subscription", "api", "local")
 EXECUTION_ADAPTERS = ("main", "submimo", "delegate-codex", "claude-worktree")
+MAX_OBSERVATION_BYTES = 64 * 1024
+MAX_OBSERVATION_LEGS = 4
 
 
 class DecisionError(Exception):
@@ -84,7 +86,13 @@ def required(obj: dict[str, Any], key: str, path: str) -> Any:
     return obj[key]
 
 
-def exact_object(value: Any, path: str, keys: tuple[str, ...]) -> dict[str, Any]:
+def exact_object(
+    value: Any,
+    path: str,
+    keys: tuple[str, ...],
+    *,
+    redact_unknown: bool = False,
+) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise DecisionError("field.type", path, value, "object")
     missing = [key for key in keys if key not in value]
@@ -92,7 +100,8 @@ def exact_object(value: Any, path: str, keys: tuple[str, ...]) -> dict[str, Any]
         raise DecisionError("field.required", f"{path}.{missing[0]}".lstrip("."), MISSING, "present (null allowed by shape)")
     extra = sorted(set(value) - set(keys))
     if extra:
-        raise DecisionError("field.unknown", f"{path}.{extra[0]}".lstrip("."), value[extra[0]], "no unknown fields in schema v1")
+        actual = "<redacted>" if redact_unknown else value[extra[0]]
+        raise DecisionError("field.unknown", f"{path}.{extra[0]}".lstrip("."), actual, "no unknown fields in schema v1")
     return value
 
 
@@ -275,6 +284,13 @@ def validate_dispatch(data: dict[str, Any], track_dir: Path) -> None:
     if high_factors and level != "high":
         raise DecisionError("impact.high_factor", "impact.level", level, f"high because factors={','.join(high_factors)}")
     evidence = data["design"]["premise_attack"]["evidence"]
+    if status == "done" and not evidence:
+        raise DecisionError(
+            "design.premise_evidence",
+            "design.premise_attack.evidence",
+            evidence,
+            "non-empty evidence when status=done",
+        )
     if uncertainty == "high" and (status != "done" or not evidence):
         raise DecisionError(
             "design.premise_required",
@@ -362,6 +378,11 @@ def validate(track_dir: Path, phase: str, source: str, expected_impact: str | No
             print(f"track-record: status=legacy phase={phase} source={source} track={track_dir.name}")
             return 0
         validate_shape(data, track_dir)
+        # observations are typed machine facts from their first commit onward.
+        # Shape/dispatch only validate the compact whitelist; archive adds PASS
+        # coverage requirements below. This prevents an active track from
+        # committing a transcript/secret now and discovering it only at archive.
+        load_observations(track_dir, data["track"], source)
         if expected_impact is not None and data["impact"]["level"] != expected_impact:
             raise DecisionError("impact.expected", "impact.level", data["impact"]["level"], expected_impact)
         if phase in ("dispatch", "archive"):
@@ -438,6 +459,9 @@ def control_repo(repo: Path) -> Path:
 
 
 def write_observation(track_dir: Path, rel_track: str, payload: dict[str, Any]) -> str:
+    # Producer 与 reader 共用同一份 schema；任何 controller 都不应先写出一份
+    # 自己的 archive/ledger 随后会拒绝的事件。
+    observation_payload(payload, payload["track"])
     obs_dir = track_dir / "observations"
     if obs_dir.is_symlink():
         raise DecisionError("observation.boundary", "observations", os.fspath(obs_dir), "real directory, not symlink")
@@ -445,6 +469,8 @@ def write_observation(track_dir: Path, rel_track: str, payload: dict[str, Any]) 
     if not obs_dir.is_dir() or obs_dir.is_symlink():
         raise DecisionError("observation.boundary", "observations", os.fspath(obs_dir), "real directory")
     body = (json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
+    if len(body) > MAX_OBSERVATION_BYTES:
+        raise DecisionError("observation.size", "observation", len(body), f"<= {MAX_OBSERVATION_BYTES} UTF-8 bytes")
     stamp = payload["finished_at"].replace("-", "").replace(":", "").replace("T", "T").replace("Z", "Z")
     base = f"{stamp}-{payload['controller']}-{payload['event']}"
     temp = obs_dir / f".{base}.{os.getpid()}.tmp"
@@ -712,6 +738,7 @@ def observation_usage(value: Any, path: str) -> dict[str, Any]:
         value,
         path,
         ("input_tokens", "output_tokens", "total_tokens", "api_cost", "billing_mode"),
+        redact_unknown=True,
     )
     for key in ("input_tokens", "output_tokens", "total_tokens"):
         field = usage[key]
@@ -747,6 +774,7 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
             "actual",
             "usage",
         ),
+        redact_unknown=True,
     )
     if type(root["schema_version"]) is not int or root["schema_version"] != 1:
         raise DecisionError("schema.version", "observation.schema_version", root["schema_version"], 1)
@@ -789,6 +817,7 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
         root["actual"],
         "observation.actual",
         ("adapter", "model", "risk", "degraded", "work_exit_code", "legs"),
+        redact_unknown=True,
     )
     if actual["adapter"] != root["controller"]:
         raise DecisionError(
@@ -812,6 +841,13 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
     if root["controller"] == "panel-review":
         if not isinstance(legs, list):
             raise DecisionError("field.type", "observation.actual.legs", legs, "array for panel-review")
+        if len(legs) > MAX_OBSERVATION_LEGS:
+            raise DecisionError(
+                "observation.legs_limit",
+                "observation.actual.legs",
+                len(legs),
+                f"<= {MAX_OBSERVATION_LEGS} compact panel legs",
+            )
     elif legs is not None:
         raise DecisionError("field.type", "observation.actual.legs", legs, "null outside panel-review")
     for index, value_leg in enumerate(legs or []):
@@ -831,6 +867,7 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
                 "duration_ms",
                 "usage",
             ),
+            redact_unknown=True,
         )
         for key in ("name", "family"):
             if not isinstance(leg[key], str):
@@ -857,6 +894,9 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
 
 
 def observation_text(text: str, track: str, source: str) -> dict[str, Any]:
+    size = len(text.encode("utf-8"))
+    if size > MAX_OBSERVATION_BYTES:
+        raise DecisionError("observation.size", source, size, f"<= {MAX_OBSERVATION_BYTES} UTF-8 bytes")
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -867,6 +907,9 @@ def observation_text(text: str, track: str, source: str) -> dict[str, Any]:
 def observation_for_ledger(path: Path, track: str) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise DecisionError("ledger.observation", "observations", os.fspath(path), "non-symlink JSON file")
+    size = path.stat().st_size
+    if size > MAX_OBSERVATION_BYTES:
+        raise DecisionError("observation.size", os.fspath(path), size, f"<= {MAX_OBSERVATION_BYTES} UTF-8 bytes")
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -928,6 +971,20 @@ def load_observations(track_dir: Path, track: str, source: str) -> list[dict[str
     paths.sort()
     observations: list[dict[str, Any]] = []
     for path in paths:
+        sized = subprocess.run(
+            ["git", "-C", os.fspath(repo), "cat-file", "-s", f":{path}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        try:
+            blob_size = int(sized.stdout.strip())
+        except (TypeError, ValueError) as exc:
+            raise DecisionError("git.index", path, sized.returncode, "readable staged observation size") from exc
+        if sized.returncode != 0 or blob_size > MAX_OBSERVATION_BYTES:
+            if sized.returncode != 0:
+                raise DecisionError("git.index", path, sized.returncode, "readable staged observation size")
+            raise DecisionError("observation.size", path, blob_size, f"<= {MAX_OBSERVATION_BYTES} UTF-8 bytes")
         shown = subprocess.run(
             ["git", "-C", os.fspath(repo), "show", f":{path}"],
             check=False,

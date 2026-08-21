@@ -668,6 +668,114 @@ JSON
   grep -q 'verify.md' <<<"$out"
   check 'G10: 缺 staged verify 的报警明确' $?
   rm -rf "$d"
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t/observations
+    printf '# Verify\n- 无机器证据:fixture\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    python3 - tracks/t/decision.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["outcome"]["verdict"]="PASS"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+    cat > tracks/t/observations/ok.json <<'JSON'
+{"schema_version":1,"track":"t","run_id":"r1","controller":"runlog","event":"execution_finished","label":"r1","started_at":"2026-08-21T00:00:00Z","finished_at":"2026-08-21T00:00:01Z","duration_ms":1,"exit_code":0,"actual":{"adapter":"runlog","model":null,"risk":null,"degraded":null,"work_exit_code":0,"legs":null},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+JSON
+    git add tracks/t; git commit -qm complete
+    mkdir -p tracks/archive; git mv tracks/t tracks/archive/t
+    git rm -q -f tracks/archive/t/decision.json; git add -A )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check 'G10: typed track 搬入 archive 同时删 decision ⇒ 不许降级 legacy' $([[ $rc -ne 0 ]]; echo $?)
+  grep -q 'decision.json' <<<"$out"
+  check 'G10: 搬入时缺 typed decision 的报警明确' $?
+  rm -rf "$d"
+}
+
+g11_archived_machine_facts_stay_typed() {
+  echo '[G11] typed 机器事实从 active 到 archive 都必须持续过白名单闸'
+  local d rc
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t/observations
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    cat > tracks/t/observations/ok.json <<'JSON'
+{"schema_version":1,"track":"t","run_id":"r1","controller":"runlog","event":"execution_finished","label":"r1","started_at":"2026-08-21T00:00:00Z","finished_at":"2026-08-21T00:00:01Z","duration_ms":1,"exit_code":0,"actual":{"adapter":"runlog","model":null,"risk":null,"degraded":null,"work_exit_code":0,"legs":null},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+JSON
+    git add tracks/t; git commit -qm active
+    python3 - tracks/t/observations/ok.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["transcript"]="FULL_TRANSCRIPT"
+json.dump(p, open(sys.argv[1], "w"), separators=(",", ":"))
+PY
+    git add tracks/t/observations/ok.json )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G11: active observation 被 M 加 transcript 字段 ⇒ guard 当场拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t/observations
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    cat > tracks/t/observations/ok.json <<'JSON'
+{"schema_version":1,"track":"t","run_id":"r1","controller":"runlog","event":"execution_finished","label":"r1","started_at":"2026-08-21T00:00:00Z","finished_at":"2026-08-21T00:00:01Z","duration_ms":1,"exit_code":0,"actual":{"adapter":"runlog","model":null,"risk":null,"degraded":null,"work_exit_code":0,"legs":null},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+JSON
+    git add tracks/t; git commit -qm active
+    python3 - tracks/t/observations/ok.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["transcript"]="FULL_TRANSCRIPT"
+json.dump(p, open(sys.argv[1], "w"), separators=(",", ":"))
+PY
+    git add tracks/t/observations/ok.json; git rm -q tracks/t/verify.md )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G11: active M transcript + 同 commit 删除 verify ⇒ 仍不能跳过 typed shape' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t/observations
+    printf '# Verify\n- 无机器证据:fixture\n' > tracks/archive/t/verify.md
+    typed_decision '"self"' > tracks/archive/t/decision.json
+    python3 - tracks/archive/t/decision.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["outcome"]["verdict"]="PASS"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+    cat > tracks/archive/t/observations/ok.json <<'JSON'
+{"schema_version":1,"track":"t","run_id":"r1","controller":"runlog","event":"execution_finished","label":"r1","started_at":"2026-08-21T00:00:00Z","finished_at":"2026-08-21T00:00:01Z","duration_ms":1,"exit_code":0,"actual":{"adapter":"runlog","model":null,"risk":null,"degraded":null,"work_exit_code":0,"legs":null},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+JSON
+    git add tracks/archive/t; git commit -qm archived
+    python3 - tracks/archive/t/observations/ok.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["transcript"]="FULL_TRANSCRIPT"
+json.dump(p, open(sys.argv[1], "w"), separators=(",", ":"))
+PY
+    git add tracks/archive/t/observations/ok.json )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G11: 已归档 observation 被 M 加 transcript 字段 ⇒ guard 拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t/observations
+    printf '# Verify\n- 无机器证据:fixture\n' > tracks/archive/t/verify.md
+    typed_decision '"self"' > tracks/archive/t/decision.json
+    python3 - tracks/archive/t/decision.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["outcome"]["verdict"]="PASS"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+    cat > tracks/archive/t/observations/ok.json <<'JSON'
+{"schema_version":1,"track":"t","run_id":"r1","controller":"runlog","event":"execution_finished","label":"r1","started_at":"2026-08-21T00:00:00Z","finished_at":"2026-08-21T00:00:01Z","duration_ms":1,"exit_code":0,"actual":{"adapter":"runlog","model":null,"risk":null,"degraded":null,"work_exit_code":0,"legs":null},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+JSON
+    git add tracks/archive/t; git commit -qm archived
+    python3 - tracks/archive/t/decision.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["outcome"]["verdict"]=None
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+    git add tracks/archive/t/decision.json )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G11: 已归档 decision outcome 改回 null ⇒ guard 拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
 }
 
 # ---------------------------------------------------------------- G7
@@ -728,5 +836,6 @@ g8_round2_false_positive_shapes
 g8_track_new_rejects_path_names
 g9_typed_shape_uses_staged_decision
 g10_manual_typed_archive_uses_staged_facts
+g11_archived_machine_facts_stay_typed
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

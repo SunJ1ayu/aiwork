@@ -312,7 +312,7 @@ EOF
 # ---------------------------------------------------------------- R11
 r11_writes_compact_typed_observation() {
   echo "[R11] 每次 controller run 写一份紧凑 observation，不复制命令/输出/transcript"
-  local d f rc
+  local d f rc long
   d="$(newrepo)"
   ( cd "$d" && "$RUNLOG" -t t -n timed -- \
       bash -c 'sleep 0.05; printf "TRANSCRIPT_SENTINEL\\n"' PROMPT_SENTINEL ) >/dev/null 2>&1; rc=$?
@@ -340,6 +340,15 @@ for forbidden in ("TRANSCRIPT_SENTINEL", "PROMPT_SENTINEL", "cmd", "stdout", "st
     assert forbidden not in raw, forbidden
 PY
   check "R11: schema/时长/rc/null usage 精确，且不含 raw payload" $?
+  long="$(printf 'x%.0s' {1..160})"
+  ( cd "$d" && "$RUNLOG" -t t -n "$long" -- true ) >/dev/null 2>&1; rc=$?
+  f="$(find "$d/tracks/t/observations" -name '*.json' | sort | tail -1)"
+  python3 - "$f" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1], encoding="utf-8"))
+assert len(p["label"]) == 128 and set(p["label"]) == {"x"}
+PY
+  check "R11: 过长 slug 在 producer 端截到 schema 的 128 字节上限" $?
   rm -f "$d"/tracks/t/evidence/*.txt
   check "R11: 清掉大 receipt 后 observation 仍在" $([[ -f "$f" ]]; echo $?)
   rm -rf "$d"

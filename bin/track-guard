@@ -15,6 +15,38 @@ say() { printf 'track-guard: %s\n' "$1" >&2; }
 
 staged() { git diff --cached --name-only; }
 
+# active typed 机器源不能依赖 working verify.md 才触发校验；否则同一 commit 删除
+# verify，再把 observation 塞进 transcript，就会被 `[ -f verify ] || continue` 跳过。
+# 真正搬入 archive 的 active 删除由下面 archive/staged validator 接管。
+active_typed_dirs_changed() {
+  staged | sed -nE \
+    's#^(tracks/[^/]+)/(decision\.json|verify\.md|observations(/.*)?)$#\1#p' | sort -u
+}
+
+for track_dir in $(active_typed_dirs_changed); do
+  name="${track_dir#tracks/}"
+  # 合法 archive move：staged destination 的 typed facts 会在归档循环完整校验。
+  git cat-file -e ":tracks/archive/$name/decision.json" 2>/dev/null && continue
+  known_decision=0
+  git cat-file -e ":$track_dir/decision.json" 2>/dev/null && known_decision=1
+  [ -f "$track_dir/decision.json" ] && known_decision=1
+  git cat-file -e "HEAD:$track_dir/decision.json" 2>/dev/null && known_decision=1
+  [[ "$known_decision" -eq 1 ]] || continue
+  if ! git cat-file -e ":$track_dir/decision.json" 2>/dev/null; then
+    fail=1
+    say "🔴 typed decision 没有出现在 staged snapshot（新文件漏 add 或已被删除）:$track_dir/decision.json"
+    continue
+  fi
+  if ! git cat-file -e ":$track_dir/verify.md" 2>/dev/null; then
+    fail=1
+    say "🔴 typed active track 的 staged snapshot 缺 verify.md:$track_dir/verify.md"
+  fi
+  if ! "$BIN/track-record" validate --phase shape --source staged "$track_dir"; then
+    fail=1
+    say "🔴 typed active 机器源的 staged snapshot 未通过 shape:$track_dir"
+  fi
+done
+
 # 逃生口(规矩1 与规矩4 共用):本次提交带了 track 工件,或近 7 天有 verify.md 改动。
 # **只此一份** —— 08-06 第一版把这五行在两条规矩里各抄了一遍,而"两份拷贝总有一份
 # 会落下"是本机反复记账的那条债(底座腿因此合并过躯干)。趁只有两份先合掉。
@@ -75,6 +107,7 @@ fi
 # 取「本提交涉及的 verify.md」∪「工作区里最近 7 天内改过的 verify.md」逐个查。
 verifies=$( { staged | grep -E '^tracks/[^/]+/verify\.md$' || true; \
               staged | sed -nE 's#^(tracks/[^/]+)/decision\.json$#\1/verify.md#p' || true; \
+              staged | sed -nE 's#^(tracks/[^/]+)/observations/.*$#\1/verify.md#p' || true; \
               git log --since='7 days ago' --name-only --pretty=format: -- 'tracks/*/verify.md' | grep . || true; } | sort -u )
 
 for v in $verifies; do
@@ -168,12 +201,42 @@ archiving_dirs_now() {
                      split($NF, p, "/"); print p[1] "/" p[2] "/" p[3]
                    }' | sort -u
 }
-for dir in $(archiving_dirs_now); do
-  v="$dir/verify.md"
+
+# typed 机器源进了 archive 以后仍是账本事实，不是「归档时查一次就永久可信」。
+# 因此两类动作都要用 **staged snapshot** 重跑 archive validator：
+#   1) 本次正搬入 archive；2) 已归档 decision/observations 后续被增删改。
+# 第二类刻意只盯机器源，不让修历史 verify.md 的错字触发整套归档闸。
+archive_machine_dirs_changed() {
+  staged | sed -nE \
+    's#^(tracks/archive/[^/]+)/(decision\.json|observations(/.*)?)$#\1#p' | sort -u
+}
+
+archive_typed_validation_dirs() {
+  { archiving_dirs_now; archive_machine_dirs_changed; } | sort -u
+}
+
+for dir in $(archive_typed_validation_dirs); do
+  name="${dir#tracks/archive/}"
+  known_typed=0
+  git cat-file -e ":$dir/decision.json" 2>/dev/null && known_typed=1
+  git cat-file -e "HEAD:$dir/decision.json" 2>/dev/null && known_typed=1
+  # 搬入同时删 decision 时，destination 与 HEAD 同路径都看不见它；active source
+  # 才能证明这原本是 typed track，不能让它在移动中降级成 legacy。
+  git cat-file -e "HEAD:tracks/$name/decision.json" 2>/dev/null && known_typed=1
+  [[ "$known_typed" -eq 1 ]] || continue
+  if ! git cat-file -e ":$dir/decision.json" 2>/dev/null; then
+    fail=1
+    say "🔴 typed archive 的 staged snapshot 缺 decision.json（不许删除或降级 legacy）:$dir/decision.json"
+    continue
+  fi
   if ! "$BIN/track-record" validate --phase archive --source staged "$dir"; then
     fail=1
     say "🔴 规矩3:$dir 的 staged typed outcome/coverage 未满足归档条件。"
   fi
+done
+
+for dir in $(archiving_dirs_now); do
+  v="$dir/verify.md"
   if ! git cat-file -e ":$v" 2>/dev/null; then
     fail=1
     say "🔴 规矩3:$v 没有出现在 staged archive（归档不能同时删掉验收结论）。"

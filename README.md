@@ -69,8 +69,10 @@ agent to verify, never a verdict to adopt.
   events live in the main checkout's track (never an execution worktree), contain
   no prompt/transcript, and therefore survive safe worktree cleanup. Unknown usage
   stays `null`; observation-write failure is loud without changing controller rc.
-  The `observations/` directory accepts only direct regular JSON events, and both
-  CLI archive and staged manual archive validate coverage before any sweep/move.
+  The `observations/` directory accepts only direct regular JSON events (64 KiB
+  per event; at most four panel legs). Writers and readers share the same strict
+  schema, and staged machine facts remain guarded both before and after archive.
+  Both CLI archive and staged manual archive validate coverage before any sweep/move.
 - `bin/redcheck` — revert-the-implementation red check: puts the impl back to a
   baseline, rebuilds, reruns the oracle, and REQUIRES red (`--must-fail` pins
   where the red must land). Restores unconditionally and proves the tree is clean.
