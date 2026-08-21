@@ -41,7 +41,7 @@
 - in: 统一双轴在 workflow / templates / convention / guards / tests 中的语义。
 - in: 新 track 的紧凑 typed record、分阶段 validator 与可审计 rule trace。
 - in: runlog/panel/delegate 在主控制端产生的紧凑观测事实；不保存完整 transcript。
-- in: 从归档 record / receipt 生成只读 ledger，显示缺失率而非猜历史。
+- in: 从归档 decision / typed observations 生成只读 ledger，显示缺失率而非猜历史。
 - in: 旧 track / 旧 archive 向后兼容，不批量伪造迁移数据。
 
 ## Non-goals
