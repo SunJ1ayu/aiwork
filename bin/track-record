@@ -337,6 +337,24 @@ def track_location(repo: Path, name: str) -> tuple[Path, str]:
     raise DecisionError("track.directory", "track", name, "existing active or archived track")
 
 
+def control_repo(repo: Path) -> Path:
+    """Return the main checkout even when *repo* is an attached worktree."""
+    resolved = repo.resolve()
+    try:
+        common = subprocess.run(
+            ["git", "-C", os.fspath(resolved), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return resolved
+    common_path = Path(common).resolve()
+    if common_path.name == ".git" and common_path.parent.is_dir():
+        return common_path.parent
+    return resolved
+
+
 def write_observation(track_dir: Path, rel_track: str, payload: dict[str, Any]) -> str:
     obs_dir = track_dir / "observations"
     if obs_dir.is_symlink():
@@ -482,6 +500,107 @@ def observe(args: argparse.Namespace) -> int:
     return 0
 
 
+def import_delegate(args: argparse.Namespace) -> int:
+    """Import only the compact, whitelisted fields from a delegate receipt."""
+    try:
+        with args.receipt.open(encoding="utf-8") as stream:
+            receipt = json.load(stream)
+        if not isinstance(receipt, dict):
+            raise DecisionError("delegate.receipt", "receipt", type(receipt).__name__, "JSON object")
+        if receipt.get("dry_run") is True or receipt.get("track") is None:
+            print("track-record: delegate observation skipped (dry-run or no track)")
+            return 0
+
+        def text_field(key: str, pattern: re.Pattern[str], limit: int = 200) -> str:
+            value = receipt.get(key, MISSING)
+            if not isinstance(value, str):
+                raise DecisionError("delegate.receipt", key, value, "string")
+            return safe_identifier(value, key, pattern, limit)
+
+        repo_value = receipt.get("repo", MISSING)
+        if not isinstance(repo_value, str) or not repo_value:
+            raise DecisionError("delegate.receipt", "repo", repo_value, "non-empty path string")
+        track = text_field("track", NAME_RE)
+        run_id = text_field("run_id", LABEL_RE)
+        label = text_field("label", LABEL_RE, 128)
+        model_value = receipt.get("model")
+        model = None
+        if model_value is not None:
+            if not isinstance(model_value, str):
+                raise DecisionError("delegate.receipt", "model", model_value, "null or string")
+            model = safe_identifier(model_value, "model", TOKEN_RE)
+
+        if args.event == "execution_finished":
+            started_key, finished_key, duration_key, rc_key = (
+                "started_at",
+                "finished_at",
+                "duration_ms",
+                "codex_rc",
+            )
+        else:
+            started_key, finished_key, duration_key, rc_key = (
+                "receive_started_at",
+                "received_at",
+                "receive_duration_ms",
+                "receive_rc",
+            )
+        started_value = receipt.get(started_key, MISSING)
+        finished_value = receipt.get(finished_key, MISSING)
+        if not isinstance(started_value, str):
+            raise DecisionError("delegate.receipt", started_key, started_value, "ISO-8601 UTC string")
+        if not isinstance(finished_value, str):
+            raise DecisionError("delegate.receipt", finished_key, finished_value, "ISO-8601 UTC string")
+        started = iso8601_utc(started_value, started_key)
+        finished = iso8601_utc(finished_value, finished_key)
+        if datetime.fromisoformat(finished[:-1] + "+00:00") < datetime.fromisoformat(started[:-1] + "+00:00"):
+            raise DecisionError("observation.time_order", finished_key, finished, f">= {started_key}")
+        duration = receipt.get(duration_key, MISSING)
+        rc = receipt.get(rc_key, MISSING)
+        if not isinstance(duration, int) or isinstance(duration, bool):
+            raise DecisionError("delegate.receipt", duration_key, duration, "non-negative integer")
+        if not isinstance(rc, int) or isinstance(rc, bool):
+            raise DecisionError("delegate.receipt", rc_key, rc, "non-negative integer")
+        nullable_nonnegative(duration, duration_key)
+        nullable_nonnegative(rc, rc_key)
+
+        repo = control_repo(Path(repo_value))
+        track_dir, rel_track = track_location(repo, track)
+        payload = {
+            "schema_version": 1,
+            "track": track,
+            "run_id": run_id,
+            "controller": "delegate-codex",
+            "event": args.event,
+            "label": label,
+            "started_at": started,
+            "finished_at": finished,
+            "duration_ms": duration,
+            "exit_code": rc,
+            "actual": {
+                "adapter": "delegate-codex",
+                "model": model,
+                "risk": None,
+                "degraded": False,
+                "work_exit_code": rc,
+                "legs": None,
+            },
+            "usage": {
+                "input_tokens": None,
+                "output_tokens": None,
+                "total_tokens": None,
+                "api_cost": None,
+                "billing_mode": "subscription",
+            },
+        }
+        rel_file = write_observation(track_dir, rel_track, payload)
+    except (DecisionError, OSError, json.JSONDecodeError) as exc:
+        if isinstance(exc, DecisionError):
+            return block(exc)
+        return block(DecisionError("delegate.receipt", "receipt", str(exc), "readable compact JSON receipt"))
+    print(f"track-record: observed file={rel_file}")
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="track-record")
     commands = top.add_subparsers(dest="command", required=True)
@@ -516,6 +635,9 @@ def parser() -> argparse.ArgumentParser:
         action="append",
         help="panel leg: name,family,adapter,exit_code,verdict|null,degraded(true|false)",
     )
+    delegated = commands.add_parser("import-delegate", help="import compact fields from a delegate receipt")
+    delegated.add_argument("--receipt", required=True, type=Path)
+    delegated.add_argument("--event", required=True, choices=EVENTS)
     return top
 
 
@@ -527,6 +649,8 @@ def main() -> int:
         return validate(args.track_dir.resolve(), args.phase, args.source, args.expected_impact)
     if args.command == "observe":
         return observe(args)
+    if args.command == "import-delegate":
+        return import_delegate(args)
     return 2
 
 

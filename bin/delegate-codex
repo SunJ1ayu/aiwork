@@ -54,6 +54,7 @@ set -uo pipefail
 BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 CODEX="${CODEX:-codex}"
 WT_ROOT="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
+TRACK_RECORD_BIN="${TRACK_RECORD_BIN:-$BIN_DIR/track-record}"
 
 die()  { echo "delegate-codex: $*" >&2; exit 2; }
 usage() { sed -n '/^# 用法:/,/^#         --receive/p' "$0" | sed 's/^# \?//' >&2; }
@@ -94,7 +95,7 @@ do_receive() {
   if [[ "$(_rj "$receipt" dry_run)" == "True" ]]; then
     echo "闸①:这是一份 --dry-run 的回执 —— 没建过树,也没派过活,没什么可收的。" >&2
     echo "  想真派就去掉 --dry-run 重来一次(会写一份新回执)。" >&2
-    exit 2
+    return 2
   fi
 
   # 四条臂 + 底账全部跑在**腿真正干活的那棵树**上。隔离之后这棵树里天然只有腿的改动 ——
@@ -104,7 +105,7 @@ do_receive() {
     tree="$wt"
     [[ -d "$tree" ]] || { echo "闸①:回执里记的隔离树不在了:$tree" >&2
       echo "  这不是'干净',是**现场没了** —— 闸① 无从查起,先弄清它是被谁删的。" >&2
-      exit 2; }
+      return 2; }
   fi
 
   echo "闸①(机械版):repo=$repo"
@@ -293,7 +294,38 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "$RECEIVE" ]]; then do_receive "$RECEIVE"; exit $?; fi
+if [[ -n "$RECEIVE" ]]; then
+  _receive_started_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  _receive_started_ns="$(date +%s%N)"
+  do_receive "$RECEIVE"
+  _receive_rc=$?
+  _received_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  _received_ns="$(date +%s%N)"
+  _receive_duration_ms=$(( (_received_ns - _receive_started_ns) / 1000000 ))
+  python3 - "$RECEIVE" "$_receive_started_at" "$_received_at" "$_receive_duration_ms" "$_receive_rc" <<'PY'
+import json, os, sys
+path, started, finished, duration, rc = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    receipt = json.load(stream)
+receipt.update({
+    "receive_started_at": started,
+    "received_at": finished,
+    "receive_duration_ms": int(duration),
+    "receive_rc": int(rc),
+})
+temp = path + ".tmp"
+with open(temp, "w", encoding="utf-8") as stream:
+    json.dump(receipt, stream, ensure_ascii=False, indent=2)
+    stream.write("\n")
+os.replace(temp, path)
+PY
+  if [[ $? -ne 0 ]]; then
+    echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIVE event=received (回执完成态写入失败)" >&2
+  elif ! "$TRACK_RECORD_BIN" import-delegate --receipt "$RECEIVE" --event received; then
+    echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIVE event=received" >&2
+  fi
+  exit "$_receive_rc"
+fi
 
 # ── 拒发闸(下面每一条不满足都 exit 2,codex 一次都不启动)──────────────
 if [[ $PRINTHASH -eq 0 ]]; then
@@ -314,6 +346,19 @@ if [[ $PRINTHASH -eq 0 ]]; then
   [[ -s "$ATTACK" ]] || die "攻题记录是空文件:$ATTACK(空文件应付不算做过这件事)"
 fi
 _rp="$(realpath "$REPO")"
+CONTROL_REPO="$_rp"
+_common_git="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ "$(basename "$_common_git")" == ".git" ]]; then
+  CONTROL_REPO="$(dirname "$_common_git")"
+fi
+
+# typed track 的机器事实只认主仓卷宗；从 worktree 派发时也不能把事件/决策写进临时树。
+if [[ $PRINTHASH -eq 0 && -n "$TRACK" ]]; then
+  [[ "$TRACK" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "--track 不是安全的单段名称:$TRACK"
+  [[ -d "$CONTROL_REPO/tracks/$TRACK" ]] || die "active track 不存在:$CONTROL_REPO/tracks/$TRACK"
+  "$TRACK_RECORD_BIN" validate --phase dispatch "$CONTROL_REPO/tracks/$TRACK" \
+    || die "track 的 typed decision 未通过 dispatch 闸:$TRACK"
+fi
 
 # ② 判卷清单:守卫的强度只等于这份清单,漏列一个就是那个洞。没有清单 = 没有守卫。
 [[ ${#PROTECT[@]} -gt 0 ]] || die "缺 --protect:把 oracle 为得出裁决所读的**每一个**文件
@@ -368,6 +413,8 @@ fi
 TS="$(date +%Y%m%d-%H%M%S)"
 NAME="$(basename "${TASK%.*}")"
 JOB="${NAME}-${TS}"
+OBS_LABEL="delegate-$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-110)"
+RUN_ID="delegate-${TS}-$$"
 WT=""; BRANCH=""; RUNDIR="$REPO"
 if [[ $ISOLATE -eq 1 ]]; then
   _wtroot_abs="$(realpath -m "$WT_ROOT")"
@@ -423,8 +470,8 @@ done
 #     那等于把"我没说"翻译成"我同意删" —— 归档时轮次目录下的树是**可以被自动收掉**的,
 #     而无主的树只点名不碰。猜错的代价落在删这一侧,和本机"猜不出就 fail closed"的立场相反。
 #     没有 active track 的仓不啰嗦(守卫一变噪音就没人看)。
-if [[ $PRINTHASH -eq 0 && $TRACK_SAID -eq 0 && -d "$REPO/tracks" ]]; then
-  _active="$(ls -1 "$REPO/tracks" 2>/dev/null | grep -v '^archive$' || true)"
+if [[ $PRINTHASH -eq 0 && $TRACK_SAID -eq 0 && -d "$CONTROL_REPO/tracks" ]]; then
+  _active="$(ls -1 "$CONTROL_REPO/tracks" 2>/dev/null | grep -v '^archive$' || true)"
   if [[ -n "$_active" ]]; then
     die "这个仓里有开着的 track,得说一句这单归谁(我不替你猜):
 $(printf '%s\n' "$_active" | sed 's/^/    --track /')
@@ -559,13 +606,17 @@ fi
 
 # 回执里**不另造 `base` 键**:现有的 `head` 就是建树用的基线,多一个同义键就是第二份账
 # (design 四·2 驳回 registry 的同一条理由:并发度为 1 时磁盘本身就是账)。
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+STARTED_NS="$(date +%s%N)"
 python3 - "$RECEIPT" "$REPO" "$HEAD_AT_DISPATCH" "$ATTACK" "$TASK" "$LOG" "$MODEL" \
-         "$ISOLATE" "$WT" "$BRANCH" "$TRACK" "$ORACLE_HASH" "$DRY" "${PROTECT[@]}" <<'PY'
+         "$ISOLATE" "$WT" "$BRANCH" "$TRACK" "$ORACLE_HASH" "$DRY" "$RUN_ID" "$OBS_LABEL" \
+         "$STARTED_AT" "${PROTECT[@]}" <<'PY'
 import hashlib, json, sys, datetime
-receipt, repo, head, attack, task, log, model, isolate, wt, branch, track, ohash, dry, *protect = sys.argv[1:]
+receipt, repo, head, attack, task, log, model, isolate, wt, branch, track, ohash, dry, run_id, label, started_at, *protect = sys.argv[1:]
 sha = hashlib.sha256(open(attack, "rb").read()).hexdigest()
 json.dump({
     "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    "run_id": run_id, "label": label, "started_at": started_at,
     "repo": repo, "head": head, "protect": protect,
     "isolate": isolate == "1", "dry_run": dry == "1",
     "worktree": wt or None, "branch": branch or None,
@@ -603,6 +654,26 @@ fi
   -c project_doc_max_bytes=0 -o "$LOG" \
   ${PASSTHRU[@]+"${PASSTHRU[@]}"} "$PROMPT"
 rc=$?
+FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+FINISHED_NS="$(date +%s%N)"
+DURATION_MS=$(( (FINISHED_NS - STARTED_NS) / 1000000 ))
+python3 - "$RECEIPT" "$FINISHED_AT" "$DURATION_MS" "$rc" <<'PY'
+import json, os, sys
+path, finished, duration, rc = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    receipt = json.load(stream)
+receipt.update({"finished_at": finished, "duration_ms": int(duration), "codex_rc": int(rc)})
+temp = path + ".tmp"
+with open(temp, "w", encoding="utf-8") as stream:
+    json.dump(receipt, stream, ensure_ascii=False, indent=2)
+    stream.write("\n")
+os.replace(temp, path)
+PY
+if [[ $? -ne 0 ]]; then
+  echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIPT event=execution_finished (回执完成态写入失败)" >&2
+elif ! "$TRACK_RECORD_BIN" import-delegate --receipt "$RECEIPT" --event execution_finished; then
+  echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIPT event=execution_finished" >&2
+fi
 
 echo
 echo "delegate-codex: codex rc=$rc"

@@ -64,6 +64,11 @@ agent to verify, never a verdict to adopt.
   Isolation buys attribution, not confinement: `-s workspace-write` resolves its
   writable root upward to the main repo (a worktree's `.git` is a file), so case
   files (attack log, log, receipt) must stay outside `repo ∪ worktrees-root`.
+- `bin/track-record` — validates the typed `decision.json`, atomically writes
+  compact controller observations, and derives the read-only ledger. Controller
+  events live in the main checkout's track (never an execution worktree), contain
+  no prompt/transcript, and therefore survive safe worktree cleanup. Unknown usage
+  stays `null`; observation-write failure is loud without changing controller rc.
 - `bin/redcheck` — revert-the-implementation red check: puts the impl back to a
   baseline, rebuilds, reruns the oracle, and REQUIRES red (`--must-fail` pins
   where the red must land). Restores unconditionally and proves the tree is clean.

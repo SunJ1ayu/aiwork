@@ -221,7 +221,7 @@ s6_cross_repo_and_failclosed() {
 s7_track_in_path() {
   echo "[S7] delegate-codex --track:树落进 <根>/<track>/,分支带轮次;不给就是老样子"
   local d; d="$(mktemp -d)"; local b="$d/bin" rec="$d/rec" repo="$d/repo" root="$d/wt" rc
-  mkdir -p "$b" "$rec" "$repo/tests" "$repo/src"
+  mkdir -p "$b" "$rec" "$repo/tests" "$repo/src" "$repo/tracks/mytrack"
   cat > "$b/codex" <<EOF
 #!/usr/bin/env bash
 echo call >> "$rec/calls"
@@ -231,6 +231,7 @@ EOF
   chmod +x "$b/codex"
   ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
     printf 'echo ok\n' > tests/oracle.sh; printf 'x\n' > src/impl.sh
+    printf '# Verify\n' > tracks/mytrack/verify.md
     git add -A; git commit -qm init )
   printf '# 任务书\n干活\n' > "$d/task.md"
   printf '攻题记录\n' > "$d/attack.md"
@@ -252,7 +253,7 @@ EOF
 
   # 不给 --track ⇒ 老路径老分支(向后兼容,别把没挂轮次的活弄坏)
   env PATH="$b:$PATH" DELEGATE_WORKTREE_ROOT="$root" bash "$BIN/delegate-codex" \
-      --task "$d/task.md" --repo "$repo" --attack-log "$d/attack.md" \
+      --task "$d/task.md" --repo "$repo" --attack-log "$d/attack.md" --no-track \
       --protect tests/ --log "$d/b.log" >"$d/o7b" 2>&1; rc=$?
   check "S7: 不给 --track 照样派得出去" $([[ $rc -eq 0 ]]; echo $?)
   local cdir2; cdir2="$(awk '$0=="-C"{getline; print; exit}' "$rec/argv.2")"

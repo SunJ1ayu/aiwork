@@ -144,6 +144,14 @@ codex exec -C <repo> -m gpt-5.6-sol -s read-only \
            -c project_doc_max_bytes=0 -o <log> "评审任务书"
 ```
 
+`--track` 不是目录标签而已：入口会在建 worktree / 启动 Codex **之前**对主仓里的
+`tracks/<轮次>/decision.json` 跑 dispatch 校验；从 attached worktree 发起也仍以主仓卷宗为准。
+Codex 退出后，仓外 receipt 先补齐 `run_id/started_at/finished_at/duration_ms/codex_rc`，再只把这些
+白名单字段导入主仓 `observations/`，写成 `execution_finished`；`--receive` 跑完闸①后另写
+`received`，两件事不互相冒充。观测不含 task、attack log、protect 清单、log 路径或 transcript；
+订阅拿不到 token/API 现金成本时就是 `null`。导入失败会明确打印 `OBSERVATION_WRITE_FAILED`，
+但绝不能覆盖 Codex 或收货闸原本的 rc。`--no-track` 和 `--dry-run` 都不伪造事件。
+
 **默认隔离(2026-08-11,track codex-worktree-delegation)**:每单一棵
 `/root/aiwork/worktrees/<任务名>-<时间戳>` + 一个 `delegate/<同名>` 分支,从派活时的 HEAD 建。
 买到的是**归因**:闸① 的基线是派活时 HEAD,而"腿说考卷错了 ⇒ 我改考卷并提交"是常规路径 ——
@@ -158,6 +166,8 @@ codex exec -C <repo> -m gpt-5.6-sol -s read-only \
 **一律只点名不碰**(要收自己去查了再敲)。
 所以:**忘了传 `--track` 的代价是这棵树以后没人自动收** —— 也正因如此,仓里有开着的 track 时
 入口会**拒发**,逼你说一句(不替你猜:把"我没说"翻译成"我同意删"是删那一侧的风险)。
+观测写在主仓 track 而不是执行 worktree，所以安全 sweep 只回收冗余执行现场，不会把成本—质量
+事实一起删掉；完整日志/receipt 仍按各自 retention 处理，ledger 不依赖它们。
 
 三条实测出来的边界,别凭推理:
 
