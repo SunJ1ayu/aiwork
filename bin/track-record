@@ -280,6 +280,57 @@ def validate_dispatch(data: dict[str, Any], track_dir: Path) -> None:
                 raise DecisionError("evidence.exists", "design.premise_attack.evidence[]", rel, "existing non-symlink file")
 
 
+def validate_archive_observations(data: dict[str, Any], track_dir: Path) -> None:
+    if data["outcome"]["verdict"] != "PASS":
+        return
+    obs_dir = track_dir / "observations"
+    if obs_dir.is_symlink() or not obs_dir.is_dir():
+        raise DecisionError(
+            "observation.required",
+            "observations",
+            MISSING,
+            "at least one successful execution_finished event before PASS archive",
+        )
+    observations = [observation_for_ledger(path, data["track"]) for path in sorted(obs_dir.glob("*.json"))]
+    executions = [item for item in observations if item["event"] == "execution_finished"]
+    if not executions:
+        raise DecisionError(
+            "observation.required",
+            "observations[].event",
+            MISSING,
+            "execution_finished before PASS archive",
+        )
+    if not any(item["exit_code"] == 0 for item in executions):
+        raise DecisionError(
+            "observation.success_required",
+            "observations[].exit_code",
+            [item["exit_code"] for item in executions],
+            "at least one execution_finished with exit_code=0 before PASS archive",
+        )
+    if data["execution_plan"]["adapter"] == "delegate-codex":
+        delegate_runs = {item["run_id"] for item in executions if item["controller"] == "delegate-codex"}
+        if not delegate_runs:
+            raise DecisionError(
+                "observation.delegate_required",
+                "observations[].controller",
+                sorted({item["controller"] for item in executions}),
+                "delegate-codex execution_finished for planned delegate-codex execution",
+            )
+        received_ok = {
+            item["run_id"]
+            for item in observations
+            if item["controller"] == "delegate-codex" and item["event"] == "received" and item["exit_code"] == 0
+        }
+        missing = sorted(delegate_runs - received_ok)
+        if missing:
+            raise DecisionError(
+                "observation.received_required",
+                "observations[].event",
+                missing,
+                "received with exit_code=0 for every delegate execution run_id",
+            )
+
+
 def validate(track_dir: Path, phase: str, source: str, expected_impact: str | None = None) -> int:
     try:
         data = load_decision(track_dir, source)
@@ -293,6 +344,8 @@ def validate(track_dir: Path, phase: str, source: str, expected_impact: str | No
             validate_dispatch(data, track_dir)
         if phase == "archive" and data["outcome"]["verdict"] is None:
             raise DecisionError("field.decided", "outcome.verdict", None, "PASS|BLOCK|NEEDS_MORE_INFO|ARCHIVED-SUPERSEDED")
+        if phase == "archive":
+            validate_archive_observations(data, track_dir)
     except DecisionError as exc:
         return block(exc)
     print(f"track-record: status=valid phase={phase} source={source} track={data['track']}")
