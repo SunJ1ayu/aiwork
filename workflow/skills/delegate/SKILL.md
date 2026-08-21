@@ -10,7 +10,7 @@ description: 把实现工作派给执行腿的完整规矩(分层选档:主 agen
 
 ## 谁负责什么(不可外包的部分)
 
-**主 agent 永远负责**:plan、task brief、**oracle(亲自写,永不外包)**、lane 选择、
+**主 agent 永远负责**:plan、task brief、**oracle(亲自写,永不外包)**、双轴决策、
 验证、仲裁、merge/push/归档。
 
 **这条是铁律,和评审那边同源**:oracle 永远由主 agent 编写和拥有,**绝不能由执行腿写**。
@@ -53,11 +53,10 @@ fork 把它判成"评审腿篡改",恢复了文件并 kill 掉主 agent 的判�
 08-04 体检实查:记忆里的计数停在"样本 2、还欠 1 单";两个不同的 track 都自称"第 3 单";
 我凭印象报给用户的返工率表**和工件对不上**(工件里没有任何一单是 2 轮返工)。
 一本互相打架的账做不了"定型 / 删 Sonnet 档"的依据。
-⇒ **唯一账本 = 各 track 的 `verify.md`**(`派给:` 那格连同返工轮数、自身错误数一起写)。
-记忆只指路、不复述数字。攒够三单**从工件重新数一遍**再谈定型。
-**verify.md 里不写"第 N 单"这种序号**(08-06 退场):序号是存出来的第二份账,两个 track 都
-自称"第 3 单"、被手工改过两次,正好违反上面那句"从工件重新数"。只留原始事实
-(`返工 N 轮` / `自身错误 N 处`),要数就当场数。
+⇒ 不再手工维护“第 N 单 / 返工 N 轮 / 自身错误 N 处”。计划决策只写 track 的
+`decision.json`；controller 实际 dispatch、rc、耗时和真实可得 usage 写紧凑 observation，
+由只读 ledger 当场汇总。拿不到就是 null，不能把订阅额度或现金费用猜成 0。旧 track
+明确标 legacy/unknown，不从 `verify.md` 自由文本回填。
 
 ## 规划:什么时候花"双出方案"
 
@@ -87,12 +86,12 @@ fork 把它判成"评审腿篡改",恢复了文件并 kill 掉主 agent 的判�
    - ③ **亲读 diff**(安全面逐行)。顺带盯 `create mode 120000`——执行腿在 worktree 建的
      符号链接被 merge 带回主仓会**覆盖掉真目录**(出过事故;`.gitignore` 带尾斜杠只匹配
      目录,挡不住链接)。
-4. **verify 的 `impact-risk` 硬规矩:新写口/权限/auth/钱/数据一致性面 = high，针孔再薄
+4. **`decision.json` 的 `impact-risk` 硬规矩:新写口/权限/auth/钱/数据一致性面 = high，针孔再薄
    也不打折。** 默认预算 self=0、standard=1、high=2；high 取两条健康跨家族腿，失败/
    降级/冲突才追加。判卷、沙箱、权限控制面才显式 `panel-review --all`。
    `design-uncertainty` 另判 low/high，只决定是否需要 premise attack / 双出，不拿人数代替。
    切记 **oracle 是主 agent 写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
-   (07-18 实锤:错误编码进 oracle,fast lane 的 submimo 对着错考卷判 PASS,双漏。)
+   (07-18 实锤:错误编码进 oracle,当时的单腿评审对着错考卷判 PASS,双漏。)
 5. 主 agent 仲裁 → 修(自己或回派)→ merge → e2e → push → 归档。
 
 ## submimo fix — 微档

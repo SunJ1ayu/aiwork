@@ -39,7 +39,11 @@ commit,闸①就退化成翻执行腿日志人工找补,而且 git 历史里再�
 失败、降级、冲突、NEEDS_MORE_INFO 或我仍不确定才追加第三腿；判卷/沙箱/权限边界等
 特殊控制面才显式 `panel-review --all`。`design-uncertainty`:low / high，只决定是否做
 premise attack / 双出 / panel-explore，不因实现风险高就自动花一次规划双出。
-`lane:` 和 `派给:` 守卫仍查非空，但我要填写的是上述真实判断，不是沿用旧 full/fast 标签。
+新 track 的机器字段只写同目录 `decision.json`，unknown 用 null，不在 verify.md 复制
+`Verdict:` / `lane:` / `派给:`。真实 controller dispatch 前先跑
+`track-record validate --phase dispatch tracks/<name>`；缺字段、高危因子降档、high uncertainty
+却没有持久 premise evidence 都会打印 rule/path/actual/expected 并 BLOCK。旧 track 继续 legacy，
+不从旧自由文本猜新字段。
 **oracle 是我写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
 
 **bump 版本号、或动判卷防线的 commit,必须挂在一个 track 下**(归进现成 track 也算)。

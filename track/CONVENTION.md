@@ -1,27 +1,50 @@
 # track — lightweight change workflow (Comet artifacts, no state machine)
 
 This is the **lightweight** install: it borrows Comet's durable, traceable
-artifact chain and **drops** the rigid phase machine, HARD-STOP guards, blocking
-decision points, and the OpenSpec/Superpowers dependency. The main agent (Opus)
-keeps full judgment; nothing forces a phase order.
+artifact chain and **drops** the rigid phase machine and the OpenSpec/Superpowers
+dependency. The main agent keeps full judgment over prose and ordering; narrow
+typed/evidence/archive safety gates fail closed where ambiguity is unsafe.
 
 ## Unit
 
 A **track** = one PR-sized feature/modification in an existing project. It lives
-in `<project>/tracks/<name>/` with four artifacts:
+in `<project>/tracks/<name>/` with five artifacts:
 
 | File | What | When to write |
 |---|---|---|
 | `proposal.md` | what & why: goal, motivation, scope, non-goals | at the start of a non-trivial track |
 | `design.md` | how: approach, trade-offs, alternatives, test strategy (oracle) | when there's a real design choice; **panel-explore hook** here |
 | `tasks.md` | task checklist + `base-ref` | when breaking the work down |
+| `decision.json` | typed machine facts: impact, uncertainty, premise evidence, execution plan, outcome | scaffolded as null; fill before a real dispatch and at final arbitration |
 | `verify.md` | what was checked + arbitrated verdict | before calling it done; **panel-review hook** here |
 
 On close: `track archive <name>` moves the folder to `tracks/archive/`. It **refuses**
-if `verify.md` is missing or its `Verdict:` line is still the template placeholder —
-archiving means "this is done", and done without an arbitrated verdict means the
-judgment was never made. Superseded work still archives: write the real outcome
-(e.g. `ARCHIVED-SUPERSEDED`), just don't stamp a `PASS` on it.
+if `verify.md` is missing or `decision.json.outcome.verdict` is null/invalid — archiving
+means "this is done", and done without an arbitrated outcome means the judgment was
+never made. Superseded work still archives with `ARCHIVED-SUPERSEDED`; do not stamp a
+fake `PASS`. Tracks created before `decision.json` remain on the legacy Markdown verdict
+path; they are not backfilled or guessed.
+
+## Typed machine facts (2026-08-21)
+
+`decision.json` is the only machine source for current decisions. Markdown keeps reasons,
+findings and trade-offs; it does not copy `Verdict:`, `lane:` or `派给:` fields. Missing and
+unknown are JSON `null`, never silently `false`, `[]`, self risk or zero cost.
+
+The validator has three narrow modes, not a workflow state machine:
+
+```
+track-record validate --phase shape tracks/<name>     # schema/types; null is legal
+track-record validate --phase dispatch tracks/<name>  # decisions + hand-written cross rules
+track-record validate --phase archive tracks/<name>   # dispatch rules + final outcome
+```
+
+Known high-impact factors (new write surfaces, permissions, auth, money, data consistency,
+migrations and control boundaries) mechanically require `impact.level=high`. High design
+uncertainty requires `premise_attack.status=done` and a durable in-track evidence file.
+Every block prints rule/path/actual/expected. The commit hook checks the staged snapshot,
+so a later working-copy edit cannot answer for the commit being made. Rules are hand-written
+and tested; an LLM does not compile this control plane from prose.
 
 ## Machine evidence (2026-08-08)
 
@@ -87,13 +110,15 @@ accepted for now, revisit with a block-level exemption if it actually bites.
 track new <name> [project-dir]      # scaffold tracks/<name>/ (default: cwd)
 track archive <name> [project-dir]  # -> tracks/archive/<name>/
 track list [project-dir]            # active + archived
+track-record validate --phase dispatch tracks/<name>
 runlog -t <name> -- <cmd>           # 跑判据并把收据落进 tracks/<name>/evidence/
 ```
 
 ## What's deliberately NOT here
 
-- No guard scripts forcing build→verify→archive order. **Two exceptions**:
-  archiving requires a filled-in verdict (2026-08-04) and machine evidence that
+- No guard scripts forcing build→verify→archive order. **Narrow exceptions**:
+  typed dispatch requires complete decisions; archiving requires a filled-in outcome
+  (legacy tracks keep the old Markdown verdict check) and machine evidence that
   matches byte-for-byte (2026-08-08, see above). Both guard the *content of the
   last field*, not the *order of the phases* — you can still skip
   proposal/design/tasks entirely.
@@ -107,10 +132,10 @@ runlog -t <name> -- <cmd>           # 跑判据并把收据落进 tracks/<name>/
 - **design.md → panel-explore**, *conditionally*: only a genuine open architecture
   fork (several defensible directions, risk = tunnel vision). Main agent commits
   its own direction first, then folds the spread in. Otherwise just write it.
-- **verify.md → panel-review**, by lane: `full` (main + 全部评审腿:MiMo/DeepSeek/GLM/Kimi,
-  现 4 条) for high-risk tracks — 新写口/权限/auth/钱/数据一致性/migration/cross-module 一律 full,
-  针孔再薄也不打折; `fast` (main + submimo) 只给纯展示/纯逻辑改动; `self` (main only) for small.
-  Build/test pass stays mechanical.
+- **verify.md → panel-review**, with the budget from `decision.json.impact.level`:
+  `self=0`, `standard=1`, `high=2` external review legs. High rotates healthy,
+  cross-family legs; failure/degradation/conflict may add one spare. `--all` is explicit
+  for exceptional judging/sandbox/permission control surfaces. Build/test pass stays mechanical.
   Main agent is sole arbiter — a panel verdict never auto-advances anything.
 
 ## Build delegation
