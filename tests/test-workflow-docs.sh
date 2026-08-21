@@ -102,5 +102,26 @@ is_judging_surface "workflow/CLAUDE.md" \
   && is_judging_surface "workflow/skills/panel/SKILL.md"
 check "W4: 唯一规范源受 track 归属守卫保护" $?
 
+echo "[W5] typed decision 是新 track 唯一机器事实源，旧 lane 不再混进现行模板"
+d="$(mktemp -d)"; mkdir -p "$d/typed-doc"
+sed 's/__NAME__/typed-doc/g' "$ROOT/track/templates/decision.json" > "$d/typed-doc/decision.json"
+"$ROOT/bin/track-record" validate --phase shape "$d/typed-doc" >/dev/null 2>&1
+check "W5: decision 模板本身通过 shape validator" $?
+rm -rf "$d"
+
+! grep -qE '^-[[:space:]]*(Verdict|lane|派给):' "$ROOT/track/templates/verify.md"
+check "W5: 新 verify 模板不复制 verdict/lane/派给" $?
+grep -q 'decision.json' "$ROOT/track/CONVENTION.md" \
+  && ! grep -q 'verify.md → panel-review.*, by lane' "$ROOT/track/CONVENTION.md" \
+  && ! grep -q 'verify 那边会填 `lane: full`' "$ROOT/track/templates/design.md"
+check "W5: convention/design 现行语义只讲双轴" $?
+grep -q 'decision.json' "$SOURCE/skills/track/SKILL.md" \
+  && grep -q 'track-record.*validate.*dispatch' "$SOURCE/skills/track/SKILL.md" \
+  && ! grep -q '`lane:` 和 `派给:` 守卫仍查非空' "$SOURCE/CLAUDE.md"
+check "W5: workflow 要求 dispatch 前填 decision 并机械校验" $?
+! grep -q '唯一账本 = 各 track 的 `verify.md`' "$SOURCE/skills/delegate/SKILL.md" \
+  && ! grep -q '只留原始事实.*返工 N 轮' "$SOURCE/skills/delegate/SKILL.md"
+check "W5: delegate 不再要求手工返工账或 verify 第二事实源" $?
+
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
