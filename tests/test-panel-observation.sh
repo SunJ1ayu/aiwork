@@ -154,7 +154,8 @@ p=json.loads(os.environ["LEDGER"])
 t=next(x for x in p["tracks"] if x["track"]=="current")
 assert t["quality"]["controller_runs"] == 3
 assert t["quality"]["panel_legs"] == 3
-assert t["quality"]["dispatch_count"] == 3
+assert t["quality"]["fallback_dispatches"] == 1
+assert t["quality"]["dispatch_count"] == 4
 PY
 check "P5: 空 legs 的 panel run 不被伪记成一次外腿 dispatch" $?
 

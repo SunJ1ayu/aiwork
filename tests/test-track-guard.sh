@@ -607,6 +607,45 @@ g9_typed_shape_uses_staged_decision() {
   rm -rf "$d"
 }
 
+g10_manual_typed_archive_uses_staged_facts() {
+  echo '[G10] 手工 git mv 归档 typed track，也必须用 staged decision/observations 过 archive 闸'
+  local d out rc
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    printf '# Verify\n- 无机器证据:fixture\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    git add tracks/t; git commit -qm typed
+    mkdir -p tracks/archive; git mv tracks/t tracks/archive/t; git add -A )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check 'G10: outcome=null 的 typed track 手工搬进 archive ⇒ guard 拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  grep -q 'path=outcome.verdict' <<<"$out"
+  check 'G10: 手工归档仍给 typed outcome trace' $?
+  rm -rf "$d"
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    printf '# Verify\n- 无机器证据:fixture\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    python3 - tracks/t/decision.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["outcome"]["verdict"]="PASS"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+    git add tracks/t; git commit -qm typed-pass
+    mkdir -p tracks/t/observations
+    cat > tracks/t/observations/working-only.json <<'JSON'
+{"schema_version":1,"track":"t","run_id":"r1","controller":"runlog","event":"execution_finished","label":"r1","started_at":"2026-08-21T00:00:00Z","finished_at":"2026-08-21T00:00:01Z","duration_ms":1,"exit_code":0,"actual":{"adapter":"runlog","model":null,"risk":null,"degraded":null,"work_exit_code":0,"legs":null},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+JSON
+    mkdir -p tracks/archive; git mv tracks/t tracks/archive/t; git add -u )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check 'G10: working 有绿 observation、index 没有 ⇒ staged archive 仍拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  grep -q 'rule=observation.required' <<<"$out"
+  check 'G10: 未 staged observation 不能替本次提交应试' $?
+  ( cd "$d"; git add tracks/archive/t/observations; "$GUARD" >/dev/null 2>&1 ); rc=$?
+  check 'G10: decision/observation 都 staged 后手工归档才放行' $([[ $rc -eq 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
 # ---------------------------------------------------------------- G7
 # 和 G3 同一个道理:守卫要守在**动作发生那一刻**,不是它的痕迹被提交那一刻。
 # `track archive` 会把目录移走 —— 只靠 pre-commit 挡,中间那段时间磁盘上就是
@@ -664,5 +703,6 @@ g8_bold_wrapped_paste_is_fine
 g8_round2_false_positive_shapes
 g8_track_new_rejects_path_names
 g9_typed_shape_uses_staged_decision
+g10_manual_typed_archive_uses_staged_facts
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

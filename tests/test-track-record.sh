@@ -104,6 +104,11 @@ check "R2: 非法 impact 枚举被挡" $([[ $rc -ne 0 ]]; echo $?)
 grep -q 'path=impact.level' <<<"$out" && grep -q 'actual=.*medium' <<<"$out" \
   && grep -q 'self.*standard.*high' <<<"$out"
 check "R2: 非法枚举 trace 点名实际值与合法集合" $?
+write_decision "$d/t" t '"self"' '[]' '"low"' '"not_required"' '[]' '"delegate_codxe"' null null
+out="$($RECORD validate --phase shape "$d/t" 2>&1)"; rc=$?
+check "R2: execution adapter 拼错不能作为任意 token 混过去" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'path=execution_plan.adapter' <<<"$out" && grep -q 'delegate_codxe' <<<"$out"
+check "R2: adapter enum trace 点名实际拼错值" $?
 rm -rf "$d"
 
 echo "[R3] dispatch 才要求决策完整，并执行手写跨字段规则"
