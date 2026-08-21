@@ -119,6 +119,7 @@ COMMIT="$(git -C "$REPO" rev-parse --short=7 HEAD 2>/dev/null || echo nocommit)"
 if [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then DIRTY=yes; else DIRTY=no; fi
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+START_NS="$(date +%s%N)"
 
 EVDIR="$REPO/$REL/evidence"
 mkdir -p "$EVDIR" || die "建不了 $EVDIR"
@@ -210,6 +211,22 @@ LINE="runlog: $SLUG rc=$RC commit=$COMMIT dirty=$DIRTY${FINAL_FIELD} at=$AT file
   printf -- '---------------- 输出结束 ----------------\n'
   printf '%s\n' "$LINE"
 } >> "$FILE"
+
+# 紧凑观测只收白名单元数据；完整 argv/output 继续只在可清理 receipt。
+# writer 失败必须可见，但不能把原命令的 rc 改写成另一件事。
+FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+END_NS="$(date +%s%N)"
+DURATION_MS=$(( (END_NS - START_NS) / 1000000 ))
+RUN_ID="$(basename "${FILE%.txt}")"
+TRACK_RECORD_BIN="${TRACK_RECORD_BIN:-$(dirname "$0")/track-record}"
+if ! "$TRACK_RECORD_BIN" observe \
+    --repo "$REPO" --track "$TRACK" --run-id "$RUN_ID" \
+    --controller runlog --event execution_finished --label "$SLUG" \
+    --started-at "$AT" --finished-at "$FINISHED_AT" --duration-ms "$DURATION_MS" \
+    --exit-code "$RC" --adapter runlog --work-exit-code "$COMMAND_RC" >/dev/null; then
+  printf 'runlog: OBSERVATION_WRITE_FAILED track=%s run_id=%s (controller rc 保持 %s)\n' \
+    "$TRACK" "$RUN_ID" "$RC" >&2
+fi
 
 {
   printf -- '---- 粘这一行进 verify.md(逐字节,别改数)----\n'

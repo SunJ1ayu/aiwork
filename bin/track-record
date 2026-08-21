@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -45,6 +46,10 @@ PREMISE_STATUSES = ("pending", "not_required", "done")
 VERDICTS = ("PASS", "BLOCK", "NEEDS_MORE_INFO", "ARCHIVED-SUPERSEDED")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+CONTROLLERS = ("runlog", "panel-review", "delegate-codex")
+EVENTS = ("execution_finished", "received")
+BILLING_MODES = ("subscription", "api", "local")
 
 
 class DecisionError(Exception):
@@ -292,6 +297,139 @@ def validate(track_dir: Path, phase: str, source: str) -> int:
     return 0
 
 
+def safe_identifier(value: str, path: str, pattern: re.Pattern[str], limit: int = 200) -> str:
+    if not value or len(value) > limit or not pattern.fullmatch(value):
+        raise DecisionError("observation.identifier", path, value, f"safe identifier <= {limit} chars")
+    return value
+
+
+def iso8601_utc(value: str, path: str) -> str:
+    if not value.endswith("Z"):
+        raise DecisionError("observation.timestamp", path, value, "ISO-8601 UTC ending in Z")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise DecisionError("observation.timestamp", path, value, "ISO-8601 UTC ending in Z") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise DecisionError("observation.timestamp", path, value, "ISO-8601 UTC ending in Z")
+    return value
+
+
+def nullable_nonnegative(value: int | float | None, path: str) -> int | float | None:
+    if value is not None and (isinstance(value, bool) or value < 0):
+        raise DecisionError("observation.range", path, value, "null or non-negative number")
+    return value
+
+
+def track_location(repo: Path, name: str) -> tuple[Path, str]:
+    safe_identifier(name, "track", NAME_RE)
+    repo = repo.resolve()
+    for rel in (Path("tracks") / name, Path("tracks/archive") / name):
+        candidate = repo / rel
+        if candidate.is_dir() and not candidate.is_symlink():
+            try:
+                candidate.resolve().relative_to(repo)
+            except ValueError as exc:
+                raise DecisionError("observation.boundary", "track", os.fspath(candidate), "track inside repo") from exc
+            return candidate, rel.as_posix()
+    raise DecisionError("track.directory", "track", name, "existing active or archived track")
+
+
+def write_observation(track_dir: Path, rel_track: str, payload: dict[str, Any]) -> str:
+    obs_dir = track_dir / "observations"
+    if obs_dir.is_symlink():
+        raise DecisionError("observation.boundary", "observations", os.fspath(obs_dir), "real directory, not symlink")
+    obs_dir.mkdir(mode=0o755, parents=False, exist_ok=True)
+    if not obs_dir.is_dir() or obs_dir.is_symlink():
+        raise DecisionError("observation.boundary", "observations", os.fspath(obs_dir), "real directory")
+    body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    stamp = payload["finished_at"].replace("-", "").replace(":", "").replace("T", "T").replace("Z", "Z")
+    base = f"{stamp}-{payload['controller']}-{payload['event']}"
+    temp = obs_dir / f".{base}.{os.getpid()}.tmp"
+    temp_fd = None
+    try:
+        temp_fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(temp_fd, "wb") as stream:
+            temp_fd = None
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        for counter in range(1, 1000):
+            final = obs_dir / f"{base}-{counter:03d}.json"
+            try:
+                os.link(temp, final)
+                os.unlink(temp)
+                return f"{rel_track}/observations/{final.name}"
+            except FileExistsError:
+                continue
+        raise DecisionError("observation.collision", "observations", 999, "fewer than 999 same-stamp events")
+    finally:
+        if temp_fd is not None:
+            os.close(temp_fd)
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def observe(args: argparse.Namespace) -> int:
+    try:
+        repo = args.repo.resolve()
+        if not repo.is_dir():
+            raise DecisionError("git.repository", "repo", os.fspath(repo), "existing repository directory")
+        track_dir, rel_track = track_location(repo, args.track)
+        run_id = safe_identifier(args.run_id, "run_id", LABEL_RE)
+        label = safe_identifier(args.label, "label", LABEL_RE, 128)
+        adapter = safe_identifier(args.adapter, "actual.adapter", TOKEN_RE)
+        model = None if args.model is None else safe_identifier(args.model, "actual.model", TOKEN_RE)
+        started = iso8601_utc(args.started_at, "started_at")
+        finished = iso8601_utc(args.finished_at, "finished_at")
+        if datetime.fromisoformat(finished[:-1] + "+00:00") < datetime.fromisoformat(started[:-1] + "+00:00"):
+            raise DecisionError("observation.time_order", "finished_at", finished, ">= started_at")
+        nullable_nonnegative(args.duration_ms, "duration_ms")
+        nullable_nonnegative(args.input_tokens, "usage.input_tokens")
+        nullable_nonnegative(args.output_tokens, "usage.output_tokens")
+        nullable_nonnegative(args.total_tokens, "usage.total_tokens")
+        nullable_nonnegative(args.api_cost, "usage.api_cost")
+        if args.risk is not None and args.risk not in IMPACT_LEVELS:
+            raise DecisionError("field.enum", "actual.risk", args.risk, "|".join(IMPACT_LEVELS))
+        degraded = {None: None, "null": None, "true": True, "false": False}[args.degraded]
+        payload = {
+            "schema_version": 1,
+            "track": args.track,
+            "run_id": run_id,
+            "controller": args.controller,
+            "event": args.event,
+            "label": label,
+            "started_at": started,
+            "finished_at": finished,
+            "duration_ms": args.duration_ms,
+            "exit_code": args.exit_code,
+            "actual": {
+                "adapter": adapter,
+                "model": model,
+                "risk": args.risk,
+                "degraded": degraded,
+                "work_exit_code": args.work_exit_code,
+                "legs": None,
+            },
+            "usage": {
+                "input_tokens": args.input_tokens,
+                "output_tokens": args.output_tokens,
+                "total_tokens": args.total_tokens,
+                "api_cost": args.api_cost,
+                "billing_mode": args.billing_mode,
+            },
+        }
+        rel_file = write_observation(track_dir, rel_track, payload)
+    except (DecisionError, OSError) as exc:
+        if isinstance(exc, DecisionError):
+            return block(exc)
+        return block(DecisionError("observation.write", "observations", str(exc), "atomic JSON write"))
+    print(f"track-record: observed file={rel_file}")
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="track-record")
     commands = top.add_subparsers(dest="command", required=True)
@@ -299,6 +437,27 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--phase", required=True, choices=("shape", "dispatch", "archive"))
     check.add_argument("--source", default="working", choices=("working", "staged"))
     check.add_argument("track_dir", type=Path)
+    event = commands.add_parser("observe", help="write one compact controller observation")
+    event.add_argument("--repo", required=True, type=Path)
+    event.add_argument("--track", required=True)
+    event.add_argument("--run-id", required=True)
+    event.add_argument("--controller", required=True, choices=CONTROLLERS)
+    event.add_argument("--event", required=True, choices=EVENTS)
+    event.add_argument("--label", required=True)
+    event.add_argument("--started-at", required=True)
+    event.add_argument("--finished-at", required=True)
+    event.add_argument("--duration-ms", required=True, type=int)
+    event.add_argument("--exit-code", required=True, type=int)
+    event.add_argument("--adapter", required=True)
+    event.add_argument("--work-exit-code", required=True, type=int)
+    event.add_argument("--model")
+    event.add_argument("--risk", choices=IMPACT_LEVELS)
+    event.add_argument("--degraded", choices=("null", "true", "false"))
+    event.add_argument("--input-tokens", type=int)
+    event.add_argument("--output-tokens", type=int)
+    event.add_argument("--total-tokens", type=int)
+    event.add_argument("--api-cost", type=float)
+    event.add_argument("--billing-mode", choices=BILLING_MODES)
     return top
 
 
@@ -308,6 +467,8 @@ def main() -> int:
         if not args.track_dir.is_dir():
             return block(DecisionError("track.directory", "track_dir", os.fspath(args.track_dir), "existing directory"))
         return validate(args.track_dir.resolve(), args.phase, args.source)
+    if args.command == "observe":
+        return observe(args)
     return 2
 
 
