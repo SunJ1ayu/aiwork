@@ -84,6 +84,13 @@ PY
 check "R1: 初态字段精确、unknown=null 且不等于 false/[]" $?
 rm -rf "$d"
 
+d="$(mktemp -d)"; mkdir -p "$d/tracks/archive/reused"
+( cd "$d"; git init -q; git config user.email t@t; git config user.name t )
+out="$($TRACK new reused "$d" 2>&1)"; rc=$?
+check "R1: archived 名称全生命周期唯一，不能新建同名 active 污染迟到回执" $([[ $rc -ne 0 ]]; echo $?)
+check "R1: 同名拒绝时 archived 现场原样保留" $([[ -d "$d/tracks/archive/reused" && ! -d "$d/tracks/reused" ]]; echo $?)
+rm -rf "$d"
+
 echo "[R2] shape 只查结构/类型/枚举，并给可审计 rule trace"
 d="$(mktemp -d)"; shape_decision "$d/t" t
 out="$($RECORD validate --phase shape "$d/t" 2>&1)"; rc=$?
@@ -109,6 +116,15 @@ out="$($RECORD validate --phase shape "$d/t" 2>&1)"; rc=$?
 check "R2: execution adapter 拼错不能作为任意 token 混过去" $([[ $rc -ne 0 ]]; echo $?)
 grep -q 'path=execution_plan.adapter' <<<"$out" && grep -q 'delegate_codxe' <<<"$out"
 check "R2: adapter enum trace 点名实际拼错值" $?
+rm -rf "$d"
+
+d="$(mktemp -d)"; mkdir -p "$d/t" "$d/outside"
+shape_decision "$d/outside" t
+ln -s "$d/outside/decision.json" "$d/t/decision.json"
+out="$($RECORD validate --phase shape "$d/t" 2>&1)"; rc=$?
+check "R2: working decision.json 不许是指向仓外可变事实的 symlink" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=decision.boundary' <<<"$out"
+check "R2: decision symlink 边界 trace 明确" $?
 rm -rf "$d"
 
 echo "[R3] dispatch 才要求决策完整，并执行手写跨字段规则"
@@ -162,6 +178,19 @@ out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
 check "R4: observation 顶层夹带 transcript/额外字段时 archive fail closed" $([[ $rc -ne 0 ]]; echo $?)
 grep -q 'rule=field.unknown' <<<"$out"
 check "R4: observation 白名单违规给结构化 rule trace" $?
+write_observation "$d/t" t run-1 runlog execution_finished 0
+python3 - "$d/t/observations/run-1-execution_finished.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["usage"]["api_cost"]=float("inf")
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4: observation 的 Infinity/NaN 非有限成本被拒绝" $([[ $rc -ne 0 ]]; echo $?)
+write_observation "$d/t" t run-1 runlog execution_finished 0
+printf 'FULL_TRANSCRIPT_SHOULD_NOT_LIVE_HERE\n' > "$d/t/observations/transcript.txt"
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4: observations 目录夹带非 JSON transcript 时拒绝归档" $([[ $rc -ne 0 ]]; echo $?)
+rm "$d/t/observations/transcript.txt"
 write_observation "$d/t" t run-1 panel-review execution_finished 0
 python3 - "$d/t/observations/run-1-execution_finished.json" <<'PY'
 import json,sys
@@ -217,6 +246,22 @@ mkdir -p "$d/tracks/legacy-life"
 printf '# Verify\n- Verdict: ARCHIVED-SUPERSEDED\n- 无机器证据:fixture\n' > "$d/tracks/legacy-life/verify.md"
 DELEGATE_WORKTREE_ROOT="$d/wt" $TRACK archive legacy-life "$d" >/dev/null 2>&1; rc=$?
 check "R6: 无 decision 的旧 track 仍按 legacy 规则归档" $([[ $rc -eq 0 ]]; echo $?)
+rm -rf "$d"
+
+echo "[R7] delegate receive 可失败后重试；execution 仍不许重复计费"
+d="$(mktemp -d)"
+write_decision "$d/t" t '"self"' '[]' '"low"' '"not_required"' '[]' '"delegate-codex"' '"gpt-5.5"' '"PASS"'
+write_observation "$d/t" t delegate-1 delegate-codex execution_finished 0
+write_observation "$d/t" t delegate-1 delegate-codex received 1
+mv "$d/t/observations/delegate-1-received.json" "$d/t/observations/delegate-1-received-first.json"
+write_observation "$d/t" t delegate-1 delegate-codex received 0
+$RECORD validate --phase archive "$d/t" >/dev/null 2>&1; rc=$?
+check "R7: 同 run_id 的 received fail→pass 合法，任一成功即可收货" $([[ $rc -eq 0 ]]; echo $?)
+cp "$d/t/observations/delegate-1-execution_finished.json" "$d/t/observations/duplicate-execution.json"
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R7: 同 execution_finished 重复导入仍拒绝双计" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=observation.duplicate' <<<"$out"
+check "R7: 重复 execution trace 明确" $?
 rm -rf "$d"
 
 echo "=== total: $PASS passed, $FAIL failed ==="

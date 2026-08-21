@@ -83,7 +83,8 @@ conversation history; reconstruct from the folder:
    - `design-uncertainty`: low / high. High uncertainty triggers premise attack,
      independent dual planning or `panel-explore`; high implementation impact
      alone does not.
-   Record the planned Adapter/model there too; keep reasons and review findings in Markdown.
+   Record the planned Adapter/model there too (v1 Adapter enum:
+   `main|submimo|delegate-codex|claude-worktree`); keep reasons and review findings in Markdown.
    Main agent reviews first and commits findings BEFORE reading any panel output, then
    arbitrates one outcome into `decision.json` (PASS / BLOCK / NEEDS_MORE_INFO or
    ARCHIVED-SUPERSEDED). A panel verdict never auto-advances anything — the main agent
@@ -101,7 +102,10 @@ conversation history; reconstruct from the folder:
 同一行，但不把 dispatch_count 解释成“返工轮数”。只有 PASS 且 execution coverage 完整的 track
 进入 successful-cost 聚合；缺 event 的 PASS 单独列 missing。订阅拿不到 token/API 现金成本、
 或历史 track 根本没有 typed facts 时都保留 `null/unknown`，绝不能补成 0，也不从旧 prose 猜。
-planned/actual model 或 Adapter 不一致由 mismatch 明示，不相互覆盖。
+planned/actual model 或 Adapter **可比较时**由 mismatch 明示，不相互覆盖；main 的 runlog 是验证
+controller，不冒充实际执行 Adapter，所以该维度拿不到时保持 null。agent→chat 回落是第二次真实
+dispatch，ledger 会在 degraded leg 之外另计一次 fallback dispatch。`observations/` 只准紧凑 JSON，
+不能夹带 transcript/子目录/symlink；archive 对 working/staged 两种路径都 fail closed。
 
 ## What this is NOT
 

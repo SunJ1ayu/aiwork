@@ -10,6 +10,9 @@ typed/evidence/archive safety gates fail closed where ambiguity is unsafe.
 A **track** = one PR-sized feature/modification in an existing project. It lives
 in `<project>/tracks/<name>/` with five artifacts:
 
+Track names are unique across the active + archive lifetime. Reusing an archived name is
+rejected: otherwise a late delegate receipt for the old run could be imported into a new track.
+
 | File | What | When to write |
 |---|---|---|
 | `proposal.md` | what & why: goal, motivation, scope, non-goals | at the start of a non-trivial track |
@@ -19,7 +22,8 @@ in `<project>/tracks/<name>/` with five artifacts:
 | `verify.md` | what was checked + arbitrated verdict | before calling it done; **panel-review hook** here |
 
 On close: `track archive <name>` moves the folder to `tracks/archive/`. It **refuses**
-if `verify.md` is missing or `decision.json.outcome.verdict` is null/invalid — archiving
+if `verify.md` is missing, `decision.json.outcome.verdict` is null/invalid, or PASS lacks
+valid execution coverage — archiving
 means "this is done", and done without an arbitrated outcome means the judgment was
 never made. Superseded work still archives with `ARCHIVED-SUPERSEDED`; do not stamp a
 fake `PASS`. Tracks created before `decision.json` remain on the legacy Markdown verdict
@@ -44,6 +48,13 @@ Ledger 只扫描 `decision.json` 与 `observations/*.json`；不解析 verify pr
 transcript。legacy 与采不到的 usage 明示 `unknown/null`，PASS 但缺 execution coverage 的 track
 进入 missing 清单而不是成功成本聚合。它不写数据库、索引或缓存，所以 worktree 清理与日志
 retention 不会和持久账本打架。
+
+`execution_plan.adapter` v1 只接受 `main|submimo|delegate-codex|claude-worktree`，拼错不能退化成
+任意 token。main 的归档覆盖要求成功 runlog；delegate 还要求 execution + 至少一次成功 receive。
+submimo/claude 尚无统一 controller 用量接口，所以可完成归档，但 ledger 明示 coverage missing，
+不进入 successful-cost 聚合。`observations/` 是严格白名单目录：只准直接的 100644 JSON 事件，
+不准 transcript、子目录或 symlink。CLI 归档和手工 staged rename 都校验 staged decision、
+staged observations 与 staged verify，working copy 不能替本次提交应试。
 
 Known high-impact factors (new write surfaces, permissions, auth, money, data consistency,
 migrations and control boundaries) mechanically require `impact.level=high`. High design

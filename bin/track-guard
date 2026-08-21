@@ -82,8 +82,18 @@ for v in $verifies; do
   track_dir="${v%/verify.md}"
   # typed track 的机器字段只认 decision.json。这里必须验 **staged snapshot**:
   # working copy 可以已经被下一步编辑，不能替本次 commit 应试。
-  if git cat-file -e ":$track_dir/decision.json" 2>/dev/null \
-      || [ -f "$track_dir/decision.json" ]; then
+  staged_decision=0; known_decision=0
+  git cat-file -e ":$track_dir/decision.json" 2>/dev/null && staged_decision=1
+  if [[ "$staged_decision" -eq 1 ]] || [ -f "$track_dir/decision.json" ] \
+      || git cat-file -e "HEAD:$track_dir/decision.json" 2>/dev/null; then
+    known_decision=1
+  fi
+  if [[ "$known_decision" -eq 1 ]]; then
+    if [[ "$staged_decision" -eq 0 ]]; then
+      fail=1
+      say "🔴 typed decision 没有出现在 staged snapshot（新文件漏 add 或已被删除）:$track_dir/decision.json"
+      continue
+    fi
     if ! "$BIN/track-record" validate --phase shape --source staged "$track_dir"; then
       fail=1
       say "🔴 typed decision 的 staged snapshot 未通过 shape:$track_dir/decision.json"
@@ -151,15 +161,26 @@ done
 # 2026-08-08 四审两条腿独立命中:按路径匹配的话,改一份两个月前就归档的 verify.md
 # 的错字也会被当成"你在归档"挡下,而仓里 8 份历史归档工件全部零收据 ⇒ 一碰就挡,
 # 报错文案还是错的。任务书自己写着「误报比漏报更致命」,我照样踩了进去。
-archiving_now() {
+archiving_dirs_now() {
   git diff --cached --name-status --find-renames 2>/dev/null \
     | awk -F'\t' '$1 ~ /^R/ && $2 ~ /^tracks\/archive\// { next }   # archive/ 内部改名不是归档
-                   $1 !~ /^[MD]/ && $NF ~ /^tracks\/archive\/[^\/]+\/verify\.md$/ {print $NF}'
+                   $1 !~ /^[MD]/ && $NF ~ /^tracks\/archive\/[^\/]+\// {
+                     split($NF, p, "/"); print p[1] "/" p[2] "/" p[3]
+                   }' | sort -u
 }
-for v in $(archiving_now); do
-  [ -f "$v" ] || continue
-  dir="$(dirname "$v")"
-  tmp="$(verify_content "$v")"
+for dir in $(archiving_dirs_now); do
+  v="$dir/verify.md"
+  if ! "$BIN/track-record" validate --phase archive --source staged "$dir"; then
+    fail=1
+    say "🔴 规矩3:$dir 的 staged typed outcome/coverage 未满足归档条件。"
+  fi
+  if ! git cat-file -e ":$v" 2>/dev/null; then
+    fail=1
+    say "🔴 规矩3:$v 没有出现在 staged archive（归档不能同时删掉验收结论）。"
+    continue
+  fi
+  tmp="$(mktemp)"
+  git show ":$v" > "$tmp" 2>/dev/null || { rm -f "$tmp"; fail=1; continue; }
   ev_check "$dir" "$tmp" archive "track-guard" "$v" || fail=1
   rm -f "$tmp"
   # 5d 留痕:证据必须进 git。闸① 同款盲点 —— 未跟踪文件在 diff 里是隐形的,

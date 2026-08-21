@@ -232,6 +232,10 @@ case "$cmd" in
     esac
     dir="$proj/tracks/$name"
     [ -e "$dir" ] && { echo "ERROR: $dir already exists" >&2; exit 1; }
+    [ -e "$proj/tracks/archive/$name" ] && {
+      echo "ERROR: track 名全生命周期必须唯一，已存在 archived track:$proj/tracks/archive/$name" >&2
+      exit 1
+    }
     mkdir -p "$dir"
     date="$(date +%Y-%m-%d)"
     baseref="$(git -C "$proj" rev-parse --verify -q HEAD 2>/dev/null || true)"

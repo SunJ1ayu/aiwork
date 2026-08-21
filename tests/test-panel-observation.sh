@@ -31,7 +31,7 @@ EOF
   "track": "current",
   "impact": {"level": "high", "factors": []},
   "design": {"uncertainty": "low", "premise_attack": {"status": "not_required", "evidence": []}},
-  "execution_plan": {"adapter": "panel-review", "model": null},
+  "execution_plan": {"adapter": "main", "model": null},
   "outcome": {"verdict": null}
 }
 EOF

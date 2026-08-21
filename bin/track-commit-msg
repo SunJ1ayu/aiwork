@@ -54,7 +54,7 @@ verify_ready() {  # legacy verify_ready <verify-file>
 }
 
 validate_track() {  # validate_track <name> <allow-archive:0|1>
-  local name="$1" allow_archive="$2" v="" track_dir="" source="staged"
+  local name="$1" allow_archive="$2" v="" track_dir="" staged_decision=0 known_decision=0
   valid_name "$name" || { say "🔴 非法 Track 名:$name"; return 1; }
   if [[ -f "tracks/$name/verify.md" ]]; then
     v="tracks/$name/verify.md"
@@ -62,14 +62,21 @@ validate_track() {  # validate_track <name> <allow-archive:0|1>
   elif [[ "$allow_archive" -eq 1 && -f "tracks/archive/$name/verify.md" ]]; then
     v="tracks/archive/$name/verify.md"
     track_dir="tracks/archive/$name"
-    source="working"
   else
     say "🔴 Track: $name 没有对应的${allow_archive:+ active/archived} verify.md。"
     return 1
   fi
-  if git cat-file -e ":$track_dir/decision.json" 2>/dev/null \
-      || [[ -f "$track_dir/decision.json" ]]; then
-    if ! "$BIN/track-record" validate --phase dispatch --source "$source" "$track_dir"; then
+  git cat-file -e ":$track_dir/decision.json" 2>/dev/null && staged_decision=1
+  if [[ "$staged_decision" -eq 1 ]] || [[ -f "$track_dir/decision.json" ]] \
+      || git cat-file -e "HEAD:$track_dir/decision.json" 2>/dev/null; then
+    known_decision=1
+  fi
+  if [[ "$known_decision" -eq 1 ]]; then
+    if [[ "$staged_decision" -eq 0 ]]; then
+      say "🔴 $track_dir/decision.json 没有出现在 staged snapshot（新文件漏 add 或已被删除）。"
+      return 1
+    fi
+    if ! "$BIN/track-record" validate --phase dispatch --source staged "$track_dir"; then
       say "🔴 $track_dir/decision.json 尚未满足 dispatch；关键 commit 拒绝放行。"
       return 1
     fi

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -50,6 +51,7 @@ LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CONTROLLERS = ("runlog", "panel-review", "delegate-codex")
 EVENTS = ("execution_finished", "received")
 BILLING_MODES = ("subscription", "api", "local")
+EXECUTION_ADAPTERS = ("main", "submimo", "delegate-codex", "claude-worktree")
 
 
 class DecisionError(Exception):
@@ -150,6 +152,17 @@ def staged_decision_text(track_dir: Path) -> str | None:
         rel = (track_dir / "decision.json").resolve().relative_to(repo.resolve())
     except ValueError as exc:
         raise DecisionError("git.repository", "decision.json", os.fspath(track_dir), "path inside git repository") from exc
+    staged = subprocess.run(
+        ["git", "-C", os.fspath(repo), "ls-files", "--stage", "--", rel.as_posix()],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    if staged.stdout:
+        mode = staged.stdout.split(" ", 1)[0]
+        if mode != "100644":
+            raise DecisionError("decision.boundary", "decision.json", mode, "staged regular 100644 file")
     result = subprocess.run(
         ["git", "-C", os.fspath(repo), "show", f":{rel.as_posix()}"],
         stdout=subprocess.PIPE,
@@ -173,6 +186,8 @@ def load_decision(track_dir: Path, source: str) -> dict[str, Any] | None:
         if text is None:
             return None
     else:
+        if path.is_symlink():
+            raise DecisionError("decision.boundary", "decision.json", os.fspath(path), "regular non-symlink file")
         if not path.is_file():
             if decision_was_tracked(track_dir):
                 raise DecisionError("decision.required", "decision.json", MISSING, "tracked typed decision must exist")
@@ -235,7 +250,7 @@ def validate_shape(data: dict[str, Any], track_dir: Path) -> None:
             raise DecisionError("evidence.path", "design.premise_attack.evidence[]", item, "safe track-relative path")
 
     execution = exact_object(required(root, "execution_plan", ""), "execution_plan", ("adapter", "model"))
-    nullable_token(required(execution, "adapter", "execution_plan"), "execution_plan.adapter")
+    nullable_enum(required(execution, "adapter", "execution_plan"), "execution_plan.adapter", EXECUTION_ADAPTERS)
     nullable_token(required(execution, "model", "execution_plan"), "execution_plan.model")
     outcome = exact_object(required(root, "outcome", ""), "outcome", ("verdict",))
     nullable_enum(required(outcome, "verdict", "outcome"), "outcome.verdict", VERDICTS)
@@ -280,18 +295,18 @@ def validate_dispatch(data: dict[str, Any], track_dir: Path) -> None:
                 raise DecisionError("evidence.exists", "design.premise_attack.evidence[]", rel, "existing non-symlink file")
 
 
-def validate_archive_observations(data: dict[str, Any], track_dir: Path) -> None:
+def validate_archive_observations(data: dict[str, Any], track_dir: Path, source: str) -> None:
     if data["outcome"]["verdict"] != "PASS":
         return
-    obs_dir = track_dir / "observations"
-    if obs_dir.is_symlink() or not obs_dir.is_dir():
+    observations = load_observations(track_dir, data["track"], source)
+    observations, duplicates = unique_observations(observations)
+    if duplicates:
         raise DecisionError(
-            "observation.required",
-            "observations",
-            MISSING,
-            "at least one successful execution_finished event before PASS archive",
+            "observation.duplicate",
+            "observations[].controller/event/run_id",
+            duplicates,
+            "unique controller/event/run_id",
         )
-    observations = [observation_for_ledger(path, data["track"]) for path in sorted(obs_dir.glob("*.json"))]
     executions = [item for item in observations if item["event"] == "execution_finished"]
     if not executions:
         raise DecisionError(
@@ -306,6 +321,15 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path) -> None
             "observations[].exit_code",
             [item["exit_code"] for item in executions],
             "at least one execution_finished with exit_code=0 before PASS archive",
+        )
+    if data["execution_plan"]["adapter"] == "main" and not any(
+        item["controller"] == "runlog" and item["exit_code"] == 0 for item in executions
+    ):
+        raise DecisionError(
+            "observation.main_required",
+            "observations[].controller",
+            sorted({item["controller"] for item in executions}),
+            "successful runlog execution_finished for planned main execution",
         )
     if data["execution_plan"]["adapter"] == "delegate-codex":
         delegate_runs = {item["run_id"] for item in executions if item["controller"] == "delegate-codex"}
@@ -345,7 +369,7 @@ def validate(track_dir: Path, phase: str, source: str, expected_impact: str | No
         if phase == "archive" and data["outcome"]["verdict"] is None:
             raise DecisionError("field.decided", "outcome.verdict", None, "PASS|BLOCK|NEEDS_MORE_INFO|ARCHIVED-SUPERSEDED")
         if phase == "archive":
-            validate_archive_observations(data, track_dir)
+            validate_archive_observations(data, track_dir, source)
     except DecisionError as exc:
         return block(exc)
     print(f"track-record: status=valid phase={phase} source={source} track={data['track']}")
@@ -371,7 +395,12 @@ def iso8601_utc(value: str, path: str) -> str:
 
 
 def nullable_nonnegative(value: int | float | None, path: str) -> int | float | None:
-    if value is not None and (isinstance(value, bool) or value < 0):
+    if value is not None and (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or (isinstance(value, float) and not math.isfinite(value))
+        or value < 0
+    ):
         raise DecisionError("observation.range", path, value, "null or non-negative number")
     return value
 
@@ -415,7 +444,7 @@ def write_observation(track_dir: Path, rel_track: str, payload: dict[str, Any]) 
     obs_dir.mkdir(mode=0o755, parents=False, exist_ok=True)
     if not obs_dir.is_dir() or obs_dir.is_symlink():
         raise DecisionError("observation.boundary", "observations", os.fspath(obs_dir), "real directory")
-    body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    body = (json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
     stamp = payload["finished_at"].replace("-", "").replace(":", "").replace("T", "T").replace("Z", "Z")
     base = f"{stamp}-{payload['controller']}-{payload['event']}"
     temp = obs_dir / f".{base}.{os.getpid()}.tmp"
@@ -447,7 +476,7 @@ def write_observation(track_dir: Path, rel_track: str, payload: dict[str, Any]) 
 
 def observe(args: argparse.Namespace) -> int:
     try:
-        repo = args.repo.resolve()
+        repo = control_repo(args.repo)
         if not repo.is_dir():
             raise DecisionError("git.repository", "repo", os.fspath(repo), "existing repository directory")
         track_dir, rel_track = track_location(repo, args.track)
@@ -678,54 +707,256 @@ def empty_cost() -> dict[str, Any]:
     }
 
 
+def observation_usage(value: Any, path: str) -> dict[str, Any]:
+    usage = exact_object(
+        value,
+        path,
+        ("input_tokens", "output_tokens", "total_tokens", "api_cost", "billing_mode"),
+    )
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        field = usage[key]
+        if field is not None and (type(field) is not int or field < 0):
+            raise DecisionError("field.type", f"{path}.{key}", field, "null or non-negative integer")
+    cost = usage["api_cost"]
+    if cost is not None and (
+        isinstance(cost, bool)
+        or not isinstance(cost, (int, float))
+        or (isinstance(cost, float) and not math.isfinite(cost))
+        or cost < 0
+    ):
+        raise DecisionError("field.type", f"{path}.api_cost", cost, "null or non-negative number")
+    nullable_enum(usage["billing_mode"], f"{path}.billing_mode", BILLING_MODES)
+    return usage
+
+
+def observation_payload(value: Any, track: str) -> dict[str, Any]:
+    root = exact_object(
+        value,
+        "observation",
+        (
+            "schema_version",
+            "track",
+            "run_id",
+            "controller",
+            "event",
+            "label",
+            "started_at",
+            "finished_at",
+            "duration_ms",
+            "exit_code",
+            "actual",
+            "usage",
+        ),
+    )
+    if type(root["schema_version"]) is not int or root["schema_version"] != 1:
+        raise DecisionError("schema.version", "observation.schema_version", root["schema_version"], 1)
+    if root["track"] != track:
+        raise DecisionError("track.identity", "observation.track", root["track"], track)
+    if not isinstance(root["run_id"], str):
+        raise DecisionError("field.type", "observation.run_id", root["run_id"], "safe identifier")
+    safe_identifier(root["run_id"], "observation.run_id", LABEL_RE)
+    if root["controller"] not in CONTROLLERS:
+        raise DecisionError("field.enum", "observation.controller", root["controller"], "|".join(CONTROLLERS))
+    if root["event"] not in EVENTS:
+        raise DecisionError("field.enum", "observation.event", root["event"], "|".join(EVENTS))
+    allowed_events = {
+        "runlog": ("execution_finished",),
+        "panel-review": ("execution_finished",),
+        "delegate-codex": EVENTS,
+    }
+    if root["event"] not in allowed_events[root["controller"]]:
+        raise DecisionError(
+            "observation.controller_event",
+            "observation.event",
+            root["event"],
+            "|".join(allowed_events[root["controller"]]),
+        )
+    if not isinstance(root["label"], str):
+        raise DecisionError("field.type", "observation.label", root["label"], "safe identifier")
+    safe_identifier(root["label"], "observation.label", LABEL_RE, 128)
+    if not isinstance(root["started_at"], str) or not isinstance(root["finished_at"], str):
+        raise DecisionError("field.type", "observation.started_at/finished_at", None, "ISO-8601 UTC strings")
+    started = iso8601_utc(root["started_at"], "observation.started_at")
+    finished = iso8601_utc(root["finished_at"], "observation.finished_at")
+    if datetime.fromisoformat(finished[:-1] + "+00:00") < datetime.fromisoformat(started[:-1] + "+00:00"):
+        raise DecisionError("observation.time_order", "observation.finished_at", finished, f">= {started}")
+    for key in ("duration_ms", "exit_code"):
+        field = root[key]
+        if type(field) is not int or field < 0:
+            raise DecisionError("field.type", f"observation.{key}", field, "non-negative integer")
+
+    actual = exact_object(
+        root["actual"],
+        "observation.actual",
+        ("adapter", "model", "risk", "degraded", "work_exit_code", "legs"),
+    )
+    if actual["adapter"] != root["controller"]:
+        raise DecisionError(
+            "observation.adapter",
+            "observation.actual.adapter",
+            actual["adapter"],
+            root["controller"],
+        )
+    nullable_token(actual["model"], "observation.actual.model")
+    nullable_enum(actual["risk"], "observation.actual.risk", IMPACT_LEVELS)
+    if actual["degraded"] is not None and type(actual["degraded"]) is not bool:
+        raise DecisionError("field.type", "observation.actual.degraded", actual["degraded"], "null or boolean")
+    if type(actual["work_exit_code"]) is not int or actual["work_exit_code"] < 0:
+        raise DecisionError(
+            "field.type",
+            "observation.actual.work_exit_code",
+            actual["work_exit_code"],
+            "non-negative integer",
+        )
+    legs = actual["legs"]
+    if root["controller"] == "panel-review":
+        if not isinstance(legs, list):
+            raise DecisionError("field.type", "observation.actual.legs", legs, "array for panel-review")
+    elif legs is not None:
+        raise DecisionError("field.type", "observation.actual.legs", legs, "null outside panel-review")
+    for index, value_leg in enumerate(legs or []):
+        path = f"observation.actual.legs[{index}]"
+        leg = exact_object(
+            value_leg,
+            path,
+            (
+                "name",
+                "family",
+                "adapter",
+                "model",
+                "state",
+                "exit_code",
+                "verdict",
+                "degraded",
+                "duration_ms",
+                "usage",
+            ),
+        )
+        for key in ("name", "family"):
+            if not isinstance(leg[key], str):
+                raise DecisionError("field.type", f"{path}.{key}", leg[key], "safe identifier")
+            safe_identifier(leg[key], f"{path}.{key}", LABEL_RE)
+        if not isinstance(leg["adapter"], str):
+            raise DecisionError("field.type", f"{path}.adapter", leg["adapter"], "safe identifier")
+        safe_identifier(leg["adapter"], f"{path}.adapter", TOKEN_RE)
+        nullable_token(leg["model"], f"{path}.model")
+        if type(leg["exit_code"]) is not int or leg["exit_code"] < 0:
+            raise DecisionError("field.type", f"{path}.exit_code", leg["exit_code"], "non-negative integer")
+        expected_state = "completed" if leg["exit_code"] == 0 else "failed"
+        if leg["state"] != expected_state:
+            raise DecisionError("observation.leg_state", f"{path}.state", leg["state"], expected_state)
+        nullable_enum(leg["verdict"], f"{path}.verdict", ("PASS", "BLOCK", "NEEDS_MORE_INFO"))
+        if type(leg["degraded"]) is not bool:
+            raise DecisionError("field.type", f"{path}.degraded", leg["degraded"], "boolean")
+        duration = leg["duration_ms"]
+        if duration is not None and (type(duration) is not int or duration < 0):
+            raise DecisionError("field.type", f"{path}.duration_ms", duration, "null or non-negative integer")
+        observation_usage(leg["usage"], f"{path}.usage")
+    observation_usage(root["usage"], "observation.usage")
+    return root
+
+
+def observation_text(text: str, track: str, source: str) -> dict[str, Any]:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DecisionError("json.parse", source, str(exc), "valid UTF-8 JSON observation") from exc
+    return observation_payload(value, track)
+
+
 def observation_for_ledger(path: Path, track: str) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise DecisionError("ledger.observation", "observations", os.fspath(path), "non-symlink JSON file")
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise DecisionError("ledger.observation", "observations", str(exc), "valid UTF-8 JSON") from exc
-    if not isinstance(value, dict):
-        raise DecisionError("ledger.observation", "observations", type(value).__name__, "JSON object")
-    if value.get("schema_version") != 1 or value.get("track") != track:
-        raise DecisionError(
-            "ledger.observation",
-            "observations.track",
-            {"schema_version": value.get("schema_version"), "track": value.get("track")},
-            {"schema_version": 1, "track": track},
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise DecisionError("json.parse", os.fspath(path), str(exc), "valid UTF-8 JSON observation") from exc
+    return observation_text(text, track, os.fspath(path))
+
+
+def load_observations(track_dir: Path, track: str, source: str) -> list[dict[str, Any]]:
+    if source == "working":
+        obs_dir = track_dir / "observations"
+        if obs_dir.is_symlink():
+            raise DecisionError("observation.boundary", "observations", os.fspath(obs_dir), "real directory")
+        if not obs_dir.is_dir():
+            return []
+        entries = sorted(obs_dir.iterdir(), key=lambda item: item.name)
+        for path in entries:
+            if path.suffix != ".json" or path.is_symlink() or not path.is_file():
+                raise DecisionError(
+                    "observation.entry",
+                    "observations",
+                    path.name,
+                    "direct non-symlink *.json files only",
+                )
+        return [observation_for_ledger(path, track) for path in entries]
+
+    repo = git_root(track_dir)
+    if repo is None:
+        raise DecisionError("git.repository", "track_dir", os.fspath(track_dir), "track inside a git repository")
+    try:
+        rel = track_dir.resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError as exc:
+        raise DecisionError("git.repository", "track_dir", os.fspath(track_dir), "track inside git repository") from exc
+    listed = subprocess.run(
+        ["git", "-C", os.fspath(repo), "ls-files", "--stage", "-z", "--", f"{rel}/observations"],
+        check=False,
+        capture_output=True,
+    )
+    if listed.returncode != 0:
+        raise DecisionError("git.index", "observations", listed.returncode, "readable staged observation list")
+    paths: list[str] = []
+    prefix = f"{rel}/observations/"
+    for raw in listed.stdout.split(b"\0"):
+        if not raw:
+            continue
+        try:
+            metadata, path = raw.decode("utf-8").split("\t", 1)
+            mode = metadata.split(" ", 1)[0]
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise DecisionError("git.index", "observations", str(exc), "staged regular observation files") from exc
+        suffix = path.removeprefix(prefix)
+        if not path.startswith(prefix) or "/" in suffix or not suffix.endswith(".json") or mode != "100644":
+            raise DecisionError(
+                "observation.entry",
+                "observations",
+                {"path": path, "mode": mode},
+                "direct staged 100644 *.json files only",
+            )
+        paths.append(path)
+    paths.sort()
+    observations: list[dict[str, Any]] = []
+    for path in paths:
+        shown = subprocess.run(
+            ["git", "-C", os.fspath(repo), "show", f":{path}"],
+            check=False,
+            capture_output=True,
         )
-    if value.get("event") not in EVENTS or value.get("controller") not in CONTROLLERS:
-        raise DecisionError("ledger.observation", "observations.event", value.get("event"), "known controller/event")
-    for key in ("run_id", "label"):
-        if not isinstance(value.get(key), str):
-            raise DecisionError("ledger.observation", f"observations.{key}", value.get(key), "string")
-    for key in ("duration_ms", "exit_code"):
-        field = value.get(key)
-        if not isinstance(field, int) or isinstance(field, bool) or field < 0:
-            raise DecisionError("ledger.observation", f"observations.{key}", field, "non-negative integer")
-    actual = value.get("actual")
-    usage = value.get("usage")
-    if not isinstance(actual, dict) or not isinstance(usage, dict):
-        raise DecisionError("ledger.observation", "observations.actual/usage", None, "objects")
-    if not isinstance(actual.get("adapter"), str):
-        raise DecisionError("ledger.observation", "observations.actual.adapter", actual.get("adapter"), "string")
-    if actual.get("model") is not None and not isinstance(actual.get("model"), str):
-        raise DecisionError("ledger.observation", "observations.actual.model", actual.get("model"), "null or string")
-    legs = actual.get("legs")
-    if legs is not None and not isinstance(legs, list):
-        raise DecisionError("ledger.observation", "observations.actual.legs", legs, "null or array")
-    for key in ("input_tokens", "output_tokens", "total_tokens", "api_cost"):
-        field = usage.get(key)
-        if field is not None and (isinstance(field, bool) or not isinstance(field, (int, float)) or field < 0):
-            raise DecisionError("ledger.observation", f"observations.usage.{key}", field, "null or non-negative number")
-    if usage.get("billing_mode") is not None and usage.get("billing_mode") not in BILLING_MODES:
-        raise DecisionError(
-            "ledger.observation",
-            "observations.usage.billing_mode",
-            usage.get("billing_mode"),
-            "null|subscription|api|local",
-        )
-    return value
+        if shown.returncode != 0:
+            raise DecisionError("git.index", path, shown.returncode, "readable staged observation")
+        try:
+            text = shown.stdout.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise DecisionError("json.parse", path, str(exc), "valid UTF-8 JSON observation") from exc
+        observations.append(observation_text(text, track, path))
+    return observations
+
+
+def unique_observations(observations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[dict[str, Any]] = []
+    duplicates: list[str] = []
+    for item in observations:
+        key = (item["controller"], item["event"], item["run_id"])
+        # received is an attempt, not an idempotent completion: the same receipt may
+        # fail gate ①, be repaired, then pass. All receive attempts stay observable.
+        if item["event"] == "execution_finished" and key in seen:
+            duplicates.append("/".join(key))
+        else:
+            seen.add(key)
+            unique.append(item)
+    return unique, duplicates
 
 
 def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -752,11 +983,16 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
     invalid_observations = 0
     obs_dir = track_dir / "observations"
     if obs_dir.is_dir() and not obs_dir.is_symlink():
-        for path in sorted(obs_dir.glob("*.json"), key=lambda item: item.name):
+        for path in sorted(obs_dir.iterdir(), key=lambda item: item.name):
+            if path.suffix != ".json" or path.is_symlink() or not path.is_file():
+                invalid_observations += 1
+                continue
             try:
                 observations.append(observation_for_ledger(path, name))
             except DecisionError:
                 invalid_observations += 1
+    observations, duplicates = unique_observations(observations)
+    invalid_observations += len(duplicates)
 
     executions = [item for item in observations if item["event"] == "execution_finished"]
     receives = [item for item in observations if item["event"] == "received"]
@@ -771,7 +1007,16 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
     )
 
     panel_legs = [leg for item in executions for leg in (item["actual"].get("legs") or [])]
-    dispatch_count = sum(len(item["actual"].get("legs") or []) or 1 for item in executions)
+    fallback_dispatches = sum(
+        1
+        for item in executions
+        for leg in (item["actual"].get("legs") or [])
+        if leg["degraded"] is True
+    )
+    dispatch_count = sum(
+        len(item["actual"].get("legs") or []) if item["controller"] == "panel-review" else 1
+        for item in executions
+    ) + fallback_dispatches
     failed_legs = sum(1 for leg in panel_legs if leg.get("exit_code") != 0)
     degraded = sum(1 for item in executions if item["actual"].get("degraded") is True)
     degraded += sum(1 for leg in panel_legs if leg.get("degraded") is True)
@@ -811,7 +1056,19 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
         elif not any(item["exit_code"] == 0 for item in executions):
             missing.append("successful_execution_finished")
         delegate_runs = {item["run_id"] for item in executions if item["controller"] == "delegate-codex"}
-        received_ok = {item["run_id"] for item in receives if item["exit_code"] == 0}
+        if planned["adapter"] == "delegate-codex" and not delegate_runs:
+            missing.append("delegate_execution_finished")
+        if planned["adapter"] == "main" and executions and not any(
+            item["controller"] == "runlog" and item["exit_code"] == 0 for item in executions
+        ):
+            missing.append("main_execution_finished")
+        if planned["adapter"] in ("submimo", "claude-worktree"):
+            missing.append(f"planned_adapter_observation:{planned['adapter']}")
+        received_ok = {
+            item["run_id"]
+            for item in receives
+            if item["controller"] == "delegate-codex" and item["exit_code"] == 0
+        }
         for run_id in sorted(delegate_runs - received_ok):
             missing.append(f"received:{run_id}")
     eligible = status == "typed" and outcome == "PASS" and not missing
@@ -836,6 +1093,7 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
             "dispatch_count": dispatch_count,
             "failed_controller_runs": sum(1 for item in executions if item["exit_code"] != 0),
             "panel_legs": len(panel_legs),
+            "fallback_dispatches": fallback_dispatches,
             "failed_panel_legs": failed_legs,
             "degraded_runs_or_legs": degraded,
         },

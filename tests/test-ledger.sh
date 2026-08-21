@@ -211,6 +211,16 @@ check "L5: PASS archive validator 同样拒绝重复事件" $([[ $rc -ne 0 ]]; e
 grep -q 'rule=observation.duplicate' <<<"$out"
 check "L5: duplicate trace 明确" $?
 
+echo "[L6] observe 写口拒绝 NaN/Infinity，不产出非标准 JSON"
+before_count="$(find "$repo/tracks/archive/local-pass/observations" -name '*.json' | wc -l)"
+out="$($RECORD observe --repo "$repo" --track local-pass --run-id nonfinite --controller runlog \
+  --event execution_finished --label nonfinite --started-at 2026-08-21T00:00:00Z \
+  --finished-at 2026-08-21T00:00:01Z --duration-ms 1 --exit-code 0 \
+  --adapter runlog --work-exit-code 0 --api-cost nan 2>&1)"; rc=$?
+check "L6: --api-cost nan 在写盘前被拒" $([[ $rc -ne 0 ]]; echo $?)
+after_count="$(find "$repo/tracks/archive/local-pass/observations" -name '*.json' | wc -l)"
+check "L6: 拒绝后没有半份 observation" $([[ "$before_count" -eq "$after_count" ]]; echo $?)
+
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

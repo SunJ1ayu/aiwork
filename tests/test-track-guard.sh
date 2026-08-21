@@ -643,6 +643,30 @@ JSON
   check 'G10: 未 staged observation 不能替本次提交应试' $?
   ( cd "$d"; git add tracks/archive/t/observations; "$GUARD" >/dev/null 2>&1 ); rc=$?
   check 'G10: decision/observation 都 staged 后手工归档才放行' $([[ $rc -eq 0 ]]; echo $?)
+  ( cd "$d"; printf 'FULL_TRANSCRIPT\n' > tracks/archive/t/observations/transcript.txt
+    git add tracks/archive/t/observations/transcript.txt; "$GUARD" >/dev/null 2>&1 ); rc=$?
+  check 'G10: staged observations 目录夹带 transcript 文件 ⇒ 拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t/observations
+    printf '# Verify\n- 无机器证据:fixture\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    python3 - tracks/t/decision.json <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["outcome"]["verdict"]="PASS"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+    cat > tracks/t/observations/ok.json <<'JSON'
+{"schema_version":1,"track":"t","run_id":"r1","controller":"runlog","event":"execution_finished","label":"r1","started_at":"2026-08-21T00:00:00Z","finished_at":"2026-08-21T00:00:01Z","duration_ms":1,"exit_code":0,"actual":{"adapter":"runlog","model":null,"risk":null,"degraded":null,"work_exit_code":0,"legs":null},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
+JSON
+    git add tracks/t; git commit -qm complete
+    mkdir -p tracks/archive; git mv tracks/t tracks/archive/t
+    git rm -q -f tracks/archive/t/verify.md; git add -A )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check 'G10: 搬入 archive 同时删 verify ⇒ 仍按任意 archive 落点识别并拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  grep -q 'verify.md' <<<"$out"
+  check 'G10: 缺 staged verify 的报警明确' $?
   rm -rf "$d"
 }
 
