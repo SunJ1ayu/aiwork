@@ -25,6 +25,7 @@ runlog -t workflow-observability -- <判据命令>
 runlog: review-tooling-final rc=1 commit=7578a3c dirty=no final=yes at=2026-08-21T12:59:21Z file=tracks/workflow-observability/evidence/20260821T125921Z-01-review-tooling-final.txt
 runlog: review-tooling-final-r2 rc=0 commit=4fd811d dirty=no final=yes at=2026-08-21T13:09:46Z file=tracks/workflow-observability/evidence/20260821T130946Z-01-review-tooling-final-r2.txt
 runlog: review-tooling-final-r3 rc=0 commit=d112347 dirty=no final=yes at=2026-08-21T13:59:27Z file=tracks/workflow-observability/evidence/20260821T135927Z-01-review-tooling-final-r3.txt
+runlog: review-tooling-final-r4 rc=0 commit=0c33338 dirty=no final=yes at=2026-08-21T14:05:56Z file=tracks/workflow-observability/evidence/20260821T140556Z-01-review-tooling-final-r4.txt
 ```
 
 ## Review
@@ -52,7 +53,7 @@ runlog: review-tooling-final-r3 rc=0 commit=d112347 dirty=no final=yes at=2026-0
   > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
   > 花名册在上一格,查工件不查自述。
 - arbitrated verdict (主裁): PASS。外部 BLOCK 的可复现缺陷及 sub-Codex 的二阶绕过都已修复并
-  重新验证；最终源码身份 `d112347` 的全量机器收据为 rc=0/dirty=no/final=yes，且 archive
+  重新验证；最终源码身份 `0c33338` 的全量机器收据为 rc=0/dirty=no/final=yes，且 archive
   预算、执行覆盖、事件白名单和 worktree sweep 生命周期判据全部通过。
   > **归档时这一条和 `decision.json.outcome.verdict` 都不许还是占位符**,`track-guard` 会挡;
   > 没归档但已经合并上线的,`track list` 会打 ⚠️(stage-timer 就这么漏了两个月)。
