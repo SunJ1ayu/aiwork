@@ -90,7 +90,7 @@ conversation history; reconstruct from the folder:
    ARCHIVED-SUPERSEDED). A panel verdict never auto-advances anything — the main agent
    is sole arbiter. Never copy these enums into verify.md as a second machine source.
 6. **Archive.** On PASS, offer `track archive <name>`. Archive mechanically requires a
-   successful panel observation covering 0 / 1 / 2 distinct external model families for
+   successful panel observation covering 0 / 1 / 2 successful distinct external model-family legs for
    self / standard / high; dispatching a panel without binding the track cannot satisfy it.
 
 ## Cost-quality ledger

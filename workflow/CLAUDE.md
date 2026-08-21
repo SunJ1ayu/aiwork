@@ -45,7 +45,7 @@ premise attack / 双出 / panel-explore，不因实现风险高就自动花一�
 `track-record validate --phase dispatch tracks/<name>`；缺字段、高危因子降档、high uncertainty
 却没有持久 premise evidence 都会打印 rule/path/actual/expected 并 BLOCK。旧 track 继续 legacy，
 不从旧自由文本猜新字段。PASS 归档还会从 compact panel observation 机械核对
-self/standard/high 实际覆盖了 0/1/2 个不同模型家族；缺腿时 archive 与成功成本聚合都 BLOCK。
+self/standard/high 实际覆盖了 0/1/2 个成功的不同模型家族腿；缺腿时 archive 与成功成本聚合都 BLOCK。
 **oracle 是我写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
 
 **bump 版本号、或动判卷防线的 commit,必须挂在一个 track 下**(归进现成 track 也算)。

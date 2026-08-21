@@ -308,6 +308,15 @@ json.dump(p, open(sys.argv[1], "w"), indent=2)
 PY
 out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
 check "R4b: 失败 panel 的第二 family 不能与成功单家族拼成 high 双家族" $([[ $rc -ne 0 ]]; echo $?)
+rm "$d/t/observations/panel-2-failed.json"
+python3 - "$d/t/observations/panel-1-panel.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); leg=p["actual"]["legs"][1]
+leg.update(family="deepseek", state="failed", exit_code=1, verdict="BLOCK")
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4b: 成功 panel event 内的失败腿也不能补足第二家证据" $([[ $rc -ne 0 ]]; echo $?)
 rm -rf "$d"
 
 echo "[R5] legacy 明示兼容；曾跟踪过的 decision 删除后不能降级逃闸"

@@ -54,7 +54,8 @@ planned 与 actual 分开：`decision.execution_plan` 记录计划，observation
   已有 rc 语义；typed track 在 archive 时因计划需要的观测缺失而 BLOCK。
 - panel 增加显式 `--track NAME|--no-track`，不从 task 名猜；dispatch 前机械核对
   `decision.impact.level == --risk`，typed track 的显式 budget 不得低于 risk 的 0/1/2 下限；
-  PASS archive 与 ledger 再从成功 panel observation 核对 0/1/2 个不同模型家族，未绑定事件不算。
+  PASS archive 与 ledger 再从成功 panel observation 核对 0/1/2 个成功的不同模型家族腿，
+  未绑定事件或失败腿不算。
 - delegate 继续先写仓外 receipt；Codex 结束记录 `execution_finished`，`--receive` 后再记录
   `received`，两者不互相冒充。事件只从 receipt 白名单字段导入主仓。
 

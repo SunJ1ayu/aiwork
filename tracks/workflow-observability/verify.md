@@ -11,9 +11,9 @@
 
 ## Mechanical checks
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+- [x] build passes
+- [x] tests pass
+- [x] no secrets / unsafe ops
 
 **机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
 
@@ -22,28 +22,47 @@ runlog -t workflow-observability -- <判据命令>
 ```
 
 ```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
+runlog: review-tooling-final rc=1 commit=7578a3c dirty=no final=yes at=2026-08-21T12:59:21Z file=tracks/workflow-observability/evidence/20260821T125921Z-01-review-tooling-final.txt
+runlog: review-tooling-final-r2 rc=0 commit=4fd811d dirty=no final=yes at=2026-08-21T13:09:46Z file=tracks/workflow-observability/evidence/20260821T130946Z-01-review-tooling-final-r2.txt
+runlog: review-tooling-final-r3 rc=0 commit=d112347 dirty=no final=yes at=2026-08-21T13:59:27Z file=tracks/workflow-observability/evidence/20260821T135927Z-01-review-tooling-final-r3.txt
 ```
 
 ## Review
 
-- 规格自查(读任何 panel 输出之前先答):<如果规格本身就是错的,会错成什么样、我怎么发现?
-  panel 只验"实现合不合规格",验不了"规格对不对" —— 四腿齐 PASS 不等于题是对的。>
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
+- 规格自查(读任何 panel 输出之前先答):规格最可能错在把“执行现场清理”与“持久账本清理”
+  混成同一保留策略，或只在 panel 入口检查 0/1/2 预算却没有在 PASS 生命周期边界复核。
+  我用真 archive+sweep 前后 ledger 同值判据发现前者，用 high+runlog-only 反例与变异/攻击复核
+  发现后者；因此最终规则由 archive 与 ledger 同时从 compact observations 机械核对。
+- 腿的花名册:
+  `submimo=PASS(verdict=UNKNOWN) subdeepseek=PASS(verdict=UNKNOWN) subglm=FAIL(rc=1,降级:回落聊天腿也没成) subkimi=SKIP(rotation)`
+  `submimo=SKIP(health:cooldown:INCOMPLETE) subdeepseek=SKIP(health:cooldown:INCOMPLETE) subglm=SKIP(health:cooldown:FAIL) subkimi=FAIL(rc=1)`
   > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
   > 08-06 立这条的理由:08-05 我在这里手写了"三条腿一致 PASS",而 Kimi 根本没出结论
   > (同一页第 90 行我自己还写着它没出报告)—— 手抄一份终端上的东西,抄错那次没人会发现。
 - findings:
-  - <...>
+  - 主自审与 sub-Codex 两阶段攻击命中的 staged/working 混用、typed→legacy 降级、手工归档、
+    active/archive 同名、secret 回显、事件大小、重复计费、fallback 少计、NaN/Infinity、主仓归属
+    等绕过均已转成回归；sub-Codex 对最终窄 diff 给 `FINAL PASS`，相关 112/112 全绿。
+  - MiMo 报告结论 PASS；DeepSeek 报告结论 BLOCK，复现 high track 只靠 runlog 也能归档。
+    主裁接受该 finding，在 `b9897d0` 增加 archive/ledger 的 distinct-family 预算闸。
+  - sub-Codex 随后复现“成功一家 + 失败一家”可拼预算，主裁再次接受，在 `d112347` 改为
+    只从成功 panel events 汇总家族，并新增精确反例。最终全量 runner 所有套件 0 fail。
+  - GLM agent→chat 与窄复核 Kimi 均失败；它们不是 PASS，也未被主裁当成判断材料。失败、降级
+    与真实 dispatch 已进入 compact observations，原始原因保留在仓外 panel logs。
   > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
   > 花名册在上一格,查工件不查自述。
-- arbitrated verdict (主裁): <...>
-  > **归档时这一条和顶部的 `Verdict:` 都不许还是占位符**,`track-guard` 规矩3 会挡;
+- arbitrated verdict (主裁): PASS。外部 BLOCK 的可复现缺陷及 sub-Codex 的二阶绕过都已修复并
+  重新验证；最终源码身份 `d112347` 的全量机器收据为 rc=0/dirty=no/final=yes，且 archive
+  预算、执行覆盖、事件白名单和 worktree sweep 生命周期判据全部通过。
+  > **归档时这一条和 `decision.json.outcome.verdict` 都不许还是占位符**,`track-guard` 会挡;
   > 没归档但已经合并上线的,`track list` 会打 ⚠️(stage-timer 就这么漏了两个月)。
 
 ## Accepted deviations
 
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
+- 订阅模型拿不到可靠 token/API 现金成本时继续记 `null/unknown`，不估算、不补 0；这会降低
+  成本横比覆盖率，但不会制造虚假低成本。
+- 历史 track 不回填，明确标 legacy/missing；本轮只保证新 typed track。
+- panel 的严格 verdict parser 将两份有正文结论的报告标为 UNKNOWN 并触发 spare；主裁读取了完整
+  报告，且生命周期预算只证明不同家族的真实成功 dispatch，不把模型投票当自动裁决。
+- `submimo` / `claude-worktree` 的执行观测尚未接各自 controller；ledger 明示
+  `planned_adapter_observation:*`，不会把 runlog 冒充它们。

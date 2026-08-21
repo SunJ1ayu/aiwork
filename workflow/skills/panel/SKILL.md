@@ -53,7 +53,7 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 一个健康 spare；`--all` 才是显式全审，留给判卷、沙箱、权限边界或二审无法收敛的特殊面。
 `--track` 绑定 typed track 时，显式 `--budget` 只能增加证据，不能低于 self/standard/high 的
 0/1/2 机械预算；要做无归属实验必须明确 `--no-track`，但无归属事件不能满足 typed track 的
-PASS 归档。归档会再核对成功 panel observation 中是否有 0/1/2 个不同外部模型家族。
+PASS 归档。归档会再核对成功 panel observation 中是否有 0/1/2 个成功的不同外部模型家族腿。
 仓里有 typed active track 时，派发前必须显式给 `--track NAME` 或 `--no-track`；前者会在
 任何腿启动前校验 decision 已满足 dispatch 且 `impact.level == --risk`。实际腿、回落降级、
 总耗时、rc 与真实可得 usage 在全部腿结束后写回主仓 track 的紧凑 observation；prompt 和
