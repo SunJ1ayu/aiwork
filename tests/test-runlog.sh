@@ -40,6 +40,10 @@ receipt_of() {  # receipt_of <repo> -> 最新一份收据文件的路径
   ls -1 "$1"/tracks/t/evidence/*.txt 2>/dev/null | sort | tail -1
 }
 
+observation_of() {  # observation_of <repo> -> 最新一份 typed observation
+  ls -1 "$1"/tracks/t/observations/*.json 2>/dev/null | sort | tail -1
+}
+
 # ---------------------------------------------------------------- R1
 r1_writes_a_receipt() {
   echo "[R1] 跑一条命令 ⇒ 收据落盘,输出和身份都在里面"
@@ -305,6 +309,82 @@ EOF
   rm -rf "$d" "$marker" "$stub"
 }
 
+# ---------------------------------------------------------------- R11
+r11_writes_compact_typed_observation() {
+  echo "[R11] 每次 controller run 写一份紧凑 observation，不复制命令/输出/transcript"
+  local d f rc
+  d="$(newrepo)"
+  ( cd "$d" && "$RUNLOG" -t t -n timed -- \
+      bash -c 'sleep 0.05; printf "TRANSCRIPT_SENTINEL\\n"' PROMPT_SENTINEL ) >/dev/null 2>&1; rc=$?
+  check "R11: 原命令照常成功" $([[ $rc -eq 0 ]]; echo $?)
+  f="$(observation_of "$d")"
+  check "R11: observations/ 里恰有一份 JSON" \
+    $([[ -n "$f" && "$(find "$d/tracks/t/observations" -name '*.json' | wc -l)" -eq 1 ]]; echo $?)
+  python3 - "$f" <<'PY'
+import json, sys
+p=json.load(open(sys.argv[1], encoding="utf-8"))
+assert set(p) == {"schema_version", "track", "run_id", "controller", "event", "label",
+                  "started_at", "finished_at", "duration_ms", "exit_code", "actual", "usage"}
+assert p["schema_version"] == 1 and p["track"] == "t"
+assert p["controller"] == "runlog" and p["event"] == "execution_finished"
+assert p["label"] == "timed" and isinstance(p["run_id"], str) and p["run_id"]
+assert p["started_at"].endswith("Z") and p["finished_at"].endswith("Z")
+assert isinstance(p["duration_ms"], int) and p["duration_ms"] >= 20
+assert p["exit_code"] == 0
+assert p["actual"] == {"adapter":"runlog", "model":None, "risk":None,
+                       "degraded":None, "work_exit_code":0, "legs":None}
+assert p["usage"] == {"input_tokens":None, "output_tokens":None, "total_tokens":None,
+                       "api_cost":None, "billing_mode":None}
+raw=open(sys.argv[1], encoding="utf-8").read()
+for forbidden in ("TRANSCRIPT_SENTINEL", "PROMPT_SENTINEL", "cmd", "stdout", "stderr", "transcript"):
+    assert forbidden not in raw, forbidden
+PY
+  check "R11: schema/时长/rc/null usage 精确，且不含 raw payload" $?
+  rm -f "$d"/tracks/t/evidence/*.txt
+  check "R11: 清掉大 receipt 后 observation 仍在" $([[ -f "$f" ]]; echo $?)
+  rm -rf "$d"
+}
+
+# ---------------------------------------------------------------- R12
+r12_observation_is_atomic_and_failure_preserves_rc() {
+  echo "[R12] observation 原子不覆盖；writer 失败报警但不篡改 controller rc"
+  local d rc out stub count
+  d="$(newrepo)"
+  for n in 1 2 3 4; do
+    ( cd "$d" && "$RUNLOG" -t t -n "p$n" -- true >/dev/null 2>&1 ) &
+  done
+  wait
+  count="$(find "$d/tracks/t/observations" -name '*.json' | wc -l)"
+  check "R12: 并发四次得到四份独立 JSON，谁也没覆盖谁" $([[ "$count" -eq 4 ]]; echo $?)
+  python3 - "$d/tracks/t/observations" <<'PY'
+import json, pathlib, sys
+files=sorted(pathlib.Path(sys.argv[1]).glob("*.json"))
+payloads=[json.load(open(p, encoding="utf-8")) for p in files]
+assert len({p["run_id"] for p in payloads}) == 4
+assert {p["label"] for p in payloads} == {"p1","p2","p3","p4"}
+PY
+  check "R12: 四份 run_id/label 也互不冒充" $?
+  rm -rf "$d"
+
+  d="$(newrepo)"; stub="$(mktemp)"
+  cat > "$stub" <<'EOF'
+#!/usr/bin/env bash
+exit 7
+EOF
+  chmod +x "$stub"
+  out="$(cd "$d" && TRACK_RECORD_BIN="$stub" "$RUNLOG" -t t -n writer-red -- \
+      bash -c 'exit 3' 2>&1)"; rc=$?
+  check "R12: 原命令 rc=3 时 writer 失败也仍返回 3" $([[ $rc -eq 3 ]]; echo $?)
+  grep -q 'OBSERVATION_WRITE_FAILED' <<<"$out"
+  check "R12: writer 失败明确报警" $?
+  check "R12: writer 失败不伪造 observation" $([[ -z "$(observation_of "$d")" ]]; echo $?)
+  out="$(cd "$d" && TRACK_RECORD_BIN="$stub" "$RUNLOG" -t t -n writer-red-green -- true 2>&1)"; rc=$?
+  check "R12: 原命令 rc=0 时 writer 失败也不把 controller 改红" $([[ $rc -eq 0 ]]; echo $?)
+  grep -q 'OBSERVATION_WRITE_FAILED' <<<"$out"
+  check "R12: 绿命令同样留下报警而非静默" $?
+  rm -rf "$d" "$stub"
+}
+
 echo "=== runlog oracle ==="
 r1_writes_a_receipt
 r2_exit_code_passthrough
@@ -316,5 +396,7 @@ r7_end_to_end_with_the_guard
 r8_final_binds_the_existing_last_run
 r9_secret_shapes_never_become_receipts
 r10_temp_buffer_failure_is_pre_run
+r11_writes_compact_typed_observation
+r12_observation_is_atomic_and_failure_preserves_rc
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
