@@ -33,6 +33,19 @@ message() {  # message <path> [track]
   [[ -n "${2:-}" ]] && printf '\nTrack: %s\n' "$2" >> "$1"
 }
 
+typed_decision() {  # typed_decision <level>
+  cat <<EOF
+{
+  "schema_version": 1,
+  "track": "current",
+  "impact": {"level": $1, "factors": []},
+  "design": {"uncertainty": "low", "premise_attack": {"status": "not_required", "evidence": []}},
+  "execution_plan": {"adapter": "main", "model": null},
+  "outcome": {"verdict": null}
+}
+EOF
+}
+
 g1_ro_repo_exec_is_protected() {
   echo '[G1] ro-repo-exec 是判卷/隔离保护面'
   # shellcheck source=/root/aiwork/bin/_tooling-paths.sh
@@ -124,6 +137,27 @@ g6_history_audit_catches_bypass_merge() {
   rm -rf "$d"
 }
 
+g7_typed_track_must_be_dispatch_ready() {
+  echo '[G7] typed track 用 decision 绑定执行责任；关键 commit 前必须过 dispatch'
+  local d msg out rc
+  d="$(newrepo)"; msg="$d/msg"
+  printf '# changed\n' >> "$d/bin/ro-repo-exec"
+  printf '# Verify\n- findings: pending\n' > "$d/tracks/current/verify.md"
+  typed_decision null > "$d/tracks/current/decision.json"
+  git -C "$d" add bin/ro-repo-exec tracks/current
+  message "$msg" current
+  out="$(cd "$d" && bash "$LINK" "$msg" 2>&1)"; rc=$?
+  check 'G7: decision 仍为 null ⇒ 关键 commit 在花成本/落实现前被挡' $([[ $rc -ne 0 ]]; echo $?)
+  grep -q 'path=impact.level' <<<"$out" && grep -q 'actual=null' <<<"$out"
+  check 'G7: commit-msg 原样给出 typed rule trace' $?
+
+  typed_decision '"self"' > "$d/tracks/current/decision.json"
+  git -C "$d" add tracks/current/decision.json
+  (cd "$d" && bash "$LINK" "$msg" >/dev/null 2>&1); rc=$?
+  check 'G7: decision 完整后无需 Markdown 复制 lane/派给即可放行' $([[ $rc -eq 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
 echo '=== track-link oracle ==='
 g1_ro_repo_exec_is_protected
 g2_commit_message_binds_exact_track
@@ -131,5 +165,6 @@ g3_recent_verify_is_not_a_global_pass
 g4_unrelated_commit_is_quiet
 g5_history_audit_catches_bypass
 g6_history_audit_catches_bypass_merge
+g7_typed_track_must_be_dispatch_ready
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

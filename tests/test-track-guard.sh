@@ -64,6 +64,19 @@ verify_with() {  # verify_with <verdict 行内容>
 EOF
 }
 
+typed_decision() {  # typed_decision <level>
+  cat <<EOF
+{
+  "schema_version": 1,
+  "track": "t",
+  "impact": {"level": $1, "factors": []},
+  "design": {"uncertainty": "low", "premise_attack": {"status": "not_required", "evidence": []}},
+  "execution_plan": {"adapter": "main", "model": null},
+  "outcome": {"verdict": null}
+}
+EOF
+}
+
 # ---------------------------------------------------------------- G1
 g1_version_lives_where_the_product_says() {
   echo "[G1] bump 必挂 track:守的门要对准这个项目真正的版本号"
@@ -553,6 +566,27 @@ g8_bold_wrapped_paste_is_fine() {
   rm -rf "$d"
 }
 
+g9_typed_shape_uses_staged_decision() {
+  echo '[G9] typed track 的 staged decision 必须过 shape；不能拿 working copy 替它应试'
+  local d out rc
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    typed_decision '"medium"' > tracks/t/decision.json
+    git add tracks/t
+    typed_decision '"self"' > tracks/t/decision.json )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  check 'G9: staged 非法、working 合法 ⇒ 仍按 staged 拒绝' $([[ $rc -ne 0 ]]; echo $?)
+  grep -q 'path=impact.level' <<<"$out" && grep -q 'actual=.*medium' <<<"$out"
+  check 'G9: staged shape 错误带 rule trace' $?
+
+  ( cd "$d"; typed_decision '"self"' > tracks/t/decision.json; git add tracks/t/decision.json
+    typed_decision '"medium"' > tracks/t/decision.json )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G9: staged 合法、working 非法 ⇒ guard 按 staged 放行' $([[ $rc -eq 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
 # ---------------------------------------------------------------- G7
 # 和 G3 同一个道理:守卫要守在**动作发生那一刻**,不是它的痕迹被提交那一刻。
 # `track archive` 会把目录移走 —— 只靠 pre-commit 挡,中间那段时间磁盘上就是
@@ -609,5 +643,6 @@ g8_every_red_run_must_be_quoted
 g8_bold_wrapped_paste_is_fine
 g8_round2_false_positive_shapes
 g8_track_new_rejects_path_names
+g9_typed_shape_uses_staged_decision
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
