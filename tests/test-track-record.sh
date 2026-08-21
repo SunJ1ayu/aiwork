@@ -39,6 +39,23 @@ low_decision() {
   write_decision "$1" "$2" '"self"' '[]' '"low"' '"not_required"' '[]' '"main"' null "$3"
 }
 
+write_observation() { # track-dir track run-id controller event rc
+  mkdir -p "$1/observations"
+  cat > "$1/observations/$3-$5.json" <<EOF
+{
+  "schema_version": 1, "track": "$2", "run_id": "$3",
+  "controller": "$4", "event": "$5", "label": "$3",
+  "started_at": "2026-08-21T01:00:00.000Z",
+  "finished_at": "2026-08-21T01:00:01.000Z",
+  "duration_ms": 100, "exit_code": $6,
+  "actual": {"adapter": "$4", "model": null, "risk": null,
+    "degraded": false, "work_exit_code": $6, "legs": null},
+  "usage": {"input_tokens": null, "output_tokens": null, "total_tokens": null,
+    "api_cost": null, "billing_mode": "local"}
+}
+EOF
+}
+
 echo "=== typed track record oracle ==="
 
 if [[ ! -x "$RECORD" ]]; then
@@ -124,8 +141,14 @@ check "R4: outcome=null 时拒绝归档" $([[ $rc -ne 0 ]]; echo $?)
 grep -q 'path=outcome.verdict' <<<"$out" && grep -q 'actual=null' <<<"$out"
 check "R4: outcome 缺失 trace 明确" $?
 low_decision "$d/t" t '"PASS"'
+out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
+check "R4: PASS 但没有 execution observation 时拒绝归档" $([[ $rc -ne 0 ]]; echo $?)
+grep -q 'rule=observation.required' <<<"$out"
+check "R4: 缺覆盖的 rule trace 明确" $?
+write_observation "$d/t" t run-1 runlog execution_finished 0
 $RECORD validate --phase archive "$d/t" >/dev/null 2>&1
-check "R4: PASS 可归档" $?
+check "R4: PASS 且 execution coverage 完整才可归档" $?
+rm -rf "$d/t/observations"
 low_decision "$d/t" t '"ARCHIVED-SUPERSEDED"'
 $RECORD validate --phase archive "$d/t" >/dev/null 2>&1
 check "R4: ARCHIVED-SUPERSEDED 可归档且无需冒充 PASS" $?
@@ -160,7 +183,11 @@ check "R6: typed facts 未完成时 archive 被挡" $([[ $rc -ne 0 ]]; echo $?)
 check "R6: 被挡时目录原地不动" $([[ -d "$d/tracks/typed-life" && ! -d "$d/tracks/archive/typed-life" ]]; echo $?)
 low_decision "$d/tracks/typed-life" typed-life '"PASS"'
 DELEGATE_WORKTREE_ROOT="$d/wt" $TRACK archive typed-life "$d" >/dev/null 2>&1; rc=$?
-check "R6: typed outcome 完整后无需在 Markdown 复制 Verdict 即可归档" $([[ $rc -eq 0 ]]; echo $?)
+check "R6: typed PASS 缺 observation 时仍在 sweep/mv 前被挡" $([[ $rc -ne 0 ]]; echo $?)
+check "R6: 缺 observation 被挡时目录原地不动" $([[ -d "$d/tracks/typed-life" && ! -d "$d/tracks/archive/typed-life" ]]; echo $?)
+write_observation "$d/tracks/typed-life" typed-life run-1 runlog execution_finished 0
+DELEGATE_WORKTREE_ROOT="$d/wt" $TRACK archive typed-life "$d" >/dev/null 2>&1; rc=$?
+check "R6: typed outcome/coverage 完整后无需在 Markdown 复制 Verdict 即可归档" $([[ $rc -eq 0 ]]; echo $?)
 check "R6: typed track 确实移入 archive" $([[ -d "$d/tracks/archive/typed-life" ]]; echo $?)
 mkdir -p "$d/tracks/legacy-life"
 printf '# Verify\n- Verdict: ARCHIVED-SUPERSEDED\n- 无机器证据:fixture\n' > "$d/tracks/legacy-life/verify.md"
