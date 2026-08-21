@@ -8,7 +8,7 @@
 - [x] T1 主 Agent 独立方案 commit 后，请 sub-Codex 两阶段攻题并合并有效发现
 - [x] T2 先补 schema / rule trace / legacy 双读 / superseded 红判据并确认红在目标断言
 - [x] T3 实现共享 `track-record` Module 与 `decision.json` 模板
-- [ ] T4 接入 track new / guard / commit-msg / archive，确保 typed 与 legacy 路径不互相猜
+- [x] T4 接入 track new / guard / commit-msg / archive，确保 typed 与 legacy 路径不互相猜
 - [ ] T5 更新 workflow、templates、CONVENTION 和同步判据，删除旧 lane 现行语义
 - [ ] T6 先接 runlog observation，钉住 rc、无 transcript、原子同秒写与 raw-log 独立性
 - [ ] T7 接 panel：显式 track 归属、risk 一致性、实际腿/降级/时长/可得 usage

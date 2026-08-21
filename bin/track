@@ -263,6 +263,13 @@ case "$cmd" in
     [ -z "$name" ] && { echo "ERROR: need a track name" >&2; usage 1; }
     src="$proj/tracks/$name"
     [ -d "$src" ] || { echo "ERROR: $src not found" >&2; exit 1; }
+    # typed facts 是唯一机器事实源；必须在 evidence 检查、worktree sweep 和 mv 之前判。
+    # 无 decision 的旧 track 由 validator 明示为 legacy，继续走下面的旧 verify 规则。
+    if ! "$(dirname "$0")/track-record" validate --phase archive "$src"; then
+      echo "🔴 拒绝归档:typed decision 未完成。目录留在原地,尚未触碰 worktree。" >&2
+      exit 1
+    fi
+    typed=0; [ -f "$src/decision.json" ] && typed=1
     # 归档 = 宣布做完了。没有主裁结论就没做完 —— 在**动目录之前**挡,
     # 别留下「已归档但没结论」的半截状态(pre-commit 的规矩3 只挡痕迹被提交那一步,
     # 目录那时早就搬走了)。现存 51 个已归档 track 实测无一缺 verify.md、
@@ -272,7 +279,7 @@ case "$cmd" in
       echo "🔴 拒绝归档:$v 不存在(归档 = 宣布做完了,没有 verify.md 就没有结论)" >&2
       exit 1
     fi
-    if grep -qE '^-[[:space:]]*Verdict:[[:space:]]*<' "$v"; then
+    if [[ "$typed" -eq 0 ]] && grep -qE '^-[[:space:]]*Verdict:[[:space:]]*<' "$v"; then
       echo "🔴 拒绝归档:$v 的结论栏还是模板占位符(空着 = 没判过)。" >&2
       echo "   路线被取代、不是验收通过的,也要如实写(例:ARCHIVED-SUPERSEDED)," >&2
       echo "   别拿一个 PASS 充数。" >&2
@@ -312,7 +319,13 @@ case "$cmd" in
     # list 都看得见。软提示,不阻断。
     for t in $(ls -1 "$proj/tracks" 2>/dev/null | grep -v '^archive$'); do
       v="$proj/tracks/$t/verify.md"
-      if [ -f "$v" ] && grep -qE '^-[[:space:]]*Verdict:[[:space:]]*<' "$v"; then
+      if [ -f "$proj/tracks/$t/decision.json" ]; then
+        if ! "$(dirname "$0")/track-record" validate --phase archive "$proj/tracks/$t" >/dev/null 2>&1; then
+          echo "  $t  ⚠️ typed outcome 还没满足归档条件"
+        else
+          echo "  $t"
+        fi
+      elif [ -f "$v" ] && grep -qE '^-[[:space:]]*Verdict:[[:space:]]*<' "$v"; then
         echo "  $t  ⚠️ 结论栏还空着(空着 = 没判过)"
       else
         echo "  $t"

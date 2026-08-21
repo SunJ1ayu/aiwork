@@ -46,7 +46,7 @@ valid_name() {
      && "$name" != "archive" && "$name" != -* ]]
 }
 
-verify_ready() {  # verify_ready <verify-file>
+verify_ready() {  # legacy verify_ready <verify-file>
   local v="$1"
   [[ -f "$v" ]] || return 1
   grep -qE '^-[[:space:]]*lane:[[:space:]]*[^<[:space:]]' "$v" || return 1
@@ -54,20 +54,32 @@ verify_ready() {  # verify_ready <verify-file>
 }
 
 validate_track() {  # validate_track <name> <allow-archive:0|1>
-  local name="$1" allow_archive="$2" v=""
+  local name="$1" allow_archive="$2" v="" track_dir="" source="staged"
   valid_name "$name" || { say "🔴 非法 Track 名:$name"; return 1; }
   if [[ -f "tracks/$name/verify.md" ]]; then
     v="tracks/$name/verify.md"
+    track_dir="tracks/$name"
   elif [[ "$allow_archive" -eq 1 && -f "tracks/archive/$name/verify.md" ]]; then
     v="tracks/archive/$name/verify.md"
+    track_dir="tracks/archive/$name"
+    source="working"
   else
     say "🔴 Track: $name 没有对应的${allow_archive:+ active/archived} verify.md。"
     return 1
+  fi
+  if git cat-file -e ":$track_dir/decision.json" 2>/dev/null \
+      || [[ -f "$track_dir/decision.json" ]]; then
+    if ! "$BIN/track-record" validate --phase dispatch --source "$source" "$track_dir"; then
+      say "🔴 $track_dir/decision.json 尚未满足 dispatch；关键 commit 拒绝放行。"
+      return 1
+    fi
+    return 0
   fi
   if ! verify_ready "$v"; then
     say "🔴 $v 的 lane 或 派给 仍为空；先把本轮验收责任写清。"
     return 1
   fi
+  return 0
 }
 
 check_message() {  # check_message <message-file> <allow-archive:0|1>

@@ -8,6 +8,8 @@
 # 所以历史审计仍需调用 `track-commit-msg --audit <range>`，不能把 hook 当权限边界。
 set -u
 
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 fail=0
 say() { printf 'track-guard: %s\n' "$1" >&2; }
 
@@ -72,10 +74,22 @@ fi
 # ---- 规矩2:最近改动的 verify.md 里 lane / 派给 非空 ----
 # 取「本提交涉及的 verify.md」∪「工作区里最近 7 天内改过的 verify.md」逐个查。
 verifies=$( { staged | grep -E '^tracks/[^/]+/verify\.md$' || true; \
+              staged | sed -nE 's#^(tracks/[^/]+)/decision\.json$#\1/verify.md#p' || true; \
               git log --since='7 days ago' --name-only --pretty=format: -- 'tracks/*/verify.md' | grep . || true; } | sort -u )
 
 for v in $verifies; do
   [ -f "$v" ] || continue
+  track_dir="${v%/verify.md}"
+  # typed track 的机器字段只认 decision.json。这里必须验 **staged snapshot**:
+  # working copy 可以已经被下一步编辑，不能替本次 commit 应试。
+  if git cat-file -e ":$track_dir/decision.json" 2>/dev/null \
+      || [ -f "$track_dir/decision.json" ]; then
+    if ! "$BIN/track-record" validate --phase shape --source staged "$track_dir"; then
+      fail=1
+      say "🔴 typed decision 的 staged snapshot 未通过 shape:$track_dir/decision.json"
+    fi
+    continue
+  fi
   # 有暂存版本时以暂存内容为准
   if staged | grep -qx "$v"; then
     content=$(git show ":$v" 2>/dev/null) || content=$(cat "$v")

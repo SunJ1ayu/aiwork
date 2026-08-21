@@ -137,15 +137,48 @@ def decision_was_tracked(track_dir: Path) -> bool:
     return history.returncode == 0 and bool(history.stdout.strip())
 
 
-def load_decision(track_dir: Path) -> dict[str, Any] | None:
-    path = track_dir / "decision.json"
-    if not path.is_file():
+def staged_decision_text(track_dir: Path) -> str | None:
+    repo = git_root(track_dir)
+    if repo is None:
+        raise DecisionError("git.repository", "track_dir", os.fspath(track_dir), "track inside a git repository")
+    try:
+        rel = (track_dir / "decision.json").resolve().relative_to(repo.resolve())
+    except ValueError as exc:
+        raise DecisionError("git.repository", "decision.json", os.fspath(track_dir), "path inside git repository") from exc
+    result = subprocess.run(
+        ["git", "-C", os.fspath(repo), "show", f":{rel.as_posix()}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0:
         if decision_was_tracked(track_dir):
-            raise DecisionError("decision.required", "decision.json", MISSING, "tracked typed decision must exist")
+            raise DecisionError("decision.required", "decision.json", MISSING, "typed decision present in staged snapshot")
         return None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return result.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise DecisionError("json.parse", "decision.json", str(exc), "valid UTF-8 JSON") from exc
+
+
+def load_decision(track_dir: Path, source: str) -> dict[str, Any] | None:
+    path = track_dir / "decision.json"
+    if source == "staged":
+        text = staged_decision_text(track_dir)
+        if text is None:
+            return None
+    else:
+        if not path.is_file():
+            if decision_was_tracked(track_dir):
+                raise DecisionError("decision.required", "decision.json", MISSING, "tracked typed decision must exist")
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise DecisionError("json.parse", "decision.json", str(exc), "valid UTF-8 JSON") from exc
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
         raise DecisionError("json.parse", "decision.json", str(exc), "valid UTF-8 JSON") from exc
     if not isinstance(value, dict):
         raise DecisionError("field.type", "decision.json", value, "object")
@@ -242,11 +275,11 @@ def validate_dispatch(data: dict[str, Any], track_dir: Path) -> None:
                 raise DecisionError("evidence.exists", "design.premise_attack.evidence[]", rel, "existing non-symlink file")
 
 
-def validate(track_dir: Path, phase: str) -> int:
+def validate(track_dir: Path, phase: str, source: str) -> int:
     try:
-        data = load_decision(track_dir)
+        data = load_decision(track_dir, source)
         if data is None:
-            print(f"track-record: status=legacy phase={phase} track={track_dir.name}")
+            print(f"track-record: status=legacy phase={phase} source={source} track={track_dir.name}")
             return 0
         validate_shape(data, track_dir)
         if phase in ("dispatch", "archive"):
@@ -255,7 +288,7 @@ def validate(track_dir: Path, phase: str) -> int:
             raise DecisionError("field.decided", "outcome.verdict", None, "PASS|BLOCK|NEEDS_MORE_INFO|ARCHIVED-SUPERSEDED")
     except DecisionError as exc:
         return block(exc)
-    print(f"track-record: status=valid phase={phase} track={data['track']}")
+    print(f"track-record: status=valid phase={phase} source={source} track={data['track']}")
     return 0
 
 
@@ -264,6 +297,7 @@ def parser() -> argparse.ArgumentParser:
     commands = top.add_subparsers(dest="command", required=True)
     check = commands.add_parser("validate", help="validate a track decision")
     check.add_argument("--phase", required=True, choices=("shape", "dispatch", "archive"))
+    check.add_argument("--source", default="working", choices=("working", "staged"))
     check.add_argument("track_dir", type=Path)
     return top
 
@@ -273,7 +307,7 @@ def main() -> int:
     if args.command == "validate":
         if not args.track_dir.is_dir():
             return block(DecisionError("track.directory", "track_dir", os.fspath(args.track_dir), "existing directory"))
-        return validate(args.track_dir.resolve(), args.phase)
+        return validate(args.track_dir.resolve(), args.phase, args.source)
     return 2
 
 
