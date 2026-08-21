@@ -37,7 +37,13 @@ The validator has three narrow modes, not a workflow state machine:
 track-record validate --phase shape tracks/<name>     # schema/types; null is legal
 track-record validate --phase dispatch tracks/<name>  # decisions + hand-written cross rules
 track-record validate --phase archive tracks/<name>   # dispatch rules + final outcome
+track-record ledger --repo . --format json             # read-only derived view
 ```
+
+Ledger 只扫描 `decision.json` 与 `observations/*.json`；不解析 verify prose、receipt、raw log 或
+transcript。legacy 与采不到的 usage 明示 `unknown/null`，PASS 但缺 execution coverage 的 track
+进入 missing 清单而不是成功成本聚合。它不写数据库、索引或缓存，所以 worktree 清理与日志
+retention 不会和持久账本打架。
 
 Known high-impact factors (new write surfaces, permissions, auth, money, data consistency,
 migrations and control boundaries) mechanically require `impact.level=high`. High design

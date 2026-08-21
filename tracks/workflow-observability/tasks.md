@@ -13,5 +13,5 @@
 - [x] T6 先接 runlog observation，钉住 rc、无 transcript、原子同秒写与 raw-log 独立性
 - [x] T7 接 panel：显式 track 归属、risk 一致性、实际腿/降级/时长/可得 usage
 - [x] T8 接 delegate：仓外 receipt、execution_finished / received 分离、旧 receipt 兼容
-- [ ] T9 实现只读 ledger，覆盖 legacy/null/missing/mismatch、稳定输出和零写入
+- [x] T9 实现只读 ledger，覆盖 legacy/null/missing/mismatch、稳定输出和零写入
 - [ ] T10 真 archive+sweep 端到端、聚焦回归、变异、总工具链；主自审后 high 复核并仲裁

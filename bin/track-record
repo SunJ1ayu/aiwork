@@ -601,6 +601,328 @@ def import_delegate(args: argparse.Namespace) -> int:
     return 0
 
 
+def metric(values: list[int | float | None]) -> dict[str, Any]:
+    known = [value for value in values if value is not None]
+    unknown = len(values) - len(known)
+    known_total: int | float | None = sum(known) if known else None
+    return {
+        "value": known_total if known and unknown == 0 else None,
+        "known_total": known_total,
+        "known_events": len(known),
+        "unknown_events": unknown,
+    }
+
+
+def empty_cost() -> dict[str, Any]:
+    return {
+        "execution_duration_ms": None,
+        "receive_duration_ms": None,
+        "input_tokens": metric([]),
+        "output_tokens": metric([]),
+        "total_tokens": metric([]),
+        "api_cost": metric([]),
+        "billing_modes": [],
+    }
+
+
+def observation_for_ledger(path: Path, track: str) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise DecisionError("ledger.observation", "observations", os.fspath(path), "non-symlink JSON file")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DecisionError("ledger.observation", "observations", str(exc), "valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise DecisionError("ledger.observation", "observations", type(value).__name__, "JSON object")
+    if value.get("schema_version") != 1 or value.get("track") != track:
+        raise DecisionError(
+            "ledger.observation",
+            "observations.track",
+            {"schema_version": value.get("schema_version"), "track": value.get("track")},
+            {"schema_version": 1, "track": track},
+        )
+    if value.get("event") not in EVENTS or value.get("controller") not in CONTROLLERS:
+        raise DecisionError("ledger.observation", "observations.event", value.get("event"), "known controller/event")
+    for key in ("run_id", "label"):
+        if not isinstance(value.get(key), str):
+            raise DecisionError("ledger.observation", f"observations.{key}", value.get(key), "string")
+    for key in ("duration_ms", "exit_code"):
+        field = value.get(key)
+        if not isinstance(field, int) or isinstance(field, bool) or field < 0:
+            raise DecisionError("ledger.observation", f"observations.{key}", field, "non-negative integer")
+    actual = value.get("actual")
+    usage = value.get("usage")
+    if not isinstance(actual, dict) or not isinstance(usage, dict):
+        raise DecisionError("ledger.observation", "observations.actual/usage", None, "objects")
+    if not isinstance(actual.get("adapter"), str):
+        raise DecisionError("ledger.observation", "observations.actual.adapter", actual.get("adapter"), "string")
+    if actual.get("model") is not None and not isinstance(actual.get("model"), str):
+        raise DecisionError("ledger.observation", "observations.actual.model", actual.get("model"), "null or string")
+    legs = actual.get("legs")
+    if legs is not None and not isinstance(legs, list):
+        raise DecisionError("ledger.observation", "observations.actual.legs", legs, "null or array")
+    for key in ("input_tokens", "output_tokens", "total_tokens", "api_cost"):
+        field = usage.get(key)
+        if field is not None and (isinstance(field, bool) or not isinstance(field, (int, float)) or field < 0):
+            raise DecisionError("ledger.observation", f"observations.usage.{key}", field, "null or non-negative number")
+    if usage.get("billing_mode") is not None and usage.get("billing_mode") not in BILLING_MODES:
+        raise DecisionError(
+            "ledger.observation",
+            "observations.usage.billing_mode",
+            usage.get("billing_mode"),
+            "null|subscription|api|local",
+        )
+    return value
+
+
+def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    name = track_dir.name
+    decision: dict[str, Any] | None = None
+    status = "legacy"
+    record_error: dict[str, Any] | None = None
+    try:
+        decision = load_decision(track_dir, "working")
+        if decision is not None:
+            validate_shape(decision, track_dir)
+            status = "typed"
+    except DecisionError as exc:
+        status = "invalid"
+        decision = None
+        record_error = {
+            "rule": exc.rule,
+            "path": exc.path,
+            "actual": None if exc.actual is MISSING else exc.actual,
+            "expected": exc.expected,
+        }
+
+    observations: list[dict[str, Any]] = []
+    invalid_observations = 0
+    obs_dir = track_dir / "observations"
+    if obs_dir.is_dir() and not obs_dir.is_symlink():
+        for path in sorted(obs_dir.glob("*.json"), key=lambda item: item.name):
+            try:
+                observations.append(observation_for_ledger(path, name))
+            except DecisionError:
+                invalid_observations += 1
+
+    executions = [item for item in observations if item["event"] == "execution_finished"]
+    receives = [item for item in observations if item["event"] == "received"]
+    execution_duration = sum(item["duration_ms"] for item in executions) if executions else None
+    receive_duration = sum(item["duration_ms"] for item in receives) if receives else None
+    usage_metrics = {
+        key: metric([item["usage"].get(key) for item in executions])
+        for key in ("input_tokens", "output_tokens", "total_tokens", "api_cost")
+    }
+    billing_modes = sorted(
+        {item["usage"].get("billing_mode") for item in executions if item["usage"].get("billing_mode") is not None}
+    )
+
+    panel_legs = [leg for item in executions for leg in (item["actual"].get("legs") or [])]
+    dispatch_count = sum(len(item["actual"].get("legs") or []) or 1 for item in executions)
+    failed_legs = sum(1 for leg in panel_legs if leg.get("exit_code") != 0)
+    degraded = sum(1 for item in executions if item["actual"].get("degraded") is True)
+    degraded += sum(1 for leg in panel_legs if leg.get("degraded") is True)
+
+    impact = decision["impact"]["level"] if decision is not None else None
+    uncertainty = decision["design"]["uncertainty"] if decision is not None else None
+    planned = (
+        {
+            "adapter": decision["execution_plan"]["adapter"],
+            "model": decision["execution_plan"]["model"],
+        }
+        if decision is not None
+        else {"adapter": None, "model": None}
+    )
+    outcome = decision["outcome"]["verdict"] if decision is not None else None
+
+    primary_controllers = {
+        "delegate-codex": "delegate-codex",
+        "panel-review": "panel-review",
+        "runlog": "runlog",
+    }
+    primary_name = primary_controllers.get(planned["adapter"])
+    primary = [item for item in executions if item["controller"] == primary_name] if primary_name else []
+    adapter_mismatch: bool | None = None
+    model_mismatch: bool | None = None
+    if primary and planned["adapter"] is not None:
+        adapter_mismatch = any(item["actual"].get("adapter") != planned["adapter"] for item in primary)
+    if primary and planned["model"] is not None:
+        model_mismatch = any(item["actual"].get("model") != planned["model"] for item in primary)
+
+    missing: list[str] = []
+    if invalid_observations:
+        missing.append("valid_observations")
+    if status == "typed" and outcome == "PASS":
+        if not executions:
+            missing.append("execution_finished")
+        elif not any(item["exit_code"] == 0 for item in executions):
+            missing.append("successful_execution_finished")
+        delegate_runs = {item["run_id"] for item in executions if item["controller"] == "delegate-codex"}
+        received_ok = {item["run_id"] for item in receives if item["exit_code"] == 0}
+        for run_id in sorted(delegate_runs - received_ok):
+            missing.append(f"received:{run_id}")
+    eligible = status == "typed" and outcome == "PASS" and not missing
+
+    item = {
+        "track": name,
+        "location": location,
+        "record_status": status,
+        "record_error": record_error,
+        "impact_level": impact,
+        "design_uncertainty": uncertainty,
+        "planned": planned,
+        "outcome": outcome,
+        "coverage": {
+            "events": len(observations),
+            "execution_finished": len(executions),
+            "received": len(receives),
+            "invalid_observations": invalid_observations,
+        },
+        "quality": {
+            "controller_runs": len(executions),
+            "dispatch_count": dispatch_count,
+            "failed_controller_runs": sum(1 for item in executions if item["exit_code"] != 0),
+            "panel_legs": len(panel_legs),
+            "failed_panel_legs": failed_legs,
+            "degraded_runs_or_legs": degraded,
+        },
+        "cost": {
+            "execution_duration_ms": execution_duration,
+            "receive_duration_ms": receive_duration,
+            **usage_metrics,
+            "billing_modes": billing_modes,
+        },
+        "mismatch": {"adapter": adapter_mismatch, "model": model_mismatch},
+        "successful_cost_eligible": eligible,
+        "missing": missing,
+    }
+    return item, executions
+
+
+def aggregate_cost(items: list[tuple[dict[str, Any], list[dict[str, Any]]]]) -> dict[str, Any]:
+    executions = [event for _, events in items for event in events]
+    total = {
+        "track_count": len(items),
+        "execution_duration_ms": sum(event["duration_ms"] for event in executions) if executions else None,
+        **{
+            key: metric([event["usage"].get(key) for event in executions])
+            for key in ("input_tokens", "output_tokens", "total_tokens", "api_cost")
+        },
+    }
+    by_mode: dict[str, Any] = {}
+    for mode in (*BILLING_MODES, "unknown"):
+        selected = [
+            (item, [event for event in events if (event["usage"].get("billing_mode") or "unknown") == mode])
+            for item, events in items
+        ]
+        selected = [(item, events) for item, events in selected if events]
+        events = [event for _, group in selected for event in group]
+        by_mode[mode] = {
+            "track_count": len(selected),
+            "execution_duration_ms": sum(event["duration_ms"] for event in events) if events else None,
+            **{
+                key: metric([event["usage"].get(key) for event in events])
+                for key in ("input_tokens", "output_tokens", "total_tokens", "api_cost")
+            },
+        }
+    total["by_billing_mode"] = by_mode
+    return total
+
+
+def ledger_data(repo: Path) -> dict[str, Any]:
+    locations: list[tuple[Path, str]] = []
+    active = repo / "tracks"
+    archive = active / "archive"
+    if active.is_dir() and not active.is_symlink():
+        locations.extend(
+            (path, "active")
+            for path in active.iterdir()
+            if path.name != "archive" and path.is_dir() and not path.is_symlink()
+        )
+    if archive.is_dir() and not archive.is_symlink():
+        locations.extend(
+            (path, "archive") for path in archive.iterdir() if path.is_dir() and not path.is_symlink()
+        )
+    results = [ledger_track(path, location) for path, location in sorted(locations, key=lambda pair: pair[0].name)]
+    tracks = [item for item, _ in results]
+    eligible = [result for result in results if result[0]["successful_cost_eligible"]]
+    successful = [item for item in tracks if item["record_status"] == "typed" and item["outcome"] == "PASS"]
+    return {
+        "schema_version": 1,
+        "source": ["decision.json", "observations/*.json"],
+        "summary": {
+            "tracks_total": len(tracks),
+            "typed_tracks": sum(1 for item in tracks if item["record_status"] == "typed"),
+            "legacy_tracks": sum(1 for item in tracks if item["record_status"] == "legacy"),
+            "invalid_tracks": sum(1 for item in tracks if item["record_status"] == "invalid"),
+            "successful_tracks": len(successful),
+            "successful_cost_eligible": len(eligible),
+            "successful_cost_missing": sorted(
+                item["track"] for item in successful if not item["successful_cost_eligible"]
+            ),
+            "successful_cost": aggregate_cost(eligible),
+        },
+        "tracks": tracks,
+    }
+
+
+def markdown_ledger(data: dict[str, Any]) -> str:
+    lines = [
+        "# aiwork cost-quality ledger",
+        "",
+        "| Track | Location | Record | Outcome | Impact | Runs | Dispatches | Duration ms | Tokens | API cost | Eligible | Missing |",
+        "|---|---|---|---|---|---:|---:|---:|---:|---:|---|---|",
+    ]
+    for item in data["tracks"]:
+        cost = item["cost"]
+        token_value = cost["total_tokens"]["value"]
+        api_value = cost["api_cost"]["value"]
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    item["track"],
+                    item["location"],
+                    item["record_status"],
+                    item["outcome"] or "unknown",
+                    item["impact_level"] or "unknown",
+                    str(item["quality"]["controller_runs"]),
+                    str(item["quality"]["dispatch_count"]),
+                    str(cost["execution_duration_ms"] if cost["execution_duration_ms"] is not None else "unknown"),
+                    str(token_value if token_value is not None else "unknown"),
+                    str(api_value if api_value is not None else "unknown"),
+                    "yes" if item["successful_cost_eligible"] else "no",
+                    ",".join(item["missing"]) or "-",
+                )
+            )
+            + " |"
+        )
+    summary = data["summary"]
+    lines.extend(
+        (
+            "",
+            f"Successful cost coverage: {summary['successful_cost_eligible']}/{summary['successful_tracks']}",
+            "Unknown remains unknown; legacy prose and raw logs are not parsed.",
+        )
+    )
+    return "\n".join(lines) + "\n"
+
+
+def ledger(args: argparse.Namespace) -> int:
+    repo = control_repo(args.repo)
+    if not repo.is_dir() or not (repo / "tracks").is_dir():
+        return block(DecisionError("ledger.repository", "repo", os.fspath(repo), "repository with tracks/"))
+    try:
+        data = ledger_data(repo)
+    except OSError as exc:
+        return block(DecisionError("ledger.read", "tracks", str(exc), "readable decision/observation files"))
+    if args.format == "json":
+        print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=False))
+    else:
+        print(markdown_ledger(data), end="")
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="track-record")
     commands = top.add_subparsers(dest="command", required=True)
@@ -638,6 +960,9 @@ def parser() -> argparse.ArgumentParser:
     delegated = commands.add_parser("import-delegate", help="import compact fields from a delegate receipt")
     delegated.add_argument("--receipt", required=True, type=Path)
     delegated.add_argument("--event", required=True, choices=EVENTS)
+    report = commands.add_parser("ledger", help="derive a read-only cost/quality ledger")
+    report.add_argument("--repo", required=True, type=Path)
+    report.add_argument("--format", default="json", choices=("json", "markdown"))
     return top
 
 
@@ -651,6 +976,8 @@ def main() -> int:
         return observe(args)
     if args.command == "import-delegate":
         return import_delegate(args)
+    if args.command == "ledger":
+        return ledger(args)
     return 2
 
 
