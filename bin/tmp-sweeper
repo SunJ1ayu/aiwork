@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# tmp-sweeper —— 清掉 mimo / opencode 泄漏在 /tmp 顶层的 Bun 运行时 .so。
+#
+# ── 为什么存在(2026-08-22)────────────────────────────────────────────────
+# mimo(MiMoCode CLI)和 opencode 都是 Bun 编译的单文件二进制,里面嵌着同一个
+# 原生文件搜索库(导出 fff_* 符号)。单文件二进制没法直接从内存 dlopen,必须先把
+# 库写到磁盘再加载 —— 而这两个工具**写完不收**,正常退出也不收(实测:rc=1、
+# 2 秒自己退出,文件照留)。kimi-code / claude-code / codex 都不产,只有这两个。
+#
+# 代价:2026-07-23 到 08-21 累积 1336 个文件 / 5.7G,把 50G 的盘顶到 92%。
+# 峰值 08-19 一天 472 个(≈2.1G)—— 那天跑了三轮 panel 多腿评审。
+#
+# ── 为什么范围这么窄 ──────────────────────────────────────────────────────
+# /tmp 里还有几万个判据残渣,但那是 **inode 问题不是体积问题**(每天涨 10~20MB),
+# 而 inode 才用了 24%。**多扫一类就多一份误删风险,不急就不该冒险。**
+#
+# 🔴 **绝对不要扩到 `tmp.*`** —— 那是 mktemp 的默认前缀,全机器公用。铁证:
+#    `/tmp/tmp.llsdBUkG8M`(2026-07-04 创建)至今仍写在一个**活着的进程**的
+#    命令行里(`python3 - /tmp/tmp.llsdBUkG8M/port`)。任何「tmp.* 超过 N 天就删」
+#    的规则,N 取到 49 天都会咬到它。
+#
+# 🔴 **绝对不要去掉 `-maxdepth 1`** —— 这一条不只是提速。系统自带的
+#    systemd-tmpfiles 每天 21:30 跑一次「/tmp 里超 30 天的清掉」,而它按
+#    atime/mtime/ctime **最新的那个**判龄。递归遍历 /tmp 会刷新所有子目录的
+#    atime ⇒ **等于亲手把系统那道 30 天策略永久焊死**。实测:按 mtime 超 30 天的
+#    目录有 311 个,按 tmpfiles 的口径到期的是 0 个 —— 已经被刷瞎了。
+#    `-maxdepth 1` 只 readdir /tmp 自己这一层,不碰子目录。
+#
+# ── 两道独立防线(任何一道单独失效都不会误删)──────────────────────────────
+#   ① 年龄 6 小时:单个 mimo/opencode 进程的硬天花板是 930 秒
+#      (submimo:100 / subagent:158 的 timeout 900 + 30 秒 kill 宽限),
+#      140 份真实腿日志实测最长 1184 秒。6 小时 = 实测最大值的 18 倍。
+#   ② 进程持有:Bun 用 mmap 加载,运行期间文件会出现在 /proc/PID/maps。
+#      **实测确认过**(不是推断):跑 mimo 时第 3 次采样命中。
+#
+# ⚠️ 匹配 /proc 时必须用 `^/tmp/` 锚点。不锚定会把 `/var/tmp/systemd-private-…`
+#    和 `…/codex-home/tmp/arg0` 误报成 /tmp 里的东西(评审时踩过两次)。
+#
+# ── 不按文件大小过滤 ──────────────────────────────────────────────────────
+# mimo 产 4499072 字节、opencode 产 5576816 字节,但这两个数字**版本相关**,
+# 工具一升级就变。写进判据 = 静默漏删,那是最坏的失效形态。大小只进报告。
+#
+# 用法:tmp-sweeper [--dry-run]
+
+set -uo pipefail
+
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+STATE=/var/log/tmp-sweeper.state    # 🔴 不许放 /tmp —— 否则清扫器早晚清掉自己的证据
+
+# 文件名形状:前导点 + 16 位十六进制 + -00000000.so。
+# 大小写通吃:实测样本全是小写,但放宽这一点不增加风险(仍要求那个后缀),
+# 却挡掉了「哪天变成大写 ⇒ 永远匹配不到 ⇒ 静默失效」这一整类。
+PATTERN='^/tmp/\.[0-9a-fA-F]{16}-00000000\.so$'
+
+# ── 防线②:一次扫完 /proc,拿到所有正在被持有的目标文件 ──────────────────
+held_now() {
+  { awk '$6 ~ /^\/tmp\/\./ {print $6}' /proc/[0-9]*/maps 2>/dev/null
+    for d in /proc/[0-9]*/fd; do
+      ls -l "$d" 2>/dev/null | sed -n 's|.* -> \(/tmp/\.[^ ]*\)$|\1|p'
+    done
+  } | sort -u
+}
+
+mapfile -t HELD < <(held_now)
+is_held() {
+  local f="$1" h
+  for h in "${HELD[@]}"; do [ "$h" = "$f" ] && return 0; done
+  return 1
+}
+
+n_matched=0; n_deleted=0; n_held=0; bytes=0
+while IFS= read -r f; do
+  n_matched=$((n_matched + 1))
+  if is_held "$f"; then
+    n_held=$((n_held + 1))
+    echo "SKIP(被进程持有) $f"
+    continue
+  fi
+  sz=$(stat -c %s -- "$f" 2>/dev/null || echo 0)
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "[DRY] 会删 $f ($sz 字节)"
+  else
+    rm -f -- "$f" && { n_deleted=$((n_deleted + 1)); bytes=$((bytes + sz)); }
+  fi
+done < <(find /tmp -maxdepth 1 -type f -regextype posix-extended \
+              -regex "$PATTERN" -mmin +360 -print 2>/dev/null)
+
+# ── 状态行:给 disk-watch 判「清扫器是不是已经静默失效」用 ────────────────
+# 🔴 这里**不许**用 `du -sb /tmp` 统计体积 —— 那会递归遍历、刷新全部子目录 atime,
+#    正是上面 -maxdepth 1 要避免的那件事。用 df(整盘水位)+ 只读 /tmp 一层的条目数。
+entries=$(ls -A /tmp 2>/dev/null | wc -l)
+pct=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc 0-9)
+line="$(date -Is) matched=$n_matched deleted=$n_deleted skipped_held=$n_held freed_bytes=$bytes tmp_entries=$entries disk_pct=${pct:-?}"
+echo "$line"
+[ "$DRY_RUN" = 1 ] || echo "$line" >> "$STATE" 2>/dev/null || true
