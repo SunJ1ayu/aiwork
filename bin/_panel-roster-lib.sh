@@ -8,7 +8,8 @@
 #
 # 设计要点(track panel-roster-from-disk):
 #   花名册 = f(<prefix>.plan, <prefix>.<leg>.state, <prefix>.final?)
-#   —— **纯函数,读盘算出来**,不依赖任何进程还活着。
+#   —— **读盘算出来**,不依赖任何进程还活着。
+#      (抬头那个渲染时间戳除外:它答的是"什么时候打印的",不是盘上状态的函数。)
 #   · .plan  控制器在**派发之前**写(那时选腿结果已全部已知)
 #   · .state **腿自己在 setsid 出去的那个会话里**写(控制器死了它照样写得成)
 #   · .final 控制器正常收尾才写;缺了不是错,只说明它没活到最后
@@ -38,6 +39,12 @@ roster_entry_from_disk() {  # roster_entry_from_disk <prefix> <leg>
   local selected health rc state_txt verdict
   selected="$(_plan_leg_field "$plan" "$name" 2)"
   health="$(_plan_leg_field "$plan" "$name" 3)"
+  # **盘上有 state ⇒ 它真的跑过**,不管 plan 当初说没说要派它。
+  # plan 是派发**之前**写的,升级追加的增补腿不在里面(控制器只翻了内存里的标志)。
+  # 只信 plan 的话,一条真跑过的增补腿会被印成 SKIP(rotation),
+  # 它要是跑失败了失败也一起消失 —— 正是这个功能存在要防的那种数据丢失。
+  # (2026-08-23 评审腿 subdeepseek F1 在真控制器上复现的回归,判据 R9 守着。)
+  [[ -s "$state" ]] && selected=1
   if [[ "$selected" != "1" ]]; then
     if [[ "$health" == "off" ]]; then printf '%s=off' "$name"
     elif [[ "$health" == "healthy" ]]; then printf '%s=SKIP(rotation)' "$name"
@@ -47,7 +54,14 @@ roster_entry_from_disk() {  # roster_entry_from_disk <prefix> <leg>
   if [[ ! -s "$state" ]]; then
     # 派出去了、却没有任何退出码落盘 ⇒ 这条腿没收尾。
     # **绝不许印成 PASS,也绝不许整行消失** —— 那正是这道闸存在的理由。
-    printf '%s=KILLED(未收尾,无 state)' "$name"
+    #
+    # ⚠️ 但也**不许断言它死了**:盘上的信息区分不了"被砍"和"还在跑"。
+    # 2026-08-23 派全员评审时我用这命令查进行中的花名册,两条腿被印成 KILLED,
+    # 而它们活得好好的、只是还没交卷 —— 这道闸自己犯了它要防的病:
+    # **说了一句盘上证据支持不了的话**。
+    # (不去区分在跑/被砍是**故意的**:那要引入 pid 或心跳,而 pid 会被复用,
+    #  又是一个"看起来对"的方案。说不知道,比猜一个死因诚实。)
+    printf '%s=未收尾(无 state:被砍或仍在跑)' "$name"
     return
   fi
   rc="$(_plan_kv "$state" rc)"
@@ -70,15 +84,20 @@ render_roster() {  # render_roster <prefix>
   local esc head_before head_after line name
   [[ -s "$plan" ]] || { echo "🔴 panel-roster: 没有 $plan —— 这一轮连派发都没走到,无从重建。" >&2; return 1; }
   head_before="$(_plan_kv "$plan" snapshot-head)"
+  local sel sel_count
+  sel="$(_plan_kv "$plan" selected)"; sel_count="$(_plan_kv "$plan" selected-count)"
   if [[ -s "$final" ]]; then
     esc="$(_plan_kv "$final" escalation)"; head_after="$(_plan_kv "$final" head-after)"
+    # 控制器活到收尾 ⇒ 它知道**升级之后**的选腿结果,优先用它(plan 是升级之前的)
+    [[ -n "$(_plan_kv "$final" selected)" ]] && sel="$(_plan_kv "$final" selected)"
+    [[ -n "$(_plan_kv "$final" selected-count)" ]] && sel_count="$(_plan_kv "$final" selected-count)"
   else
     esc="unknown(控制器没活到收尾)"; head_after=""
   fi
   echo "# panel-review 花名册($(date '+%F %T'))task=$(_plan_kv "$plan" task)"
   echo "# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。"
-  echo "# impact-risk=$(_plan_kv "$plan" impact-risk) requested-budget=$(_plan_kv "$plan" requested-budget) selected-count=$(_plan_kv "$plan" selected-count)"
-  echo "# selected=$(_plan_kv "$plan" selected)"
+  echo "# impact-risk=$(_plan_kv "$plan" impact-risk) requested-budget=$(_plan_kv "$plan" requested-budget) selected-count=$sel_count"
+  echo "# selected=$sel"
   echo "# escalation=$esc"
   echo "# snapshot=head:$head_before"
   echo "# 日志:${prefix}.*.log"

@@ -547,7 +547,9 @@ session_run() {  # session_run <statefile> <cmd...>
     st="$1"; shift
     started="$(date -u +%FT%TZ)"
     "$@"; rc=$?
-    printf "rc=%s\nstarted=%s\nfinished=%s\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st"
+    # 原子落盘:先写临时文件再 mv。直接 `> "$st"` 的话,腿在写到一半被砍会留下
+    # 半截 state,读不到 rc= ⇒ 花名册印出 FAIL(rc=)(空 rc)这种没设计过的第三种形态。
+    printf "rc=%s\nstarted=%s\nfinished=%s\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st.tmp" && mv -f "$st.tmp" "$st"
     exit $rc
   ' _ "$state" "$@"
 }
@@ -748,6 +750,10 @@ ROSTER_FILE="${LOG_PREFIX}.roster"
 {
   printf 'escalation=%s\n' "$ESCALATION_REASON"
   printf 'head-after=%s\n' "$HEAD_AFTER"
+  # 升级追加增补腿之后,选腿结果变了,而 plan 是派发之前写的 ⇒ 这里补一份最终的。
+  # 控制器没活到这一步时,render_roster 回落用 plan 的,并靠"盘上有 state"补齐腿。
+  printf 'selected=%s\n' "$(selected_identities)"
+  printf 'selected-count=%s\n' "$SELECTED_COUNT"
 } > "${LOG_PREFIX}.final"
 # 花名册**不再由内存渲染**:走和 panel-roster 完全同一条路(共享 lib 的 render_roster),
 # 保证"控制器当场写的"和"事后重建的"逐字节一样 —— 判据 R5b 守着这一条。
