@@ -60,12 +60,17 @@
 ## 收口
 
 - [x] 红检:每条断言至少一个变异(12 条,0 漏网)
-- [ ] 最终收据(跑在最后一次编辑之后,用 `runlog`)
-- [ ] **第二轮 `panel-review --all`**(第一轮跑过:控制器被 `timeout 120` 砍,
+- [x] 最终收据(跑在最后一次编辑之后,用 `runlog`)
+- [x] **第二轮 `panel-review --all`**(第一轮跑过:控制器被 `timeout 120` 砍,
       零 observation、零 roster —— **正是本单要修的病,发生在评审本单的那一轮**;
       归档闸要的 exit_code=0 的 panel 运行因此不成立,必须重跑)
       ⚠️ 第一轮**跳过了 my-review 闸**;第二轮补了 `tasks/panel-roster-from-disk-my-review.md`
-- [ ] 主裁 + 归档
+      —— 但**约定路径在仓内、闸拒绝**(被审的就是 aiwork 自己),只能用
+      `--require-my-review` 指到仓外。这是工具的真限制,记进 verify 的敞账。
+      第二轮结果:submimo rc=0(实质通过)/ subdeepseek rc=0 PASS /
+      subglm 挂(底座超时 + 聊天腿 503)/ subkimi 挂(无凭证)。
+- [x] 第二轮的四条发现全部落地(R12/R13 + M13~M16),并清掉我自己造的一条误报
+- [x] 主裁 PASS + 归档
 
 ## 明确不做
 
