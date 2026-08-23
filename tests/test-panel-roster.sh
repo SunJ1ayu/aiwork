@@ -89,8 +89,13 @@ check "R1b: 走的确实是 run_leg 那条路(subglm 被选中,不是 submimo �
 
 # ---------------------------------------------------------------- R4
 echo "[R4] 花名册是纯函数:同样的盘上状态,连算两次逐字节相同"
-a="$(roster_cmd "$d/bin" "$pre")"; b="$(roster_cmd "$d/bin" "$pre")"
-check "R4: 两次输出逐字节相同" $([[ -n "$a" && "$a" == "$b" ]]; echo $?)
+# ⚠️ 必须抹掉渲染时间戳再比:`render_roster` 里嵌了秒级 `date`,
+#    那一行语义上是"这份花名册是什么时候渲染的",**不属于**盘上状态的函数。
+#    第一版直接比原文 ⇒ 两次调用跨过秒边界就红。评审腿(subdeepseek F2)的
+#    全套跑里它**真的红了**,而我自己那次绿是运气。
+strip_ts() { sed -E 's/^# panel-review 花名册\(.*\)task=/# panel-review 花名册(<TS>)task=/'; }
+a="$(roster_cmd "$d/bin" "$pre" | strip_ts)"; b="$(roster_cmd "$d/bin" "$pre" | strip_ts)"
+check "R4: 两次输出逐字节相同(抹掉渲染时间戳之后)" $([[ -n "$a" && "$a" == "$b" ]]; echo $?)
 
 # ---------------------------------------------------------------- R7
 echo "[R7] 腿也没留下 state(最坏情况)—— 必须说人话,不许印成 PASS、不许整行消失"
@@ -160,6 +165,59 @@ check "R8: 缺共享库时走的是 fail-closed 那条路(专用退出码 70)" \
   $([[ "$rc8" -eq 70 ]]; echo $?)
 check "R8: 而且是**我们自己**拒绝的,不是 bash 顺带报的错" \
   $(grep -q '拒绝空跑' <<<"$out8"; echo $?)
+
+# ---------------------------------------------------------------- R9
+echo "[R9] 升级追加的增补腿不许隐身(评审腿 subdeepseek F1 抓到的真回归)"
+# .plan 写在派发之前,而升级追加腿时只翻内存里的 LEG_SELECTED、**没更新 plan**
+# ⇒ 一条真跑过的腿被印成 SKIP(rotation);它要是跑失败了,失败也一起消失 ——
+# **正是这个功能存在要防的那种数据丢失**,而且改动前的老代码是对的。
+# 原则:**盘上有 state = 它真的跑过**,plan 只说明"原本打算派谁"。
+d9="$(mktemp -d)"; mkdir -p "$d9/bin" "$d9/raw"
+cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/panel-roster" "$d9/bin/"
+cat > "$d9/raw/esc.plan" <<'PLAN'
+task=t
+impact-risk=high
+requested-budget=2
+selected-count=2
+selected=submimo(xiaomi/submimo),subdeepseek(deepseek/subdeepseek)
+snapshot-head=abc123
+leg	submimo	1	healthy
+leg	subdeepseek	1	healthy
+leg	subglm	0	healthy
+leg	subkimi	0	off
+PLAN
+printf 'rc=3\n'  > "$d9/raw/esc.submimo.state"
+printf 'rc=0\n'  > "$d9/raw/esc.subdeepseek.state"
+printf 'rc=5\n'  > "$d9/raw/esc.subglm.state"     # 增补腿真跑了、而且**失败**了
+printf 'Conclusion: PASS\n' > "$d9/raw/esc.subdeepseek.log"
+out9="$("$d9/bin/panel-roster" "$d9/raw/esc" 2>/dev/null)"
+check "R9a: 盘上有 state 的增补腿,绝不许印成 SKIP(rotation)" \
+  $(! grep -q 'subglm=SKIP' <<<"$out9"; echo $?)
+check "R9b: 而且它的失败要印出来(rc=5 不许隐身)" \
+  $(grep -q 'subglm=FAIL(rc=5)' <<<"$out9"; echo $?)
+check "R9c: 没派也没 state 的腿仍然照实印 off" \
+  $(grep -q 'subkimi=off' <<<"$out9"; echo $?)
+
+# ---------------------------------------------------------------- R10
+echo "[R10] 一条腿都没派(全 off)也要照实印,不许炸(评审腿 F4 的覆盖缺口)"
+d10="$(mktemp -d)"; mkdir -p "$d10/bin" "$d10/raw"
+cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/panel-roster" "$d10/bin/"
+cat > "$d10/raw/none.plan" <<'PLAN'
+task=t
+impact-risk=self
+requested-budget=0
+selected-count=0
+selected=none
+snapshot-head=abc123
+leg	submimo	0	off
+leg	subdeepseek	0	off
+leg	subglm	0	off
+leg	subkimi	0	off
+PLAN
+out10="$("$d10/bin/panel-roster" "$d10/raw/none" 2>&1)"; rc10=$?
+check "R10: 全 off 时正常退出" $([[ "$rc10" -eq 0 ]]; echo $?)
+check "R10: 四条腿都印 off" \
+  $([[ "$(grep -o '=off' <<<"$out10" | wc -l)" -eq 4 ]]; echo $?)
 
 echo
 echo "---- 合计 PASS=$PASS FAIL=$FAIL ----"
