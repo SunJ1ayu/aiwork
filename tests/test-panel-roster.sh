@@ -39,6 +39,9 @@ make_fixture() { # make_fixture <dir> <sleep> <rc>
   mkdir -p "$b" "$repo" "$d/raw" "$d/state"
   cp "$ROOT/bin/panel-review" "$b/panel-review"
   cp "$ROOT/bin/track-record" "$b/track-record"
+  # 花名册渲染的共享库:panel-review 和 panel-roster 都 source 它(只许有一份)。
+  # 真实 bin/ 里本来就在,夹具得跟上 —— 这是管线,不是断言。
+  [[ -f "$ROOT/bin/_panel-roster-lib.sh" ]] && cp "$ROOT/bin/_panel-roster-lib.sh" "$b/"
   # panel-roster 是本单要造的东西;现在还不存在 ⇒ 判据必须因此红。
   [[ -x "$ROOT/bin/panel-roster" ]] && cp "$ROOT/bin/panel-roster" "$b/panel-roster"
   for leg in submimo subdeepseek subglm subkimi; do make_leg "$b/$leg" "$sl" "$rc"; done
@@ -139,6 +142,24 @@ check "R6: 底座腿那次的 state 单独留档(.agent.state)" \
 check "R6: 回落后聊天腿的 state 也在" $([[ -s "$pre6.subglm.state" ]]; echo $?)
 check "R6: 花名册仍然标出降级(不许把降级腿说成健康腿)" \
   $(roster_cmd "$d6/bin" "$pre6" | grep -q '降级'; echo $?)
+
+# ---------------------------------------------------------------- R8
+echo "[R8] 共享库缺失必须 fail closed(2026-08-23 自己踩出来的)"
+# 实现第一版是裸 `.` source。脚本没开 set -e ⇒ 缺文件只打一行错就往下跑 ⇒
+# render_roster/verdict_of 全不存在 ⇒ 花名册静默变空、observation 一份不写,
+# **而退出码还是 0**。我就是这么一次打红了 21 条既有判据才发现的。
+# 静默放过 = 假绿,和 `env '=key'` rc=0 那次是同一种病。
+d8="$(mktemp -d)"; mkdir -p "$d8/bin"
+cp "$ROOT/bin/panel-review" "$d8/bin/panel-review"     # 故意**不**复制共享库
+out8="$(bash "$d8/bin/panel-review" --no-track --no-my-review /dev/null 2>&1)"; rc8=$?
+# ⚠️ 这两条第一版是**为了错误的理由绿的**(红检 M7 当场照出来):
+#    改回裸 source 之后脚本照样非零退出(后面别的原因),而 bash 自己那句
+#    "No such file" 里也含库名 ⇒ 两条都撞对了,却没一条在问我要保证的事。
+#    改成只认 fail-closed 分支**独有**的证据:专用退出码 70 + 我自己那句话。
+check "R8: 缺共享库时走的是 fail-closed 那条路(专用退出码 70)" \
+  $([[ "$rc8" -eq 70 ]]; echo $?)
+check "R8: 而且是**我们自己**拒绝的,不是 bash 顺带报的错" \
+  $(grep -q '拒绝空跑' <<<"$out8"; echo $?)
 
 echo
 echo "---- 合计 PASS=$PASS FAIL=$FAIL ----"

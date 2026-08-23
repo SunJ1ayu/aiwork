@@ -111,6 +111,18 @@ FORCE_ALL=0
 [[ "$REVIEW_BUDGET" -eq 4 ]] && FORCE_ALL=1
 
 BIN="$(dirname "$0")"
+
+# verdict_of / roster 渲染都住在 _panel-roster-lib.sh —— **只许有一份**。
+# panel-roster(事后重建)source 的是同一个文件,两条路算出来的必须一模一样。
+# **fail closed**:找不到就当场死,不许"打一行错继续跑"。
+# 本脚本没开 `set -e`,裸 `.` 在缺文件时只打一行错就往下走 ⇒ render_roster/verdict_of
+# 全部不存在 ⇒ 花名册静默变空、observation 一份不写,**而退出码还是 0**。
+# 2026-08-23 我就是这么把 21 条既有判据打红的(它们的夹具没复制这个库)。
+# 静默放过 = 假绿,和 `env '=key'` rc=0 那次是同一种病。
+. "$BIN/_panel-roster-lib.sh" || {
+  echo "🔴 panel-review: 找不到 $BIN/_panel-roster-lib.sh —— 花名册渲染在它里面,拒绝空跑。" >&2
+  exit 70
+}
 TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
 TASK_FILE="$1"
 REPO_DIR="${2:-$PWD}"
@@ -483,15 +495,18 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   # --panel-dispatch 走**命令行**,不用环境变量(后者会被 shell 继承 = 随手可按的后门);
   # 而且放在**参数末尾** —— 放开头会把各腿的位置参数整体顶偏一位,
   # 任何按 $3 取日志路径的调用方(判据里的假腿全是这么写的)当场就坏。08-06 实测。
-  setsid --wait "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
+  session_run "${log%.log}.state" "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   if [[ $rc -eq 0 || "$agent" == "$chat" ]]; then return $rc; fi
   # agent leg died and a distinct chat leg exists -> keep the evidence, then retry
   [[ -e "$log" ]] && mv -f "$log" "${log%.log}.agent.log"
+  # state 跟着 log 一起归档:回落之后聊天腿会写同名的 state,不挪就被覆盖掉,
+  # 花名册里"底座腿死于 rc 几"这件事就没了。
+  [[ -e "${log%.log}.state" ]] && mv -f "${log%.log}.state" "${log%.log}.agent.state"
   [[ -s "$err" ]] && mv -f "$err" "${log%.log}.agent.log.err" || rm -f "$err"
   local agent_rc=$rc   # 底座腿的死因;下面 rc 会被聊天腿的返回码覆盖
   echo "  NOTE: $label agent leg failed (rc=$agent_rc) -> fallback to chat leg;" \
        "agent output kept at ${log%.log}.agent.log(.err)"
-  setsid --wait "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
+  session_run "${log%.log}.state" "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   # 横幅写进日志本身,不只印在 stdout:这份结论以后会被单独读到(归档、断线重连),
   # 那时终端上那行 NOTE 早就没了,而一份降级腿的结论长得和健康腿一模一样。
   # 2026-08-03 我就是这样差点按「四审三腿 PASS」给权重,实际只有两腿睁着眼。
@@ -517,13 +532,32 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
 # 的子进程 ⇒ 下面的 `wait` 和 rc 语义一个字都不用改。
 # 注意 subkimi 里那套"先写裁决、超时也不亏"的兜底**防不了这个** ——
 # 被 SIGTERM 打死时那段抢救代码根本没机会跑。兜底装在了另一种失败模式上。
+
+# ── 腿自己把退出码落盘(track panel-roster-from-disk,2026-08-23)────────────
+# 根因:`wait_leg` 里的 `wait; rc=$?` 只有亲手起腿的那个进程拿得到 ⇒ 退出码是整套
+# 系统里**唯一不落盘的事实**,而花名册恰恰只需要它。控制器一死,它永久消失。
+#
+# ⚠️ 写入点必须在 **setsid 出去的那个会话里面**,不能在控制器里、也不能在
+# `run_leg` 的后台子 shell 里 —— 那两处都跟控制器同进程组,一起被杀。
+# 08-23 的真实时间线证伪了"控制器增量写"那个看起来对的方案:
+# 控制器死在**第一条腿交卷之前**,增量写和一次性写落盘字节数都是 0。
+session_run() {  # session_run <statefile> <cmd...>
+  local state="$1"; shift
+  setsid --wait bash -c '
+    st="$1"; shift
+    started="$(date -u +%FT%TZ)"
+    "$@"; rc=$?
+    printf "rc=%s\nstarted=%s\nfinished=%s\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st"
+    exit $rc
+  ' _ "$state" "$@"
+}
 LEG=(setsid --wait)
 declare -A LEG_PID
 launch_leg() {  # launch_leg <name>
   local name="$1" cmd="${LEG_CMD[$1]}" log="${LEG_LOG[$1]}" err="${LEG_ERR[$1]}"
   case "$name" in
     submimo|subkimi)
-      "${LEG[@]}" "$cmd" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err" &
+      session_run "${log%.log}.state" "$cmd" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err" &
       ;;
     subdeepseek)
       run_leg "$cmd" "$BIN/subdeepseek" "$log" "$err" "$name" &
@@ -541,6 +575,42 @@ wait_leg() {  # wait_leg <name>
   LEG_RC[$name]="$rc"
 }
 
+selected_identities() {
+  local name out="" family cmd
+  for name in "${LEGS[@]}"; do
+    [[ "${LEG_SELECTED[$name]}" -eq 1 ]] || continue
+    case "$name" in
+      submimo) family=xiaomi ;;
+      subdeepseek) family=deepseek ;;
+      subglm) family=zhipu ;;
+      subkimi) family=moonshot ;;
+    esac
+    cmd="$(basename "${LEG_CMD[$name]}")"
+    out+="${out:+,}$name($family/$cmd)"
+  done
+  printf '%s\n' "${out:-none}"
+}
+
+# ── plan:**派发之前**就落盘(track panel-roster-from-disk,2026-08-23)────────
+# 这一格的事实在派腿之前就全部已知(选腿逻辑跑在 launch_leg 之前)。写在这里,
+# 控制器之后死在哪一步都不影响"派了谁"这件事查得到 —— 08-23/08-19 两次事故
+# 丢掉的正是它:整轮零记录,而腿的完整日志就躺在盘上。
+#
+# 兜底的强度在这一格,不在腿那一格:就算哪天腿也死了、一份 state 都没有,
+# 花名册照样答得出"派了谁",只把那条腿标成 KILLED(未收尾)。
+PLAN_FILE="${LOG_PREFIX}.plan"
+{
+  printf 'task=%s\n' "$TASKNAME"
+  printf 'impact-risk=%s\n' "$IMPACT_RISK"
+  printf 'requested-budget=%s\n' "$REVIEW_BUDGET"
+  printf 'selected-count=%s\n' "$SELECTED_COUNT"
+  printf 'selected=%s\n' "$(selected_identities)"
+  printf 'snapshot-head=%s\n' "$HEAD_BEFORE"
+  for _leg in "${LEGS[@]}"; do
+    printf 'leg\t%s\t%s\t%s\n' "$_leg" "${LEG_SELECTED[$_leg]}" "${LEG_HEALTH[$_leg]}"
+  done
+} > "$PLAN_FILE"
+
 _launched=0
 for _leg in "${LEGS[@]}"; do
   [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
@@ -552,15 +622,6 @@ for _leg in "${LEGS[@]}"; do
   [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] && wait_leg "$_leg"
 done
 
-verdict_of() {  # verdict_of <log>; PASS/BLOCK/NEEDS_MORE_INFO/UNKNOWN
-  local found
-  # 只认独立裁决行。提示词和推理日志都可能原样出现
-  # "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"，子串匹配会把没交卷误记成 PASS。
-  found="$(grep -Eio '^[[:space:]]*(Conclusion|Verdict|结论)[[:space:]]*[：:][[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)[[:space:]]*$' "$1" 2>/dev/null \
-    | tail -n 1 | sed -E 's/[[:space:]]+$//' \
-    | grep -Eio '(PASS|BLOCK|NEEDS_MORE_INFO)$' || true)"
-  [[ -n "$found" ]] && printf '%s\n' "${found^^}" || printf 'UNKNOWN\n'
-}
 
 # Default high lane starts with two. Only evidence problems add one spare; we do
 # not turn a single provider failure into a mandatory all-four wait.
@@ -682,56 +743,15 @@ unset _leg
 # 手抄一份终端上的东西,抄错的那次不会有人发现。⇒ 机器写一行,verify.md 直接粘。
 # 注意:这里的 PASS 只表示**进程 rc=0**,不表示它给了裁决;裁决永远要自己读日志。
 ROSTER_FILE="${LOG_PREFIX}.roster"
-roster_entry() {  # roster_entry <name>
-  local name="$1" rc log state verdict
-  if [[ "${LEG_SELECTED[$name]}" -ne 1 ]]; then
-    if [[ "${LEG_HEALTH[$name]}" == "off" ]]; then printf '%s=off' "$name"
-    elif [[ "${LEG_HEALTH[$name]}" == "healthy" ]]; then printf '%s=SKIP(rotation)' "$name"
-    else printf '%s=SKIP(health:%s)' "$name" "${LEG_HEALTH[$name]}"; fi
-    return
-  fi
-  rc="${LEG_RC[$name]}"; log="${LEG_LOG[$name]}"
-  if [[ "$rc" -eq 0 ]]; then
-    verdict="$(verdict_of "$log")"
-    state="PASS(verdict=$verdict)"
-  else
-    state="FAIL(rc=$rc)"
-  fi
-  # 底座腿死了、聊天腿顶上来的:结论可以旅行,资格要跟着走(同 V19 的降级横幅)
-  if [[ -e "${log%.log}.agent.log" || -e "${log%.log}.agent.log.err" ]]; then
-    if [[ "$rc" -eq 0 ]]; then state="PASS(verdict=$verdict,降级:回落聊天腿,只看得见 diff)"
-    else state="FAIL(rc=$rc,降级:回落聊天腿也没成)"; fi
-  fi
-  printf '%s=%s' "$name" "$state"
-}
-selected_identities() {
-  local name out="" family cmd
-  for name in "${LEGS[@]}"; do
-    [[ "${LEG_SELECTED[$name]}" -eq 1 ]] || continue
-    case "$name" in
-      submimo) family=xiaomi ;;
-      subdeepseek) family=deepseek ;;
-      subglm) family=zhipu ;;
-      subkimi) family=moonshot ;;
-    esac
-    cmd="$(basename "${LEG_CMD[$name]}")"
-    out+="${out:+,}$name($family/$cmd)"
-  done
-  printf '%s\n' "${out:-none}"
-}
+# ── final:只有控制器活到这一步才写(escalation / HEAD_AFTER 也只有此刻才知道)
+# 缺了不是错 —— 它恰恰是"控制器没活到收尾"的证据,panel-roster 会照实说。
 {
-  echo "# panel-review 花名册($(date '+%F %T'))task=$TASKNAME"
-  echo "# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。"
-  echo "# impact-risk=$IMPACT_RISK requested-budget=$REVIEW_BUDGET selected-count=$SELECTED_COUNT"
-  echo "# selected=$(selected_identities)"
-  echo "# escalation=$ESCALATION_REASON"
-  echo "# snapshot=head:$HEAD_BEFORE"
-  echo "# 日志:${LOG_PREFIX}.*.log"
-  echo "$(roster_entry submimo) $(roster_entry subdeepseek) $(roster_entry subglm) $(roster_entry subkimi)"
-  if [[ -n "$HEAD_BEFORE" && -n "$HEAD_AFTER" && "$HEAD_BEFORE" != "$HEAD_AFTER" ]]; then
-    echo "# ⚠️ 评审期间 HEAD 从 $HEAD_BEFORE 移到 $HEAD_AFTER —— 各腿未必评的同一棵树。"
-  fi
-} > "$ROSTER_FILE"
+  printf 'escalation=%s\n' "$ESCALATION_REASON"
+  printf 'head-after=%s\n' "$HEAD_AFTER"
+} > "${LOG_PREFIX}.final"
+# 花名册**不再由内存渲染**:走和 panel-roster 完全同一条路(共享 lib 的 render_roster),
+# 保证"控制器当场写的"和"事后重建的"逐字节一样 —— 判据 R5b 守着这一条。
+render_roster "$LOG_PREFIX" > "$ROSTER_FILE"
 echo "  roster -> $ROSTER_FILE(各腿状态一行,粘进 verify.md,别再手写)"
 
 echo "  read all logs above, then arbitrate."

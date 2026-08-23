@@ -14,6 +14,7 @@ make_fixture() { # root
   local d="$1" b="$1/bin" repo="$1/repo"
   mkdir -p "$b" "$repo/tracks/current" "$d/raw" "$d/state"
   cp "$ROOT/bin/panel-review" "$b/panel-review"
+  cp "$ROOT/bin/_panel-roster-lib.sh" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   cp "$ROOT/bin/track-record" "$b/track-record"
   for leg in submimo subdeepseek subglm subkimi; do
     cat > "$b/$leg" <<'EOF'
