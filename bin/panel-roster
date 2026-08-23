@@ -13,7 +13,8 @@ usage() { cat >&2 <<'U'
 用法: panel-roster <日志前缀>
   例: panel-roster /root/aiwork/logs/panel-minanim-r3
 读 <前缀>.plan / <前缀>.<腿>.state / <前缀>.final,打印花名册到 stdout。
-派出去却没有 state 的腿印成 KILLED(未收尾) —— 不许读成通过。
+派出去却没有 state 的腿印成「未收尾(无 state:被砍或仍在跑)」—— 不许读成通过。
+盘上的信息区分不了"被砍"和"还在跑",所以它只说没收尾,不猜死因。
 U
 }
 [[ $# -eq 1 && "$1" != "-h" && "$1" != "--help" ]] || { usage; exit 64; }

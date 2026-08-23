@@ -13,7 +13,8 @@
 set -uo pipefail
 export ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ORACLE="$ROOT/tests/test-panel-roster.sh"
-TARGETS=("$ROOT/bin/panel-review" "$ROOT/bin/_panel-roster-lib.sh")
+# panel-roster 也在名单里:M13 要变异它的 usage 文本。**不在名单 = 变异了还不回去**
+TARGETS=("$ROOT/bin/panel-review" "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/panel-roster")
 
 declare -A BEFORE
 for f in "${TARGETS[@]}"; do BEFORE["$f"]="$(sha256sum "$f" | cut -d' ' -f1)"; done
@@ -181,6 +182,43 @@ p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_tex
 old = 'echo "# 日志:${prefix}.*.log"'
 if s.count(old) != 1: sys.exit(1)
 p.write_text(s.replace(old, 'echo "# logs:${prefix}.*.log"', 1))
+PY
+
+mutate M13 "R12a: panel-roster 的帮助文本" <<'PY'
+import os, pathlib, sys
+# 把帮助文本退回上一版行为(KILLED)。两条腿独立命中的就是这处文档与实现脱节。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-roster"); s = p.read_text()
+old = "派出去却没有 state 的腿印成「未收尾"
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, "派出去却没有 state 的腿印成 KILLED(未收尾", 1))
+PY
+
+mutate M14 "R12c: 没有 .final 时,不许断言控制器死了" <<'PY'
+import os, pathlib, sys
+# 把 escalation 退回"断言它死了"。第二轮评审进行中,这句话真的把一个活着的控制器说成死了。
+p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_text()
+old = 'esc="unknown(没有 .final:控制器没活到收尾,或仍在跑)"'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, 'esc="unknown(控制器没活到收尾)"', 1))
+PY
+
+mutate M15 "R12d: 没有 .final 时,selected 那行必须标明" <<'PY'
+import os, pathlib, sys
+# 拿掉"派发前快照"的标注 ⇒ 头又读起来像事实,而它补不进升级追加的腿。
+p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_text()
+old = '    [[ -n "$sel" ]] && sel="$sel(派发前快照,.final 缺失时不含升级追加的腿)"\n'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, "", 1))
+PY
+
+mutate M16 "R13a: 一条腿都派不出去时" <<'PY'
+import os, pathlib, sys
+# 让"一条腿都没派出去"变成静默成功 —— 那正是"响亮失败"要防的:
+# 调用方拿 rc 判断,会以为审过了。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = '  [[ "$_evidence" -gt 0 ]] || PANEL_RC=1\n'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, "", 1))
 PY
 
 restore

@@ -282,8 +282,10 @@ echo "[R12] 第二轮评审的发现:说盘上证据支持不了的话(本单自
 # 读它的人会被误导,而判据只看输出、看不见文档。
 check "R12a: panel-roster 的帮助文本里不许再出现 KILLED(与 R7d 实际行为一致)" \
   $(! grep -q 'KILLED' "$ROOT/bin/panel-roster"; echo $?)
-check "R12b: 共享库里也不许有 KILLED 残留" \
-  $(! grep -q 'KILLED' "$ROOT/bin/_panel-roster-lib.sh"; echo $?)
+# ⚠️ 只看**会被打印出来的**行:第一版连注释都查,于是库里那句讲历史的
+# "两条腿被印成 KILLED" 也算残留 —— **误报**,而带误报的闸会逼出绕开它的习惯。
+check "R12b: 共享库**印得出来的**字里不许有 KILLED 残留(注释讲历史不算)" \
+  $(! grep -vE '^[[:space:]]*#' "$ROOT/bin/_panel-roster-lib.sh" | grep -q 'KILLED'; echo $?)
 
 # R12c/R12d:`.final` 缺失时的两句头,都不许把"没有证据"说成"有证据".
 #   · escalation 原话 "unknown(控制器没活到收尾)" —— 第二轮评审进行中就被印出来过,

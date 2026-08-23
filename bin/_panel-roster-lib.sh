@@ -92,7 +92,15 @@ render_roster() {  # render_roster <prefix>
     [[ -n "$(_plan_kv "$final" selected)" ]] && sel="$(_plan_kv "$final" selected)"
     [[ -n "$(_plan_kv "$final" selected-count)" ]] && sel_count="$(_plan_kv "$final" selected-count)"
   else
-    esc="unknown(控制器没活到收尾)"; head_after=""
+    # ⚠️ 缺 .final 只证明"**没有**收尾记录",不证明控制器死了 —— 它也可能**还在跑**。
+    # 原话是 "unknown(控制器没活到收尾)",而 2026-08-23 第二轮评审**进行中**
+    # 我用这命令看进度,它就把一个活得好好的控制器说成死了(评审腿 subdeepseek F4)。
+    # 这道闸对腿守着 R7d(不许断言死因),对控制器自己却没守。判据 R12c/R12c2。
+    esc="unknown(没有 .final:控制器没活到收尾,或仍在跑)"; head_after=""
+    # 同理:plan 是**派发前**写的,升级追加的增补腿不在里面。腿那行靠盘上的 state
+    # 补得齐(R9),但这两句头补不了 ⇒ 必须标明它是快照,不许读起来像事实(F2/R12d)。
+    [[ -n "$sel" ]] && sel="$sel(派发前快照,.final 缺失时不含升级追加的腿)"
+    [[ -n "$sel_count" ]] && sel_count="$sel_count(派发前快照)"
   fi
   echo "# panel-review 花名册($(date '+%F %T'))task=$(_plan_kv "$plan" task)"
   echo "# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。"
