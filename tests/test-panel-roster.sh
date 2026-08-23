@@ -113,12 +113,15 @@ rm -f "$pre.subglm.state"
 out7="$(roster_cmd "$d/bin" "$pre")"
 check "R7: 那条腿仍然出现在花名册里(不许整行消失)" \
   $(grep -q 'subglm' <<<"$out7"; echo $?)
-# ⚠️ 这一条单独看是"空输出也能绿"的瞎断言;它靠上下 R7a/R7c 两条正向断言兜住
-#    (行必须在 + 必须印成未收尾),三条一起才咬得住。别单独引用它。
+# ⚠️ 这一条单独看是"空输出也能绿"的瞎断言;它靠紧随其后的两条 R7 断言兜住
+#    (不许印成 PASS + 必须印成未收尾),三条一起才咬得住。别单独引用它。
+#    (2026-08-23:原文写的是"上下 R7a/R7c",而这份判据里从来没有叫 R7a/R7c 的断言。)
 check "R7: 缺 state **绝不许**被读成 PASS" \
   $(! grep -qE 'subglm=PASS' <<<"$out7"; echo $?)
-check "R7: 印成可识别的未收尾状态(KILLED/未收尾/NO_STATE 之一)" \
-  $(grep -qE 'subglm=(KILLED|未收尾|NO_STATE)' <<<"$out7"; echo $?)
+# ⚠️ 这里**不许**再把 KILLED 列成合格写法:R7d 专门禁止它(盘上证据说不了死因)。
+# 列着它 = 同一份判据里两条断言自相矛盾,而矛盾的那一半迟早被人拿去当依据。
+check "R7: 印成可识别的未收尾状态(未收尾/NO_STATE 之一)" \
+  $(grep -qE 'subglm=(未收尾|NO_STATE)' <<<"$out7"; echo $?)
 # R7d:**也不许反过来断言它死了**。盘上信息区分不了"被砍"和"还在跑",
 # 而 2026-08-23 派全员评审时,进行中的花名册把两条活着的腿印成了 KILLED ——
 # 这道闸自己犯了它要防的病:说了一句盘上证据支持不了的话。
@@ -145,9 +148,9 @@ norm() {  # 抹掉天然会变的两样:时间戳、fixture 的 HEAD
          -e 's@^# 日志:.*$@# 日志:<PREFIX>@' "$1"
 }
 if [[ -f "$golden" ]]; then
-  check "R5: 控制器正常收尾写出的花名册,与格式基线逐字节一致" \
+  check "R5: 控制器正常收尾写出的花名册,与格式基线**归一化后一致**" \
     $(diff -q <(norm "$pre5.roster") <(norm "$golden") >/dev/null; echo $?)
-  check "R5b: panel-roster 事后算出的,与控制器当场写的**完全一样**" \
+  check "R5b: panel-roster 事后算出的,与控制器当场写的**归一化后一致**" \
     $(diff -q <(norm "$pre5.roster") <(roster_cmd "$d5/bin" "$pre5" | norm /dev/stdin) >/dev/null; echo $?)
 else
   bad "R5: 缺格式基线 tests/fixtures/panel-roster-format.golden(本单要生成)"
@@ -286,6 +289,30 @@ check "R12a: panel-roster 的帮助文本里不许再出现 KILLED(与 R7d 实�
 # "两条腿被印成 KILLED" 也算残留 —— **误报**,而带误报的闸会逼出绕开它的习惯。
 check "R12b: 共享库**印得出来的**字里不许有 KILLED 残留(注释讲历史不算)" \
   $(! grep -vE '^[[:space:]]*#' "$ROOT/bin/_panel-roster-lib.sh" | grep -q 'KILLED'; echo $?)
+
+# R12f:**注释也要守,但只对"现在时"的那种。**
+# 2026-08-23 评审腿 subdeepseek 在 `bin/panel-review:601` 抓到一句**现在时**、
+# 描述现行行为的注释:"只把那条腿标成 KILLED(未收尾)" —— 与 R7d 和实际输出矛盾。
+# 而我那次"全盘搜一遍"**根本没扫到它**:我用了 `--include=*.md --include=*.sh`,
+# 而 `bin/` 下的工具**全是无扩展名脚本** ⇒ 半个仓没进搜索范围。
+# ⇒ 机械化的判法:bin/ 里凡是出现 KILLED 的行,**上下两行内必须有四位年份**
+#   (历史记账都带日期;而"这就是现在的行为"那种话不会带)。
+#   **它守的是日期邻近,不是时态**(2026-08-23 评审腿 subdeepseek/submimo 各自实测):
+#   一句带日期的现在时陈述照样过得去,一句不带日期的历史陈述反而被误伤。
+#   所以它是**启发式代理指标**,不是"现在时陈述"的判据 —— 别让它许诺给不了的东西。
+#   误报边界:真要写一句不带日期的历史陈述,补个日期即可 —— 成本一行,而它换来的是
+#   "陈述过期"这类病第一次有了机器在查。
+r12f_bad=0
+while IFS= read -r f; do
+  [[ -f "$f" ]] || continue
+  grep -q 'KILLED' "$f" 2>/dev/null || continue
+  # 取出每个命中行号,检查 ±2 行窗口里有没有 20xx 年份
+  while IFS=: read -r ln _; do
+    lo=$(( ln > 2 ? ln - 2 : 1 )); hi=$(( ln + 2 ))
+    sed -n "${lo},${hi}p" "$f" | grep -qE '20[0-9]{2}' || { r12f_bad=1; echo "    ↳ 无日期的 KILLED 陈述:$f:$ln"; }
+  done < <(grep -n 'KILLED' "$f")
+done < <(find "$ROOT/bin" -maxdepth 1 -type f)
+check "R12f: bin/ 里的 KILLED 行,上下两行内必须有四位年份(历史记账都带日期)" "$r12f_bad"
 
 # R12c/R12d:`.final` 缺失时的两句头,都不许把"没有证据"说成"有证据".
 #   · escalation 原话 "unknown(控制器没活到收尾)" —— 第二轮评审进行中就被印出来过,

@@ -221,6 +221,17 @@ if s.count(old) != 1: sys.exit(1)
 p.write_text(s.replace(old, "", 1))
 PY
 
+mutate M17 "R12f: bin/ 里的 KILLED 行,上下两行内必须有四位年份" <<'PY'
+import os, pathlib, sys
+# 把评审腿真正抓到的那句话原样放回去:一句**现在时**、描述现行行为、**不带日期**的注释。
+# 它躲过了 R7d(只看输出)、躲过了 R12a/R12b(只看另外两个文件),
+# 也躲过了我那次"全盘搜索"(--include 过滤把无扩展名的 bin/ 工具整个漏掉)。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = '花名册照样答得出"派了谁",只把那条腿标成「未收尾(无 state:被砍或仍在跑)」。'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, '花名册照样答得出"派了谁",只把那条腿标成 KILLED(未收尾)。', 1))
+PY
+
 restore
 echo
 for f in "${TARGETS[@]}"; do

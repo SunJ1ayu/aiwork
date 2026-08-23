@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "track": "panel-roster-doc-sync",
+  "run_id": "20260823-182012-3532220-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "panel-roster-doc-sync",
+  "started_at": "2026-08-23T10:20:12Z",
+  "finished_at": "2026-08-23T10:30:30Z",
+  "duration_ms": 618641,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "high",
+    "degraded": false,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "name": "subdeepseek",
+        "family": "deepseek",
+        "adapter": "subdeepseek-agent",
+        "model": null,
+        "state": "completed",
+        "exit_code": 0,
+        "verdict": "BLOCK",
+        "degraded": false,
+        "duration_ms": null,
+        "usage": {
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null,
+          "api_cost": null,
+          "billing_mode": null
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
