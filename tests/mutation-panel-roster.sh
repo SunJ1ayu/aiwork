@@ -23,15 +23,26 @@ restore() { for f in "${TARGETS[@]}"; do cp -f "$BACKUP/$(basename "$f")" "$f"; 
 trap restore EXIT
 
 BIT=0; MISS=0
+# 基线:没变异时判据说了什么。靶子名必须在这里面**字面**存在,否则就是靶子过期
+# (锚点会过期,靶子名一样会 —— 而靶子打偏的表现和"断言是摆设"一模一样)。
+BASELINE="$(bash "$ORACLE" 2>&1)"
+
 mutate() {  # mutate <编号> <该打红的断言关键字>  (python 从 stdin 喂)
   local id="$1" target="$2" py out
   py="$(cat)"
+  # ⚠️ 一律 `grep -F`(字面),**不许**把靶子当正则:断言名里有 `**整组**` 这种
+  # markdown 星号,BRE 会把 `*` 读成量词 ⇒ 静默匹配不上 ⇒ 一条**真咬住了**的
+  # 变异被报成漏网。2026-08-23 M11 第一次跑就撞上,查了半天才发现红检工具自己坏了。
+  if ! grep "PASS:" <<<"$BASELINE" | grep -qF -- "$target"; then
+    echo "  [漏网] $id 的靶子「$target」在基线里压根不是一条断言 —— **靶子名过期**"
+    MISS=$((MISS+1)); return
+  fi
   restore
   if ! printf '%s' "$py" | python3 - ; then
     echo "  [漏网] $id 的锚点没命中 —— **锚点过期本身就是问题**"; MISS=$((MISS+1)); restore; return
   fi
   out="$(bash "$ORACLE" 2>&1)"
-  if grep -q "FAIL:.*$target" <<<"$out"; then
+  if grep "FAIL:" <<<"$out" | grep -qF -- "$target"; then
     echo "  [OK]   $id -> 靶子「$target」如期红了"; BIT=$((BIT+1))
   else
     echo "  [漏网] $id -> 改坏了,而「$target」还是绿的 ⇒ 那条断言是摆设"; MISS=$((MISS+1))
@@ -137,6 +148,28 @@ p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_tex
 old = "未收尾(无 state:被砍或仍在跑)"
 if s.count(old) != 1: sys.exit(1)
 p.write_text(s.replace(old, "KILLED(未收尾,无 state)", 1))
+PY
+
+mutate M11 "R11b: **整组**吃了 SIGTERM" <<'PY'
+import os, pathlib, sys
+# 方案②的**第二种形态**:落盘挪出 setsid,但仍留在 run_leg 的后台子 shell 里。
+# 它躲得过 R1/R2(那里只打控制器本身,子 shell 活着),只有组信号才照得出来。
+# 2026-08-23 评审腿 subglm 的 agent 腿(超时被砍之前)在它自己的沙箱里试出这一手,
+# 当时判据 21 条全绿放行 —— 我复现了对照组,然后补了 R11。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+i = s.find("session_run() {")
+if i < 0: sys.exit(1)
+j = s.find("\n}\n", i)
+if j < 0: sys.exit(1)
+new = (
+    'session_run() {\n'
+    '  local state="$1"; shift\n'
+    '  setsid --wait "$@"\n'
+    '  local rc=$?\n'
+    '  printf "rc=%s\\nstarted=%s\\nfinished=%s\\n" "$rc" "$(date -u +%FT%TZ)" "$(date -u +%FT%TZ)" > "$state"\n'
+    '  return $rc'
+)
+p.write_text(s[:i] + new + s[j:])
 PY
 
 restore

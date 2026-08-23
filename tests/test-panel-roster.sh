@@ -224,6 +224,40 @@ check "R10: 全 off 时正常退出" $([[ "$rc10" -eq 0 ]]; echo $?)
 check "R10: 四条腿都印 off" \
   $([[ "$(grep -o '=off' <<<"$out10" | wc -l)" -eq 4 ]]; echo $?)
 
+# ---------------------------------------------------------------- R11
+echo "[R11] 杀法二:SIGTERM 打**整个进程组**(断线的杀法,不是 timeout 的)"
+# 为什么必须单独有这一条:R1/R2 用 `kill -TERM $ctl` 只打控制器**本身**,于是
+# `run_leg` 的后台子 shell 活了下来。把落盘从 setsid 里挪进那个子 shell,
+# **R1~R10 二十一条全绿放行**(2026-08-23 亲手跑过对照组)。
+# 而 panel-review 的规格白纸黑字写着"也不能在 run_leg 的后台子 shell 里",
+# 只是**没人守** —— 又一次「该问的写进了规格却没写进判据」。
+# 08-19 断线那次正是组信号(断线 SIGTERM 打整个进程组),前提探针实验 B 验过腿能活;
+# 这条把那次一次性的探针变成常驻的闸。红检 M11 咬它。
+d11="$(mktemp -d)"; make_fixture "$d11" 6 3
+pre11="$d11/raw/grpkill"
+setsid env "${common_env[@]}" "${only_glm[@]}" PANEL_STATE_DIR="$d11/state" \
+  bash "$d11/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
+  "$d11/task.md" "$d11/repo" "$pre11" >"$d11/ctl.out" 2>&1 &
+ctl11=$!
+sleep 2
+state11_before=0; [[ -e "$pre11.subglm.state" ]] && state11_before=1
+pgid11="$(ps -o pgid= -p "$ctl11" 2>/dev/null | tr -d ' ')"
+mypgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+# ⚠️ fail closed:拿不到 pgid、或者它跟判据自己同组,**绝不开枪** —— 那是自杀。
+# (08-18 用 `pkill -f` 干过一次,把判据自己打死了。宁可这条红。)
+if [[ -n "$pgid11" && -n "$mypgid" && "$pgid11" != "$mypgid" ]]; then
+  kill -TERM -"$pgid11" 2>/dev/null; killed11=$?
+else
+  killed11=1
+fi
+wait "$ctl11" 2>/dev/null
+sleep 8                                        # 等腿自己跑完(6 秒)+ 富余
+check "R11a: 控制器自成进程组,组信号打得出去(且没打在判据自己身上)" "$killed11"
+check "R11b: **整组**吃了 SIGTERM 之后,腿仍然把 state 写成了" \
+  $([[ "$state11_before" -eq 0 && -s "$pre11.subglm.state" ]]; echo $?)
+check "R11c: 花名册照样算得出真退出码(rc=3)" \
+  $(roster_cmd "$d11/bin" "$pre11" | grep -q 'subglm=FAIL(rc=3)'; echo $?)
+
 echo
 echo "---- 合计 PASS=$PASS FAIL=$FAIL ----"
 [[ "$FAIL" -eq 0 ]]
