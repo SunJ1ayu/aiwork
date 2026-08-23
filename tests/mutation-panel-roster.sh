@@ -172,6 +172,17 @@ new = (
 p.write_text(s[:i] + new + s[j:])
 PY
 
+mutate M12 "R5: 控制器正常收尾" <<'PY'
+import os, pathlib, sys
+# 改**键名**(不是值):`# 日志:` -> `# logs:`。
+# 归一化第一版把这一整行替换成固定串,于是这种改动 R5 完全看不见。
+# 这条变异守的是"norm 有没有抹过头"本身 —— 判据的判据。
+p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_text()
+old = 'echo "# 日志:${prefix}.*.log"'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, 'echo "# logs:${prefix}.*.log"', 1))
+PY
+
 restore
 echo
 for f in "${TARGETS[@]}"; do

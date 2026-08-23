@@ -56,6 +56,15 @@ only_glm=(PANEL_MIMO_LEG=off PANEL_KIMI_LEG=off PANEL_DEEPSEEK_LEG=off)
 # R5 的格式基线就会自己抖起来(2026-08-23 生成基线时当场撞上,连取两遍就不一样)。
 common_env=(PANEL_STAGGER_MAX=0 PANEL_SELECTION_START=0)
 
+# 等一个文件出现,**别用固定 sleep**:机器一忙,`sleep 2` 就可能不够(假红),
+# 而 `sleep 8` 等腿跑完同理。评审腿 subglm 指出这一条 —— 本机"判据自己会造抖动"
+# 已经记过账,而抖动最舒服的解释永远是"它只是抖",顺着走下一步就是调钝报警器。
+wait_for() {  # wait_for <文件> [最多秒]
+  local f="$1" max="${2:-30}" i=0
+  while [[ ! -s "$f" ]] && (( i < max * 5 )); do sleep 0.2; i=$((i+1)); done
+  [[ -s "$f" ]]
+}
+
 roster_cmd() { # roster_cmd <bindir> <prefix>
   "$1/panel-roster" "$2" 2>/dev/null
 }
@@ -70,15 +79,16 @@ env "${common_env[@]}" "${only_glm[@]}" PANEL_STATE_DIR="$d/state" \
   bash "$d/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
   "$d/task.md" "$d/repo" "$pre" >"$d/ctl.out" 2>&1 &
 ctl=$!
-sleep 2                                        # 此刻:腿还在睡,一条都没交卷
+wait_for "$pre.plan" 30                        # 等 plan 落盘(腿还在睡 6 秒,一条都没交卷)
 
+# 「在任何一条腿交卷之前」不是靠掐表证明的,是靠**此刻盘上还没有任何 state** 证明的。
 check "R3: plan 在**任何一条腿交卷之前**就已落盘" \
-  $([[ -s "$pre.plan" ]]; echo $?)
+  $([[ -s "$pre.plan" && ! -e "$pre.subglm.state" ]]; echo $?)
 state_before_kill=0; [[ -e "$pre.subglm.state" ]] && state_before_kill=1
 
 kill -TERM "$ctl" 2>/dev/null                  # 只打控制器(= timeout 的做法,已探针验过腿会活)
 wait "$ctl" 2>/dev/null
-sleep 8                                        # 等腿自己跑完(6 秒)+ 富余
+wait_for "$pre.subglm.state" 30                # 等腿自己跑完(睡 6 秒)——轮询,不掐表
 
 check "R2: state 由**腿自己**写 —— 控制器死后它才出现" \
   $([[ "$state_before_kill" -eq 0 && -s "$pre.subglm.state" ]]; echo $?)
@@ -124,6 +134,12 @@ env "${common_env[@]}" PANEL_STATE_DIR="$d5/state" \
   "$d5/task.md" "$d5/repo" "$pre5" >"$d5/ctl.out" 2>&1
 golden="$ROOT/tests/fixtures/panel-roster-format.golden"
 norm() {  # 抹掉天然会变的两样:时间戳、fixture 的 HEAD
+  # 这里是**整行替换**,看着像"抹过头了、键名回归就抓不到" —— 评审腿 subglm
+  # 第一轮就是这么报的,我也照着收紧过一版(只抹值、留键名)。
+  # **对照组证伪了它**:整行替换只在**匹配旧格式**时才发生,键名一改就不匹配、
+  # 原样留下、diff 当场红。两种写法的检出能力一样,所以退回原样,别留
+  # "我修了个洞"的假象。真正值钱的是这条发现逼出来的红检 M12(改键名 -> R5 红),
+  # 它现在守着这件事本身。
   sed -E -e 's/^# panel-review 花名册\(.*\)task=.*$/# panel-review 花名册(<TS>)task=<TASK>/' \
          -e 's/^# snapshot=head:.*$/# snapshot=head:<HEAD>/' \
          -e 's@^# 日志:.*$@# 日志:<PREFIX>@' "$1"
@@ -239,7 +255,7 @@ setsid env "${common_env[@]}" "${only_glm[@]}" PANEL_STATE_DIR="$d11/state" \
   bash "$d11/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
   "$d11/task.md" "$d11/repo" "$pre11" >"$d11/ctl.out" 2>&1 &
 ctl11=$!
-sleep 2
+wait_for "$pre11.plan" 30
 state11_before=0; [[ -e "$pre11.subglm.state" ]] && state11_before=1
 pgid11="$(ps -o pgid= -p "$ctl11" 2>/dev/null | tr -d ' ')"
 mypgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
@@ -251,7 +267,7 @@ else
   killed11=1
 fi
 wait "$ctl11" 2>/dev/null
-sleep 8                                        # 等腿自己跑完(6 秒)+ 富余
+wait_for "$pre11.subglm.state" 30              # 轮询,不掐表
 check "R11a: 控制器自成进程组,组信号打得出去(且没打在判据自己身上)" "$killed11"
 check "R11b: **整组**吃了 SIGTERM 之后,腿仍然把 state 写成了" \
   $([[ "$state11_before" -eq 0 && -s "$pre11.subglm.state" ]]; echo $?)
