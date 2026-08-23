@@ -598,7 +598,7 @@ selected_identities() {
 # 丢掉的正是它:整轮零记录,而腿的完整日志就躺在盘上。
 #
 # 兜底的强度在这一格,不在腿那一格:就算哪天腿也死了、一份 state 都没有,
-# 花名册照样答得出"派了谁",只把那条腿标成 KILLED(未收尾)。
+# 花名册照样答得出"派了谁",只把那条腿标成「未收尾(无 state:被砍或仍在跑)」。
 PLAN_FILE="${LOG_PREFIX}.plan"
 {
   printf 'task=%s\n' "$TASKNAME"
@@ -745,7 +745,8 @@ unset _leg
 # 注意:这里的 PASS 只表示**进程 rc=0**,不表示它给了裁决;裁决永远要自己读日志。
 ROSTER_FILE="${LOG_PREFIX}.roster"
 # ── final:只有控制器活到这一步才写(escalation / HEAD_AFTER 也只有此刻才知道)
-# 缺了不是错 —— 它恰恰是"控制器没活到收尾"的证据,panel-roster 会照实说。
+# 缺了不是错 —— 它说明**没有收尾记录**(控制器没活到收尾,**或者仍在跑**),
+# panel-roster 会照实说,不猜死因。
 {
   printf 'escalation=%s\n' "$ESCALATION_REASON"
   printf 'head-after=%s\n' "$HEAD_AFTER"
@@ -755,7 +756,9 @@ ROSTER_FILE="${LOG_PREFIX}.roster"
   printf 'selected-count=%s\n' "$SELECTED_COUNT"
 } > "${LOG_PREFIX}.final"
 # 花名册**不再由内存渲染**:走和 panel-roster 完全同一条路(共享 lib 的 render_roster),
-# 保证"控制器当场写的"和"事后重建的"逐字节一样 —— 判据 R5b 守着这一条。
+# 保证"控制器当场写的"和"事后重建的"**归一化后一致** —— 判据 R5b 守着这一条。
+# (不是字面逐字节:抬头嵌了渲染时间戳,两次渲染必然不同;R5b 的 norm 抹掉
+#  时间戳/HEAD/日志前缀三行再比。说"逐字节"会让人对这道闸产生错误预期。)
 render_roster "$LOG_PREFIX" > "$ROSTER_FILE"
 echo "  roster -> $ROSTER_FILE(各腿状态一行,粘进 verify.md,别再手写)"
 

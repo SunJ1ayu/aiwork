@@ -27,7 +27,17 @@ runlog: oracle-red-round2 rc=1 commit=4fd28b4 dirty=yes at=2026-08-23T09:28:01Z 
 runlog: redcheck-round2 rc=0 commit=c5750c0 dirty=yes at=2026-08-23T09:30:40Z file=tracks/panel-roster-from-disk/evidence/20260823T093040Z-01-redcheck-round2.txt
 runlog: oracle-green-round2 rc=0 commit=c5750c0 dirty=yes at=2026-08-23T09:36:38Z file=tracks/panel-roster-from-disk/evidence/20260823T093638Z-01-oracle-green-round2.txt
 runlog: tooling-suite-round2 rc=0 commit=c5750c0 dirty=yes at=2026-08-23T09:36:57Z file=tracks/panel-roster-from-disk/evidence/20260823T093657Z-01-tooling-suite-round2.txt
+runlog: redcheck-after-doc-sync rc=0 commit=2d9b076 dirty=yes at=2026-08-23T10:05:19Z file=tracks/archive/panel-roster-from-disk/evidence/20260823T100519Z-01-redcheck-after-doc-sync.txt
+runlog: tooling-suite-after-doc-sync rc=0 commit=2d9b076 dirty=yes at=2026-08-23T10:11:24Z file=tracks/archive/panel-roster-from-disk/evidence/20260823T101124Z-01-tooling-suite-after-doc-sync.txt
 ```
+
+**归档之后又追加的两份**(`*-after-doc-sync`):归档当天按第一性把「这一单改变的事实
+被复制到了几处」机械搜了一遍,改准了五处文档 + 一处**判据自相矛盾**
+(R7 仍把 `KILLED` 列成合格写法,而 R7d 禁止它)。动了判据就得重跑:
+红检 16 咬住 0 漏网、判据 33/33、19 套件全绿(含 workflow-docs 32)。
+> ⚠️ 两件事记在这儿:① **归档后的工件仍可被追加**(runlog 照样往 archive/ 里写),
+> 所以"归档=冻结"是错觉;② 正因为如此,**收据区会在归档之后过期** ——
+> 这次就是 `track-guard` 规矩 5b 当场拦下我的,不是我自己想起来的。
 
 **红的那几份一份没藏**(规矩 5b):
 
@@ -82,7 +92,9 @@ submimo=FAIL(rc=124) subdeepseek=PASS(verdict=BLOCK) subglm=PASS(verdict=UNKNOWN
   > 控制器内存里,随它一起没。
 
 - **第二轮花名册**(这一次控制器活到了收尾,`.roster` 是它自己写的,与
-  `panel-roster` 事后重建逐字节一致 —— R5b 守着这一条):
+  `panel-roster` 事后重建**归一化后一致** —— R5b 守着这一条。
+  2026-08-23 track `panel-roster-doc-sync` 更正:原文写"逐字节一致"是言过其实,
+  R5b 两边都过 `norm`,抬头嵌着渲染时间戳,字面逐字节根本不可能):
 
 ```
 # panel-review 花名册(2026-08-23 17:26:38)task=panel-roster-from-disk
