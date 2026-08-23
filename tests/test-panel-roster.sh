@@ -274,6 +274,65 @@ check "R11b: **整组**吃了 SIGTERM 之后,腿仍然把 state 写成了" \
 check "R11c: 花名册照样算得出真退出码(rc=3)" \
   $(roster_cmd "$d11/bin" "$pre11" | grep -q 'subglm=FAIL(rc=3)'; echo $?)
 
+# ---------------------------------------------------------------- R12
+echo "[R12] 第二轮评审的发现:说盘上证据支持不了的话(本单自己那条原则)"
+# R12a:usage 文本必须和实际输出对得上。
+# `bin/panel-roster` 的帮助里还写着"印成 KILLED",而 R7d **专门禁止**这个词 ——
+# 两条腿(submimo F-1 / subdeepseek F1)独立命中同一处。文档留在上一版行为上,
+# 读它的人会被误导,而判据只看输出、看不见文档。
+check "R12a: panel-roster 的帮助文本里不许再出现 KILLED(与 R7d 实际行为一致)" \
+  $(! grep -q 'KILLED' "$ROOT/bin/panel-roster"; echo $?)
+check "R12b: 共享库里也不许有 KILLED 残留" \
+  $(! grep -q 'KILLED' "$ROOT/bin/_panel-roster-lib.sh"; echo $?)
+
+# R12c/R12d:`.final` 缺失时的两句头,都不许把"没有证据"说成"有证据".
+#   · escalation 原话 "unknown(控制器没活到收尾)" —— 第二轮评审进行中就被印出来过,
+#     而那个控制器活得好好的、只是在等腿(subdeepseek F4)。
+#     **这道闸对腿守了 R7d,对控制器自己没守。**
+#   · selected/selected-count 在 .final 缺失时取的是**派发前**的 plan 快照,
+#     升级追加的腿不在里面,而头里读起来像事实(subdeepseek F2)。
+d12="$(mktemp -d)"; mkdir -p "$d12/raw"
+cat > "$d12/raw/nofinal.plan" <<'PLAN'
+task=t
+impact-risk=high
+requested-budget=2
+selected-count=2
+selected=submimo(xiaomi/submimo),subdeepseek(deepseek/subdeepseek)
+snapshot-head=abc123
+leg	submimo	1	healthy
+leg	subdeepseek	1	healthy
+leg	subglm	0	healthy
+leg	subkimi	0	off
+PLAN
+printf 'rc=0\nstarted=..\nfinished=..\n' > "$d12/raw/nofinal.submimo.state"
+printf 'rc=0\nstarted=..\nfinished=..\n' > "$d12/raw/nofinal.subdeepseek.state"
+printf 'rc=5\nstarted=..\nfinished=..\n' > "$d12/raw/nofinal.subglm.state"   # 升级追加的腿,跑了还失败了
+out12="$("$ROOT/bin/panel-roster" "$d12/raw/nofinal" 2>&1)"
+check "R12c: 没有 .final 时,不许断言控制器死了(它也可能还在跑)" \
+  $(! grep -qE '^# escalation=unknown\(控制器没活到收尾\)$' <<<"$out12"; echo $?)
+check "R12c2: 但也必须说清楚这一轮**没有**收尾记录(不许假装正常)" \
+  $(grep -qE '^# escalation=.*(没有|无) \.final' <<<"$out12"; echo $?)
+check "R12d: 没有 .final 时,selected 那行必须标明它是**派发前**的快照" \
+  $(grep -qE '^# selected=.*派发前' <<<"$out12"; echo $?)
+check "R12e: 而腿那行照旧靠 state 说真话(升级腿的失败不许隐身)" \
+  $(grep -q 'subglm=FAIL(rc=5)' <<<"$out12"; echo $?)
+
+# ---------------------------------------------------------------- R13
+echo "[R13] 全 off 的**控制器路径**(R10 只测了渲染路径 —— subdeepseek F3:只堵了一半)"
+d13="$(mktemp -d)"; make_fixture "$d13" 0 0
+pre13="$d13/raw/alloff"
+env "${common_env[@]}" PANEL_MIMO_LEG=off PANEL_KIMI_LEG=off PANEL_DEEPSEEK_LEG=off PANEL_GLM_LEG=off \
+  PANEL_STATE_DIR="$d13/state" \
+  bash "$d13/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
+  "$d13/task.md" "$d13/repo" "$pre13" >"$d13/ctl.out" 2>&1
+rc13=$?
+check "R13a: 一条腿都派不出去时,控制器**响亮地失败**(budget>=1 却 0 条 ⇒ 非零)" \
+  $([[ "$rc13" -ne 0 ]]; echo $?)
+check "R13b: 而且仍然留下了 plan(不是连派发都没走到就静默退出)" \
+  $([[ -s "$pre13.plan" ]]; echo $?)
+check "R13c: 也仍然写了花名册,四条腿照实印 off" \
+  $([[ -s "$pre13.roster" ]] && [[ "$(grep -o '=off' "$pre13.roster" | wc -l)" -eq 4 ]]; echo $?)
+
 echo
 echo "---- 合计 PASS=$PASS FAIL=$FAIL ----"
 [[ "$FAIL" -eq 0 ]]
