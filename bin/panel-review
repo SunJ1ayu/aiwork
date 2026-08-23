@@ -553,7 +553,6 @@ session_run() {  # session_run <statefile> <cmd...>
     exit $rc
   ' _ "$state" "$@"
 }
-LEG=(setsid --wait)
 declare -A LEG_PID
 launch_leg() {  # launch_leg <name>
   local name="$1" cmd="${LEG_CMD[$1]}" log="${LEG_LOG[$1]}" err="${LEG_ERR[$1]}"
