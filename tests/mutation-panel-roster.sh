@@ -44,18 +44,21 @@ echo "== 红检开始(花名册不依赖控制器存活)=="
 mutate M1 "R2: state 由" <<'PY'
 import os, pathlib, sys
 p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
-old = '    printf "rc=%s\\nstarted=%s\\nfinished=%s\\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st"\n'
-if s.count(old) != 1: sys.exit(1)
-p.write_text(s.replace(old, "", 1))
+# 锚点只贴不易变的那一小段(改过两次原子写,长锚点每次都过期)
+i = s.find('printf "rc=%s')
+if i < 0: sys.exit(1)
+j = s.index("\n", i) + 1
+p.write_text(s[:i] + s[j:])
 PY
 
 mutate M2 "R1: 控制器被砍之后" <<'PY'
 import os, pathlib, sys
 # 方案②「控制器增量写」—— 看起来对,实际修不好:把落盘从 setsid 里挪回控制器
 p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
-old = '    printf "rc=%s\\nstarted=%s\\nfinished=%s\\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st"\n'
-if s.count(old) != 1: sys.exit(1)
-s = s.replace(old, "", 1)
+i = s.find('printf "rc=%s')
+if i < 0: sys.exit(1)
+j = s.index("\n", i) + 1
+s = s[:i] + s[j:]
 old2 = '  wait "${LEG_PID[$name]}"; rc=$?\n  LEG_RC[$name]="$rc"\n'
 if s.count(old2) != 1: sys.exit(1)
 p.write_text(s.replace(old2, old2 + '  printf "rc=%s\\n" "$rc" > "${LEG_LOG[$name]%.log}.state"\n', 1))
@@ -76,9 +79,9 @@ mutate M4 "R7: 印成可识别的未收尾" <<'PY'
 import os, pathlib, sys
 # 缺 state 读成 PASS —— 这正是这道闸存在的理由
 p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_text()
-old = "    printf '%s=KILLED(未收尾,无 state)' \"$name\"\n"
+old = "未收尾(无 state:被砍或仍在跑)"
 if s.count(old) != 1: sys.exit(1)
-p.write_text(s.replace(old, "    printf '%s=PASS(verdict=UNKNOWN)' \"$name\"\n", 1))
+p.write_text(s.replace(old, "PASS(verdict=UNKNOWN)", 1))
 PY
 
 mutate M5 "R5: 控制器正常收尾" <<'PY'
@@ -116,6 +119,24 @@ p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_tex
 old = '  echo "# 日志:${prefix}.*.log"\n'
 if s.count(old) != 1: sys.exit(1)
 p.write_text(s.replace(old, '  echo "# 日志:${prefix}.*.log($RANDOM)"\n', 1))
+PY
+
+mutate M9 "R9a: 盘上有 state 的增补腿" <<'PY'
+import os, pathlib, sys
+# 拿掉"盘上有 state = 它真的跑过"这条规则 ⇒ 增补腿重新隐身(评审腿 F1 那个回归)
+p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_text()
+old = '  [[ -s "$state" ]] && selected=1\n'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, "", 1))
+PY
+
+mutate M10 "R7d: 不许断言死因" <<'PY'
+import os, pathlib, sys
+# 标签改回"断言它死了" = 说一句盘上证据支持不了的话
+p = pathlib.Path(os.environ["ROOT"], "bin/_panel-roster-lib.sh"); s = p.read_text()
+old = "未收尾(无 state:被砍或仍在跑)"
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, "KILLED(未收尾,无 state)", 1))
 PY
 
 restore

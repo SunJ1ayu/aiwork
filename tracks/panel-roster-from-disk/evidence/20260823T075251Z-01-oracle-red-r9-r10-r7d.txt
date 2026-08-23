@@ -1,0 +1,42 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    oracle-red-r9-r10-r7d
+cmd:     bash tests/test-panel-roster.sh
+cwd:     /root/aiwork(仓根)
+commit:  bbdcdcd
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-23T07:52:51Z
+---------------- 输出开始 ----------------
+=== 花名册不依赖控制器存活 ===
+[R1/R2/R3] 控制器死在第一条腿交卷之前 —— 复刻 08-23 的真实时间线
+  PASS: R3: plan 在**任何一条腿交卷之前**就已落盘
+  PASS: R2: state 由**腿自己**写 —— 控制器死后它才出现
+  PASS: R1: 控制器被砍之后,花名册仍然算得出来,且退出码是真的(rc=3)
+  PASS: R1b: 走的确实是 run_leg 那条路(subglm 被选中,不是 submimo 顶包)
+[R4] 花名册是纯函数:同样的盘上状态,连算两次逐字节相同
+  PASS: R4: 两次输出逐字节相同(抹掉渲染时间戳之后)
+[R7] 腿也没留下 state(最坏情况)—— 必须说人话,不许印成 PASS、不许整行消失
+  PASS: R7: 那条腿仍然出现在花名册里(不许整行消失)
+  PASS: R7: 缺 state **绝不许**被读成 PASS
+  PASS: R7: 印成可识别的未收尾状态(KILLED/未收尾/NO_STATE 之一)
+  FAIL: R7d: 不许断言死因(没有证据说明它是被砍的还是还在跑)
+[R5] 正常路径下花名册**格式**不许变(verify.md 里粘的那行是下游)
+  PASS: R5: 控制器正常收尾写出的花名册,与格式基线逐字节一致
+  PASS: R5b: panel-roster 事后算出的,与控制器当场写的**完全一样**
+[R6] agent 腿挂了回落聊天腿:两份 state 各自归位,降级标记不丢
+  PASS: R6: 底座腿那次的 state 单独留档(.agent.state)
+  PASS: R6: 回落后聊天腿的 state 也在
+  PASS: R6: 花名册仍然标出降级(不许把降级腿说成健康腿)
+[R8] 共享库缺失必须 fail closed(2026-08-23 自己踩出来的)
+  PASS: R8: 缺共享库时走的是 fail-closed 那条路(专用退出码 70)
+  PASS: R8: 而且是**我们自己**拒绝的,不是 bash 顺带报的错
+[R9] 升级追加的增补腿不许隐身(评审腿 subdeepseek F1 抓到的真回归)
+  FAIL: R9a: 盘上有 state 的增补腿,绝不许印成 SKIP(rotation)
+  FAIL: R9b: 而且它的失败要印出来(rc=5 不许隐身)
+  PASS: R9c: 没派也没 state 的腿仍然照实印 off
+[R10] 一条腿都没派(全 off)也要照实印,不许炸(评审腿 F4 的覆盖缺口)
+  PASS: R10: 全 off 时正常退出
+  PASS: R10: 四条腿都印 off
+
+---- 合计 PASS=18 FAIL=3 ----
+---------------- 输出结束 ----------------
+runlog: oracle-red-r9-r10-r7d rc=1 commit=bbdcdcd dirty=yes at=2026-08-23T07:52:51Z file=tracks/panel-roster-from-disk/evidence/20260823T075251Z-01-oracle-red-r9-r10-r7d.txt
