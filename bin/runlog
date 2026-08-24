@@ -8,6 +8,11 @@
 #
 #   runlog [--final] -t <track> [-n <slug>] [--repo <dir>] -- <命令...>
 #
+# ⚠️ **跑 `--final` 的那段时间里,任何人都不许写这个仓库** —— 包括并发的后台任务、
+#    panel-review 收尾往 observations 写、以及你自己顺手编辑工件。跑完发现仓库变过,
+#    它会判 `source-stable: no` 并把 rc 变成 **65**(命令本身的 rc 另记在 command-rc)。
+#    那不是「命令失败了」,是「这遍不能当最终证据」。2026-08-24 一天撞两次立的。
+#
 # 它做四件事:
 #   1. 在**跑之前**记下 commit 和工作树脏不脏(顺序不能反 —— 收据文件本身会弄脏工作树);
 #   2. 跑命令,输出先在仓外缓冲；扫描安全后再回显并写入收据(stdout/stderr 合并);
@@ -199,6 +204,27 @@ if [ "$FINAL" -eq 1 ]; then
   if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ] || [ "$SOURCE_BEFORE" != "$SOURCE_AFTER" ]; then
     SOURCE_STABLE=no
     [ "$RC" -ne 0 ] || RC=65
+    # 🔴 **当场把话说清楚,别只把 rc 悄悄改成 65。**
+    #    收据文件里本来就写着 `source-stable: no`,可 2026-08-24 那天我两次撞上 65,
+    #    看着收据也没懂,还得 `sed -n` 翻这个文件才明白 —— 缺的从来不是记录,
+    #    是**跑的人当场看得见的一句人话**。
+    #    打到 stderr:stdout 已经 tee 进收据了,而这段是给人看的,不该混进证据。
+    {
+      printf '\n'
+      printf 'runlog: 🔴 这份 --final 收据不算数(rc=65)——跑的过程中,这个仓库被改动过。\n'
+      printf '        --final 的意思是「这是最后一遍」,而它跑的那个快照已经不是现在这个了。\n'
+      [ "$HEAD_BEFORE" != "$HEAD_AFTER" ] && \
+        printf '        变的是 HEAD:%s → %s\n' "${HEAD_BEFORE:0:7}" "${HEAD_AFTER:0:7}"
+      [ "$SOURCE_BEFORE" != "$SOURCE_AFTER" ] && \
+        printf '        变的是工作树里的源码(收据文件自己已排除在外,不是它造成的)。\n'
+      printf '        怎么办:让工作树静下来,确认没人在写,再重跑一遍。\n'
+      printf '        常见元凶(按撞见频次):\n'
+      printf '          · 并发的后台任务 —— 总跑/回归/红检和这一趟同时在跑;\n'
+      printf '          · panel-review 收尾时往仓内 tracks/*/observations/ 写事件;\n'
+      printf '          · **自己**在收据跑的过程中编辑 verify.md / 工件。\n'
+      printf '        命令本身的退出码是 %s,已如实记在收据的 command-rc 里 —— \n' "$COMMAND_RC"
+      printf '        65 说的是「这遍不能当最终证据」,不是「你的命令失败了」。\n'
+    } >&2
   fi
   FINAL_FIELD=" final=yes"
 fi

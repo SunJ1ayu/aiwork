@@ -110,6 +110,14 @@ panel-roster <日志前缀>        # 事后重建;与驱动自己写的 .roster 
 - **反锚定泄漏报警**:仓里存在 `verify.md` / `*my-review*` 时报 `WARNING: anchor leak`。
   **正确节奏是先派发、后写 verify.md**;07-21 就是先 commit 了 verify.md 才补发 chat 腿,
   DeepSeek 直接引用它当证据,那一腿的"独立"作废。报警只提醒不阻断。
+  > 🔴 **「派发前把 verify.md 回退掉」挡不住它(2026-08-24 实证)。** 那天我照这条做了 ——
+  > 派发前 `git checkout` 把 verify.md 回到 HEAD、自审正本放仓外 —— **两轮仍然都报 leak**。
+  > 因为引擎内联的是**整份 diff**:`PANEL_DIFF_BASE..HEAD` 区间里**任何一版** verify.md
+  > 都会进 prompt,`git checkout` 只管得住工作树那一份。
+  > 想真干净只有两条路:**① 让 verify.md 在整个 diff 区间里都还没被写过**
+  > (先派发、后落工件 —— 这才是那句"正确节奏"的完整含义);
+  > ② 把 diff base 选在最后一次写 verify.md 之后(**通常不行,会漏掉实现**)。
+  > 做不到就**如实记账**:泄漏了什么、影响多大。那比在 verify 里写"已反锚定"强。
 
 ### 3. 与自己那份逐条对账
 他们是顾问,不是投票人;**主 agent 是唯一仲裁者。** 每条:
