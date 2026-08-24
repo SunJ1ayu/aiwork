@@ -1854,7 +1854,9 @@ v22_anchor_leak_sees_committed_track() {
   cp "$BIN/panel-review" "$pb/panel-review"
   cp "$BIN/_panel-roster-lib.sh" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm subkimi; do
-    printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
+    # 桩把自己看见的 PANEL_DIFF_BASE 记进日志:V22d 要的就是"腿到底拿到了什么"。
+    printf '#!/bin/bash\necho "STUB PASS diffbase=${PANEL_DIFF_BASE:-UNSET}" > "$3"\nexit 0\n' \
+      > "$pb/$leg"; chmod +x "$pb/$leg"
   done
   # 本机默认形状:在 main 上干活(main == HEAD ⇒ PANEL_DIFF_BASE 那一臂结构上不存在)、
   # 工作区干净(verify.md 已提交 ⇒ status 那一臂也照不到)。08-05 实测泄漏就长这样。
@@ -1877,6 +1879,16 @@ v22_anchor_leak_sees_committed_track() {
   fi
   # 警告只是提醒,不阻断
   [[ -s "$d/L1.submimo.log" ]]; check "V22b: 报警不阻断派发" $?
+
+  # V22d(2026-08-24,track workflow-gates-say-why):**同一次运行**再钉一件事 ——
+  # 这个默认形状里 PANEL_DIFF_BASE 压根没被设上(HEAD == 默认分支 ⇒ 自动设那一臂
+  # 结构上不成立),所以 chat 腿的 diff 是 `git diff HEAD` = 只有未提交改动,
+  # **已提交的 verify.md 不在 chat 腿的 diff 里**。上面 V22b 又证明它照样泄漏 ——
+  # 两条合起来才说得清泄漏的真实通道:底座腿自己读树,不是"整份 diff 被内联"。
+  # 我 08-24 把那句推论写成事实、还写进了 SKILL.md,靠 panel 一条腿读源码才揪回来。
+  # 断言查的是**腿实际拿到的环境**,不是控制台措辞。
+  grep -q 'diffbase=UNSET' "$d/L1.submimo.log"
+  check "V22d: HEAD==默认分支时不自动设 PANEL_DIFF_BASE(chat 腿只看未提交改动)" $?
   rm -rf "$d"
 }
 

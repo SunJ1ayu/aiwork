@@ -25,6 +25,20 @@ ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 
+# stderr 上印出来的每一个 `rc=<数字>`,都必须等于这次运行**真实的**退出码。
+# 2026-08-24 立(panel subdeepseek 抓到):漂移那段人话把 65 写死了,而 65 只在
+# **命令自己绿**的时候才加(`[ "$RC" -ne 0 ] || RC=65`)。命令失败 + 漂移时,
+# 屏幕上写着 rc=65、`echo $?` 给的是 7、收据里也是 7 —— 一个屏幕上找不着落点的数,
+# 正是本单要消灭的那种「撞上看不懂」。
+# 断言故意只查数、不查措辞:数字对不对机器判得了,话说得好不好判不了。
+all_rc_tokens_equal() {  # all_rc_tokens_equal <errfile> <expected-rc>
+  local n=0 tok
+  while read -r tok; do
+    n=$((n+1)); [[ "${tok#rc=}" == "$2" ]] || return 1
+  done < <(grep -o 'rc=[0-9]\+' "$1")
+  [[ "$n" -gt 0 ]]   # 一个都没印也算没通过:否则删光提示反而"绿"了
+}
+
 newrepo() {  # 干净仓 + 一个现成 track,**工作树全干净**(R3 靠这个)
   local d; d="$(mktemp -d)"
   ( cd "$d"
@@ -257,6 +271,41 @@ r8_final_binds_the_existing_last_run() {
 
   # A5:帮助文本要提这件事,否则下一个人还得靠撞。
   "$RUNLOG" --help 2>&1 | grep -qE '并发|同时|静下来|别写'; check "A5: --help 提到 final 期间不许并发写入" $?
+
+  # ── A6:命令自己失败 + 漂移 ⇒ 屏幕上印的 rc 必须是**真的那个** ───────────────
+  # 这一路和 A1 只差一件事:命令自己红了。判定不变(rc 保持命令的),
+  # 所以那段人话里凡是出现的 rc,都得跟着变 —— 写死一个 65 就是在指路指到沟里。
+  rm -rf "$d"; d="$(newrepo)"
+  errf="$(mktemp)"
+  ( cd "$d" && "$RUNLOG" --final -t t -n driftfail -- \
+      bash -c 'printf "mutation\n" >> app.txt; exit 7' ) >/dev/null 2>"$errf"; rc=$?
+  check "A6: 命令失败+漂移 ⇒ 退出码仍是命令自己的 7(判定一个字没动)" $([[ $rc -eq 7 ]]; echo $?)
+  all_rc_tokens_equal "$errf" 7; check "A6: stderr 上每个 rc= 都等于真实退出码(不许写死 65)" $?
+  grep -qE '重跑|不算数|作废' "$errf"; check "A6: 这一路照样说了该怎么办" $?
+  f="$(receipt_of "$d")"
+  grep -q '^command-rc: 7$' "$f"; check "A6: 收据如实记命令 rc=7" $?
+  grep -q '^source-stable: no$' "$f"; check "A6: 收据仍记 source-stable: no" $?
+  rm -f "$errf"
+
+  # ── A7:**只有 HEAD 变了**(工作树一字未动)———— 这条分支此前一次都没跑过 ────
+  # 代码里写了两个条件行(HEAD 变 / 工作树变),A1~A6 造的场景全是后者。
+  # 空提交是唯一能单独触发前者的造法:HEAD 变了,树逐字节没变。
+  rm -rf "$d"; d="$(newrepo)"
+  errf="$(mktemp)"
+  local h_before h_after
+  h_before="$(git -C "$d" rev-parse HEAD)"
+  ( cd "$d" && "$RUNLOG" --final -t t -n headmove -- \
+      git commit -q --allow-empty -m during-run ) >/dev/null 2>"$errf"; rc=$?
+  h_after="$(git -C "$d" rev-parse HEAD)"
+  check "A7: 前置条件成立 —— HEAD 真的变了" $([[ "$h_before" != "$h_after" ]]; echo $?)
+  check "A7: 只挪 HEAD 也算漂移(命令绿 ⇒ rc=65)" $([[ $rc -eq 65 ]]; echo $?)
+  grep -qE "${h_before:0:7}.*${h_after:0:7}" "$errf"
+  check "A7: stderr 把变化前后的 HEAD 都印出来了(不是只说一句'变了')" $?
+  # 只咬"归因"那一行。第一版我写的是 `! grep -q '工作树'`,当场红 —— 而红的原因是
+  # 每一路都会打的「怎么办:让工作树静下来」也含这三个字:**误报是我自己造的**(第 N 次)。
+  ! grep -q '变的是工作树' "$errf"; check "A7: 树没动就别说树变了(不许乱指元凶)" $?
+  all_rc_tokens_equal "$errf" 65; check "A7: stderr 上每个 rc= 都等于真实退出码" $?
+  rm -f "$errf"
 
   # ignored 运行产物不属于源码视图，常见缓存不制造误红。
   rm -rf "$d"; d="$(newrepo)"
