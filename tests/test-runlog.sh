@@ -226,6 +226,38 @@ r8_final_binds_the_existing_last_run() {
   grep -q '^command-rc: 0$' "$f"; check "R8: 仍如实保留原命令 rc，没伪装成测试失败" $?
   grep -q '^source-stable: no$' "$f"; check "R8: 红因明确是源码漂移" $?
 
+  # ── A1~A4:漂移时必须**当场说人话**,不是只把 rc 悄悄改成 65 ────────────────
+  # 2026-08-24 立:那天两次撞上 rc=65(一次并行派了 panel、它往仓内 observations 写;
+  # 一次是我自己在收据跑的过程中编辑工件),两次都得翻 runlog 源码才明白 65 是什么意思。
+  # 收据文件里**本来就有** `source-stable: no` —— 缺的不是记录,是跑的人当场看得见的话。
+  rm -rf "$d"; d="$(newrepo)"
+  local errf outf
+  errf="$(mktemp)"; outf="$(mktemp)"
+  ( cd "$d" && "$RUNLOG" --final -t t -n speaks -- \
+      bash -c 'printf "mutation\n" >> app.txt' ) >"$outf" 2>"$errf"; rc=$?
+  check "A4: 判定没被动过,漂移仍然非零" $([[ $rc -ne 0 ]]; echo $?)
+  # A1 不查"有没有输出"、也不查长度 —— 那种断言凑几个字就能骗过(同族栽过)。
+  #    要求**同时**命中「处置」和「原因」两类词,即它真的说清了该怎么办、为什么。
+  grep -qE '重跑|不算数|作废' "$errf"; check "A1: stderr 说了该怎么办(重跑/不算数)" $?
+  grep -qE '并发|同时|别的|写入|改动' "$errf"; check "A1: stderr 说了为什么(跑的时候仓库被改了)" $?
+  f="$(receipt_of "$d")"
+  # A3:多打的话只能进 stderr。收据里该有的照旧,且**不许**混进那段人话。
+  grep -q '^source-stable: no$' "$f"; check "A3: 收据内容不受影响(source-stable 照旧)" $?
+  grep -q '^command-rc: 0$' "$f"; check "A3: 收据内容不受影响(command-rc 照旧)" $?
+  ! grep -qE '重跑|不算数|作废' "$f"; check "A3: 那段人话没有漏进收据文件" $?
+  rm -f "$errf" "$outf"
+
+  # A2:绿的那一路不许多嘴 —— 否则就是狼来了,下次没人看。
+  rm -rf "$d"; d="$(newrepo)"
+  errf="$(mktemp)"
+  ( cd "$d" && "$RUNLOG" --final -t t -n quiet -- true ) >/dev/null 2>"$errf"; rc=$?
+  check "A2: 源码没漂时 final 仍绿" $([[ $rc -eq 0 ]]; echo $?)
+  ! grep -qE '重跑|不算数|作废' "$errf"; check "A2: 绿的那一路不打漂移告警" $?
+  rm -f "$errf"
+
+  # A5:帮助文本要提这件事,否则下一个人还得靠撞。
+  "$RUNLOG" --help 2>&1 | grep -qE '并发|同时|静下来|别写'; check "A5: --help 提到 final 期间不许并发写入" $?
+
   # ignored 运行产物不属于源码视图，常见缓存不制造误红。
   rm -rf "$d"; d="$(newrepo)"
   printf 'runtime/\n' > "$d/.gitignore"; git -C "$d" add .gitignore; git -C "$d" commit -qm ignore
