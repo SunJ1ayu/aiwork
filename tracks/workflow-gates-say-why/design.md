@@ -32,10 +32,16 @@
 现有那句「正确节奏是先派发、后写 verify.md」不够 —— 它只说了"别在派发前写",
 没说**已经写过的也会跟着 diff 一起进 prompt**。补上:
 
-- 引擎内联的是**整份 diff**,所以 `PANEL_DIFF_BASE..HEAD` 区间里**任何一版**
-  verify.md 都会被评审腿看见,`git checkout` 回 HEAD 只挡得住工作树那一份;
-- 想真干净:要么让 verify.md 在**整个 diff 区间里都还没被写过**(先派发、后落工件),
-  要么把 diff base 选在最后一次写 verify.md 之后(**但那会漏掉实现,通常不行**);
+- ~~引擎内联的是**整份 diff**,所以 `PANEL_DIFF_BASE..HEAD` 区间里**任何一版**
+  verify.md 都会被评审腿看见~~ —— 🔴 **这句是错的,收 panel 时被证伪(见 verify.md 的
+  发现 F1)。** 我从"两轮都报 leak"反推出机制、没读源码就写成了事实,还顺手开出一条
+  假药方(把 diff base 往后挪)。留在这儿不删,是为了让下一个人看得见我错在哪一步。
+- 真实机制(逐条读过 `bin/subagent` / `bin/submimo-review` / `bin/panel-review` 源码):
+  底座腿**自己读树**(不吃 diff)⇒ 已提交的 verify.md 照样被读;chat 腿吃 diff,
+  但没设 `PANEL_DIFF_BASE` 时只有未提交改动,而本机 `master == HEAD` ⇒ 默认不会自动设;
+  那行 WARNING 来自 `anchor_leak_files` 的第三臂(扫已跟踪文件),和 diff 无关。
+  ⇒ `git checkout` 只挡工作树那一份,两条通道都堵不住。
+- 想真干净只有一条:让 verify.md 在**派发那一刻还没被写**(先派发、后落工件);
 - 做不到就**如实记账**:泄漏了什么、影响多大 —— 这比假装独立强。
 
 ## Key trade-offs / risks

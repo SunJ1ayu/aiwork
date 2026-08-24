@@ -112,12 +112,24 @@ panel-roster <日志前缀>        # 事后重建;与驱动自己写的 .roster 
   DeepSeek 直接引用它当证据,那一腿的"独立"作废。报警只提醒不阻断。
   > 🔴 **「派发前把 verify.md 回退掉」挡不住它(2026-08-24 实证)。** 那天我照这条做了 ——
   > 派发前 `git checkout` 把 verify.md 回到 HEAD、自审正本放仓外 —— **两轮仍然都报 leak**。
-  > 因为引擎内联的是**整份 diff**:`PANEL_DIFF_BASE..HEAD` 区间里**任何一版** verify.md
-  > 都会进 prompt,`git checkout` 只管得住工作树那一份。
-  > 想真干净只有两条路:**① 让 verify.md 在整个 diff 区间里都还没被写过**
-  > (先派发、后落工件 —— 这才是那句"正确节奏"的完整含义);
-  > ② 把 diff base 选在最后一次写 verify.md 之后(**通常不行,会漏掉实现**)。
+  > `git checkout` 只管工作树那一份,而泄漏通道有两条,它一条都堵不住:
+  > **① 底座腿自己读仓库**(`bin/subagent` 08-19 起**不再往提示词里塞 diff**,
+  >    腿有 Read/Grep + 只读 git)⇒ **只要文件在树上就够得着**,已提交的照样被读。
+  >    08-05 那次 DeepSeek 日志第 28 行读了 verify.md、第 101 行原文引用我的「规格自查第 2 条」。
+  > **② chat 腿内联 diff,但只有 `PANEL_DIFF_BASE` 设上时才含已提交的那一版**
+  >    (`bin/submimo-review:resolve_diff_target`:设了 ⇒ `merge-base(base,HEAD)`..工作树;
+  >    没设 ⇒ `git diff HEAD`,**只有未提交改动**)。而 panel-review 只在
+  >    **HEAD ≠ 默认分支**时才自动设它 —— 本机常年 `master == HEAD`,所以默认它压根没设。
+  > 那行 WARNING 本身也不是 diff 来的:它来自 `anchor_leak_files` 的**第三臂**
+  > (`git ls-files 'tracks/*/verify.md'`,扫**已跟踪文件**)。所以"把 diff base 往后挪"
+  > 既不消警告、也不堵通道 —— **真干净只有一条路:让 verify.md 在派发那一刻还没被写**
+  > (先派发、后落工件 —— 这才是那句"正确节奏"的完整含义)。
   > 做不到就**如实记账**:泄漏了什么、影响多大。那比在 verify 里写"已反锚定"强。
+  > > 上面这段 08-24 第一版写的是「引擎内联整份 diff,所以 diff 区间里任何一版都会进
+  > > prompt」—— 那是我从"两轮都报 leak"**反推**出来的,没读源码,**推论写成了事实**
+  > > (同一天同一单里我还因此给出一条假药方:把 diff base 往后挪)。是 panel 一条腿
+  > > 去读 `bin/panel-review`/`bin/submimo-review` 才揪回来。机械钉子:
+  > > `tests/test-review-tooling.sh` V22b(树上就够得着)+ V22d(默认不自动设 diff base)。
 
 ### 3. 与自己那份逐条对账
 他们是顾问,不是投票人;**主 agent 是唯一仲裁者。** 每条:

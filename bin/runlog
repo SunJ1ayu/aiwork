@@ -211,7 +211,10 @@ if [ "$FINAL" -eq 1 ]; then
     #    打到 stderr:stdout 已经 tee 进收据了,而这段是给人看的,不该混进证据。
     {
       printf '\n'
-      printf 'runlog: 🔴 这份 --final 收据不算数(rc=65)——跑的过程中,这个仓库被改动过。\n'
+      # rc 用 $RC 打,**不许写死 65**:65 只在命令自己绿的时候才加(见上面那行判定)。
+      # 命令红 + 漂移时 rc 保持命令自己的,写死 65 就是让人在屏幕上找一个不存在的数
+      # (2026-08-24 panel subdeepseek 抓到,判据 A6)。
+      printf 'runlog: 🔴 这份 --final 收据不算数(rc=%s)——跑的过程中,这个仓库被改动过。\n' "$RC"
       printf '        --final 的意思是「这是最后一遍」,而它跑的那个快照已经不是现在这个了。\n'
       [ "$HEAD_BEFORE" != "$HEAD_AFTER" ] && \
         printf '        变的是 HEAD:%s → %s\n' "${HEAD_BEFORE:0:7}" "${HEAD_AFTER:0:7}"
@@ -222,8 +225,13 @@ if [ "$FINAL" -eq 1 ]; then
       printf '          · 并发的后台任务 —— 总跑/回归/红检和这一趟同时在跑;\n'
       printf '          · panel-review 收尾时往仓内 tracks/*/observations/ 写事件;\n'
       printf '          · **自己**在收据跑的过程中编辑 verify.md / 工件。\n'
-      printf '        命令本身的退出码是 %s,已如实记在收据的 command-rc 里 —— \n' "$COMMAND_RC"
-      printf '        65 说的是「这遍不能当最终证据」,不是「你的命令失败了」。\n'
+      if [ "$COMMAND_RC" -eq 0 ]; then
+        printf '        命令本身是绿的(收据里 command-rc: 0)。65 是 runlog 加的,\n'
+        printf '        它说的是「这遍不能当最终证据」,不是「你的命令失败了」。\n'
+      else
+        printf '        命令本身也失败了(收据里 command-rc: %s),所以这次的退出码就是它 ——\n' "$COMMAND_RC"
+        printf '        runlog 只在命令绿时才把 rc 换成 65,这一路看不到 65:两件事都得修。\n'
+      fi
     } >&2
   fi
   FINAL_FIELD=" final=yes"

@@ -457,7 +457,10 @@ LEAK="$(anchor_leak_files)"
 if [[ -n "$LEAK" ]]; then
   echo "  WARNING: anchor leak(反锚定) — 主审自己的评审可能进了评审腿的 prompt:"
   echo "$LEAK" | sed 's/^/    /'
-  echo "    (引擎会把未跟踪文件与整份 diff 内联进每条腿;先派发、后写 verify.md)"
+  # 这行字 08-24 把我指错过一整轮:它说的"整份 diff"只在 chat 腿 + PANEL_DIFF_BASE
+  # 设上时才成立,而本机默认形状下泄漏走的是"底座腿自己读树"。报警要说得出自己在报什么。
+  echo "    (底座腿自己读树、未跟踪文件会被内联、chat 腿另看 diff —— 已提交的照样够得着;"
+  echo "     先派发、后写 verify.md;详见 skills/panel/SKILL.md 反锚定一节)"
 fi
 
 # 派发窗口的树是不是同一棵(2026-08-05 实事故):22:40 我趁 Kimi 还在跑提交了 80d2d23,
