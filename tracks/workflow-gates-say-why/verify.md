@@ -41,8 +41,13 @@ runlog: aiwork-suites-final rc=0 commit=ae7a24e dirty=no final=yes at=2026-08-24
 **机器打印的**(不是我的转述):
 
 ```
-<第二轮最终收据行 —— 跑完粘>
+runlog: aiwork-suites-final rc=0 commit=9f122bf dirty=no final=yes at=2026-08-24T06:19:54Z file=tracks/workflow-gates-say-why/evidence/20260824T061954Z-01-aiwork-suites-final.txt
 ```
+
+> `source-stable: yes` —— 跑的整段时间没人写仓库(**这一条正是本单在讲的东西**:
+> 上午那两次 rc=65 就是没做到它)。19 个套件逐个报数,没有整块 SKIP:
+> review-tooling 450/0、runlog 92/0、track-guard 85/0、delegate-isolate 102/0、
+> workflow-docs 32/0、evidence-lifetime 41/0 ……(全文在收据文件里)。
 
 ## Review
 
