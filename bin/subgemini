@@ -191,7 +191,20 @@ case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
 
 TASK_TEXT="$(cat "$TASK_FILE" 2>/dev/null || true)"
+# 🔴 提示词里必须写清沙箱边界。这不是客气话,是**这条腿能不能交卷**的关键:
+# agy 在 headless 下拿不到批准的工具是 soft-deny,而实测 soft-deny **一次就让整个 run
+# 零产出**(不是"换个工具继续")。所以治本的办法不是把它想跑的命令一个个加进白名单
+# (2026-08-26 连追四轮:RunCommand → read_file → git 分组语法 → `bash tests/...`,
+# 追不完),而是**让它一开始就不去调那些工具**。
 PROMPT="You are a code reviewer. Read the repository yourself; do not assume a diff was pasted.
+
+SANDBOX CONSTRAINTS — read this first, it decides whether your review survives:
+- You CAN read any file in this workspace with your file-reading tools. Use them freely.
+- You CANNOT run shell commands, EXCEPT read-only git:
+  git log / git diff / git status / git show / git ls-files / git rev-parse / git blame
+- Do NOT try to run tests, build, install, or execute any script (no bash/sh/python/npm).
+  Those are blocked, and a single blocked attempt ABORTS YOUR ENTIRE RUN WITH ZERO OUTPUT —
+  your whole review would be lost. Base your review on READING the code.
 
 $TASK_TEXT
 
