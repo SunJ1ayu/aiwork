@@ -3914,6 +3914,150 @@ GITSTUB2
 # ---------------------------------------------------------------- V43
 # 用户 2026-08-20 拍板:常态不再固定四审。默认从健康池轮换两条不同家族的腿，
 # 失败/冲突才加第三条；四审保留显式入口。额度不足是腿的健康状态，不是实现 BLOCK。
+v44_dead_leg_stops_rotating() {
+  echo "[V44] panel-review:连续硬失败的腿停止轮换(不是每 6 小时复活一次)"
+  # 由来(数出来的):subkimi 08-20→08-25 跨 **10 轮** panel,每轮同一句
+  # "no credential configured" —— 要人跑一次 kimi login 才会好,而 health.tsv
+  # 把所有失败都当抖动:冷却 6 小时后自动复活,再死一次,循环 6 天。
+  # 每轮只打印一句一模一样的 WARNING ⇒ 被当成背景噪音(本仓老账:「只报不拦」的
+  # 免责声明要当待办读)。所以要的不是再加一句提示,是**让状态会变**。
+  local d pb repo state rc row
+  d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; state="$d/state"
+  mkdir -p "$pb" "$repo" "$state"
+  cp "$BIN/panel-review" "$pb/panel-review"
+  cp "$BIN/_panel-roster-lib.sh" "$pb/"
+  printf '# review\n' > "$d/t.md"
+  ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
+    echo base > f.txt; git add -A; git commit -qm init )
+
+  local leg
+  for leg in submimo subdeepseek subdeepseek-agent subglm subglm-agent subkimi; do
+    cat > "$pb/$leg" <<'EOF'
+#!/usr/bin/env bash
+name="$(basename "$0")"
+case "$name" in
+  subdeepseek-agent) name=subdeepseek ;;
+  subglm-agent) name=subglm ;;
+esac
+case "$name" in
+  submimo) verdict="${STUB_MIMO_VERDICT:-PASS}"; rc="${STUB_MIMO_RC:-0}" ;;
+  subdeepseek) verdict="${STUB_DEEPSEEK_VERDICT:-PASS}"; rc="${STUB_DEEPSEEK_RC:-0}" ;;
+  subglm) verdict="${STUB_GLM_VERDICT:-PASS}"; rc="${STUB_GLM_RC:-0}" ;;
+  subkimi) verdict="${STUB_KIMI_VERDICT:-PASS}"; rc="${STUB_KIMI_RC:-0}" ;;
+esac
+printf '%s\n' "$name" >> "${STUB_CALLS:?}"
+printf 'Conclusion: %s\n' "$verdict" > "$3"
+exit "$rc"
+EOF
+    chmod +x "$pb/$leg"
+  done
+
+  # 让 subkimi 每次都硬失败(rc=1),其余正常。--all 保证每轮它都被派到,
+  # 这样"连续"才数得起来(默认 high=2 会轮换,数不出连续)。
+  run_round() {  # run_round <tag>
+    env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+      PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+      bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/$1" >"$d/$1.out" 2>&1
+  }
+
+  # ── a) 连续硬失败要累计,而且写进 health.tsv ─────────────────────────
+  : > "$d/calls"; run_round R1
+  row="$(awk -F '\t' '$1=="subkimi"{print}' "$state/health.tsv")"
+  check "V44a: 一轮硬失败之后 health.tsv 里有 streak 列且=1" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "1" ]]; echo $?)
+  : > "$d/calls"; run_round R2
+  row="$(awk -F '\t' '$1=="subkimi"{print}' "$state/health.tsv")"
+  check "V44b: 第二轮连续失败累计到 2" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "2" ]]; echo $?)
+
+  # ── c) 跨过阈值 ⇒ **停止轮换**,即便冷却早就过了 ───────────────────
+  : > "$d/calls"; run_round R3
+  # R3 那一轮它还是被派了(--all),但 R3 之后 streak=3 ⇒ 之后的普通轮次不许再派它。
+  : > "$d/calls"
+  # 🔴 必须把轮换起点钉在 subkimi(LEGS 里的第 4 条,索引 3)——
+  # 否则"没调用它"可能只是**轮换没轮到**,这条断言就是假绿。
+  # 第一版我漏了这个:功能还没写它就绿了,而 V44k 用了 start=3 才真选中它 ⇒ 对照组当场照出来。
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=3 \
+    PANEL_STATE_DIR="$state" \
+    PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/R4" >"$d/R4.out" 2>&1
+  if grep -q '^subkimi$' "$d/calls"; then
+    bad "V44c: 连续 3 轮失败之后不许再轮换到它(冷却已归零仍不许)"
+  else ok "V44c: 连续 3 轮失败之后不许再轮换到它(冷却已归零仍不许)"; fi
+  grep -qE 'subkimi=SKIP\(health:dead' "$d/R4.roster"
+  check "V44d: 花名册明写它是 dead,不是普通 rotation skip" $?
+
+  # ── e) 那行提示必须说清楚:连续几轮 + 怎么清 ───────────────────────
+  grep -q 'subkimi' "$d/R4.out" && grep -qE '连续|streak' "$d/R4.out"
+  check "V44e: 屏幕上说清是**连续**失败(不是又一句一模一样的 WARNING)" $?
+  grep -q 'PANEL_HEALTH_OVERRIDE' "$d/R4.out"
+  check "V44f: 提示里给出怎么把它放回来(不留死胡同)" $?
+
+  # ── g) 🔴 最容易做错的一条:INCOMPLETE 是 rc=0,不许计入连续失败 ────
+  # submimo 2026-08-25 当轮就是 INCOMPLETE(裁决行没匹配上,而评审写得很好)。
+  # 把它算进去 = 把干活最好的腿踢掉。
+  rm -rf "$state"; mkdir -p "$state"
+  local i
+  for i in 1 2 3 4; do
+    : > "$d/calls"
+    env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+      PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" STUB_MIMO_VERDICT=UNPARSEABLE \
+      bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/I$i" >/dev/null 2>&1
+  done
+  row="$(awk -F '\t' '$1=="submimo"{print}' "$state/health.tsv")"
+  check "V44g: rc=0 但没裁决(INCOMPLETE)连续四轮也不许被判 dead" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=0 \
+    STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/I9" >/dev/null 2>&1
+  grep -q '^submimo$' "$d/calls"
+  check "V44h: 产出过东西的腿必须还在轮换里(这条红=我把好腿踢掉了)" $?
+
+  # ── i) 成功一次就清零(强行放回之后能自愈,不留人工死结) ───────────
+  rm -rf "$state"; mkdir -p "$state"
+  : > "$d/calls"; run_round S1
+  : > "$d/calls"; run_round S2
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+    PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" STUB_KIMI_RC=0 \
+    bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/S3" >/dev/null 2>&1
+  row="$(awk -F '\t' '$1=="subkimi"{print}' "$state/health.tsv")"
+  check "V44i: 跑成功一次 streak 归零" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
+
+  # ── j) 老的三列行照读,不许因为格式变了就崩 ─────────────────────────
+  rm -rf "$state"; mkdir -p "$state"
+  printf 'subkimi\tFAIL\t%s\n' "$(date +%s)" > "$state/health.tsv"   # 旧格式,无第 4 列
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=0 \
+    STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/L1" >/dev/null 2>&1; rc=$?
+  check "V44j: 老三列 health.tsv 照跑不崩(缺第 4 列当 0)" $([[ $rc -eq 0 ]]; echo $?)
+
+  # ── k) 阈值可关:设 0 等于整个机制不存在 ────────────────────────────
+  rm -rf "$state"; mkdir -p "$state"
+  for i in 1 2 3; do
+    : > "$d/calls"
+    env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+      PANEL_HEALTH_COOLDOWN_SEC=0 PANEL_HEALTH_DEAD_STREAK=0 \
+      STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+      bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/K$i" >/dev/null 2>&1
+  done
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_STATE_DIR="$state" \
+    PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=0 PANEL_HEALTH_DEAD_STREAK=0 \
+    PANEL_SELECTION_START=3 STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/K9" >/dev/null 2>&1
+  grep -q '^subkimi$' "$d/calls"
+  check "V44k: PANEL_HEALTH_DEAD_STREAK=0 时机制整个关掉" $?
+
+  unset -f run_round
+  rm -rf "$d"
+}
+
 v43_health_aware_rotating_budget() {
   echo "[V43] panel-review:健康池轮换二审 + 条件升级 + 显式四审"
   local d pb repo state rc count
@@ -4113,5 +4257,6 @@ v40_second_panel_findings
 v41_oracle_never_executes_its_own_comments
 v42_git_common_dir_no_silent_gap
 v43_health_aware_rotating_budget
+v44_dead_leg_stops_rotating
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
