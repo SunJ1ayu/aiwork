@@ -105,21 +105,33 @@ chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"
 # 🔴 遥测:业主在首次向导里亲手关掉了数据收集,但那条写在**他的** home。
 # 换 HOME 之后评审 home 是全新的、没有 settings.json ⇒ 走默认值 ⇒ 他的选择被绕过,
 # 而这条腿读的正是他的仓库代码。每次重写,不留隔夜残留。
-# permissions.allow:**没有它这条腿会每次交白卷,而 agy 每次说自己成功**。
-# 2026-08-25 真链冒烟实测:agy 想跑命令 ⇒ headless 弹不出提示 ⇒ auto-denied ⇒
-# rc=0、零产出、日志里只有一行 jetski 提示。文档:workspace 内读写默认允许,
-# **shell 命令默认 Ask**。
-# 白名单只给**只读探索**,与其余各腿的姿态一致(subglm 也只放行 git diff/log/status/show)。
+# 写评审 home 的 settings。**分两次调用**:
+#   第一次(无参)在预检之前 —— 预检只调 `agy models`,不需要文件权限;
+#   第二次(带可丢弃副本的路径)在 workspace 准备之后 —— 那时才知道副本在哪。
+# 三件事焊在这里:
+#  ① enableTelemetry:false —— 业主在首次向导里亲手关掉了数据收集,但那写在**他的**
+#     home;换 HOME 后评审 home 是全新的、连 settings.json 都没有 = 走默认值 =
+#     他的选择被绕过,而这条腿读的正是他的仓库代码。
+#  ② read_file/write_file **限定在那份可丢弃副本上**。2026-08-26 实测:
+#     `--add-dir` 给的目录**不算 active workspace**(文档那句"workspace 内读写
+#     自动允许"不覆盖它),每个新目录要 project 授权、headless 拿不到 ⇒
+#     read_file 被 auto-deny ⇒ 腿交白卷而 agy 仍 rc=0。
+#     `read_file(*)` 和 `read_file(/)` 也能解开,但那让腿读得到 ~/.ssh、业主凭证、
+#     别的项目 —— **这条腿的全部安全前提就是"它只看得见那份副本"**,不许通配。
+#  ③ 命令白名单只给只读探索。headless 下命令默认 Ask ⇒ 被 auto-deny ⇒ 同样交白卷。
 # 🔴 绝不用 --dangerously-skip-permissions:那会把网络与仓外写一并放开。
-# 真正的边界是"可丢弃副本 + 原仓 ro-repo-exec 只读",不是这份白名单 ——
-# 白名单挡不住所有花招(`git diff --output=` 那类,08-19 已实证),
-# 但它挡得住**误伤**,而且让腿的能力边界是写下来的、可审的。
-cat > "$AGY_HOME_DIR/settings.json" <<'AGYSETTINGS'
+# 白名单不是这条腿的安全边界 —— 真正的边界是"可丢弃副本 + 原仓 ro-repo-exec 只读"。
+# 它挡不住所有花招(`git diff --output=` 那类,08-19 已实证),但挡得住误伤,
+# 并且让腿的能力边界是写下来的、可审的。
+write_agy_settings() {   # write_agy_settings [可丢弃副本路径]
+  local ws="${1:-}" scoped=""
+  [[ -n "$ws" ]] && scoped="\"read_file($ws)\", \"write_file($ws)\", "
+  cat > "$AGY_HOME_DIR/settings.json" <<EOF
 {
   "enableTelemetry": false,
   "permissions": {
     "allow": [
-      "command(ls)",
+      ${scoped}"command(ls)",
       "command(cat)",
       "command(head)",
       "command(tail)",
@@ -133,8 +145,10 @@ cat > "$AGY_HOME_DIR/settings.json" <<'AGYSETTINGS'
     ]
   }
 }
-AGYSETTINGS
-chmod 600 "$AGY_HOME_DIR/settings.json"
+EOF
+  chmod 600 "$AGY_HOME_DIR/settings.json"
+}
+write_agy_settings
 
 AGY_BIN="${AGY_BIN:-$(command -v agy 2>/dev/null || echo "$HOME/.local/bin/agy")}"
 [[ -x "$AGY_BIN" ]] || die "找不到可执行的 agy($AGY_BIN)"
@@ -157,6 +171,9 @@ review_workspace_prepare "$SOURCE_REPO" subgemini || die 'review workspace 准�
 REVIEW_WORKSPACE_ACTIVE=1
 SOURCE_REPO="$REVIEW_SOURCE_REPO"
 REPO_DIR="$(review_workspace_repo)" || exit 78
+
+# 副本路径现在才知道 —— 重写 settings,把 read_file/write_file 授权**限定到它身上**。
+write_agy_settings "$REPO_DIR"
 
 _subgemini_cleanup() {
   local rc=$?
