@@ -118,7 +118,12 @@ chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"
 #     read_file 被 auto-deny ⇒ 腿交白卷而 agy 仍 rc=0。
 #     `read_file(*)` 和 `read_file(/)` 也能解开,但那让腿读得到 ~/.ssh、业主凭证、
 #     别的项目 —— **这条腿的全部安全前提就是"它只看得见那份副本"**,不许通配。
-#  ③ 命令白名单只给只读探索。headless 下命令默认 Ask ⇒ 被 auto-deny ⇒ 同样交白卷。
+#  ③ 命令白名单**只留只读 git**。headless 下命令默认 Ask ⇒ 被 auto-deny ⇒ 同样交白卷,
+#     所以非给不可;但**不许给 cat/ls/grep/find 这类通用文件命令** —— 它们绕过 ②
+#     的副本限定,`command(cat)` 等于让腿读得到 ~/.ssh 和业主凭证。文件读取走内置
+#     read_file 工具(受 ② 约束)。与 subglm 的 bash 白名单姿态一致。
+#     ⚠️ **分组语法是死的**:实测 `command(git log)` 通过、`command(git (log|diff))`
+#     被拒 —— 而官方文档的例子恰恰是分组写法。照文档写 = 规则静默失效 = 腿交白卷。
 # 🔴 绝不用 --dangerously-skip-permissions:那会把网络与仓外写一并放开。
 # 白名单不是这条腿的安全边界 —— 真正的边界是"可丢弃副本 + 原仓 ro-repo-exec 只读"。
 # 它挡不住所有花招(`git diff --output=` 那类,08-19 已实证),但挡得住误伤,
@@ -131,17 +136,13 @@ write_agy_settings() {   # write_agy_settings [可丢弃副本路径]
   "enableTelemetry": false,
   "permissions": {
     "allow": [
-      ${scoped}"command(ls)",
-      "command(cat)",
-      "command(head)",
-      "command(tail)",
-      "command(wc)",
-      "command(file)",
-      "command(stat)",
-      "command(grep)",
-      "command(rg)",
-      "command(find)",
-      "command(git (diff|log|status|show|ls-files|rev-parse|blame))"
+      ${scoped}"command(git log)",
+      "command(git diff)",
+      "command(git status)",
+      "command(git show)",
+      "command(git ls-files)",
+      "command(git rev-parse)",
+      "command(git blame)"
     ]
   }
 }
