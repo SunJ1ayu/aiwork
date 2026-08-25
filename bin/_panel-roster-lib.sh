@@ -14,7 +14,7 @@
 #   · .state **腿自己在 setsid 出去的那个会话里**写(控制器死了它照样写得成)
 #   · .final 控制器正常收尾才写;缺了不是错,只说明它没活到最后
 
-PANEL_LEGS_ORDER=(submimo subdeepseek subglm subkimi)
+PANEL_LEGS_ORDER=(submimo subdeepseek subglm subkimi subgemini)
 
 verdict_of() {  # verdict_of <log>; PASS/BLOCK/NEEDS_MORE_INFO/UNKNOWN
   local found
