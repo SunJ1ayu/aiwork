@@ -5,4 +5,4 @@
 # escalation=none
 # snapshot=head:3753055
 # 日志:/tmp/tmp.dOIP51An7p/raw/normal.*.log
-submimo=PASS(verdict=PASS) subdeepseek=SKIP(rotation) subglm=SKIP(rotation) subkimi=SKIP(rotation)
+submimo=PASS(verdict=PASS) subdeepseek=SKIP(rotation) subglm=SKIP(rotation) subkimi=SKIP(rotation) subgemini=SKIP(rotation)

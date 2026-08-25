@@ -34,6 +34,9 @@ EOF
   chmod +x "$1"
 }
 
+# 全部腿名 —— 唯一源是 bin/_panel-roster-lib.sh 的 PANEL_LEGS_ORDER。
+mapfile -t _ALL_LEGS < <(. "$ROOT/bin/_panel-roster-lib.sh"; printf '%s\n' "${PANEL_LEGS_ORDER[@]}")
+
 make_fixture() { # make_fixture <dir> <sleep> <rc>
   local d="$1" sl="$2" rc="$3" b="$1/bin" repo="$1/repo"
   mkdir -p "$b" "$repo" "$d/raw" "$d/state"
@@ -44,14 +47,22 @@ make_fixture() { # make_fixture <dir> <sleep> <rc>
   [[ -f "$ROOT/bin/_panel-roster-lib.sh" ]] && cp "$ROOT/bin/_panel-roster-lib.sh" "$b/"
   # panel-roster 是本单要造的东西;现在还不存在 ⇒ 判据必须因此红。
   [[ -x "$ROOT/bin/panel-roster" ]] && cp "$ROOT/bin/panel-roster" "$b/panel-roster"
-  for leg in submimo subdeepseek subglm subkimi; do make_leg "$b/$leg" "$sl" "$rc"; done
+  # 腿列表**从唯一源读**,不在夹具里抄第三份。2026-08-26 加第五条腿时,
+  # 这里漏了 ⇒ 夹具只造四条假腿 ⇒ 第五条在花名册里印成 off 而不是 SKIP(rotation)
+  # ⇒ R5 的格式基线对不上,而红的原因跟被测行为无关。
+  for leg in "${_ALL_LEGS[@]}"; do make_leg "$b/$leg" "$sl" "$rc"; done
   printf '# fake task\n' > "$d/task.md"
   ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
     printf 'x\n' > app.txt; git add -A; git commit -qm init )
 }
 
+# 腿名 → 开关名是机械规律:sub<X> ⇒ PANEL_<X大写>_LEG。**别再手抄第四份名单**
+# (2026-08-26:花名册/panel-review/夹具/这里各存了一份"当前有几条腿",加腿漏了三处)。
+_leg_off_var() { printf 'PANEL_%s_LEG' "$(printf '%s' "${1#sub}" | tr '[:lower:]' '[:upper:]')"; }
+_all_off=(); for _l in "${_ALL_LEGS[@]}"; do _all_off+=("$(_leg_off_var "$_l")=off"); done
 # 只留 subglm 一条腿(它走 run_leg 那条路 —— 08-23 真实挂掉的那条)
-only_glm=(PANEL_MIMO_LEG=off PANEL_KIMI_LEG=off PANEL_DEEPSEEK_LEG=off)
+only_glm=(); for _l in "${_ALL_LEGS[@]}"; do
+  [[ "$_l" == subglm ]] || only_glm+=("$(_leg_off_var "$_l")=off"); done
 # PANEL_SELECTION_START 必须钉死:不钉的话轮换每次挑不同的腿,
 # R5 的格式基线就会自己抖起来(2026-08-23 生成基线时当场撞上,连取两遍就不一样)。
 common_env=(PANEL_STAGGER_MAX=0 PANEL_SELECTION_START=0)
@@ -350,7 +361,7 @@ check "R12e: 而腿那行照旧靠 state 说真话(升级腿的失败不许隐�
 echo "[R13] 全 off 的**控制器路径**(R10 只测了渲染路径 —— subdeepseek F3:只堵了一半)"
 d13="$(mktemp -d)"; make_fixture "$d13" 0 0
 pre13="$d13/raw/alloff"
-env "${common_env[@]}" PANEL_MIMO_LEG=off PANEL_KIMI_LEG=off PANEL_DEEPSEEK_LEG=off PANEL_GLM_LEG=off \
+env "${common_env[@]}" "${_all_off[@]}" \
   PANEL_STATE_DIR="$d13/state" \
   bash "$d13/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
   "$d13/task.md" "$d13/repo" "$pre13" >"$d13/ctl.out" 2>&1
@@ -359,8 +370,12 @@ check "R13a: 一条腿都派不出去时,控制器**响亮地失败**(budget>=1 
   $([[ "$rc13" -ne 0 ]]; echo $?)
 check "R13b: 而且仍然留下了 plan(不是连派发都没走到就静默退出)" \
   $([[ -s "$pre13.plan" ]]; echo $?)
-check "R13c: 也仍然写了花名册,四条腿照实印 off" \
-  $([[ -s "$pre13.roster" ]] && [[ "$(grep -o '=off' "$pre13.roster" | wc -l)" -eq 4 ]]; echo $?)
+# 腿数**从唯一源读**,不在这里硬编码。2026-08-26 加第五条腿(subgemini)时,
+# 这里原本写死 `-eq 4` ⇒ 加腿就红,而红的原因跟被测的行为无关。
+# 判据里抄一份"当前有几条腿",本身就是"同一个事实存两处"。
+_nlegs="$(. "$ROOT/bin/_panel-roster-lib.sh"; echo "${#PANEL_LEGS_ORDER[@]}")"
+check "R13c: 也仍然写了花名册,每条腿照实印 off(共 $_nlegs 条)" \
+  $([[ -s "$pre13.roster" ]] && [[ "$(grep -o '=off' "$pre13.roster" | wc -l)" -eq "$_nlegs" ]]; echo $?)
 
 echo
 echo "---- 合计 PASS=$PASS FAIL=$FAIL ----"
