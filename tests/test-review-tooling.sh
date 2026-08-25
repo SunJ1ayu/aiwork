@@ -4589,11 +4589,28 @@ STUB
     bad "V46⑦: 没传 --add-dir —— 实测 agy 无 workspace 时读写自己的 scratch/,腿看不见被评审的仓"
   fi
 
-  # ⑧ 花名册:panel 的轮换池必须认得这条腿
+  # ⑧ 花名册 + **真的派得出去**。
+  # 🔴 第一版只查 `_panel-roster-lib.sh` 含 subgemini,给的是**假绿**:
+  #    `panel-review` 第 126 行 source 了那个库(注释写着"只许有一份"),
+  #    却在第 309 行又自己写了一份 `LEGS=(submimo subdeepseek subglm subkimi)`。
+  #    **腿名单实际有两份**,我加腿只改了花名册那份 ⇒ 花名册上看得见它、
+  #    panel-review 永远派不出它,而断言绿着。加腿必然漏一处,这次漏的是我。
   if grep -q 'subgemini' "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null; then
-    ok "V46⑧: PANEL_LEGS_ORDER 含 subgemini"
+    ok "V46⑧a: PANEL_LEGS_ORDER 含 subgemini"
   else
-    bad "V46⑧: 花名册里没有 subgemini —— 腿装了但 panel 永远不会派它"
+    bad "V46⑧a: 花名册里没有 subgemini"
+  fi
+  # ⑧b 名单**只许有一份**:panel-review 不许自己再硬编码一份腿名单
+  if grep -qE '^LEGS=\((submimo|subdeepseek|subglm|subkimi)' "$PWD/bin/panel-review" 2>/dev/null; then
+    bad "V46⑧b: panel-review 自己硬编码了第二份腿名单 —— 加腿必然漏一处(这次漏的就是它)"
+  else
+    ok "V46⑧b: panel-review 的腿名单不是自己硬编码的第二份"
+  fi
+  # ⑧c 派发侧真的认得这条腿(有 CMD 映射,否则选中了也起不来)
+  if grep -q 'subgemini' "$PWD/bin/panel-review" 2>/dev/null; then
+    ok "V46⑧c: panel-review 派发侧认得 subgemini"
+  else
+    bad "V46⑧c: panel-review 里一个 subgemini 都没有 —— 花名册上有它,永远派不出去"
   fi
 
   # ⑩ headless 权限白名单:没有它,这条腿会**交白卷而看起来一切正常**。
