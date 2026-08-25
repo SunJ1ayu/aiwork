@@ -274,14 +274,23 @@ if [[ "${PANEL_KIMI_LEG:-agent}" != "off" && -x "$BIN/subkimi" ]]; then
   KIMI_CMD="$BIN/subkimi"
 fi
 
+# Gemini leg (5th reviewer, Google Antigravity CLI agent base): auto-enabled when
+# subgemini is installed; PANEL_GEMINI_LEG=off disables. No chat fallback.
+GEMINI_CMD=""
+if [[ "${PANEL_GEMINI_LEG:-agent}" != "off" && -x "$BIN/subgemini" ]]; then
+  GEMINI_CMD="$BIN/subgemini"
+fi
+
 SUBMIMO_LOG="${LOG_PREFIX}.submimo.log"
 SUBDEEPSEEK_LOG="${LOG_PREFIX}.subdeepseek.log"
 SUBGLM_LOG="${LOG_PREFIX}.subglm.log"
 SUBKIMI_LOG="${LOG_PREFIX}.subkimi.log"
+SUBGEMINI_LOG="${LOG_PREFIX}.subgemini.log"
 SUBMIMO_ERR="${SUBMIMO_LOG}.err"
 SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
 SUBGLM_ERR="${SUBGLM_LOG}.err"
 SUBKIMI_ERR="${SUBKIMI_LOG}.err"
+SUBGEMINI_ERR="${LOG_PREFIX}.subgemini.log.err"
 
 # ── 健康池 + 轮换选择 ────────────────────────────────────────────────────
 # 不额外发探活请求；只吃显式状态和最近一次真实评审结果。未知视为可尝试。
@@ -306,12 +315,18 @@ if [[ ! "$HEALTH_DEAD_STREAK" =~ ^(0|[1-9][0-9]*)$ ]]; then
 fi
 mkdir -p "$PANEL_STATE_DIR"
 
-LEGS=(submimo subdeepseek subglm subkimi)
+# 🔴 腿名单**只许有一份** —— 用花名册库里的 PANEL_LEGS_ORDER,不在这里另写。
+# 2026-08-26 实证:这里原本硬编码 `LEGS=(submimo subdeepseek subglm subkimi)`,
+# 而 `_panel-roster-lib.sh` 顶上就写着"只许有一份"。加第五条腿(subgemini)时
+# 我只改了花名册那份 ⇒ 花名册上看得见它、这里永远派不出它,判据还绿着。
+# 加腿时必然漏一处的结构,现在拆掉了。判据 V46⑧b 盯着。
+LEGS=("${PANEL_LEGS_ORDER[@]}")
 declare -A LEG_CMD LEG_LOG LEG_ERR LEG_AVAILABLE LEG_HEALTH LEG_SELECTED LEG_RC LEG_OVERRIDE_OK
 LEG_CMD[submimo]="$MIMO_CMD";             LEG_LOG[submimo]="$SUBMIMO_LOG";         LEG_ERR[submimo]="$SUBMIMO_ERR"
 LEG_CMD[subdeepseek]="$DEEPSEEK_CMD";     LEG_LOG[subdeepseek]="$SUBDEEPSEEK_LOG"; LEG_ERR[subdeepseek]="$SUBDEEPSEEK_ERR"
 LEG_CMD[subglm]="$GLM_CMD";               LEG_LOG[subglm]="$SUBGLM_LOG";           LEG_ERR[subglm]="$SUBGLM_ERR"
 LEG_CMD[subkimi]="$KIMI_CMD";             LEG_LOG[subkimi]="$SUBKIMI_LOG";         LEG_ERR[subkimi]="$SUBKIMI_ERR"
+LEG_CMD[subgemini]="$GEMINI_CMD";         LEG_LOG[subgemini]="$SUBGEMINI_LOG";     LEG_ERR[subgemini]="$SUBGEMINI_ERR"
 
 override_health() {  # override_health <leg>; prints explicit status or nothing
   local leg="$1" pair key value
