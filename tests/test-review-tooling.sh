@@ -263,6 +263,8 @@ v45_oracle_never_touches_owner_credentials() {
     bad "V45: 判据动了业主的真实环境 —— 变的是:$changed"
     echo "     ⚠️ 你若在这 ~3 分钟里跑过 kimi login / 并发跑了一轮 panel,那是误报;"
     echo "        否则就是判据在写它不该写的地方 —— **先查判据,别先调钝这道闸**。"
+    echo "     去哪找:判据里跑 subkimi / submimo / subglm-agent 而**没把对应的"
+    echo "        *_REVIEW_HOME 指进夹具**的调用点。2026-08-25 一共揪出 5 处,一处一处补。"
   fi
 }
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -2084,6 +2086,7 @@ v23_my_review_gate_on_every_review_path() {
   printf '我的一遍\n' > "$d/mine.md"
   cp "$BIN/_my-review-gate.sh" "$b/" 2>/dev/null
   out="$(cd "$d" && PATH="$fb:$PATH" REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/mine.md" \
+          MIMO_REVIEW_HOME="$d/mimo-home-v23" \
           timeout "$GATE_PROBE_TIMEOUT" bash "$b/submimo" review "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
   grep -qi "realpath" <<<"$out"
   check "V23: realpath 不可用 ⇒ 拒跑并说明(不许静默跳过仓内检查)" $?
@@ -3239,6 +3242,7 @@ PWN
   #    "加一道防线顺手拆掉另一道"是本仓记过的账(V33 里有同款对照)。
   rm -f "$d/o4" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" REVIEW_NO_MY_REVIEW=1 \
+    MIMO_REVIEW_HOME="$d/mimo-home-v36d" \
     bash "$b/submimo" fix --no-oracle "$d/t.md" "$repo/logs/l4.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o4" 2>/dev/null \
     && grep -q '^source=WROTE$' "$d/o4" 2>/dev/null \
@@ -3331,6 +3335,7 @@ RECORD
   # ── ③ 相对日志路径 + cwd=仓根:第一版在这里整仓开闸,而且**一声不响**
   rm -f "$d/o3" "$repo/PWNED_BY_LEG"
   ( cd "$repo" && env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" \
+      MIMO_REVIEW_HOME="$d/mimo-home-v37a" \
       REVIEW_NO_MY_REVIEW=1 bash "$b/submimo" review "$d/t.md" "relative.log" "$repo" ) >/dev/null 2>&1
   [[ "$(cat "$d/o3" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]
   check "V37: 相对日志路径 + cwd=仓根 ⇒ 防线**仍然生效**(第一版这里整仓开闸,还不报错)" $?
@@ -3338,6 +3343,7 @@ RECORD
   # ── ④ 日志目录还不存在:wrapper 应当自己建好并跑起来,不是拒跑(回归)
   rm -rf "$repo/fresh" ; rm -f "$d/o4" "$repo/PWNED_BY_LEG"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" REVIEW_NO_MY_REVIEW=1 \
+    MIMO_REVIEW_HOME="$d/mimo-home-v37b" \
     bash "$b/submimo" review "$d/t.md" "$repo/fresh/leg.log" "$repo" >/dev/null 2>&1
   [[ -e "$repo/fresh/leg.log" && "$(cat "$d/o4" 2>/dev/null)" == "BLOCKED" ]]
   check "V37: 日志目录不存在 ⇒ wrapper 建好它并正常跑(别把防线做成回归)" $?
