@@ -70,11 +70,13 @@ echo "== 红检开始(连续硬失败的腿停止轮换)=="
 
 mutate M1 "V44a: 一轮硬失败之后 health.tsv 里有 streak 列且=1" <<'PY'
 import os, pathlib, sys
-# 「计数器永远不动」—— 最朴素的坏法
+# 「计数器永远不动」—— 最朴素的坏法。
+# 锚点 2026-08-25 换过一次:加"跨冷却窗口才计数"之后,原来那行 `streak=$((prior_streak + 1))`
+# 的缩进和位置都变了 ⇒ 红检自己报了「锚点过期」。**锚点过期本身就是问题**,不是噪音。
 p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
-old = "    streak=$((prior_streak + 1))"
+old = '      first="$now"; streak=1'
 if s.count(old) != 1: sys.exit(1)
-p.write_text(s.replace(old, "    streak=0"))
+p.write_text(s.replace(old, '      first="$now"; streak=0'))
 PY
 
 mutate M2 "V44h: 产出过东西的腿必须还在轮换里(这条红=我把好腿踢掉了)" <<'PY'
@@ -82,9 +84,9 @@ import os, pathlib, sys
 # 🔴 这一单最容易做错的坏法:把 INCOMPLETE/DEGRADED(rc=0,腿产出了东西)
 # 也算成连续失败 ⇒ 把正在干活的腿踢掉。设计里专门防的就是它。
 p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
-old = '  if [[ "$rc" -ne 0 ]]; then\n    streak=$((prior_streak + 1))'
+old = '  if [[ "$rc" -ne 0 ]]; then\n    if [[ "$prior_first" =~ ^[0-9]+$'
 if s.count(old) != 1: sys.exit(1)
-p.write_text(s.replace(old, '  if [[ "$status" != "PASS" ]]; then\n    streak=$((prior_streak + 1))'))
+p.write_text(s.replace(old, '  if [[ "$status" != "PASS" ]]; then\n    if [[ "$prior_first" =~ ^[0-9]+$'))
 PY
 
 mutate M3 "V44c: 连续 3 轮失败之后不许再轮换到它(冷却已归零仍不许)" <<'PY'
@@ -165,6 +167,56 @@ p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
 old = '    lastlog="$log"'
 if s.count(old) != 1: sys.exit(1)
 p.write_text(s.replace(old, '    lastlog=""'))
+PY
+
+mutate M11 "V44r: 一个冷却窗口内的连发失败只算一次(--all 不许压缩掉定阈前提)" <<'PY'
+import os, pathlib, sys
+# 回到第二轮 subdeepseek F1 那个真缺口:对**任何**被派发的失败无条件 +1
+# ⇒ --all 三连发在一秒内把 streak 顶到阈值,几分钟的共模抖动就能永久踢掉好腿。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = '      if (( now - first >= prior_streak * _cd )); then streak=$((prior_streak + 1))\n      else streak="$prior_streak"; fi'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, '      streak=$((prior_streak + 1))'))
+PY
+
+mutate M12 "V44s: 跨过冷却窗口的失败照样累计(修法不许是「干脆永远不计数」)" <<'PY'
+import os, pathlib, sys
+# 上一条的镜像:把"守住冷却窗口"修成"永远不再计数" —— 机制被整个关掉,
+# 而只看 V44r 的话它是绿的。对照组存在的全部意义就是咬住这一种"修法"。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = '      if (( now - first >= prior_streak * _cd )); then streak=$((prior_streak + 1))\n      else streak="$prior_streak"; fi'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, '      streak="$prior_streak"'))
+PY
+
+mutate M13 "V44u: 派不满风险预算时说出这件事本身(不是只有一行数字)" <<'PY'
+import os, pathlib, sys
+# 「缺口只剩一行数字」:把那段响亮的话删掉,退回三方独立命中的那个静默。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+i = s.find('if [[ "$SELECTED_COUNT" -lt "$RISK_BUDGET" ]]; then')
+if i < 0: sys.exit(1)
+tail = "\n  unset _missing _leg\nfi\n"
+j = s.index(tail, i) + len(tail)
+p.write_text(s[:i] + s[j:])
+PY
+
+mutate M14 "V44w: override 生效那一轮,提示改口(不再叫人去做已经做过的事)" <<'PY'
+import os, pathlib, sys
+# 「你处理完了它还在响」:去掉改口分支,又回到叫人去做他刚做完的那件事。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = '    case "${_health,,}" in healthy|pass|up|ok) LEG_OVERRIDE_OK[$_leg]=1 ;; *) LEG_HEALTH[$_leg]="$_health" ;; esac'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, '    case "${_health,,}" in healthy|pass|up|ok) : ;; *) LEG_HEALTH[$_leg]="$_health" ;; esac'))
+PY
+
+mutate M15 "V44c: 连续 3 轮失败之后不许再轮换到它(冷却已归零仍不许)" <<'PY'
+import os, pathlib, sys
+# 第二轮 subdeepseek F4 点名的红检缺口:M1-M10 谁都没变异过**选腿循环那道健康闸本身**。
+# 把普通轮次里"非 healthy 就跳过"的 continue 删掉 ⇒ 死腿照样被派。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = '  if [[ "$FORCE_ALL" -ne 1 && "${LEG_HEALTH[$_leg]}" != "healthy" ]]; then continue; fi'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, '  :'))
 PY
 
 restore

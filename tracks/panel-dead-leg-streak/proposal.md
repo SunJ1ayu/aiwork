@@ -10,8 +10,17 @@ error: failed to run prompt: provider managed:kimi-code has no credential config
 
 （`/root/aiwork/logs/*subkimi.log`,10/75 份命中同一串。）
 
-根因很简单:令牌被清空了(凭证文件只剩 `{}`),**要人跑一次 `kimi login` 才会好**。
-08-25 业主一问、两分钟就修好了。
+令牌被清空了(凭证文件只剩 `{}`),**要人跑一次 `kimi login` 才会好**。
+
+> 🔴 **2026-08-25 傍晚更正:上一句里"08-25 业主一问、两分钟就修好了"是假的,已删。**
+> 业主 13:56 确实登录过一次,而 **16:06 那个文件又变回了 `{}`**,
+> 16:13 那轮 panel 的 subkimi 仍然死在逐字相同的那句 `no credential configured`。
+> 也就是说这不是"忘了登录一次",是**有东西在反复清空它**,而根因至今不知道
+> (那一刻没有任何 kimi 进程在跑,`kimi-code.log` 里 16:06 一条记录都没有)。
+> 这件事已开独立后续单 `panel-kimi-credential-wipe`,不在本单修 —— 但它让本单的立论更成立:
+> **修不修得好那条腿是另一回事,"它连着死了 10 轮而状态从不改变"才是这里要治的病。**
+> 顺带也证明了机制本身:16:28 那轮收尾后,`health.tsv` 里 subkimi 第一次真的记上了
+> `FAIL … streak=1`,而同轮 INCOMPLETE 的 submimo 和 DEGRADED 的 subglm 都是 0。
 
 ## 问题不在"检查不够严",在"重复的信号没有变成一件要做的事"
 

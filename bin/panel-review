@@ -307,7 +307,7 @@ fi
 mkdir -p "$PANEL_STATE_DIR"
 
 LEGS=(submimo subdeepseek subglm subkimi)
-declare -A LEG_CMD LEG_LOG LEG_ERR LEG_AVAILABLE LEG_HEALTH LEG_SELECTED LEG_RC
+declare -A LEG_CMD LEG_LOG LEG_ERR LEG_AVAILABLE LEG_HEALTH LEG_SELECTED LEG_RC LEG_OVERRIDE_OK
 LEG_CMD[submimo]="$MIMO_CMD";             LEG_LOG[submimo]="$SUBMIMO_LOG";         LEG_ERR[submimo]="$SUBMIMO_ERR"
 LEG_CMD[subdeepseek]="$DEEPSEEK_CMD";     LEG_LOG[subdeepseek]="$SUBDEEPSEEK_LOG"; LEG_ERR[subdeepseek]="$SUBDEEPSEEK_ERR"
 LEG_CMD[subglm]="$GLM_CMD";               LEG_LOG[subglm]="$SUBGLM_LOG";           LEG_ERR[subglm]="$SUBGLM_ERR"
@@ -364,9 +364,12 @@ for _leg in "${LEGS[@]}"; do
     continue
   fi
   LEG_AVAILABLE[$_leg]=1; LEG_HEALTH[$_leg]="healthy"
+  LEG_OVERRIDE_OK[$_leg]=0
   _health="$(override_health "$_leg" 2>/dev/null || true)"
   if [[ -n "$_health" ]]; then
-    case "${_health,,}" in healthy|pass|up|ok) : ;; *) LEG_HEALTH[$_leg]="$_health" ;; esac
+    # 记住"这一轮是被 override 强行放回来的" —— 打印段要靠它改口,
+    # 否则会叫人去做他刚做完的那件事(判据 V44w)。
+    case "${_health,,}" in healthy|pass|up|ok) LEG_OVERRIDE_OK[$_leg]=1 ;; *) LEG_HEALTH[$_leg]="$_health" ;; esac
   elif [[ "$FORCE_ALL" -ne 1 ]]; then
     # dead 优先于 cooldown:冷却过了照样不放它回来 —— 那正是这个机制的全部意义。
     _health="$(dead_health "$_leg" 2>/dev/null || true)"
@@ -467,7 +470,14 @@ for _leg in "${LEGS[@]}"; do
     echo "  🔴 $_leg 连续 $_dstreak 轮 rc≠0(最近一次:$_dstatus)$(
       [[ "$_dfirst" =~ ^[0-9]+$ ]] && printf ',最早一次 %s' "$(date -d "@$_dfirst" '+%m-%d %H:%M' 2>/dev/null)")。"
     echo "     冷却重试救不了这一类 —— 它要人动手。上一轮它的日志:${_dlog:-(没记到,去 $(dirname "${LEG_LOG[$_leg]}") 里找最近的 $_leg.log)}"
-    echo "     处理完强行放回:PANEL_HEALTH_OVERRIDE=$_leg=healthy(跑成功一次 streak 自动清零)"
+    if [[ "${LEG_OVERRIDE_OK[$_leg]:-0}" -eq 1 ]]; then
+      # 已经强行放回了就别再叫人去强行放回 ——「你处理完了它还在响」的报警器,
+      # 就是下一个被当成背景噪音的报警器,而那正是这一单要治的病。
+      # (我自审 M2 与第二轮 subdeepseek F3 独立命中同一处。判据 V44w。)
+      echo "     本轮已强行放回(PANEL_HEALTH_OVERRIDE),跑成功一次 streak 自动清零。"
+    else
+      echo "     处理完强行放回:PANEL_HEALTH_OVERRIDE=$_leg=healthy(跑成功一次 streak 自动清零)"
+    fi
   elif [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
     echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: ${_leg#sub})"
   elif [[ "${LEG_HEALTH[$_leg]}" == "off" ]]; then
@@ -479,6 +489,24 @@ for _leg in "${LEGS[@]}"; do
   fi
 done
 unset _leg _dinfo _dstatus _dstreak _dfirst _dlog
+# 🔴 派不满风险预算这件事**要说出来**(2026-08-25 三方独立命中:我自审 M1 /
+# submimo「无人值守 CI 只看 rc」/ subglm「高风险欠配额静默放行」)。
+# 每条死腿自己那三行提示一直是打的 —— 缺的是**"这一轮没凑够 high 要的家族数"这句话本身**。
+# 它和冷却造成的缺口不是一回事:冷却过 6 小时自己好,dead 不会。归档闸会因为
+# 家族覆盖不足 BLOCK,而那时评审的钱已经花完了 —— 所以要在派发这一刻就说。
+# 用 RISK_BUDGET(风险等级要求的最低家族数)而不是 REVIEW_BUDGET:`--all` 把预算
+# 顶成 4,一条腿 off 就报"不足"是误报,而误报会逼出绕开它的习惯。判据 V44u。
+if [[ "$SELECTED_COUNT" -lt "$RISK_BUDGET" ]]; then
+  _missing=""
+  for _leg in "${LEGS[@]}"; do
+    [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] && continue
+    _missing+="${_missing:+,}$_leg(${LEG_HEALTH[$_leg]:-healthy})"
+  done
+  echo "  🔴 家族覆盖不足:impact-risk=$IMPACT_RISK 要 $RISK_BUDGET 个不同家族,这轮只派出 $SELECTED_COUNT 个;少了 $_missing。"
+  echo "     dead 不随冷却过期 —— 这个缺口不会自己好,而归档闸会因为家族覆盖不足 BLOCK。"
+  echo "     现在就定:按上面的提示清掉死腿,或 PANEL_HEALTH_OVERRIDE=<leg>=healthy 强行放回。"
+  unset _missing _leg
+fi
 # A chat leg with nothing attached beyond the diff cannot review the oracle itself
 # ("是规格错还是实现错"就查不了)。Nudge, never block — the arbiter decides.
 if [[ -z "${PANEL_INCLUDE:-}" ]] \
@@ -771,9 +799,24 @@ record_health() {  # record_health <leg>
   fi
   local lastlog
   if [[ "$rc" -ne 0 ]]; then
-    streak=$((prior_streak + 1))
-    if [[ "$prior_first" =~ ^[0-9]+$ && "$prior_streak" -gt 0 ]]; then first="$prior_first"
-    else first="$now"; fi
+    if [[ "$prior_first" =~ ^[0-9]+$ && "$prior_streak" -gt 0 ]]; then
+      first="$prior_first"
+      # 🔴 **一个冷却窗口里的连发失败只算一次**(2026-08-25 第二轮 subdeepseek F1)。
+      # 定阈 3 的**全部依据**是那句「连续 3 轮横跨至少两个冷却窗口,已经不像抖动」。
+      # 而 `--all` 绕过冷却、record_health 却对任何被派发的失败都 +1 ⇒ 那句话在
+      # --all 路径下整个是假的:实测冷却 3600s,三轮 --all 在 **1 秒**内把 streak
+      # 顶到 3,第四轮普通轮换当场判死。几分钟的共模抖动(出口断网 / 网关 5xx /
+      # 跨腿限流)就能永久踢掉一条好腿 —— 而误踢好腿是这一单唯一不可接受的后果。
+      # 所以把"横跨 N 个冷却窗口"从**副作用**变成**显式条件**:第 n 次计入,
+      # 要求距最早那次已经过了 (n-1) 个冷却窗口。冷却设 0(或非法)时窗口为 0,
+      # 一切照旧计数 —— 没有窗口就没有窗口要守。对照组判据 V44s 钉着"别修成永不计数"。
+      local _cd=0
+      [[ "$HEALTH_COOLDOWN" =~ ^[0-9]+$ ]] && _cd="$HEALTH_COOLDOWN"
+      if (( now - first >= prior_streak * _cd )); then streak=$((prior_streak + 1))
+      else streak="$prior_streak"; fi
+    else
+      first="$now"; streak=1
+    fi
     # 记下**这一轮**的日志:下一轮它被跳过时,提示得指得出一个真的存在的文件。
     # (panel subglm 发现 2:原来指的是本轮前缀,而被跳过的腿本轮根本不产生日志。)
     lastlog="$log"
