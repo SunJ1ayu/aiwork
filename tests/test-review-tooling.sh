@@ -4541,6 +4541,12 @@ STUB
   check "V46①b: 合法 gemini-* 档放行(rc=$rc)" "$([[ $rc -eq 0 ]] && echo 0 || echo 1)"
 
   # ② 默认模型必须是 gemini-3.7-flash-high(业主拍板,两轮实测支持)
+  # 🔴 必须**单独跑一次不设 AGY_MODEL 的调用**再看。第一版直接翻前面两次调用的日志,
+  #    而那两次一个是 claude-*(被拒、根本没调 agy)、一个显式设了 3.6 ——
+  #    **默认档从来没被跑过**,这条断言在检查一件它自己没测过的事。
+  : > "$stub_log"
+  PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
+    "$BIN/subgemini" review /dev/null "$W/o2b.log" "$W/repo" >/dev/null 2>&1 || true
   if grep -q -- '--model gemini-3.7-flash-high' "$stub_log" 2>/dev/null; then
     ok "V46②: 默认档确为 gemini-3.7-flash-high"
   else
@@ -4646,7 +4652,10 @@ v41_oracle_never_executes_its_own_comments
 v42_git_common_dir_no_silent_gap
 v43_health_aware_rotating_budget
 v44_dead_leg_stops_rotating
-v46_subgemini_leg
+# 反锚定闸默认拦一切 review 派发 ⇒ 不带这个前缀,V46 里每一次派发都会被拦,
+# 红的绿的全是空的(第一版就是这样:V46① 的 PASS 是被反锚定闸拦出来的假绿,
+# 不是被模型闸拦的 —— 文件里 V26 上方就写着这条警告,我读过还是踩了)。
+REVIEW_NO_MY_REVIEW=1 v46_subgemini_leg
 v45_oracle_never_touches_owner_credentials   # ← 必须排在最后:它问的是前面所有段跑完之后的状态
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
