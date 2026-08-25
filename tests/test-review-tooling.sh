@@ -4147,6 +4147,93 @@ EOF
   check "V44q: DEGRADED(rc=0,回落成功)连续四轮也不许计数" \
     $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
 
+  # ── r/s) 🔴 第二轮 subdeepseek F1:`--all` 绕过冷却,而 record_health 对**任何**
+  #   被派发的失败都 +1 ⇒「阈值 3 横跨至少两个冷却窗口,已经不像抖动」这句话 ——
+  #   也就是**定阈 3 的全部依据** —— 在 --all 路径下整个是假的。
+  #   派发前我自己复现过:冷却 3600s,三轮 --all 在 **1 秒** 内把 streak 顶到 3,
+  #   第四轮普通轮换当场 `skipped(health:dead:FAIL:3)`。
+  #   一次几分钟的共模抖动(出口断网 / 网关 5xx / 跨腿限流)就能永久踢掉一条好腿 ——
+  #   而"误踢好腿"是这一单自己写下的**唯一不可接受的后果**。
+  rm -rf "$state"; mkdir -p "$state"
+  for i in 1 2 3; do
+    : > "$d/calls"
+    env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+      PANEL_HEALTH_COOLDOWN_SEC=3600 STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+      bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/B$i" >/dev/null 2>&1
+  done
+  row="$(awk -F '\t' '$1=="subkimi"{print}' "$state/health.tsv")"
+  check "V44r: 一个冷却窗口内的连发失败只算一次(--all 不许压缩掉定阈前提)" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "1" ]]; echo $?)
+
+  # s) 反过来钉死:**跨过**冷却窗口的连续失败照样累计。
+  #    没有这一条,上一条的"修法"可以是"永远不计数",机制整个被关掉而判据全绿。
+  awk -F '\t' -v OFS='\t' -v old="$(( $(date +%s) - 4000 ))" \
+    '$1=="subkimi"{$3=old; $5=old} {print}' "$state/health.tsv" > "$state/h.tmp" \
+    && mv "$state/h.tmp" "$state/health.tsv"
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+    PANEL_HEALTH_COOLDOWN_SEC=3600 STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+    bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/B4" >/dev/null 2>&1
+  row="$(awk -F '\t' '$1=="subkimi"{print}' "$state/health.tsv")"
+  check "V44s: 跨过冷却窗口的失败照样累计(修法不许是「干脆永远不计数」)" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "2" ]]; echo $?)
+
+  # ── t) 全池判死:必须响亮拒跑,不许静默跑 0 条腿 ─────────────────────
+  # 第二轮 subglm 问的:"任务通篇没说空池时会发生什么(响亮拒跑?0 条腿照跑?静默?)"
+  # 我量过:现状**已经**是 rc=1 + 0 条腿 + 四条 🔴 提示。这条是把它钉住,不许回退。
+  rm -rf "$state"; mkdir -p "$state"
+  for leg in submimo subdeepseek subglm subkimi; do
+    printf '%s\tFAIL\t%s\t4\t%s\t/tmp/x.log\n' "$leg" "$(date +%s)" "$(date +%s)"
+  done > "$state/health.tsv"
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_STATE_DIR="$state" \
+    PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/E1" >"$d/E1.out" 2>&1
+  rc=$?
+  [[ "$rc" -ne 0 && ! -s "$d/calls" ]]
+  check "V44t: 全池判死时响亮拒跑(rc≠0 且一条腿都不派)" $?
+
+  # ── u) 派不满风险预算:要说出来,不许只留一行数字 ─────────────────────
+  # 三条腿独立指到同一处(我自审 M1 / submimo「无人值守 CI 只看 rc」/ subglm「高风险
+  # 欠配额静默放行」)。dead 把**暂时**缺腿变成**常驻**缺腿,而缺口只体现为
+  # `requested-budget=2 selected=1` 这行数字,rc=0。
+  # 🔴 注意我自己在自审里把这条说过头了:实测那次**四条 🔴 提示都打了**,
+  #    我引用时把它们截掉了。缺的不是"任何痕迹",是**"这轮没凑够 high 要的家族数"这句话本身**。
+  rm -rf "$state"; mkdir -p "$state"
+  for leg in subdeepseek subglm subkimi; do
+    printf '%s\tFAIL\t%s\t4\t%s\t/tmp/x.log\n' "$leg" "$(date +%s)" "$(date +%s)"
+  done > "$state/health.tsv"
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=0 \
+    STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/U1" >"$d/U1.out" 2>&1
+  grep -qE '覆盖不足' "$d/U1.out" && grep -qE '覆盖不足.*1.*2|1/2|少了' "$d/U1.out"
+  check "V44u: 派不满风险预算时说出这件事本身(不是只有一行数字)" $?
+
+  # ── v) 文档承诺的找回路径必须真的管用 ─────────────────────────────
+  # V44f 只查了提示里**写没写** override,没查它**做不做得到**。
+  # 第二轮 subglm 直接问:"override 是重置 streak 还是只写 status?若 dead 由 streak
+  # 推导而 override 只写 status,文档承诺的找回路径可能根本不生效。"
+  rm -rf "$state"; mkdir -p "$state"
+  printf 'subkimi\tFAIL\t%s\t5\t%s\t/tmp/x.log\n' "$(date +%s)" "$(date +%s)" > "$state/health.tsv"
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=3 \
+    PANEL_HEALTH_OVERRIDE=subkimi=healthy PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+    PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" STUB_KIMI_RC=0 \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/V1" >"$d/V1.out" 2>&1
+  row="$(awk -F '\t' '$1=="subkimi"{print}' "$state/health.tsv")"
+  grep -q '^subkimi$' "$d/calls" && [[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]
+  check "V44v: override 把死腿放回去、且跑成功后 streak 归零(找回路径不是死胡同)" $?
+
+  # ── w) 已经强行放回了,不许再叫人去做他刚做过的那件事 ────────────────
+  # 我自审 M2 与第二轮 subdeepseek F3 独立命中同一处:打印段的 dead 分支直接读
+  # health **文件**,完全不看 override ⇒ 屏幕上照打"处理完强行放回:PANEL_HEALTH_OVERRIDE=…",
+  # 而那正是这一轮已经生效的东西。一个"你处理完了它还在响"的报警器,
+  # 就是下一个被当成背景噪音的报警器 —— 而那正是这一单要治的病。
+  grep -q '本轮已强行放回' "$d/V1.out"
+  check "V44w: override 生效那一轮,提示改口(不再叫人去做已经做过的事)" $?
+
   unset -f run_round
   rm -rf "$d"
 }
