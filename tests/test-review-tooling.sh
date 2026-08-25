@@ -4596,6 +4596,25 @@ STUB
     bad "V46⑧: 花名册里没有 subgemini —— 腿装了但 panel 永远不会派它"
   fi
 
+  # ⑩ headless 权限白名单:没有它,这条腿会**交白卷而看起来一切正常**。
+  # 🔴 2026-08-25 真链冒烟实测(假桩测不出来):agy 想跑一个命令 ⇒ headless 弹不出
+  #    权限提示 ⇒ **auto-denied** ⇒ agy 自己 rc=0、日志里只有一行 jetski 提示、
+  #    零产出。wrapper 靠"没有裁决行"判了失败(那道防线是对的),但腿本身是废的。
+  #    文档原话:workspace 内读写默认允许,**shell 命令默认 Ask**。
+  # 同时钉死:**永远不许出现 --dangerously-skip-permissions**(它会把网络、
+  #    仓外写一并放开;真正的边界是可丢弃副本 + 原仓只读,不是那个开关)。
+  local st2="$W/home/.gemini/antigravity-cli/settings.json"
+  if [[ -f "$st2" ]] && grep -q '"allow"' "$st2" && grep -qE 'command\((ls|cat|grep|find)' "$st2"; then
+    ok "V46⑩a: 评审 home 配了 headless 只读命令白名单(否则腿必然交白卷)"
+  else
+    bad "V46⑩a: 评审 home 没有 permissions.allow 命令白名单 —— headless 下命令被 auto-deny,腿交白卷且 agy 仍 rc=0"
+  fi
+  if grep -q -- '--dangerously-skip-permissions' "$BIN/subgemini"; then
+    bad "V46⑩b: wrapper 里出现了 --dangerously-skip-permissions —— 那会把网络与仓外写一并放开"
+  else
+    ok "V46⑩b: 没有用 --dangerously-skip-permissions 抄近路"
+  fi
+
   # ⑨ 两道闸必须**真的生效** —— 测行为,不 grep 源码。
   # 🔴 第一版是 `grep -q '_review-home-guard.sh' wrapper` = 拿「文本出现过」冒充
   #    「闸接上了」。红检 M9 把 _RHG 的路径改坏,而别处的错误提示里还印着那个文件名
