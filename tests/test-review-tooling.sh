@@ -4618,6 +4618,28 @@ STUB
     ok "V46⑩b: 没有用 --dangerously-skip-permissions 抄近路"
   fi
 
+  # ⑪ read_file 授权必须**限定在那份可丢弃副本上**,不许用通配抄近路。
+  # 🔴 2026-08-26 实测:`--add-dir DIR` 给的目录**不算 active workspace** ——
+  #    文档说"workspace 内读写自动允许",但每个新目录要 project 授权,
+  #    而 headless 拿不到 ⇒ read_file 被 auto-deny ⇒ 又一次白卷 + rc=0。
+  #    三种写法实测都能解开:read_file(*) / read_file(/) / read_file(<具体路径>)。
+  #    **只有第三种可以用**:前两种让腿读得到整个文件系统(~/.ssh、业主凭证、
+  #    别的项目),而这条腿的全部安全前提就是"它只看得见那份副本"。
+  local sj="$W/home/.gemini/antigravity-cli/settings.json"
+  if [[ -f "$sj" ]] && grep -qE 'read_file\(/' "$sj" && ! grep -qE 'read_file\(\*\)|read_file\(/\)' "$sj"; then
+    ok "V46⑪a: read_file 授权限定在具体路径上(不是 * 或 /)"
+  else
+    bad "V46⑪a: read_file 授权缺失或用了通配 —— 通配等于让腿读得到整个文件系统"
+  fi
+  # 授权的那个路径必须是**评审 workspace 那份副本**(约定形态),不是原仓、不是别处。
+  # 用形态而不是让实现另外落一个文件来自证 —— 判据不该逼实现长出只为被测而存在的构件。
+  if [[ -f "$sj" ]] && grep -oE 'read_file\([^)]*\)' "$sj" \
+       | grep -qE 'aiwork-review-workspaces/subgemini\.[^/]+/repo'; then
+    ok "V46⑪b: 授权路径是本腿的可丢弃副本(不是原仓,也不是别处)"
+  else
+    bad "V46⑪b: 授权路径不是 aiwork-review-workspaces/subgemini.*/repo —— 腿要么看不见仓,要么看得见不该看的"
+  fi
+
   # ⑨ 两道闸必须**真的生效** —— 测行为,不 grep 源码。
   # 🔴 第一版是 `grep -q '_review-home-guard.sh' wrapper` = 拿「文本出现过」冒充
   #    「闸接上了」。红检 M9 把 _RHG 的路径改坏,而别处的错误提示里还印着那个文件名
