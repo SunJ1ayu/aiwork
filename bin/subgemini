@@ -105,7 +105,35 @@ chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"
 # 🔴 遥测:业主在首次向导里亲手关掉了数据收集,但那条写在**他的** home。
 # 换 HOME 之后评审 home 是全新的、没有 settings.json ⇒ 走默认值 ⇒ 他的选择被绕过,
 # 而这条腿读的正是他的仓库代码。每次重写,不留隔夜残留。
-printf '{\n  "enableTelemetry": false\n}\n' > "$AGY_HOME_DIR/settings.json"
+# permissions.allow:**没有它这条腿会每次交白卷,而 agy 每次说自己成功**。
+# 2026-08-25 真链冒烟实测:agy 想跑命令 ⇒ headless 弹不出提示 ⇒ auto-denied ⇒
+# rc=0、零产出、日志里只有一行 jetski 提示。文档:workspace 内读写默认允许,
+# **shell 命令默认 Ask**。
+# 白名单只给**只读探索**,与其余各腿的姿态一致(subglm 也只放行 git diff/log/status/show)。
+# 🔴 绝不用 --dangerously-skip-permissions:那会把网络与仓外写一并放开。
+# 真正的边界是"可丢弃副本 + 原仓 ro-repo-exec 只读",不是这份白名单 ——
+# 白名单挡不住所有花招(`git diff --output=` 那类,08-19 已实证),
+# 但它挡得住**误伤**,而且让腿的能力边界是写下来的、可审的。
+cat > "$AGY_HOME_DIR/settings.json" <<'AGYSETTINGS'
+{
+  "enableTelemetry": false,
+  "permissions": {
+    "allow": [
+      "command(ls)",
+      "command(cat)",
+      "command(head)",
+      "command(tail)",
+      "command(wc)",
+      "command(file)",
+      "command(stat)",
+      "command(grep)",
+      "command(rg)",
+      "command(find)",
+      "command(git (diff|log|status|show|ls-files|rev-parse|blame))"
+    ]
+  }
+}
+AGYSETTINGS
 chmod 600 "$AGY_HOME_DIR/settings.json"
 
 AGY_BIN="${AGY_BIN:-$(command -v agy 2>/dev/null || echo "$HOME/.local/bin/agy")}"
