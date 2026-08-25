@@ -3346,8 +3346,12 @@ v38_leg_runtime_home_outside_repo() {
 
   # ── ① 默认 home 必须在仓外。**查工件不查自述**:让 wrapper 自己把它解析出来打印,
   #    而不是我在这儿 grep 一个字符串。
-  local home_default
-  home_default="$(REVIEW_PRINT_HOME=1 REVIEW_NO_MY_REVIEW=1 bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/x.log" "$repo" 2>/dev/null | tail -1)"
+  # ⚠️ 必须隔离 HOME:不设 KIMI_REVIEW_HOME 是**故意的**(要问出默认值),但那会让
+  #    subkimi 的种子同步(bin/subkimi:100-110)去写**业主真实的**运行期 home ——
+  #    判据每跑一次就把他的 config/hooks 重置一次。假 HOME 一样问得出"默认 home
+  #    在不在仓外",而那正是本条要查的东西。2026-08-25 panel 抓到,V45 红过。
+  local home_default fh38="$d/fh38"; mkdir -p "$fh38"
+  home_default="$(HOME="$fh38" REVIEW_PRINT_HOME=1 REVIEW_NO_MY_REVIEW=1 bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/x.log" "$repo" 2>/dev/null | tail -1)"
   [[ -n "$home_default" ]] && case "$home_default" in "$repo"/*|"$repo") false ;; *) true ;; esac
   check "V38: subkimi 的默认运行期 home 在**被评审的仓外面**(解析出来的是:${home_default:-没打印})" $?
 
@@ -3573,15 +3577,19 @@ RECORD
   #    得自己把种子放进去。少了这一步 subkimi 在 "review home config missing" 就退了,
   #    ro-repo-exec 一次都没被调到 —— 断言照样红,但**红在我的夹具上**,
   #    而"红了就当抓到 bug"正是改考卷的第一步。2026-08-19 第一版就是这样。
-  cp -a "$BIN/../kimi-review-home/." "$kihome/" 2>/dev/null || true
-  # 🔴 种子里的 credentials 是**指向业主真凭证的符号链接**(设计如此:腿和业主共用一次登录)。
-  #    cp -a 原样保留它 ⇒ 下面那句写假凭证会**写穿到真凭证**,把 subkimi 登出
-  #    (2026-08-25 实证,详见 tracks/panel-kimi-credential-wipe/)。
-  #    斩断的是**整族**而不只 credentials 一个:夹具里一条通向沙箱外的链接都不许留。
-  #    ⚠️ 别"顺手"改成 cp -aL:那会把业主真凭证的**内容**复制进世界可读的 /tmp 夹具,
-  #    比原来的 bug 更糟。要的是复制内容、不复制通道。
-  find "$kihome" -type l -delete
-  mkdir -p "$kihome/credentials"
+  # 只装夹具真正需要的两样,**不整份 cp 种子**(两条外部腿独立指出;⑦ 段 150 行外
+  # 早就写着"种子造小份",① 段一直在照搬):
+  #  · 活仓种子里的 credentials 是**指向业主真凭证的符号链接**(腿和业主共用一次登录),
+  #    `cp -a` 原样保留它 ⇒ 下面写假凭证会**写穿到真凭证**,把 subkimi 登出
+  #    (2026-08-25 实证,详见 tracks/panel-kimi-credential-wipe/);
+  #  · 真种子 101MB(其中 80MB 是 sessions)⇒ 整份 cp 每跑一次就把会话历史抄进 /tmp。
+  #  拼装比"先整份 cp 再删链接"更贴根因:不产生通道,就不需要斩断通道。
+  local _seedhook
+  mkdir -p "$kihome/hooks" "$kihome/credentials"
+  cp -f "$BIN/../kimi-review-home/config.toml" "$kihome/config.toml" 2>/dev/null || true
+  for _seedhook in "$BIN/../kimi-review-home"/hooks/*; do
+    [[ -f "$_seedhook" ]] && cp -f "$_seedhook" "$kihome/hooks/" 2>/dev/null || true
+  done
   printf '{}\n' > "$kihome/credentials/kimi-code.json"
 
   rm -f "$d/argv1.txt"
@@ -3697,8 +3705,9 @@ SEL
   # ── ⑥ usage 写的默认值 = 真实解析出来的(**查行为,不查我写了什么**)──────────
   local doc real
   doc="$(bash "$BIN/subkimi" --help 2>&1 | sed -n 's/.*KIMI_REVIEW_HOME[^,]*, *default *\([^ ]*\).*/\1/p' | head -1)"
-  doc="${doc/\$HOME/$HOME}"; doc="${doc/#\~/$HOME}"
-  real="$(env -u KIMI_REVIEW_HOME PATH="$b:$PATH" REVIEW_PRINT_HOME=1 REVIEW_NO_MY_REVIEW=1 \
+  local fh6="$d/fh6"; mkdir -p "$fh6"   # 同 V38①:别让"问一句默认值"写进业主真实 home
+  doc="${doc/\$HOME/$fh6}"; doc="${doc/#\~/$fh6}"
+  real="$(env -u KIMI_REVIEW_HOME HOME="$fh6" PATH="$b:$PATH" REVIEW_PRINT_HOME=1 REVIEW_NO_MY_REVIEW=1 \
     bash "$b/subkimi" review "$d/t.md" "$d/k2.log" "$repo" 2>/dev/null)"
   [[ -n "$doc" && -n "$real" && "$doc" == "$real" ]]
   check "V40⑥: subkimi 的 usage 默认值和真实解析一致(doc=$doc)" $?
