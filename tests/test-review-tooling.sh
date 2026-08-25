@@ -213,36 +213,57 @@ BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 
 PASS=0; FAIL=0
 
-# ── V45:判卷工具自己不许碰业主的真实 kimi 环境(兜底报警器)────────────────
+# ── V45:判卷工具自己不许碰业主的真实评审环境(兜底报警器)──────────────────
 # 根因与实证见 tracks/panel-kimi-credential-wipe/(此处不复述,免得两处各写一份)。
-# 盯两样,都是"判据跑一次就被改一次"实测过的:
-#   ① 凭证目录 —— 被写穿会让业主**掉登录**,不可逆,只能他本人重新 OAuth;
-#   ② 运行期 home 的 config.toml / hooks —— 判据里两处跑真 subkimi 且没隔离 HOME,
-#      每跑一次就把它重置成仓内种子(可再生,但同族)。
-# 没有 env 旁路:上一版留了个 OWNER_CRED_PATH 让人改道,那等于给闸留后门,已删。
-# 目录不存在时不 SKIP,退化成"跑完之后它仍然不存在"(判据也不许凭空造出它)。
+# 只盯**判据没有任何理由去碰、碰了就是错**的那几样:
+#   ① 凭证目录本身(被写穿 = 业主掉登录,不可逆,只能他本人重新 OAuth);
+#   ② 运行期 kimi home 的 config.toml / hooks/*(判据里跑真 subkimi 会把它重置成种子);
+#   ③ 运行期 kimi home 的 credentials **链接本身** —— 它是 link-to-dir,
+#      `[[ -f ]]` 看不见它,把它换成一个假目录正是"腿拿不到登录"的原始病状(panel 抓到);
+#   ④ 运行期 mimo home 的 mimocode.json(判据里跑真 submimo 会写它,同族第三处)。
+# 🔴 刻意**不盯** sessions/ oauth/ session_index.jsonl workspaces.json device_id:
+#    那些是 CLI 自己的运行期状态,业主正常用一次就会变 ⇒ 纳进来等于给自己造误报,
+#    而"报警器老响"的下一步永远是有人去调钝它。本仓为这条记过账。
+# 没有 env 旁路(上一版留过 OWNER_CRED_PATH,那是给闸留后门,已删)。
 OWNER_CRED_DIR="/root/.kimi-code/credentials"
-OWNER_RUNTIME_HOME="$HOME/.cache/aiwork/kimi-review-home"
-_fp_files() {   # _fp_files <dir> [glob...]:逐文件 inode/mtime/size/短哈希,排序后拼成一行
-  local d="$1"; shift
-  [[ -d "$d" ]] || { printf 'absent'; return; }
-  local f out=""
-  for f in "$d"/* "$@"; do
-    [[ -f "$f" ]] || continue
-    out+="$(basename "$f"):$(stat -c %i "$f" 2>/dev/null):$(stat -c %y "$f" 2>/dev/null)"
-    out+=":$(stat -c %s "$f" 2>/dev/null):$(sha256sum "$f" 2>/dev/null | cut -c1-12) "
-  done
-  printf 'dir[%s]' "$out"
+OWNER_KIMI_HOME="$HOME/.cache/aiwork/kimi-review-home"
+OWNER_MIMO_CFG="$HOME/.cache/aiwork/mimo-review-home/mimocode/mimocode.json"
+_fp1() {   # 单个路径的指纹;**先判 -L**:符号链接要当链接看,不能被 -f/-d 吞掉
+  local p="$1" n; n="$(basename "$p")"
+  if   [[ -L "$p" ]]; then printf '%s=link->%s;' "$n" "$(readlink "$p" 2>/dev/null)"
+  elif [[ -f "$p" ]]; then printf '%s=%s:%s:%s;' "$n" "$(stat -c %i "$p" 2>/dev/null)" \
+                                  "$(stat -c %y "$p" 2>/dev/null)" \
+                                  "$(sha256sum "$p" 2>/dev/null | cut -c1-12)"
+  elif [[ -d "$p" ]]; then printf '%s=目录;' "$n"
+  else                     printf '%s=absent;' "$n"; fi
 }
-_owner_env_fp() { printf '%s | %s' "$(_fp_files "$OWNER_CRED_DIR")" \
-  "$(_fp_files "$OWNER_RUNTIME_HOME" "$OWNER_RUNTIME_HOME"/hooks/*)"; }
+_owner_env_fp() {
+  local out="" f
+  for f in "$OWNER_CRED_DIR"/*;      do [[ -e "$f" ]] && out+="cred/$(_fp1 "$f")"; done
+  for f in "$OWNER_KIMI_HOME"/hooks/*; do [[ -e "$f" ]] && out+="hook/$(_fp1 "$f")"; done
+  out+="link/$(_fp1 "$OWNER_KIMI_HOME/credentials")"
+  out+="cfg/$(_fp1 "$OWNER_KIMI_HOME/config.toml")"
+  out+="mimo/$(_fp1 "$OWNER_MIMO_CFG")"
+  printf '%s' "$out"
+}
 OWNER_ENV_BEFORE="$(_owner_env_fp)"
 
 v45_oracle_never_touches_owner_credentials() {
-  echo "V45: 判卷工具自己不许碰业主的真实 kimi 环境"
-  local after; after="$(_owner_env_fp)"
-  [[ "$after" == "$OWNER_ENV_BEFORE" ]]
-  check "V45: 整套判据跑完后业主的凭证目录与运行期 home 原封不动(before=[$OWNER_ENV_BEFORE] after=[$after])" $?
+  echo "V45: 判卷工具自己不许碰业主的真实评审环境"
+  local after changed
+  after="$(_owner_env_fp)"
+  if [[ "$after" == "$OWNER_ENV_BEFORE" ]]; then
+    # 🔴 PASS 时**不打印指纹**:收据是要 commit 进仓的,而指纹里有业主凭证文件的
+    #    大小/时间/短哈希 —— 绿的时候没人需要它,红的时候才需要,那时也只打变了的那几项。
+    ok "V45: 整套判据跑完后业主的凭证目录 / kimi home / mimo home 原封不动"
+  else
+    changed="$(comm -3 <(printf '%s' "$OWNER_ENV_BEFORE" | tr ';' '\n' | sort) \
+                       <(printf '%s' "$after"            | tr ';' '\n' | sort) \
+               | tr -d '\t' | paste -sd' ' -)"
+    bad "V45: 判据动了业主的真实环境 —— 变的是:$changed"
+    echo "     ⚠️ 你若在这 ~3 分钟里跑过 kimi login / 并发跑了一轮 panel,那是误报;"
+    echo "        否则就是判据在写它不该写的地方 —— **先查判据,别先调钝这道闸**。"
+  fi
 }
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
