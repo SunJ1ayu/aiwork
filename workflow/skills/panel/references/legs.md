@@ -114,9 +114,93 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - `panel-review` 把它纳入健康轮换池(`PANEL_KIMI_LEG=off` 关闭)，只有被预算选中或条件
   升级时才实际派出；**没有 chat 回落**。
 
-## codex (GPT-5.6-Sol) — 第五条腿,frontier 档,2026-07-26 起
+## subgemini (Gemini,跑在 Antigravity CLI 上) — 第五条轮换腿,2026-08-25 起
 
-**还没有包成脚本,当前是主 agent 手动并排拉起。** 参见 [[codex-as-employee]] 记忆。
+`/root/aiwork/bin/subgemini`,**只读评审**,没有 chat 回落。骑业主的 **Gemini 会员**
+OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
+底座是 **Antigravity CLI(`agy`)** 的 headless 模式(`agy -p`),和 subkimi 的
+`kimi -p` 同形 —— 评审员自己读仓库,无盲评、无需喂 INCLUDE。
+
+- **为什么不是 gemini-cli**:Google 已把 gemini-cli 转到 Antigravity CLI,
+  且 **2026-06-18 起 gemini-cli 对免费 / AI Pro / Ultra 个人账号停止服务**。
+  那条路是死的,别再走回去。
+- **默认模型 `gemini-3.7-flash-high`**(业主 2026-08-25 拍板)。
+  **注意 3.7 / 3.6 / 3.5 只有 Flash 档,Pro 最高停在 3.1** —— "用最新的"和
+  "用最大的"在这里是两个方向。选型有实测:同一份埋雷考卷连考两轮,
+  `gemini-3.7-flash-high` 抓 5 / 7 条,`gemini-3.1-pro-high` 抓 3 / 4 条,两轮同向。
+- **🔴 模型是硬闸,不是默认值**:`AGY_MODEL` 可覆盖,但 **非 `gemini-*` 一律拒跑**。
+  `agy models` 同时供应 `claude-sonnet-4-6` / `claude-opus-4-6-thinking` /
+  `gpt-oss-120b`。这条腿在花名册里代表 **Google 家族**,它跑成 Claude 会让归档闸的
+  「覆盖 N 个不同模型家族」变成一句假话 —— **而那道闸查的是腿名,查不出模型**。
+- **隔离靠换 `HOME`**:agy 没有专用 home 变量(路径从 `$HOME` 拼),
+  所以 `AGY_REVIEW_HOME`(默认 `~/.cache/aiwork/agy-review-home`,**仓外**)
+  整体重定向配置/数据/状态,与 subglm 的 `OPENCODE_REVIEW_HOME` 同形。
+- **凭证用「复制」不用「符号链接」**,600,每次派发前重拷一份最新的。
+  链接是通向沙箱外的写通道,`panel-kimi-credential-wipe` 的根因就是它;
+  而掉 agy 登录**不可逆**,只有业主本人能开浏览器重走 OAuth(SSH 环境下 agy 会
+  打印授权网址 + 要人贴回一次性码,`agy` 是 TUI,**没有 `login` 子命令**)。
+  token 内含 `refresh_token` ⇒ 副本能自己刷新,不会因 access_token 过期而死。
+- **评审 home 必须写死 `enableTelemetry:false`**。业主在首次向导里亲手关掉了数据
+  收集,但那条写在**他的** home;换 HOME 之后评审 home 是全新的、连 settings.json
+  都没有 = 走默认值 = 他的选择被绕过,**而这条腿读的正是他的仓库代码**。
+- **三个只有真跑才会撞见的坑**(都已焊死,判据 V46 盯着):
+  ① **rc 完全信不得** —— 未登录跑 `agy models` 仍然 **rc=0**;官方文档也载明拿不到
+     批准的工具是 soft-deny「继续跑、exit 0、只在 stderr 印一句」⇒ 判死活**只看裁决行**;
+  ② **未登录时 `agy -p` 静默挂死**(实测 40 秒零输出、不退出)⇒ wrapper 派发前
+     预检凭证,失效就**响亮失败**;没有这一步,失效凭证长得和额度耗尽一模一样;
+  ③ **不给 workspace 时它读写自己的 `~/.gemini/antigravity-cli/scratch/`,不碰 cwd**
+     ⇒ 必须显式 `--add-dir`,否则腿等于没看见被评审的仓(而它照样会交一份像样的卷)。
+
+### headless 权限:这条腿最花时间的地方,别照文档写
+
+⚠️ **早期那句"agy 在 workspace 内写权限默认全开、跟它的权限系统搏斗没有收益"是错的**,
+写在这里当墓碑。那次探针跑在**业主自己的 home**(已经手工信任过 `/root`)上,
+换进隔离 home 之后结论完全不成立 —— **隔离改变了权限基线,而我拿旧基线的结论做了设计。**
+
+真链冒烟连挂四轮才收敛,每轮换一个拒法(全都是 `rc=0` + 零产出):
+
+1. `RunCommand` 被 auto-deny —— headless 弹不出批准框;
+2. `read_file` 被 auto-deny —— **`--add-dir` 给的目录不算 active workspace**,
+   文档那句"workspace 内读写自动允许"不覆盖它,每个新目录要 project 授权;
+3. `command(git (log|diff))` 被拒 —— **分组语法是死的**。实测
+   `command(git log)` 通过 / `command(git (log|diff))` **被拒** / `command(git)` 通过,
+   **而官方文档的例子写的正是分组**。照文档写 = 规则静默失效 = 腿每次交白卷;
+4. 它想跑 `bash tests/mutation-subgemini.sh`(**它想跑我们的红检脚本来验证代码**)。
+
+第 4 条逼出了真正的病根:**一次 soft-deny 就让整个 run 零产出**,不是"换个工具继续"。
+所以修法不是把命令一条条加进白名单(追不完),而是**在提示词里写清沙箱边界**,
+并明确告诉它"一次被拒你整轮就废了"。这是**引导不是保证**,记在 track 的 E4。
+
+现在的配置(`write_agy_settings`,每次派发重写):
+- `read_file(<副本路径>)` / `write_file(<副本路径>)` —— **必须是具体路径**。
+  `read_file(*)` 和 `read_file(/)` 同样能解开,但那让腿读得到 `~/.ssh`、业主的 agy 凭证、
+  机器上别的项目。判据 V46⑪a 机械挡住通配。
+- 命令白名单**只留只读 git**(log/diff/status/show/ls-files/rev-parse/blame,一条一条写)。
+  🔴 **不许放 cat/ls/grep/find 这类通用文件命令** —— 它们**完全绕过** `read_file` 的
+  副本限定,`command(cat)` 一放行,腿就能 cat 业主的私钥。第一版白名单里正有这一串,
+  而同一个文件的注释里写着"这条腿只看得见那份副本" —— 两句话同时在,只有一句是真的。
+  判据 V46⑩d 盯着。
+- 排查工具 **`bin/subgemini-diag`**:agy 的失败信息**从不说是哪个命令**,
+  它从会话 SQLite 里挖出来。注意必须连 `-wal` 一起复制再打开,
+  只拷 `.db` 会读不到刚跑完那轮、得出"没有失败记录"的假结论。
+
+- **只读边界沿用现行架构**(可丢弃可写副本 + 原仓 `ro-repo-exec` 只读),没有另造锁。
+  `--mode plan` 只出计划,但没验过那是机械锁还是模型自觉,**因此不拿它当防线**。
+- **腿目前不能跑判据/测试**(track 的 E3):放行 `bash` 等于放弃"只看得见副本"这条边界。
+  而 `ro-lock-teardown` 的 proposal 写着评审腿应当"能运行本地判据、编译和诊断" ——
+  这笔账敞着,单开一单。
+- **裁决判定复用 `_panel-roster-lib.sh` 的 `verdict_of`**,不另写正则:
+  花名册那条是严格的(裁决必须独立成行),而提示词里原样含有
+  "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO" —— 腿用宽松、花名册用严格,
+  等于腿自认成功而花名册记 UNKNOWN。
+- **敞账:`agy` 是闭源 Go 二进制,而且会在日常运行中后台自我更新**
+  (`agy update` 子命令 + 安装脚本自述)。**判卷防线上出现了一个会自己变的构件**,
+  这笔账还没还(track subgemini-review-leg 的 D1)。
+- 超时 `AGY_TIMEOUT`(默认 1500s)。`fix` **故意不支持**。
+
+## codex (GPT-5.6-Sol) — frontier 档(**不在轮换池里**,主 agent 手动并排拉起),2026-07-26 起
+
+**还没有包成脚本,当前是主 agent 手动并排拉起;它不在 `PANEL_LEGS_ORDER` 里。** 参见 [[codex-as-employee]] 记忆。
 
 ```
 codex exec -C REPO -s read-only -o PREFIX.codex.log "评审任务书(要求中文回答)"
