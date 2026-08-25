@@ -39,6 +39,10 @@ Options / env:
   PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
   PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
   PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
+  PANEL_HEALTH_DEAD_STREAK   连续这么多轮 rc≠0 就**停止轮换**该腿,冷却过了也不放回
+                             (默认 3;0=关掉)。只有 rc≠0 计数——INCOMPLETE/DEGRADED
+                             是 rc=0,腿产出了东西,算进去会把干活的腿踢掉。
+                             放回:PANEL_HEALTH_OVERRIDE=<leg>=healthy(成功一次即清零)
   (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
                              convention file <tool-root>/tasks/<taskname>-my-review.md
                              (taskname = TASK_FILE basename) and REFUSES to dispatch
@@ -285,6 +289,14 @@ PANEL_STATE_DIR="${PANEL_STATE_DIR:-$TOOL_ROOT/logs/.panel-state}"
 HEALTH_FILE="$PANEL_STATE_DIR/health.tsv"
 CURSOR_FILE="$PANEL_STATE_DIR/cursor"
 HEALTH_COOLDOWN="${PANEL_HEALTH_COOLDOWN_SEC:-21600}"
+# 连续硬失败到这个次数 ⇒ **停止轮换**这条腿(0 = 关掉整个机制)。
+# 为什么要有它(2026-08-25,track panel-dead-leg-streak):subkimi 从 08-20 到 08-25
+# 跨 **10 轮** panel,每轮死在同一句 "no credential configured" —— 那是要人跑一次
+# `kimi login` 才会好的故障,而冷却重试对它永远无效:它每 6 小时复活一次、再死一次,
+# 循环了 6 天。每轮的信号都是同一句 WARNING,响了 10 次,被当成背景噪音。
+# ⇒ 缺的不是"再加一句提示",是**状态会变**。阈值取 3 是因为它横跨至少两个冷却窗口,
+#   已经不像抖动;取 1 会把抖动当结构性故障,变成新的噪音源。
+HEALTH_DEAD_STREAK="${PANEL_HEALTH_DEAD_STREAK:-3}"
 mkdir -p "$PANEL_STATE_DIR"
 
 LEGS=(submimo subdeepseek subglm subkimi)
@@ -317,6 +329,20 @@ recent_health() {  # recent_health <leg>; prints status if still cooling down
   printf '%s\n' "$status"
 }
 
+dead_health() {  # dead_health <leg>; 连续硬失败到阈值就打印 dead:<status>:<streak>
+  local leg="$1" row status streak
+  [[ "$HEALTH_DEAD_STREAK" =~ ^[0-9]+$ && "$HEALTH_DEAD_STREAK" -gt 0 ]] || return 1
+  [[ -f "$HEALTH_FILE" ]] || return 1
+  row="$(awk -F '\t' -v n="$leg" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
+  [[ -n "$row" ]] || return 1
+  status="$(printf '%s' "$row" | cut -f2)"
+  streak="$(printf '%s' "$row" | cut -f4)"
+  # 老的三列行没有第 4 列 ⇒ 当 0(不许因为格式变了就崩,也不许把老行误判成 dead)。
+  [[ "$streak" =~ ^[0-9]+$ ]] || return 1
+  (( streak >= HEALTH_DEAD_STREAK )) || return 1
+  printf 'dead:%s:%s\n' "$status" "$streak"
+}
+
 for _leg in "${LEGS[@]}"; do
   LEG_SELECTED[$_leg]=0
   if [[ -z "${LEG_CMD[$_leg]}" || ! -x "${LEG_CMD[$_leg]}" ]]; then
@@ -328,8 +354,14 @@ for _leg in "${LEGS[@]}"; do
   if [[ -n "$_health" ]]; then
     case "${_health,,}" in healthy|pass|up|ok) : ;; *) LEG_HEALTH[$_leg]="$_health" ;; esac
   elif [[ "$FORCE_ALL" -ne 1 ]]; then
-    _health="$(recent_health "$_leg" 2>/dev/null || true)"
-    [[ -n "$_health" ]] && LEG_HEALTH[$_leg]="cooldown:$_health"
+    # dead 优先于 cooldown:冷却过了照样不放它回来 —— 那正是这个机制的全部意义。
+    _health="$(dead_health "$_leg" 2>/dev/null || true)"
+    if [[ -n "$_health" ]]; then
+      LEG_HEALTH[$_leg]="$_health"
+    else
+      _health="$(recent_health "$_leg" 2>/dev/null || true)"
+      [[ -n "$_health" ]] && LEG_HEALTH[$_leg]="cooldown:$_health"
+    fi
   fi
 done
 unset _leg _health
@@ -407,13 +439,21 @@ for _leg in "${LEGS[@]}"; do
     echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: ${_leg#sub})"
   elif [[ "${LEG_HEALTH[$_leg]}" == "off" ]]; then
     echo "  $_leg = off/unavailable"
+  elif [[ "${LEG_HEALTH[$_leg]}" == dead:* ]]; then
+    _dstatus="${LEG_HEALTH[$_leg]#dead:}"; _dstreak="${_dstatus##*:}"; _dstatus="${_dstatus%:*}"
+    _dfirst="$(awk -F '\t' -v n="$_leg" '$1==n {f=$5} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
+    echo "  $_leg = skipped(health:${LEG_HEALTH[$_leg]})"
+    echo "  🔴 $_leg 已停止轮换:**连续 $_dstreak 轮**都以 $_dstatus 失败$(
+      [[ "$_dfirst" =~ ^[0-9]+$ ]] && printf '(最早一次 %s)' "$(date -d "@$_dfirst" '+%m-%d %H:%M' 2>/dev/null)")。"
+    echo "     冷却重试救不了这一类 —— 它要人动手。去看它上一轮的日志:${LEG_LOG[$_leg]}"
+    echo "     处理完强行放回:PANEL_HEALTH_OVERRIDE=$_leg=healthy(跑成功一次 streak 自动清零)"
   elif [[ "${LEG_HEALTH[$_leg]}" != "healthy" ]]; then
     echo "  $_leg = skipped(${LEG_HEALTH[$_leg]})"
   else
     echo "  $_leg = skipped(rotation/budget)"
   fi
 done
-unset _leg
+unset _leg _dstatus _dstreak _dfirst
 # A chat leg with nothing attached beyond the diff cannot review the oracle itself
 # ("是规格错还是实现错"就查不了)。Nudge, never block — the arbiter decides.
 if [[ -z "${PANEL_INCLUDE:-}" ]] \
@@ -689,9 +729,31 @@ record_health() {  # record_health <leg>
   elif [[ "$(verdict_of "$log")" == "UNKNOWN" ]]; then
     status="INCOMPLETE"
   fi
+  # 连续**硬**失败计数。判据 V44g/h 盯死的那一条:只有 rc≠0 才 +1。
+  # `INCOMPLETE` / `DEGRADED` 都是 **rc=0** —— 腿产出了东西,只是裁决行没匹配上。
+  # 把它们算进来,就会把正在干活的腿踢掉(submimo 2026-08-25 当轮就是 INCOMPLETE,
+  # 而它那份评审是那一轮最有价值的两份之一)。
+  local prior_streak prior_first streak first
+  prior_streak=0; prior_first=""
+  if [[ -f "$HEALTH_FILE" ]]; then
+    local prow
+    prow="$(awk -F '\t' -v n="$name" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
+    if [[ -n "$prow" ]]; then
+      prior_streak="$(printf '%s' "$prow" | cut -f4)"
+      prior_first="$(printf '%s' "$prow" | cut -f5)"
+      [[ "$prior_streak" =~ ^[0-9]+$ ]] || prior_streak=0   # 老三列行
+    fi
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    streak=$((prior_streak + 1))
+    if [[ "$prior_first" =~ ^[0-9]+$ && "$prior_streak" -gt 0 ]]; then first="$prior_first"
+    else first="$now"; fi
+  else
+    streak=0; first=""
+  fi
   tmp="$HEALTH_FILE.tmp.$$"
   { [[ -f "$HEALTH_FILE" ]] && awk -F '\t' -v n="$name" '$1!=n' "$HEALTH_FILE"
-    printf '%s\t%s\t%s\n' "$name" "$status" "$now"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$now" "$streak" "$first"
   } > "$tmp" && mv -f "$tmp" "$HEALTH_FILE"
 }
 for _leg in "${LEGS[@]}"; do

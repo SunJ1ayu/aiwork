@@ -4031,11 +4031,17 @@ EOF
   rm -rf "$state"; mkdir -p "$state"
   printf 'subkimi\tFAIL\t%s\n' "$(date +%s)" > "$state/health.tsv"   # 旧格式,无第 4 列
   : > "$d/calls"
-  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=3 \
     PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=0 \
     STUB_CALLS="$d/calls" \
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/L1" >/dev/null 2>&1; rc=$?
-  check "V44j: 老三列 health.tsv 照跑不崩(缺第 4 列当 0)" $([[ $rc -eq 0 ]]; echo $?)
+  # 🔴 只查"不崩"太弱:老行被误判成 dead 的话,整轮照样 rc=0(少一条腿而已)。
+  # 想变异方案时发现的 —— 所以这里必须同时查**它还在轮换里**。
+  # (起点钉在 subkimi;冷却设 0 ⇒ 那条老 FAIL 行不该拦住它。)
+  local still_rotating
+  grep -q '^subkimi$' "$d/calls"; still_rotating=$?
+  check "V44j: 老三列 health.tsv 照跑不崩(缺第 4 列当 0)" \
+    $([[ $rc -eq 0 && $still_rotating -eq 0 ]]; echo $?)
 
   # ── k) 阈值可关:设 0 等于整个机制不存在 ────────────────────────────
   rm -rf "$state"; mkdir -p "$state"
