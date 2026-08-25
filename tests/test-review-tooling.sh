@@ -4102,9 +4102,10 @@ EOF
     STUB_CALLS="$d/calls" \
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/N9" >"$d/N9.out" 2>&1
   local hinted
-  # 只能从**提示那一行**里取,不能全文抓第一个 .log ——
-  # 被选中腿的日志当然存在,那样这条断言永远绿(第一版就是这么错的)。
-  hinted="$(grep -F '去看它上一轮的日志' "$d/N9.out" | grep -oE '/[^ ]*\.log' | head -1)"
+  # 结构性取,不赌文案:提示里那个日志是**上一轮**的,所以它不带本轮前缀。
+  # (第一版全文抓第一个 .log ⇒ 抓到被选中腿的日志、永远绿;
+  #  第二版按措辞 grep ⇒ 我一改措辞锚点就过期。两个坑本仓都记过账。)
+  hinted="$(grep -oE '/[^ ]*\.log' "$d/N9.out" | grep -v "^$d/N9\." | head -1)"
   check "V44n: dead 提示指的日志必须真的存在(不是本轮那个永远不会产生的)" \
     $([[ -n "$hinted" && -f "$hinted" ]]; echo $?)
 

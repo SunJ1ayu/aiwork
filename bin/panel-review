@@ -297,6 +297,13 @@ HEALTH_COOLDOWN="${PANEL_HEALTH_COOLDOWN_SEC:-21600}"
 # ⇒ 缺的不是"再加一句提示",是**状态会变**。阈值取 3 是因为它横跨至少两个冷却窗口,
 #   已经不像抖动;取 1 会把抖动当结构性故障,变成新的噪音源。
 HEALTH_DEAD_STREAK="${PANEL_HEALTH_DEAD_STREAK:-3}"
+# fail-closed:垃圾值不许**静默**把机制关掉(panel subglm 发现 3)。
+# `abc` 会让判断永远失配;`08` 在 `(( ))` 里是非法八进制,同样静默不判死 ——
+# 两种都表现为"我以为开着,其实关着",正是本仓最不能接受的那一类。判据 V44o。
+if [[ ! "$HEALTH_DEAD_STREAK" =~ ^(0|[1-9][0-9]*)$ ]]; then
+  echo "panel-review: PANEL_HEALTH_DEAD_STREAK='$HEALTH_DEAD_STREAK' 不是十进制非负整数(0=关掉)" >&2
+  exit 64
+fi
 mkdir -p "$PANEL_STATE_DIR"
 
 LEGS=(submimo subdeepseek subglm subkimi)
@@ -321,7 +328,14 @@ recent_health() {  # recent_health <leg>; prints status if still cooling down
   [[ -f "$HEALTH_FILE" ]] || return 1
   row="$(awk -F '\t' -v n="$leg" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
   [[ -n "$row" ]] || return 1
-  IFS=$'\t' read -r _ status at <<< "$row"
+  # 🔴 **按列取,不许用 `read` 吞字段**(2026-08-25,panel subglm 抓到、我亲手复现):
+  # health.tsv 从 3 列长到 5 列之后,`IFS=$'\t' read -r _ status at` 会把**多余字段
+  # 连分隔符一起塞进最后一个变量** ⇒ at="<epoch>\t<streak>\t<first>" ⇒
+  # `^[0-9]+$` 永不匹配 ⇒ **冷却对新格式行整个失效**。
+  # 那让"阈值 3 横跨两个冷却窗口"这个设计前提当场变成假的:三次背靠背的瞬时故障
+  # 几分钟内就能判死一条好腿。判据 V44l/m。
+  status="$(printf '%s' "$row" | cut -f2)"
+  at="$(printf '%s' "$row" | cut -f3)"
   case "$status" in PASS|healthy) return 1 ;; esac
   [[ "$at" =~ ^[0-9]+$ && "$HEALTH_COOLDOWN" =~ ^[0-9]+$ ]] || return 1
   now="$(date +%s)"
@@ -435,25 +449,36 @@ fi
 echo "panel-review: task=$TASK_FILE repo=$REPO_DIR"
 echo "  impact-risk=$IMPACT_RISK requested-budget=$REVIEW_BUDGET selected=$SELECTED_COUNT"
 for _leg in "${LEGS[@]}"; do
-  if [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
+  # 🔴 dead 这一支必须排在 SELECTED 前面:`--all` 会把死腿也选中,
+  # 排在后面就永远到不了 —— 加了一道防线却没接进主路(判据 V44p 逮到)。
+  if [[ -n "$(dead_health "$_leg" 2>/dev/null || true)" && "${LEG_HEALTH[$_leg]}" != "off" ]]; then
+    # 🔴 `--all` 也走这里:**派它和告诉我它是死的,不矛盾**(两条评审腿独立命中)。
+    # `--all` 恰恰是最该知道"其实只有 3 条腿"的场合,原来它信息最少。判据 V44p。
+    _dinfo="$(dead_health "$_leg")"; _dstatus="${_dinfo#dead:}"
+    _dstreak="${_dstatus##*:}"; _dstatus="${_dstatus%:*}"
+    _dfirst="$(awk -F '\t' -v n="$_leg" '$1==n {f=$5} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
+    _dlog="$(awk -F '\t' -v n="$_leg" '$1==n {f=$6} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
+    if [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
+      echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: ${_leg#sub})"
+    else
+      echo "  $_leg = skipped(health:$_dinfo)"
+    fi
+    # 措辞不再断言"都以 X 失败":streak 对任意 rc≠0 计数,而 status 只是**最近一次**。
+    echo "  🔴 $_leg 连续 $_dstreak 轮 rc≠0(最近一次:$_dstatus)$(
+      [[ "$_dfirst" =~ ^[0-9]+$ ]] && printf ',最早一次 %s' "$(date -d "@$_dfirst" '+%m-%d %H:%M' 2>/dev/null)")。"
+    echo "     冷却重试救不了这一类 —— 它要人动手。上一轮它的日志:${_dlog:-(没记到,去 $(dirname "${LEG_LOG[$_leg]}") 里找最近的 $_leg.log)}"
+    echo "     处理完强行放回:PANEL_HEALTH_OVERRIDE=$_leg=healthy(跑成功一次 streak 自动清零)"
+  elif [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
     echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: ${_leg#sub})"
   elif [[ "${LEG_HEALTH[$_leg]}" == "off" ]]; then
     echo "  $_leg = off/unavailable"
-  elif [[ "${LEG_HEALTH[$_leg]}" == dead:* ]]; then
-    _dstatus="${LEG_HEALTH[$_leg]#dead:}"; _dstreak="${_dstatus##*:}"; _dstatus="${_dstatus%:*}"
-    _dfirst="$(awk -F '\t' -v n="$_leg" '$1==n {f=$5} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
-    echo "  $_leg = skipped(health:${LEG_HEALTH[$_leg]})"
-    echo "  🔴 $_leg 已停止轮换:**连续 $_dstreak 轮**都以 $_dstatus 失败$(
-      [[ "$_dfirst" =~ ^[0-9]+$ ]] && printf '(最早一次 %s)' "$(date -d "@$_dfirst" '+%m-%d %H:%M' 2>/dev/null)")。"
-    echo "     冷却重试救不了这一类 —— 它要人动手。去看它上一轮的日志:${LEG_LOG[$_leg]}"
-    echo "     处理完强行放回:PANEL_HEALTH_OVERRIDE=$_leg=healthy(跑成功一次 streak 自动清零)"
   elif [[ "${LEG_HEALTH[$_leg]}" != "healthy" ]]; then
     echo "  $_leg = skipped(${LEG_HEALTH[$_leg]})"
   else
     echo "  $_leg = skipped(rotation/budget)"
   fi
 done
-unset _leg _dstatus _dstreak _dfirst
+unset _leg _dinfo _dstatus _dstreak _dfirst _dlog
 # A chat leg with nothing attached beyond the diff cannot review the oracle itself
 # ("是规格错还是实现错"就查不了)。Nudge, never block — the arbiter decides.
 if [[ -z "${PANEL_INCLUDE:-}" ]] \
@@ -744,16 +769,20 @@ record_health() {  # record_health <leg>
       [[ "$prior_streak" =~ ^[0-9]+$ ]] || prior_streak=0   # 老三列行
     fi
   fi
+  local lastlog
   if [[ "$rc" -ne 0 ]]; then
     streak=$((prior_streak + 1))
     if [[ "$prior_first" =~ ^[0-9]+$ && "$prior_streak" -gt 0 ]]; then first="$prior_first"
     else first="$now"; fi
+    # 记下**这一轮**的日志:下一轮它被跳过时,提示得指得出一个真的存在的文件。
+    # (panel subglm 发现 2:原来指的是本轮前缀,而被跳过的腿本轮根本不产生日志。)
+    lastlog="$log"
   else
-    streak=0; first=""
+    streak=0; first=""; lastlog=""
   fi
   tmp="$HEALTH_FILE.tmp.$$"
   { [[ -f "$HEALTH_FILE" ]] && awk -F '\t' -v n="$name" '$1!=n' "$HEALTH_FILE"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$now" "$streak" "$first"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$now" "$streak" "$first" "$lastlog"
   } > "$tmp" && mv -f "$tmp" "$HEALTH_FILE"
 }
 for _leg in "${LEGS[@]}"; do

@@ -128,6 +128,45 @@ if s.count(old) != 1: sys.exit(1)
 p.write_text(s.replace(old, '[[ "$HEALTH_DEAD_STREAK" =~ ^[0-9]+$ ]] || return 1'))
 PY
 
+mutate M7 "V44l: 一次硬失败之后,冷却窗口内不许再派它(冷却没死)" <<'PY'
+import os, pathlib, sys
+# 回到那个真出过事的写法:`read` 把多余字段连分隔符塞进最后一个变量 ⇒ 冷却整个失效。
+# 这条变异存在的意义:那个 bug 曾经**461 条判据全绿**地躺在树上。
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = "  status=\"$(printf '%s' \"$row\" | cut -f2)\"\n  at=\"$(printf '%s' \"$row\" | cut -f3)\""
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, "  IFS=$'\\t' read -r _ status at <<< \"$row\""))
+PY
+
+mutate M8 "V44o: PANEL_HEALTH_DEAD_STREAK=08 必须拒跑(fail-closed),不许静默失效" <<'PY'
+import os, pathlib, sys
+# 「安全旋钮的垃圾值静默失效」—— 我以为开着,其实关着
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+i = s.find('if [[ ! "$HEALTH_DEAD_STREAK" =~ ')
+if i < 0: sys.exit(1)
+j = s.index("\nfi\n", i) + 4
+p.write_text(s[:i] + s[j:])
+PY
+
+mutate M9 "V44p: --all 照派,但那行「连续几轮」的提示照打" <<'PY'
+import os, pathlib, sys
+# 「加了一道防线却没接进主路」:dead 分支排到 SELECTED 后面 ⇒ --all 永远到不了
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = '  if [[ -n "$(dead_health "$_leg" 2>/dev/null || true)" && "${LEG_HEALTH[$_leg]}" != "off" ]]; then'
+if s.count(old) != 1: sys.exit(1)
+new = '  if [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then\n    echo "  $_leg -> ${LEG_LOG[$_leg]}"\n  el' + old.lstrip()
+p.write_text(s.replace(old, new))
+PY
+
+mutate M10 "V44n: dead 提示指的日志必须真的存在(不是本轮那个永远不会产生的)" <<'PY'
+import os, pathlib, sys
+# 「报警在"去哪看"这一格是断的」:不记上一轮日志 ⇒ 提示只能指向本轮那个不存在的文件
+p = pathlib.Path(os.environ["ROOT"], "bin/panel-review"); s = p.read_text()
+old = '    lastlog="$log"'
+if s.count(old) != 1: sys.exit(1)
+p.write_text(s.replace(old, '    lastlog=""'))
+PY
+
 restore
 echo "== 红检结束:咬住 $BIT,漏网 $MISS =="
 for f in "${TARGETS[@]}"; do
