@@ -4604,10 +4604,22 @@ STUB
   # 同时钉死:**永远不许出现 --dangerously-skip-permissions**(它会把网络、
   #    仓外写一并放开;真正的边界是可丢弃副本 + 原仓只读,不是那个开关)。
   local st2="$W/home/.gemini/antigravity-cli/settings.json"
-  if [[ -f "$st2" ]] && grep -q '"allow"' "$st2" && grep -qE 'command\((ls|cat|grep|find)' "$st2"; then
+  if [[ -f "$st2" ]] && grep -q '"allow"' "$st2" && grep -qE 'command\(git (log|diff)' "$st2"; then
     ok "V46⑩a: 评审 home 配了 headless 只读命令白名单(否则腿必然交白卷)"
   else
     bad "V46⑩a: 评审 home 没有 permissions.allow 命令白名单 —— headless 下命令被 auto-deny,腿交白卷且 agy 仍 rc=0"
+  fi
+  # ⑩d 🔴 白名单**不许放行通用文件读取命令**(cat/ls/head/tail/grep/find/rg/stat/file/wc)。
+  #    它们完全绕过 read_file 的副本限定:`command(cat)` 一旦放行,腿就能
+  #    `cat /root/.ssh/id_rsa`、`cat` 业主的 agy 凭证、`cat` 机器上任何别的项目。
+  #    第一版白名单里正有这一串 —— 我一边在注释里写"这条腿只看得见那份副本",
+  #    一边亲手开了一个读整个文件系统的口子。**两句话同时写在一个文件里,只有一句是真的。**
+  #    文件读取一律走内置 read_file 工具(已被 ⑪ 限定在副本上);
+  #    shell 只留只读 git —— 与 subglm 的姿态一致(它的 bash 白名单也只放行 git 那几条)。
+  if [[ -f "$st2" ]] && grep -qE 'command\((cat|ls|head|tail|grep|find|rg|stat|file|wc|sed|awk|bash|sh|python)' "$st2"; then
+    bad "V46⑩d: 白名单放行了通用文件命令 —— 它们绕过 read_file 的副本限定,腿能读整个文件系统"
+  else
+    ok "V46⑩d: 白名单没有放行绕过副本限定的通用文件命令"
   fi
   # 🔴 只查**非注释行**。第一版 grep 整个文件,而实现里那句"绝不用它"的注释本身
   #    就含这个字符串 ⇒ 写下警告反而让判据红。本机为「连注释都查」记过账(R12b),
@@ -4616,6 +4628,17 @@ STUB
     bad "V46⑩b: wrapper 里出现了 --dangerously-skip-permissions —— 那会把网络与仓外写一并放开"
   else
     ok "V46⑩b: 没有用 --dangerously-skip-permissions 抄近路"
+  fi
+
+  # ⑩c 白名单里不许出现**分组语法**。2026-08-26 实测:
+  #    `command(git log)` 通过 / `command(git (log|diff))` **被拒** / `command(git)` 通过。
+  #    官方文档的例子写的正是 `command(npm run (build|lint|test))` 这种分组 ——
+  #    **照文档写出来的规则是静默失效的**:它不报错、不警告,只是每次都 auto-deny,
+  #    表现为腿交白卷而 agy rc=0。必须把分组展开成一条一条的精确前缀。
+  if [[ -f "$st2" ]] && grep -qE 'command\([^)]*\([^)]*\|' "$st2"; then
+    bad "V46⑩c: 白名单里有分组语法(如 command(git (log|diff))) —— 实测被拒,是静默失效的写法"
+  else
+    ok "V46⑩c: 白名单没有用分组语法(它看着对、实测被拒)"
   fi
 
   # ⑪ read_file 授权必须**限定在那份可丢弃副本上**,不许用通配抄近路。
