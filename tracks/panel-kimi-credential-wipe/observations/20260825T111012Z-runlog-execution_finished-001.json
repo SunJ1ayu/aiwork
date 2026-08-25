@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "panel-kimi-credential-wipe",
+  "run_id": "20260825T110711Z-01-oracle-full-r3",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "oracle-full-r3",
+  "started_at": "2026-08-25T11:07:11Z",
+  "finished_at": "2026-08-25T11:10:12Z",
+  "duration_ms": 180402,
+  "exit_code": 1,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 1,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
