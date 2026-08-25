@@ -3568,6 +3568,13 @@ RECORD
   #    ro-repo-exec 一次都没被调到 —— 断言照样红,但**红在我的夹具上**,
   #    而"红了就当抓到 bug"正是改考卷的第一步。2026-08-19 第一版就是这样。
   cp -a "$BIN/../kimi-review-home/." "$kihome/" 2>/dev/null || true
+  # 🔴 种子里的 credentials 是**指向业主真凭证的符号链接**(设计如此:腿和业主共用一次登录)。
+  #    cp -a 原样保留它 ⇒ 下面那句写假凭证会**写穿到真凭证**,把 subkimi 登出
+  #    (2026-08-25 实证,详见 tracks/panel-kimi-credential-wipe/)。
+  #    斩断的是**整族**而不只 credentials 一个:夹具里一条通向沙箱外的链接都不许留。
+  #    ⚠️ 别"顺手"改成 cp -aL:那会把业主真凭证的**内容**复制进世界可读的 /tmp 夹具,
+  #    比原来的 bug 更糟。要的是复制内容、不复制通道。
+  find "$kihome" -type l -delete
   mkdir -p "$kihome/credentials"
   printf '{}\n' > "$kihome/credentials/kimi-code.json"
 
