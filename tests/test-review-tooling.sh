@@ -3947,6 +3947,8 @@ case "$name" in
 esac
 printf '%s\n' "$name" >> "${STUB_CALLS:?}"
 printf 'Conclusion: %s\n' "$verdict" > "$3"
+# DEGRADED 的形状:rc=0,但留下 .agent.log 旁证(底座腿失败回落到聊天腿)。
+[[ -n "${STUB_DEGRADE:-}" && "$name" == "$STUB_DEGRADE" ]] && : > "${3%.log}.agent.log"
 exit "$rc"
 EOF
     chmod +x "$pb/$leg"
@@ -4059,6 +4061,90 @@ EOF
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/K9" >/dev/null 2>&1
   grep -q '^subkimi$' "$d/calls"
   check "V44k: PANEL_HEALTH_DEAD_STREAK=0 时机制整个关掉" $?
+
+
+  # ── l) 🔴 冷却本身必须还活着(全套件此前**一条都没测过**冷却)────────
+  # panel subglm(那条"失败"腿)抓到的严重回归:record_health 写 5 列之后,
+  # recent_health 还按 3 列 `read`,而 bash 的 read 把多余字段连分隔符塞进最后一个变量
+  # ⇒ at="<epoch>\t<streak>\t<first>" ⇒ ^[0-9]+$ 永不匹配 ⇒ **冷却对新格式行整个失效**。
+  # 后果正好落在"唯一不可接受的后果"上:三次背靠背的瞬时故障(429 突发)几分钟内
+  # 就能攒满 streak=3 判死一条好腿 —— 而我的设计前提写的是"横跨两个冷却窗口"。
+  # 461 条全绿看不见它,不是瞎断言,是**压根缺一条断言**。
+  rm -rf "$state"; mkdir -p "$state"
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+    PANEL_HEALTH_COOLDOWN_SEC=3600 STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+    bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/W1" >/dev/null 2>&1
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=3 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=3600 \
+    STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/W2" >/dev/null 2>&1
+  if grep -q '^subkimi$' "$d/calls"; then
+    bad "V44l: 一次硬失败之后,冷却窗口内不许再派它(冷却没死)"
+  else ok "V44l: 一次硬失败之后,冷却窗口内不许再派它(冷却没死)"; fi
+  row="$(awk -F '\t' '$1=="subkimi"{print}' "$state/health.tsv")"
+  check "V44m: 冷却期内被跳过的轮次不许把 streak 也加上去" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "1" ]]; echo $?)
+
+  # ── n) 提示里那个日志路径必须真的存在 ──────────────────────────────
+  # subglm 发现 2:LEG_LOG 是**本轮**前缀,而这条腿本轮被跳过 ⇒ 那个文件永远不会产生。
+  # "报警要能行动"在"去哪看"这一格是断的。
+  rm -rf "$state"; mkdir -p "$state"
+  for i in 1 2 3; do
+    : > "$d/calls"
+    env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+      PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+      bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/N$i" >/dev/null 2>&1
+  done
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=3 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 PANEL_HEALTH_COOLDOWN_SEC=0 \
+    STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/N9" >"$d/N9.out" 2>&1
+  local hinted
+  # 只能从**提示那一行**里取,不能全文抓第一个 .log ——
+  # 被选中腿的日志当然存在,那样这条断言永远绿(第一版就是这么错的)。
+  hinted="$(grep -F '去看它上一轮的日志' "$d/N9.out" | grep -oE '/[^ ]*\.log' | head -1)"
+  check "V44n: dead 提示指的日志必须真的存在(不是本轮那个永远不会产生的)" \
+    $([[ -n "$hinted" && -f "$hinted" ]]; echo $?)
+
+  # ── o) 垃圾阈值必须 fail-closed,不许静默把机制关掉 ────────────────
+  # subglm 发现 3:`=abc` 静默关闭;`=08` 在 (( )) 里是非法八进制,同样静默不判死。
+  local vrc
+  for bad_v in abc 08 -1; do
+    env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+      PANEL_HEALTH_DEAD_STREAK="$bad_v" STUB_CALLS="$d/calls" \
+      bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/B_$bad_v" >/dev/null 2>&1
+    vrc=$?
+    check "V44o: PANEL_HEALTH_DEAD_STREAK=$bad_v 必须拒跑(fail-closed),不许静默失效" \
+      $([[ "$vrc" -ne 0 ]]; echo $?)
+  done
+
+  # ── p) --all 也要打那行提示(派它和告诉我它是死的,不矛盾)──────────
+  # 两条腿独立命中:--all 恰恰是最该知道"其实只有 3 条腿"的场合,而现在它信息最少。
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+    PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" STUB_KIMI_RC=1 \
+    bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/A1" >"$d/A1.out" 2>&1
+  grep -q 'subkimi' "$d/A1.out" && grep -qE '连续' "$d/A1.out"
+  check "V44p: --all 照派,但那行「连续几轮」的提示照打" $?
+
+  # ── q) DEGRADED(rc=0 + .agent.log 旁证)同样不许计数 ───────────────
+  # subdeepseek F5:V44g/h 只钉了 INCOMPLETE 这一种 rc=0 状态;
+  # 一个只特判 INCOMPLETE 的回归会从那两条底下溜过去。
+  rm -rf "$state"; mkdir -p "$state"
+  for i in 1 2 3 4; do
+    : > "$d/calls"
+    env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 \
+      PANEL_HEALTH_COOLDOWN_SEC=0 STUB_CALLS="$d/calls" STUB_DEGRADE=subglm \
+      bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/G$i" >/dev/null 2>&1
+  done
+  row="$(awk -F '\t' '$1=="subglm"{print}' "$state/health.tsv")"
+  # 先证明这一轮**真的**走到了 DEGRADED 那一支 —— 否则这条断言问的不是它要问的事。
+  check "V44q1: 桩真的造出了 DEGRADED 状态(不然下一条是空绿)" \
+    $([[ "$(printf '%s' "$row" | cut -f2)" == DEGRADED* ]]; echo $?)
+  check "V44q: DEGRADED(rc=0,回落成功)连续四轮也不许计数" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
 
   unset -f run_round
   rm -rf "$d"
