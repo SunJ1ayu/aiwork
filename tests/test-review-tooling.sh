@@ -213,30 +213,36 @@ BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 
 PASS=0; FAIL=0
 
-# ── V45:判卷工具自己不许碰业主的凭证(兜底报警器)────────────────────────
+# ── V45:判卷工具自己不许碰业主的真实 kimi 环境(兜底报警器)────────────────
 # 根因与实证见 tracks/panel-kimi-credential-wipe/(此处不复述,免得两处各写一份)。
-# 这条闸不治病,治的是**同族复发**:判据夹具一旦又顺着某条链接写进真实 HOME,
-# 它当场说出来,而不是让 subkimi 在十轮之后被记成"kimi 又坏了"。
-# 文件不存在时不 SKIP,退化成"跑完之后它仍然不存在"(判据也不许凭空造出它)。
-OWNER_CRED="${OWNER_CRED_PATH:-/root/.kimi-code/credentials/kimi-code.json}"
-_owner_cred_fp() {
-  if [[ -e "$OWNER_CRED" ]]; then
-    printf 'exists inode=%s mtime=%s size=%s sha=%s' \
-      "$(stat -c %i "$OWNER_CRED" 2>/dev/null)" \
-      "$(stat -c %y "$OWNER_CRED" 2>/dev/null)" \
-      "$(stat -c %s "$OWNER_CRED" 2>/dev/null)" \
-      "$(sha256sum "$OWNER_CRED" 2>/dev/null | cut -d' ' -f1)"
-  else
-    printf 'absent'
-  fi
+# 盯两样,都是"判据跑一次就被改一次"实测过的:
+#   ① 凭证目录 —— 被写穿会让业主**掉登录**,不可逆,只能他本人重新 OAuth;
+#   ② 运行期 home 的 config.toml / hooks —— 判据里两处跑真 subkimi 且没隔离 HOME,
+#      每跑一次就把它重置成仓内种子(可再生,但同族)。
+# 没有 env 旁路:上一版留了个 OWNER_CRED_PATH 让人改道,那等于给闸留后门,已删。
+# 目录不存在时不 SKIP,退化成"跑完之后它仍然不存在"(判据也不许凭空造出它)。
+OWNER_CRED_DIR="/root/.kimi-code/credentials"
+OWNER_RUNTIME_HOME="$HOME/.cache/aiwork/kimi-review-home"
+_fp_files() {   # _fp_files <dir> [glob...]:逐文件 inode/mtime/size/短哈希,排序后拼成一行
+  local d="$1"; shift
+  [[ -d "$d" ]] || { printf 'absent'; return; }
+  local f out=""
+  for f in "$d"/* "$@"; do
+    [[ -f "$f" ]] || continue
+    out+="$(basename "$f"):$(stat -c %i "$f" 2>/dev/null):$(stat -c %y "$f" 2>/dev/null)"
+    out+=":$(stat -c %s "$f" 2>/dev/null):$(sha256sum "$f" 2>/dev/null | cut -c1-12) "
+  done
+  printf 'dir[%s]' "$out"
 }
-OWNER_CRED_BEFORE="$(_owner_cred_fp)"
+_owner_env_fp() { printf '%s | %s' "$(_fp_files "$OWNER_CRED_DIR")" \
+  "$(_fp_files "$OWNER_RUNTIME_HOME" "$OWNER_RUNTIME_HOME"/hooks/*)"; }
+OWNER_ENV_BEFORE="$(_owner_env_fp)"
 
 v45_oracle_never_touches_owner_credentials() {
-  echo "V45: 判卷工具自己不许碰业主的凭证"
-  local after; after="$(_owner_cred_fp)"
-  [[ "$after" == "$OWNER_CRED_BEFORE" ]]
-  check "V45: 整套判据跑完后 $OWNER_CRED 原封不动(before=[$OWNER_CRED_BEFORE] after=[$after])" $?
+  echo "V45: 判卷工具自己不许碰业主的真实 kimi 环境"
+  local after; after="$(_owner_env_fp)"
+  [[ "$after" == "$OWNER_ENV_BEFORE" ]]
+  check "V45: 整套判据跑完后业主的凭证目录与运行期 home 原封不动(before=[$OWNER_ENV_BEFORE] after=[$after])" $?
 }
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
