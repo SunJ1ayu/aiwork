@@ -3203,7 +3203,11 @@ PWN
 
   # ── ② submimo review
   rm -f "$d/o2" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
+  # ⚠️ MIMO_REVIEW_HOME 必须指进夹具:①b/③ 都设了,唯独这条没设 ⇒ submimo 会去写
+  #    **业主真实的** ~/.cache/aiwork/mimo-review-home(判据每跑一次重写一次它的配置)。
+  #    同族第三处,2026-08-25 panel 抓到、V45 当场红过。
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" REVIEW_NO_MY_REVIEW=1 \
+    MIMO_REVIEW_HOME="$d/mimo-home-v36" \
     bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o2" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o2" 2>/dev/null \
