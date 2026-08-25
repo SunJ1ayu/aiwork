@@ -45,8 +45,8 @@ run_oracle() {   # 只跑 V46 那一段
 BIT=0; MISS=0
 BASELINE="$(run_oracle)"
 base_totals="$(grep '^TOTALS' <<<"$BASELINE" | tail -1)"
-if [[ "$base_totals" != "TOTALS 11 0" ]]; then
-  echo "🔴 基线不是十一绿零红($base_totals) ⇒ 拒绝跑红检。"
+if [[ "$base_totals" != "TOTALS 17 0" ]]; then
+  echo "🔴 基线不是十七绿零红($base_totals) ⇒ 拒绝跑红检。"
   echo "   带着红跑红检,分不清「变异咬红的」和「本来就红的」。"
   printf '%s\n' "$BASELINE"; exit 2
 fi
@@ -108,9 +108,9 @@ PY
 mutate M4 "V46④" <<'PY'
 import os,sys
 p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
-old="""printf '{\\n  "enableTelemetry": false\\n}\\n' > "$AGY_HOME_DIR/settings.json\""""
+old='"enableTelemetry": false,'
 if s.count(old)!=1: sys.exit(1)
-open(p,'w',encoding='utf-8').write(s.replace(old,'true'))
+open(p,'w',encoding='utf-8').write(s.replace(old,'"enableTelemetry": true,'))
 PY
 
 mutate M5 "V46⑤" <<'PY'
@@ -169,6 +169,46 @@ p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
 old='chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"'
 if s.count(old)!=1: sys.exit(1)
 open(p,'w',encoding='utf-8').write(s.replace(old,'chmod 644 "$AGY_HOME_DIR/antigravity-oauth-token"'))
+PY
+
+mutate M11 "V46⑩a" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='"command(git log)",\n      "command(git diff)",'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,''))
+PY
+
+mutate M12 "V46⑪a" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='scoped="\\"read_file($ws)\\", \\"write_file($ws)\\", "'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,'scoped="\\"read_file(*)\\", \\"write_file(*)\\", "'))
+PY
+
+mutate M13 "V46⑪b" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='write_agy_settings "$REPO_DIR"'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,'write_agy_settings "$SOURCE_REPO"'))
+PY
+
+mutate M14 "V46⑩c" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='"command(git log)",\n      "command(git diff)",'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,'"command(git (log|diff))",'))
+PY
+
+mutate M15 "V46⑩d" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='"command(git log)",'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,'"command(cat)", "command(git log)",'))
 PY
 
 echo "──────────────────────────────────────────────────────"
