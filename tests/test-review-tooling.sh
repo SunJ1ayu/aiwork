@@ -3375,6 +3375,16 @@ v38_leg_runtime_home_outside_repo() {
   home_default="$(HOME="$fh38" REVIEW_PRINT_HOME=1 REVIEW_NO_MY_REVIEW=1 bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/x.log" "$repo" 2>/dev/null | tail -1)"
   [[ -n "$home_default" ]] && case "$home_default" in "$repo"/*|"$repo") false ;; *) true ;; esac
   check "V38: subkimi 的默认运行期 home 在**被评审的仓外面**(解析出来的是:${home_default:-没打印})" $?
+  # ⚠️ **"问一句默认值"不许有副作用**。假 HOME 让运行期 home 不存在 ⇒ subkimi 的
+  #    首次同步(bin/subkimi:102-104)会把**整份活种子**(101MB,含那条指向业主真凭证
+  #    的符号链接)抄进夹具 —— 我 2026-08-25 修写穿 bug 时亲手引入的:V40① 那边刚
+  #    改成不产生通道,这里又把通道造了一遍。三条腿里两条独立指出,探针实测 100MB。
+  #    这两条断言盯的就是它,别只盯体积:**链接本身才是那个通道**。
+  local fh38_sz; fh38_sz="$(du -sm "$fh38" 2>/dev/null | cut -f1)"
+  [[ ! -e "$fh38/.cache/aiwork/kimi-review-home/credentials" ]]
+  check "V38: 问一句默认 home **不许**把种子里的 credentials 链接抄进夹具(通道)" $?
+  [[ "${fh38_sz:-999}" -lt 5 ]]
+  check "V38: 问一句默认 home **不许**整份抄种子(夹具实测 ${fh38_sz:-?}MB,要 <5MB)" $?
 
   # ── ② home 落在仓内 ⇒ 响亮拒跑,而且说得出原因(不许让底座去撞 EROFS)
   #
