@@ -212,6 +212,32 @@ BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 # 改成在下面的调用处逐个显式关掉,谁关的一眼看得见,新用例默认闸是开着的。
 
 PASS=0; FAIL=0
+
+# ── V45:判卷工具自己不许碰业主的凭证(兜底报警器)────────────────────────
+# 根因与实证见 tracks/panel-kimi-credential-wipe/(此处不复述,免得两处各写一份)。
+# 这条闸不治病,治的是**同族复发**:判据夹具一旦又顺着某条链接写进真实 HOME,
+# 它当场说出来,而不是让 subkimi 在十轮之后被记成"kimi 又坏了"。
+# 文件不存在时不 SKIP,退化成"跑完之后它仍然不存在"(判据也不许凭空造出它)。
+OWNER_CRED="${OWNER_CRED_PATH:-/root/.kimi-code/credentials/kimi-code.json}"
+_owner_cred_fp() {
+  if [[ -e "$OWNER_CRED" ]]; then
+    printf 'exists inode=%s mtime=%s size=%s sha=%s' \
+      "$(stat -c %i "$OWNER_CRED" 2>/dev/null)" \
+      "$(stat -c %y "$OWNER_CRED" 2>/dev/null)" \
+      "$(stat -c %s "$OWNER_CRED" 2>/dev/null)" \
+      "$(sha256sum "$OWNER_CRED" 2>/dev/null | cut -d' ' -f1)"
+  else
+    printf 'absent'
+  fi
+}
+OWNER_CRED_BEFORE="$(_owner_cred_fp)"
+
+v45_oracle_never_touches_owner_credentials() {
+  echo "V45: 判卷工具自己不许碰业主的凭证"
+  local after; after="$(_owner_cred_fp)"
+  [[ "$after" == "$OWNER_CRED_BEFORE" ]]
+  check "V45: 整套判据跑完后 $OWNER_CRED 原封不动(before=[$OWNER_CRED_BEFORE] after=[$after])" $?
+}
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 check(){ # check "desc" COND_RC   (0 => pass)
@@ -4438,5 +4464,6 @@ v41_oracle_never_executes_its_own_comments
 v42_git_common_dir_no_silent_gap
 v43_health_aware_rotating_budget
 v44_dead_leg_stops_rotating
+v45_oracle_never_touches_owner_credentials   # ← 必须排在最后:它问的是前面所有段跑完之后的状态
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
