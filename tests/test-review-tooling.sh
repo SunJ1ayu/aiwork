@@ -4609,7 +4609,10 @@ STUB
   else
     bad "V46⑩a: 评审 home 没有 permissions.allow 命令白名单 —— headless 下命令被 auto-deny,腿交白卷且 agy 仍 rc=0"
   fi
-  if grep -q -- '--dangerously-skip-permissions' "$BIN/subgemini"; then
+  # 🔴 只查**非注释行**。第一版 grep 整个文件,而实现里那句"绝不用它"的注释本身
+  #    就含这个字符串 ⇒ 写下警告反而让判据红。本机为「连注释都查」记过账(R12b),
+  #    误报会逼出"把警告删掉"这种正好相反的修法。
+  if grep -vE '^[[:space:]]*#' "$BIN/subgemini" | grep -q -- '--dangerously-skip-permissions'; then
     bad "V46⑩b: wrapper 里出现了 --dangerously-skip-permissions —— 那会把网络与仓外写一并放开"
   else
     ok "V46⑩b: 没有用 --dangerously-skip-permissions 抄近路"
