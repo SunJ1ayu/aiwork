@@ -4596,11 +4596,28 @@ STUB
     bad "V46⑧: 花名册里没有 subgemini —— 腿装了但 panel 永远不会派它"
   fi
 
-  # ⑨ 缺件即拒跑:反锚定闸与 review-home 闸都必须接上(fail closed)
-  if grep -q '_my-review-gate.sh' "$BIN/subgemini" && grep -q '_review-home-guard.sh' "$BIN/subgemini"; then
-    ok "V46⑨: 接了反锚定闸与 review-home 闸"
+  # ⑨ 两道闸必须**真的生效** —— 测行为,不 grep 源码。
+  # 🔴 第一版是 `grep -q '_review-home-guard.sh' wrapper` = 拿「文本出现过」冒充
+  #    「闸接上了」。红检 M9 把 _RHG 的路径改坏,而别处的错误提示里还印着那个文件名
+  #    ⇒ 断言照样绿。本机为「拿文本位置冒充代码结构」记过账,这里又犯一次。
+  # ⑨a 反锚定闸:不带 REVIEW_NO_MY_REVIEW 就必须被拦(评审腿不能替代我自己的第一遍)
+  # 🔴 必须 `env -u`:整段是在 `REVIEW_NO_MY_REVIEW=1 v46_subgemini_leg` 下跑的,
+  #    函数内的调用**继承**那个变量 —— 光是"不显式设置"根本没把它去掉,
+  #    这条断言第一版就是这么假红的(它测的其实是"带着变量还拦不拦")。
+  out="$(env -u REVIEW_NO_MY_REVIEW PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
+         "$BIN/subgemini" review /dev/null "$W/o5.log" "$W/repo" 2>&1)"; rc=$?
+  if [[ $rc -ne 0 ]] && grep -qE '先写你自己的一遍|my-review' <<<"$out"; then
+    ok "V46⑨a: 反锚定闸真的拦住了未先自审的派发"
   else
-    bad "V46⑨: 没接 _my-review-gate.sh / _review-home-guard.sh —— 少一道闸而错误信息长得像额度耗尽"
+    bad "V46⑨a: 不带 REVIEW_NO_MY_REVIEW 竟然放行了(rc=$rc) —— 反锚定闸没生效"
+  fi
+  # ⑨b review-home 闸:运行期 home 落在被评审的仓里必须拒跑
+  out="$(PATH="$W/bin:$PATH" REVIEW_NO_MY_REVIEW=1 AGY_REVIEW_HOME="$W/repo/inside" \
+         "$BIN/subgemini" review /dev/null "$W/o6.log" "$W/repo" 2>&1)"; rc=$?
+  if [[ $rc -ne 0 ]] && grep -qE '被评审的仓内|仓外' <<<"$out"; then
+    ok "V46⑨b: 运行期 home 落在被评审的仓内 ⇒ 拒跑"
+  else
+    bad "V46⑨b: home 指进被评审的仓竟然放行了(rc=$rc) —— 腿会被自家只读挂载弄死,而错误长得像额度耗尽"
   fi
 }
 
