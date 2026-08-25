@@ -221,6 +221,7 @@ PASS=0; FAIL=0
 #   ③ 运行期 kimi home 的 credentials **链接本身** —— 它是 link-to-dir,
 #      `[[ -f ]]` 看不见它,把它换成一个假目录正是"腿拿不到登录"的原始病状(panel 抓到);
 #   ④ 运行期 mimo home 的 mimocode.json(判据里跑真 submimo 会写它,同族第三处)。
+#   ⑤ 业主的 agy 凭证(2026-08-25 第五条腿 subgemini 起)。
 # 🔴 刻意**不盯** sessions/ oauth/ session_index.jsonl workspaces.json device_id:
 #    那些是 CLI 自己的运行期状态,业主正常用一次就会变 ⇒ 纳进来等于给自己造误报,
 #    而"报警器老响"的下一步永远是有人去调钝它。本仓为这条记过账。
@@ -228,6 +229,10 @@ PASS=0; FAIL=0
 OWNER_CRED_DIR="/root/.kimi-code/credentials"
 OWNER_KIMI_HOME="$HOME/.cache/aiwork/kimi-review-home"
 OWNER_MIMO_CFG="$HOME/.cache/aiwork/mimo-review-home/mimocode/mimocode.json"
+# ⑤ 业主的 agy(Antigravity CLI)登录 —— 2026-08-25 起第五条腿骑它。掉登录同样不可逆,
+#    只能业主本人重新走一遍 OAuth(还得他手动开浏览器贴授权码)。subgemini 只**读**
+#    这个文件去复制副本,读不改 mtime/inode/sha ⇒ 纳进指纹不会造误报。
+OWNER_AGY_TOKEN="$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
 _fp1() {   # 单个路径的指纹;**先判 -L**:符号链接要当链接看,不能被 -f/-d 吞掉
   local p="$1" n; n="$(basename "$p")"
   if   [[ -L "$p" ]]; then printf '%s=link->%s;' "$n" "$(readlink "$p" 2>/dev/null)"
@@ -244,6 +249,7 @@ _owner_env_fp() {
   out+="link/$(_fp1 "$OWNER_KIMI_HOME/credentials")"
   out+="cfg/$(_fp1 "$OWNER_KIMI_HOME/config.toml")"
   out+="mimo/$(_fp1 "$OWNER_MIMO_CFG")"
+  out+="agy/$(_fp1 "$OWNER_AGY_TOKEN")"
   printf '%s' "$out"
 }
 OWNER_ENV_BEFORE="$(_owner_env_fp)"
@@ -255,7 +261,7 @@ v45_oracle_never_touches_owner_credentials() {
   if [[ "$after" == "$OWNER_ENV_BEFORE" ]]; then
     # 🔴 PASS 时**不打印指纹**:收据是要 commit 进仓的,而指纹里有业主凭证文件的
     #    大小/时间/短哈希 —— 绿的时候没人需要它,红的时候才需要,那时也只打变了的那几项。
-    ok "V45: 整套判据跑完后业主的凭证目录 / kimi home / mimo home 原封不动"
+    ok "V45: 整套判据跑完后业主的凭证目录 / kimi home / mimo home / agy 登录原封不动"
   else
     changed="$(comm -3 <(printf '%s' "$OWNER_ENV_BEFORE" | tr ';' '\n' | sort) \
                        <(printf '%s' "$after"            | tr ';' '\n' | sort) \
@@ -4479,6 +4485,119 @@ EOF
 }
 
 echo "=== review-tooling regression oracle ==="
+
+# ── V46:subgemini(Antigravity CLI 腿)──────────────────────────────────────
+# 这条腿骑业主的 Gemini 会员额度,底座是**闭源 Go 二进制** `agy`。
+# 全部依据见 tracks/subgemini-review-leg/(此处不复述)。只钉死"错了就是防线破洞"的:
+#   ① **模型必须是 gemini-***:`agy models` 同时供应 claude-sonnet-4-6 /
+#      claude-opus-4-6-thinking / gpt-oss-120b。这条腿一旦跑 Claude,panel 归档闸的
+#      "覆盖 N 个不同模型家族"就被架空 —— **而那道闸查的是腿名,不是它实际调了谁**。
+#   ② **凭证是复制不是符号链接**:链接是通向沙箱外的写通道,
+#      panel-kimi-credential-wipe 的根因就是它。业主掉登录只能本人重新 OAuth。
+#   ③ **评审 home 必须自带 enableTelemetry:false**:业主在首次向导里亲手关掉了
+#      数据收集,但那写在**他的** home;换 HOME 之后评审 home 没有 settings.json
+#      = 走默认值 = 他的选择被绕过,而腿读的正是他的仓库代码。
+#   ④ **rc 不可信**(两次实证:未登录 `agy models` rc=0;文档载明软拒绝也 exit 0)
+#      ⇒ 判死活只能看裁决行。构造"rc=0 但没有裁决行"必须判失败。
+#   ⑤ **未登录时 print 模式静默挂死**(实测 40s 零输出)⇒ 必须响亮失败,不许挂死。
+v46_subgemini_leg() {
+  echo "V46: subgemini(Antigravity CLI 腿)"
+  local W stub_log rc out
+  W="$(mktemp -d)"; trap 'rm -rf "$W"' RETURN
+  mkdir -p "$W/bin" "$W/home" "$W/repo"
+  ( cd "$W/repo" && git init -q . && echo hi > a.txt && git add -A && git commit -qm init ) >/dev/null 2>&1
+  stub_log="$W/agy-args.log"
+
+  # 假 agy 桩:记录被传了什么参数,并按需伪造输出。绝不烧真额度。
+  cat > "$W/bin/agy" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$stub_log"
+case " \$* " in
+  *" models "*) echo "gemini-3.7-flash-high	Gemini 3.7 Flash (High)"; exit 0 ;;
+esac
+if [[ -n "\${STUB_NO_VERDICT:-}" ]]; then echo "看起来还行,没啥大问题。"; exit 0; fi
+echo "审完了。"; echo "Conclusion: PASS"; exit 0
+STUB
+  chmod +x "$W/bin/agy"
+
+  local BIN="$PWD/bin"
+  if [[ ! -x "$BIN/subgemini" ]]; then
+    bad "V46①-⑨: bin/subgemini 不存在 —— 整段无法执行(判据先行,此刻应为红)"
+    return
+  fi
+
+  # ① 模型闸:claude-* 必须拒跑
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" AGY_MODEL=claude-opus-4-6-thinking \
+         "$BIN/subgemini" review /dev/null "$W/o1.log" "$W/repo" 2>&1)"; rc=$?
+  if [[ $rc -ne 0 ]] && grep -qiE 'gemini|模型' <<<"$out"; then
+    ok "V46①: 非 gemini-* 模型被拒跑,且说得出真因"
+  else
+    bad "V46①: AGY_MODEL=claude-opus-4-6-thinking 没被拒(rc=$rc) —— 家族覆盖会被悄悄架空"
+  fi
+
+  # ①b 合法 gemini 档要放行
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" AGY_MODEL=gemini-3.6-flash-high \
+         "$BIN/subgemini" review /dev/null "$W/o2.log" "$W/repo" 2>&1)"; rc=$?
+  check "V46①b: 合法 gemini-* 档放行(rc=$rc)" "$([[ $rc -eq 0 ]] && echo 0 || echo 1)"
+
+  # ② 默认模型必须是 gemini-3.7-flash-high(业主拍板,两轮实测支持)
+  if grep -q -- '--model gemini-3.7-flash-high' "$stub_log" 2>/dev/null; then
+    ok "V46②: 默认档确为 gemini-3.7-flash-high"
+  else
+    bad "V46②: 默认档不是 gemini-3.7-flash-high —— 实际传给 agy 的是:$(grep -o -- '--model [^ ]*' "$stub_log" | tail -1)"
+  fi
+
+  # ③ 凭证是普通文件、不是符号链接、权限 600
+  local tok="$W/home/.gemini/antigravity-cli/antigravity-oauth-token"
+  if [[ -L "$tok" ]]; then
+    bad "V46③: 评审 home 的凭证是**符号链接** —— 那是通向沙箱外的写通道(kimi 凭证被清空的根因)"
+  elif [[ -f "$tok" ]]; then
+    local m; m="$(stat -c %a "$tok")"
+    check "V46③: 凭证是普通文件且权限 600(实际 $m)" "$([[ "$m" == 600 ]] && echo 0 || echo 1)"
+  else
+    bad "V46③: 评审 home 里没有凭证副本 —— 腿拿不到登录"
+  fi
+
+  # ④ 遥测必须在评审 home 里显式关掉(业主的选择不许被换 HOME 绕过)
+  local st="$W/home/.gemini/antigravity-cli/settings.json"
+  if [[ -f "$st" ]] && grep -q '"enableTelemetry"[[:space:]]*:[[:space:]]*false' "$st"; then
+    ok "V46④: 评审 home 显式 enableTelemetry:false"
+  else
+    bad "V46④: 评审 home 没写死 enableTelemetry:false —— 业主亲手关掉的数据收集被换 HOME 绕过了"
+  fi
+
+  # ⑤ rc=0 但输出里没有裁决行 ⇒ 必须判失败(rc 不可信)
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_NO_VERDICT=1 \
+         "$BIN/subgemini" review /dev/null "$W/o3.log" "$W/repo" 2>&1)"; rc=$?
+  check "V46⑤: agy rc=0 但无裁决行 ⇒ wrapper 判失败(实际 rc=$rc)" "$([[ $rc -ne 0 ]] && echo 0 || echo 1)"
+
+  # ⑥ fix 故意不支持(评审员保持只读,与其余四腿一致)
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
+         "$BIN/subgemini" fix /dev/null "$W/o4.log" "$W/repo" 2>&1)"; rc=$?
+  check "V46⑥: subgemini fix 被拒(rc=$rc)" "$([[ $rc -ne 0 ]] && echo 0 || echo 1)"
+
+  # ⑦ workspace 必须指向被评审的那份树,不能让 agy 落回它自己的 scratch
+  if grep -q -- "--add-dir" "$stub_log" 2>/dev/null; then
+    ok "V46⑦: 派发时显式传了 --add-dir(否则 agy 会写进自己的 scratch,腿等于没看见仓库)"
+  else
+    bad "V46⑦: 没传 --add-dir —— 实测 agy 无 workspace 时读写自己的 scratch/,腿看不见被评审的仓"
+  fi
+
+  # ⑧ 花名册:panel 的轮换池必须认得这条腿
+  if grep -q 'subgemini' "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null; then
+    ok "V46⑧: PANEL_LEGS_ORDER 含 subgemini"
+  else
+    bad "V46⑧: 花名册里没有 subgemini —— 腿装了但 panel 永远不会派它"
+  fi
+
+  # ⑨ 缺件即拒跑:反锚定闸与 review-home 闸都必须接上(fail closed)
+  if grep -q '_my-review-gate.sh' "$BIN/subgemini" && grep -q '_review-home-guard.sh' "$BIN/subgemini"; then
+    ok "V46⑨: 接了反锚定闸与 review-home 闸"
+  else
+    bad "V46⑨: 没接 _my-review-gate.sh / _review-home-guard.sh —— 少一道闸而错误信息长得像额度耗尽"
+  fi
+}
+
 v0_parent_panel_env_is_scrubbed
 # 老判据逐条复核四腿各自的安全合约；显式要求 all，避免它们偷偷依赖新的二审默认值。
 export PANEL_REVIEW_BUDGET=4
@@ -4527,6 +4646,7 @@ v41_oracle_never_executes_its_own_comments
 v42_git_common_dir_no_silent_gap
 v43_health_aware_rotating_budget
 v44_dead_leg_stops_rotating
+v46_subgemini_leg
 v45_oracle_never_touches_owner_credentials   # ← 必须排在最后:它问的是前面所有段跑完之后的状态
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
