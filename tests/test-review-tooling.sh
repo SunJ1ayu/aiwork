@@ -4533,6 +4533,13 @@ fi
 if [[ -n "\${STUB_SETTINGS_OUT:-}" ]]; then
   cp "\$HOME/.gemini/antigravity-cli/settings.json" "\$STUB_SETTINGS_OUT" 2>/dev/null
 fi
+if [[ -n "\${STUB_WRITE_ONLY:-}" ]]; then
+  # 模拟 agy 的致命形态:干了一堆活、把报告写进了工作区,然后**整轮被丢弃、stdout 零产出**
+  d=""; prev=""
+  for a in "\$@"; do [[ "\$prev" == "--add-dir" ]] && d="\$a"; prev="\$a"; done
+  printf '副本里的报告\nConclusion: BLOCK\n' > "\$d/SUBGEMINI-REVIEW.md"
+  exit 0
+fi
 if [[ -n "\${STUB_NO_VERDICT:-}" ]]; then echo "看起来还行,没啥大问题。"; exit 0; fi
 echo "审完了。"; echo "Conclusion: PASS"
 [[ -n "\${STUB_HANG:-}" ]] && sleep 30
@@ -4892,6 +4899,42 @@ STUB
     ok "V46⑱: 上一轮留下的后台孤儿没有把锁举着(下一轮照跑)"
   else
     bad "V46⑱: 孤儿举着锁,下一轮被误判成撞车(rc=$rc2)—— 闸在对着幻影报警:$(head -1 <<<"$out")"
+  fi
+
+  # ⑲ 🔴 **一次 soft-deny 就把整轮扔掉**,这是 agy 的行为,我们改不了它。
+  # 2026-08-26 真链实测:腿跑了 43 步、连发十几次模型请求(git status / git log /
+  # git diff … 全在白名单里过了),最后一步想跑
+  #   `git diff A..B bin/panel-review | grep -A 40 -B 10 …`
+  # —— **一个管道**。管道里的 grep 不在白名单 ⇒ soft-deny ⇒ **整轮零产出**,
+  # 几分钟的真评审连一个字都没留下。
+  # 靠"提示词再劝一次"是引导不是保证(track 的 E4)。结构性的修法是:
+  # **让报告落在副本里**(write_file 本来就授权在副本上)—— 那样即使 stdout 被丢弃,
+  # 报告还在盘上,wrapper 捞出来即可。捞出来的必须**标明出处**,不许伪装成正常产出。
+  rm -f "$W/o12.log"
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_WRITE_ONLY=1 \
+         "$BIN/subgemini" review "$W/task.md" "$W/o12.log" "$W/repo" 2>&1)"; rc=$?
+  if [[ $rc -eq 0 ]] && grep -q '^Conclusion: BLOCK$' "$W/o12.log" 2>/dev/null; then
+    ok "V46⑲: stdout 零产出但副本里有报告 ⇒ wrapper 捞得出来(整轮不再白跑)"
+  else
+    bad "V46⑲: stdout 零产出时整轮报废(rc=$rc)—— 一次 soft-deny 就吃掉几分钟的真评审"
+  fi
+  if grep -qE '从副本|工作区里捞|stdout 零产出' "$W/o12.log" 2>/dev/null; then
+    ok "V46⑲b: 捞出来的报告标明了出处(不许伪装成正常产出)"
+  else
+    bad "V46⑲b: 捞出来的报告没标出处 —— 读的人分不出这是被丢弃那轮的残骸"
+  fi
+
+  # ⑳ 提示词必须**点名管道/重定向/&&**。这不是泛泛的"别跑命令":实测那次死在管道上,
+  # 而白名单里的 git 明明是放行的 —— 模型以为自己在用允许的命令。
+  # 🔴 第一版这条断言 grep 的是 `管道|pipe|\|` —— 那个 `\|` 匹配**竖线字符本身**,
+  #    而提示词里本来就写着 "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"。**又一条假绿**,
+  #    而且是在专门修假绿的这一单里、一小时内写出的第三条(⑧a、⑧c 各一条)。
+  #    ⇒ 断言不许拿"某个字符出现过"当证据,要问**那句话在不在**。
+  local prompt_txt; prompt_txt="$(sed -n '/^PROMPT="/,/^Conclusion: PASS | BLOCK/p' "$BIN/subgemini")"
+  if grep -qiE 'pipe|管道' <<<"$prompt_txt"; then
+    ok "V46⑳: 提示词点名了管道这条死法(真链上唯一真咬死过它的)"
+  else
+    bad "V46⑳: 提示词没提管道 —— 模型会以为「命令在白名单里」就安全,而一个管道就让整轮报废"
   fi
 }
 
