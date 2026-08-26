@@ -41,7 +41,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 `/root/aiwork/bin/subglm-agent`(底座腿,默认)/ `bin/subglm`(聊天腿),**只读评审**。
 
 - **后端 = OpenCode Go**(2026-08-18 从智谱开放平台 bigmodel 换过来,业主的 $10/月订阅),
-  **默认模型 `glm-5.3`**。换的理由是 bigmodel 那把 key 欠费(1113),这条腿 08-04 起
+  **默认模型 `glm-5.3-flash`**。换的理由是 bigmodel 那把 key 欠费(1113),这条腿 08-04 起
   默认关着、四审实际只有三腿两周。后端沿革:bigmodel → 百炼(429)→ 火山方舟(07-17)
   → 07-25 切回 bigmodel → **08-18 OpenCode Go**。
   旧 key 原样留在 `~/.config/zhipu/auth.json`(另一家的账,充值可切回),方舟 key 在
@@ -56,10 +56,12 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
   地址 bug 伪装成模型名 bug,08-18 照着"模型名错"查了半天。
 - **聊天腿必须带 User-Agent**:urllib 的默认 UA(`Python-urllib/3.x`)被 Cloudflare
   前置的端点 403(error code 1010)。同一个请求 curl 200 / urllib 403,只差这一行。
-- **Go 上有哪些 glm 档**(08-18 实测 `/v1/models`):`glm-5` `glm-5.1` `glm-5.2` `glm-5.3`。
+- **Go 上有哪些 glm 档**(08-27 实测 `/v1/models`):`glm-5` `glm-5.1` `glm-5.2`
+  `glm-5.3` `glm-5.3-flash`。
   **`glm-4.6` 系在 Go 上不支持**(报 `ModelError: Model glm-4.6 is not supported`)——
   所以这次不是"顺便升个档",是老默认值在新后端上根本跑不起来。
-  默认已在 08-20 经业主确认切到 `glm-5.3`；模型变化必须同时改实现、判据与本唯一源。
+  默认 08-20 切到 `glm-5.3`，08-27 经业主确认切到 `glm-5.3-flash`。两档走同一
+  OpenAI-compatible 端点；变化的是模型 ID，不联动端点、认证、权限或底座。
 - key 来自 `ZHIPU_API_KEY` 或 `~/.config/opencode-go/auth.json`(`{"key":"..."}`,权限 600);
   模型覆盖 `ZHIPU_MODEL`,加文件 `ZHIPU_INCLUDE`。
   (**env 变量名仍是 `ZHIPU_*`**:它是"第三条腿"的前缀,不是"智谱"的缩写。改名要动
@@ -76,7 +78,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
   换成 opencode 自己当底座之后,工具形状天然对得上,能力回来了。
 - **panel-review / panel-explore 里默认开着,默认档 = 底座腿 `agent`**。
   `PANEL_GLM_LEG=chat` 强制回落聊天腿,`off` 关掉。
-  每 5 小时约 880 次请求的订阅额度,评审腿这种用量够用。
+  当前官方估算每 5 小时约 1,580 次 Flash 请求,评审腿这种用量够用。
 - **只读是机械锁,不是模型自觉**:配置里 write/edit/patch/task/todowrite/webfetch/
   websearch/skill 全关;bash 留着跑只读 git,但是白名单(`*` deny + 只放行
   git diff/log/status/show)。实测这是真闸(模型真去调、被 harness 拦回),

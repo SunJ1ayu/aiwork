@@ -48,7 +48,7 @@ Usage:
 
 Providers (thin shims in parentheses; callers normally use the shim):
   deepseek  (subdeepseek-agent)  default deepseek-v4-flash, env DEEPSEEK_*
-  zhipu     (subglm-agent)       default glm-5.3,           env ZHIPU_*
+  zhipu     (subglm-agent)       default glm-5.3-flash,     env ZHIPU_*
 
 Environment (PREFIX = DEEPSEEK | ZHIPU):
   <PREFIX>_MODEL          model id
@@ -114,10 +114,10 @@ case "$PROVIDER" in
     # "四审"实际只有三腿、已经两周。Go 的 Anthropic 面 = /zen/go/v1。
     # 旧 key 原样留在 ~/.config/zhipu/auth.json(那是另一家的账,将来充值可切回);
     # 方舟 key 仍在 auth.json.ark-bak。
-    # ⚠️ 下面这两个是**休眠值**:GLM 腿现在走 opencode 底座(见下面 AGENT_BASE),
-    # 它用的是 OC_MODEL_ID / OC_BASE_URL,**不是这两个**。留着是为了将来切回 claude 底座
-    # 时不用重新考古 —— 但别照着改它们然后指望有反应(改了没反应是最耗时的一类 bug)。
-    DEFAULT_MODEL="glm-5.3"                        # 休眠:claude 底座才读
+    # 模型只解析一次:下面的公共查表把 DEFAULT_MODEL / ZHIPU_MODEL 收敛成 MODEL，
+    # opencode 与将来可能切回的 claude 底座都只消费 MODEL。不要再给 opencode 另立
+    # 一份模型字段——那会让环境变量看似支持、实际主路径继续跑硬编码旧模型。
+    DEFAULT_MODEL="glm-5.3-flash"
     # **不带尾部 /v1**:claude CLI 自己会补 `/v1/messages`。写成 .../go/v1 会发到
     # /zen/go/v1/v1/messages(实测 404),而 CLI 把 404 报成"模型不存在",
     # 于是看起来像模型名错了 —— 实际是地址多了一层。
@@ -139,7 +139,6 @@ case "$PROVIDER" in
     # provider 必须自定义指到**订阅端点**:opencode 默认的 provider 走按量付费网关,
     # 实测直接 `Insufficient balance`(订阅和按量是两笔账)。
     OC_PROVIDER="go"
-    OC_MODEL_ID="glm-5.3"
     OC_BASE_URL="https://opencode.ai/zen/go/v1"
     # 我们自配的只读 agent。**绝不用 opencode 内置的 `plan` 档**:它自称
     # "禁掉所有编辑工具",而解析出来的配置是 write/edit/bash 全开 + 权限 `*` allow;
@@ -298,7 +297,7 @@ ERR_FILE="$(mktemp)"
     echo "base_url: $BASE_URL"
   fi
   if [[ "$AGENT_BASE" == "opencode" ]]; then
-    echo "model: $OC_PROVIDER/$OC_MODEL_ID"   # 完整 id;裸名字在调用时并不存在
+    echo "model: $OC_PROVIDER/$MODEL"   # 完整 id;裸名字在调用时并不存在
   else
     echo "model: $MODEL"
   fi
@@ -348,7 +347,7 @@ if [[ "$AGENT_BASE" == "opencode" ]]; then
   umask 077
   mkdir -p "$OC_HOME/.config/opencode"
   OC_KEY="$API_KEY" python3 - "$OC_HOME/.config/opencode/opencode.json" \
-           "$OC_PROVIDER" "$OC_MODEL_ID" "$OC_BASE_URL" "$OC_AGENT" "$MAX_TURNS" "$MODE" <<'PYOC'
+           "$OC_PROVIDER" "$MODEL" "$OC_BASE_URL" "$OC_AGENT" "$MAX_TURNS" "$MODE" <<'PYOC'
 import json, os, sys
 cfgpath, prov, model, base, agent, steps, mode = sys.argv[1:8]
 key = os.environ["OC_KEY"]
@@ -403,7 +402,7 @@ PYOC
     cd "$REPO_DIR"
     AIWORK_CALLER_HOME="${AIWORK_CALLER_HOME:-$HOME}" \
       HOME="$OC_HOME" "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" opencode run \
-      --dir "$REPO_DIR" --agent "$OC_AGENT" -m "$OC_PROVIDER/$OC_MODEL_ID" "$PROMPT"
+      --dir "$REPO_DIR" --agent "$OC_AGENT" -m "$OC_PROVIDER/$MODEL" "$PROMPT"
   ) < /dev/null 2>"$ERR_FILE" | sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' >> "$LOG_FILE" || RC=$?
   # ↑ **`< /dev/null` 不是可有可无的整洁**:opencode 在 stdin 是一个还开着的管道时
   #   会一直等输入。2026-08-18 实测:直接跑正常,一经 runlog(走 tee 管道)就挂死

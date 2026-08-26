@@ -32,7 +32,7 @@ Usage:
 
 Providers (usually invoked via their shims):
   deepseek   (shim: subdeepseek)  default model deepseek-v4-flash, env DEEPSEEK_*
-  zhipu      (shim: subglm)    default model glm-5.3,           env ZHIPU_*
+  zhipu      (shim: subglm)    default model glm-5.3-flash,     env ZHIPU_*
 
 Runs the provider's model as a read-only review sub-agent over an OpenAI-
 compatible chat-completions endpoint. Automatically attaches `git diff` of
@@ -95,7 +95,7 @@ case "$PROVIDER" in
     # 所以派它时记得带 ZHIPU_INCLUDE / PANEL_INCLUDE,否则它只看得见增量 diff。
     # 它走 OpenAI 兼容面,认证仍是 Authorization: Bearer(和底座腿那边的
     # x-api-key 不是一回事 —— 两个面的规矩不同,别顺手统一)。
-    DEFAULT_MODEL="glm-5.3"
+    DEFAULT_MODEL="glm-5.3-flash"
     ENDPOINT_ENV_VAR="MIMO_CHAT_COMPLETIONS_URL"  # exact URL, engine appends nothing
     ENDPOINT="${ZHIPU_CHAT_COMPLETIONS_URL:-https://opencode.ai/zen/go/v1/chat/completions}"
     DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"

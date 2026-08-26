@@ -25,6 +25,7 @@ runlog -t glm-flash-single-source -- <判据命令>
 ```
 runlog: oracle-red rc=1 commit=591d58f dirty=yes at=2026-08-26T23:13:53Z file=tracks/glm-flash-single-source/evidence/20260826T231353Z-01-oracle-red.txt
 runlog: oracle-red-r2 rc=1 commit=591d58f dirty=yes at=2026-08-26T23:20:17Z file=tracks/glm-flash-single-source/evidence/20260826T232017Z-01-oracle-red-r2.txt
+runlog: green-implementation rc=0 commit=93dac40 dirty=yes at=2026-08-26T23:29:44Z file=tracks/glm-flash-single-source/evidence/20260826T232944Z-01-green-implementation.txt
 ```
 
 - `oracle-red`:容器内无法创建判据要求的无外网 namespace，19 套均 `rc=78`；这是环境失败，
@@ -32,6 +33,8 @@ runlog: oracle-red-r2 rc=1 commit=591d58f dirty=yes at=2026-08-26T23:20:17Z file
 - `oracle-red-r2`:沙箱外运行同一无外网判据；review-tooling `520/9`，九个红项精确覆盖
   Flash 默认五处与 agent override 的 argv/log/config/provider-map 四处；workflow-docs
   `31/1`，其余套件通过。
+- `green-implementation`:同一总入口全绿；review-tooling `529/0`、workflow-docs
+  `32/0`，其余 17 套也全部通过。
 
 ## Review
 
