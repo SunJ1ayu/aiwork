@@ -4509,16 +4509,39 @@ v46_subgemini_leg() {
   stub_log="$W/agy-args.log"
 
   # 假 agy 桩:记录被传了什么参数,并按需伪造输出。绝不烧真额度。
+  # 🔴 几处取证必须发生在**运行当中**,不能等跑完再看盘上剩下什么:
+  #   · 凭证副本(③):wrapper 跑完就把它删了(⑬),跑完再看只能看到"没有"——
+  #     而"它是不是符号链接、是不是 600"问的是**它存在的那段时间**里的样子;
+  #   · settings.json(⑭):并发串味恰恰发生在两次运行**重叠**的那段时间里。
   cat > "$W/bin/agy" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$stub_log"
 case " \$* " in
   *" models "*) echo "gemini-3.7-flash-high	Gemini 3.7 Flash (High)"; exit 0 ;;
 esac
+if [[ -n "\${STUB_TOKEN_PROBE:-}" ]]; then
+  t="\$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+  { if [[ -L "\$t" ]]; then echo "symlink=yes"; else echo "symlink=no"; fi
+    echo "mode=\$(stat -c %a "\$t" 2>/dev/null)"
+    echo "sha=\$(sha256sum "\$t" 2>/dev/null | cut -d' ' -f1)"; } > "\$STUB_TOKEN_PROBE"
+fi
+if [[ -n "\${STUB_PWN_SOURCE:-}" ]]; then
+  if touch "\$STUB_PWN_SOURCE/PWNED_IN_SOURCE" 2>/dev/null; then echo "source=WROTE" > "\$STUB_PWN_OUT"
+  else echo "source=BLOCKED" > "\$STUB_PWN_OUT"; fi
+fi
+[[ -n "\${STUB_SLEEP:-}" ]] && sleep "\$STUB_SLEEP"
+if [[ -n "\${STUB_SETTINGS_OUT:-}" ]]; then
+  cp "\$HOME/.gemini/antigravity-cli/settings.json" "\$STUB_SETTINGS_OUT" 2>/dev/null
+fi
 if [[ -n "\${STUB_NO_VERDICT:-}" ]]; then echo "看起来还行,没啥大问题。"; exit 0; fi
-echo "审完了。"; echo "Conclusion: PASS"; exit 0
+echo "审完了。"; echo "Conclusion: PASS"
+[[ -n "\${STUB_HANG:-}" ]] && sleep 30
+exit 0
 STUB
   chmod +x "$W/bin/agy"
+  # 🔴 任务文件用真文件,不用 /dev/null:`[[ -f /dev/null ]]` 是**假**(字符设备),
+  # 而 ⑮ 要求任务文件不存在就拒跑 —— 拿 /dev/null 当任务书,整段会全死在那道闸上。
+  printf '# 假任务书(判据用)\n请评审。\n' > "$W/task.md"
 
   local BIN="$PWD/bin"
   if [[ ! -x "$BIN/subgemini" ]]; then
@@ -4528,7 +4551,7 @@ STUB
 
   # ① 模型闸:claude-* 必须拒跑
   out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" AGY_MODEL=claude-opus-4-6-thinking \
-         "$BIN/subgemini" review /dev/null "$W/o1.log" "$W/repo" 2>&1)"; rc=$?
+         "$BIN/subgemini" review "$W/task.md" "$W/o1.log" "$W/repo" 2>&1)"; rc=$?
   if [[ $rc -ne 0 ]] && grep -qiE 'gemini|模型' <<<"$out"; then
     ok "V46①: 非 gemini-* 模型被拒跑,且说得出真因"
   else
@@ -4537,7 +4560,7 @@ STUB
 
   # ①b 合法 gemini 档要放行
   out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" AGY_MODEL=gemini-3.6-flash-high \
-         "$BIN/subgemini" review /dev/null "$W/o2.log" "$W/repo" 2>&1)"; rc=$?
+         "$BIN/subgemini" review "$W/task.md" "$W/o2.log" "$W/repo" 2>&1)"; rc=$?
   check "V46①b: 合法 gemini-* 档放行(rc=$rc)" "$([[ $rc -eq 0 ]] && echo 0 || echo 1)"
 
   # ② 默认模型必须是 gemini-3.7-flash-high(业主拍板,两轮实测支持)
@@ -4545,23 +4568,26 @@ STUB
   #    而那两次一个是 claude-*(被拒、根本没调 agy)、一个显式设了 3.6 ——
   #    **默认档从来没被跑过**,这条断言在检查一件它自己没测过的事。
   : > "$stub_log"
-  PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
-    "$BIN/subgemini" review /dev/null "$W/o2b.log" "$W/repo" >/dev/null 2>&1 || true
+  PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_TOKEN_PROBE="$W/token-probe.txt" \
+    "$BIN/subgemini" review "$W/task.md" "$W/o2b.log" "$W/repo" >/dev/null 2>&1 || true
   if grep -q -- '--model gemini-3.7-flash-high' "$stub_log" 2>/dev/null; then
     ok "V46②: 默认档确为 gemini-3.7-flash-high"
   else
     bad "V46②: 默认档不是 gemini-3.7-flash-high —— 实际传给 agy 的是:$(grep -o -- '--model [^ ]*' "$stub_log" | tail -1)"
   fi
 
-  # ③ 凭证是普通文件、不是符号链接、权限 600
+  # ③ 凭证是普通文件、不是符号链接、权限 600 —— **问的是它存在的那段时间**。
+  # 🔴 跑完再看盘上剩下什么,现在答不了这个问题了:⑬ 要求跑完即删。
+  # 探针在假 agy 里、也就是腿真正在跑的那一刻取的证。
   local tok="$W/home/.gemini/antigravity-cli/antigravity-oauth-token"
-  if [[ -L "$tok" ]]; then
+  local probe="$W/token-probe.txt"
+  if [[ ! -s "$probe" ]]; then
+    bad "V46③: 运行当中没取到凭证副本的证 —— 腿要么没拿到登录,要么根本没跑到 agy"
+  elif grep -q '^symlink=yes$' "$probe"; then
     bad "V46③: 评审 home 的凭证是**符号链接** —— 那是通向沙箱外的写通道(kimi 凭证被清空的根因)"
-  elif [[ -f "$tok" ]]; then
-    local m; m="$(stat -c %a "$tok")"
-    check "V46③: 凭证是普通文件且权限 600(实际 $m)" "$([[ "$m" == 600 ]] && echo 0 || echo 1)"
   else
-    bad "V46③: 评审 home 里没有凭证副本 —— 腿拿不到登录"
+    local m; m="$(sed -n 's/^mode=//p' "$probe")"
+    check "V46③: 运行当中凭证是普通文件且权限 600(实际 $m)" "$([[ "$m" == 600 ]] && echo 0 || echo 1)"
   fi
 
   # ④ 遥测必须在评审 home 里显式关掉(业主的选择不许被换 HOME 绕过)
@@ -4574,12 +4600,12 @@ STUB
 
   # ⑤ rc=0 但输出里没有裁决行 ⇒ 必须判失败(rc 不可信)
   out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_NO_VERDICT=1 \
-         "$BIN/subgemini" review /dev/null "$W/o3.log" "$W/repo" 2>&1)"; rc=$?
+         "$BIN/subgemini" review "$W/task.md" "$W/o3.log" "$W/repo" 2>&1)"; rc=$?
   check "V46⑤: agy rc=0 但无裁决行 ⇒ wrapper 判失败(实际 rc=$rc)" "$([[ $rc -ne 0 ]] && echo 0 || echo 1)"
 
   # ⑥ fix 故意不支持(评审员保持只读,与其余四腿一致)
   out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
-         "$BIN/subgemini" fix /dev/null "$W/o4.log" "$W/repo" 2>&1)"; rc=$?
+         "$BIN/subgemini" fix "$W/task.md" "$W/o4.log" "$W/repo" 2>&1)"; rc=$?
   check "V46⑥: subgemini fix 被拒(rc=$rc)" "$([[ $rc -ne 0 ]] && echo 0 || echo 1)"
 
   # ⑦ workspace 必须指向被评审的那份树,不能让 agy 落回它自己的 scratch
@@ -4606,12 +4632,25 @@ STUB
   else
     ok "V46⑧b: panel-review 的腿名单不是自己硬编码的第二份"
   fi
-  # ⑧c 派发侧真的认得这条腿(有 CMD 映射,否则选中了也起不来)
-  if grep -q 'subgemini' "$PWD/bin/panel-review" 2>/dev/null; then
-    ok "V46⑧c: panel-review 派发侧认得 subgemini"
-  else
-    bad "V46⑧c: panel-review 里一个 subgemini 都没有 —— 花名册上有它,永远派不出去"
-  fi
+  # ⑧c 🔴 这条原来是 `grep -q 'subgemini' bin/panel-review` —— **假绿**:
+  #    LEG_CMD 映射里那几个字母就让它绿了,而派发路径(launch_leg 的 case)是断的。
+  #    "派发真的发生了吗"已经搬去 tests/test-panel-observation.sh 的 P7 用行为问,
+  #    而且是对**每一条腿**问一遍。这里只留这条腿**特有**的那个事实:
+  #    它在花名册里代表 Google 家族 —— 记错了,归档闸的"覆盖 N 个不同家族"就是假话。
+  local fam; fam="$( . "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null; panel_leg_family subgemini 2>/dev/null )"
+  check "V46⑧c: 唯一源里 subgemini 的模型家族是 google(实际='$fam')" \
+    "$([[ "$fam" == "google" ]] && echo 0 || echo 1)"
+  # ⑧d 每条腿的开关变量都必须出现在本判据顶部那两份 PANEL_* 清单里。
+  #    漏一个 ⇒ 那条腿的开关会从调用者环境**继承**进来,判据测到的就不是默认合约
+  #    (本文件顶上那段注释写的正是这件事)。PANEL_GEMINI_LEG 就漏了 —— 加腿第七处。
+  local _sw _miss=""
+  for _sw in $( . "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null
+                for l in "${PANEL_LEGS_ORDER[@]}"; do panel_leg_switch "$l"; done ); do
+    [[ "$(grep -c -- "-u $_sw\b\|^[[:space:]]*$_sw\b\|[[:space:]]$_sw\b" "$PWD/tests/test-review-tooling.sh")" -ge 2 ]] \
+      || _miss+="${_miss:+,}$_sw"
+  done
+  check "V46⑧d: 每条腿的开关变量都在判据顶部的两份 PANEL_* 清单里(缺:${_miss:-无})" \
+    "$([[ -z "$_miss" ]] && echo 0 || echo 1)"
 
   # ⑩ headless 权限白名单:没有它,这条腿会**交白卷而看起来一切正常**。
   # 🔴 2026-08-25 真链冒烟实测(假桩测不出来):agy 想跑一个命令 ⇒ headless 弹不出
@@ -4689,7 +4728,7 @@ STUB
   #    函数内的调用**继承**那个变量 —— 光是"不显式设置"根本没把它去掉,
   #    这条断言第一版就是这么假红的(它测的其实是"带着变量还拦不拦")。
   out="$(env -u REVIEW_NO_MY_REVIEW PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
-         "$BIN/subgemini" review /dev/null "$W/o5.log" "$W/repo" 2>&1)"; rc=$?
+         "$BIN/subgemini" review "$W/task.md" "$W/o5.log" "$W/repo" 2>&1)"; rc=$?
   if [[ $rc -ne 0 ]] && grep -qE '先写你自己的一遍|my-review' <<<"$out"; then
     ok "V46⑨a: 反锚定闸真的拦住了未先自审的派发"
   else
@@ -4697,11 +4736,103 @@ STUB
   fi
   # ⑨b review-home 闸:运行期 home 落在被评审的仓里必须拒跑
   out="$(PATH="$W/bin:$PATH" REVIEW_NO_MY_REVIEW=1 AGY_REVIEW_HOME="$W/repo/inside" \
-         "$BIN/subgemini" review /dev/null "$W/o6.log" "$W/repo" 2>&1)"; rc=$?
+         "$BIN/subgemini" review "$W/task.md" "$W/o6.log" "$W/repo" 2>&1)"; rc=$?
   if [[ $rc -ne 0 ]] && grep -qE '被评审的仓内|仓外' <<<"$out"; then
     ok "V46⑨b: 运行期 home 落在被评审的仓内 ⇒ 拒跑"
   else
     bad "V46⑨b: home 指进被评审的仓竟然放行了(rc=$rc) —— 腿会被自家只读挂载弄死,而错误长得像额度耗尽"
+  fi
+
+  # ⑫ 🔴 原仓只读**真的接上了**,不是只写在注释里。
+  # 这条腿的注释和 legs.md 都写着"真正的边界是可丢弃副本 + 原仓 ro-repo-exec 只读",
+  # 而 2026-08-26 四审两条腿各自 grep 出来:**subgemini 从不调用 ro-repo-exec**
+  # (subkimi/submimo/subagent 三条腿都包了)。命令白名单是前缀匹配、挡不住
+  # `git diff --output=<原仓路径>` 这类写口(08-19 已实证),所以那句话当时是假的。
+  # 假模型试着往原仓写:必须被**物理**挡住,而且腿本身照样跑得完(防线不许把腿弄死)。
+  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    bad "V46⑫: 前置不满足(缺 unshare 或 ro-repo-exec)—— 这条问不出来"
+  else
+    rm -f "$W/pwn.txt" "$W/repo/PWNED_IN_SOURCE"
+    out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
+           STUB_PWN_SOURCE="$W/repo" STUB_PWN_OUT="$W/pwn.txt" \
+           "$BIN/subgemini" review "$W/task.md" "$W/o7.log" "$W/repo" 2>&1)"; rc=$?
+    local pwn; pwn="$(cat "$W/pwn.txt" 2>/dev/null || echo "没跑到模型")"
+    if [[ "$pwn" == "source=BLOCKED" && ! -e "$W/repo/PWNED_IN_SOURCE" ]]; then
+      ok "V46⑫: 腿写不进被评审的原仓(实际:$pwn)"
+    else
+      bad "V46⑫: 腿能写进被评审的原仓(实际:$pwn) —— 注释里那句「原仓 ro-repo-exec 只读」是假的"
+    fi
+    check "V46⑫b: 只读防线没把腿弄死(仍然出结论,rc=$rc)" "$([[ $rc -eq 0 ]] && echo 0 || echo 1)"
+  fi
+
+  # ⑬ 凭证副本**跑完即删**。业主那份 agy token 内含 refresh_token(legs.md 自己写着
+  # "副本能自己刷新"),一份能自己刷新的长期凭证不该在盘上过夜:多一份泄漏面,
+  # 而且闭源二进制若做 refresh-token 轮换,副本抢先刷新会把业主的登录刷失效 ——
+  # 方向正好是本单最不能接受的那种不可逆损害。注释原话"每次重写,不留隔夜残留"
+  # 当时只对 settings.json 成立,对 token **不成立**(四审两条腿都点了这处)。
+  if [[ -e "$tok" ]]; then
+    bad "V46⑬: 跑完之后凭证副本还留在评审 home($tok)—— 含 refresh_token 的长期凭证不许过夜"
+  else
+    ok "V46⑬: 凭证副本跑完即删(评审 home 里不留过夜的长期凭证)"
+  fi
+
+  # ⑭ 并发不串味。`AGY_REVIEW_HOME` 是固定路径,而 settings.json 里写着
+  # **每次不同的**副本路径(read_file 授权)。两条 subgemini 撞上(panel 与手动跑
+  # 并行、或两轮 panel 相撞),后写的会把先跑那条的授权改成指向**自己的**副本 ⇒
+  # 先跑那条突然读不到自己的仓、交白卷,而错误长得像额度或凭证问题。
+  # 这是我自审时就写下的第 3 条,四审两条腿各自独立确认。
+  mkdir -p "$W/repo2"
+  ( cd "$W/repo2" && git init -q . && echo hi2 > b.txt && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -qm init ) >/dev/null 2>&1
+  rm -f "$W/a-settings.json" "$W/b-settings.json"
+  ( PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_SLEEP=3 \
+      STUB_SETTINGS_OUT="$W/a-settings.json" \
+      "$BIN/subgemini" review "$W/task.md" "$W/oA.log" "$W/repo" >/dev/null 2>&1 ) &
+  local a_pid=$!
+  sleep 1.5
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_SETTINGS_OUT="$W/b-settings.json" \
+         "$BIN/subgemini" review "$W/task.md" "$W/oB.log" "$W/repo2" 2>&1)"; local b_rc=$?
+  wait "$a_pid"
+  local a_repo a_scope
+  a_repo="$(sed -n 's/^repo:[[:space:]]*//p' "$W/oA.log" | awk '{print $1}')"
+  a_scope="$(grep -oE 'read_file\([^)]*\)' "$W/a-settings.json" 2>/dev/null | head -1 | sed 's/read_file(//; s/)$//')"
+  if [[ -n "$a_repo" && "$a_scope" == "$a_repo" ]]; then
+    ok "V46⑭: 并发跑第二条腿时,先跑那条的读授权始终指着**它自己**的副本"
+  else
+    bad "V46⑭: 并发串味 —— 先跑那条的读授权变成了 '$a_scope',而它的副本是 '$a_repo'"
+  fi
+  # 撞车这件事本身要**说得出来**:要么响亮失败,要么各跑各的;不许静默互相覆盖。
+  if [[ $b_rc -ne 0 ]] && grep -qE '并发|另一|占用|lock|正在跑' <<<"$out"; then
+    ok "V46⑭b: 撞上正在跑的另一条 ⇒ 响亮失败并说清原因"
+  elif [[ $b_rc -eq 0 ]] && [[ "$(grep -oE 'read_file\([^)]*\)' "$W/b-settings.json" 2>/dev/null | head -1)" != \
+                              "$(grep -oE 'read_file\([^)]*\)' "$W/a-settings.json" 2>/dev/null | head -1)" ]]; then
+    ok "V46⑭b: 两条并发各用各的评审环境(互不覆盖)"
+  else
+    bad "V46⑭b: 撞车既没响亮失败、也没各跑各的(第二条 rc=$b_rc)—— 静默串味"
+  fi
+
+  # ⑮ 任务文件不存在 ⇒ 拒跑。原来是 `cat "$TASK_FILE" 2>/dev/null || true`:
+  # 路径写错时腿拿到一份**没有任务的提示词**,照样可能吐一个裁决行 ⇒ 收一个 PASS,
+  # 而它什么都没审。这正是任务书第 5 点问的"看起来跑完了、其实没审"。
+  # 对照:subkimi 早就是 `[[ -f "$TASK_FILE" ]] || die`。
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
+         "$BIN/subgemini" review "$W/nonexistent-task.md" "$W/o8.log" "$W/repo" 2>&1)"; rc=$?
+  if [[ $rc -ne 0 ]] && grep -qE 'task file|任务' <<<"$out"; then
+    ok "V46⑮: 任务文件不存在 ⇒ 响亮拒跑(不许审一份空任务还交 PASS)"
+  else
+    bad "V46⑮: 任务文件不存在竟然放行了(rc=$rc) —— 腿会审一份空提示词然后交卷"
+  fi
+
+  # ⑯ 超时但裁决已落盘 ⇒ 接受,但**必须在报告里说它是超时的部分运行**。
+  # 取舍本身合理(裁决写完才挂死,那份评审不算丢),但一份"完整评审"和一份
+  # "写完裁决就被砍"的报告长得一模一样 —— 而这份结论以后会被单独读到(归档、
+  # 断线重连),那时终端上那句 stderr 早没了。同 V19 降级横幅的理由。
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_HANG=1 AGY_TIMEOUT=2 \
+         "$BIN/subgemini" review "$W/task.md" "$W/o9.log" "$W/repo" 2>&1)"; rc=$?
+  if [[ $rc -eq 0 ]] && grep -qE '超时|timed out' "$W/o9.log" 2>/dev/null; then
+    ok "V46⑯: 超时但有裁决 ⇒ 接受,且横幅写进报告本身(不只印在终端上)"
+  else
+    bad "V46⑯: 超时接受了(rc=$rc)却没在报告里留下横幅 —— 事后读到它的人分不出这是部分运行"
   fi
 }
 

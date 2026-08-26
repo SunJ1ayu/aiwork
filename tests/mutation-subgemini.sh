@@ -45,12 +45,25 @@ run_oracle() {   # 只跑 V46 那一段
 BIT=0; MISS=0
 BASELINE="$(run_oracle)"
 base_totals="$(grep '^TOTALS' <<<"$BASELINE" | tail -1)"
-if [[ "$base_totals" != "TOTALS 17 0" ]]; then
-  echo "🔴 基线不是十七绿零红($base_totals) ⇒ 拒绝跑红检。"
+base_pass="$(awk '{print $2}' <<<"$base_totals")"
+base_fail="$(awk '{print $3}' <<<"$base_totals")"
+# 🔴 基线**只问"零红"**,不再写死条数(2026-08-26,四审两条腿各自命中)。
+# 上一版硬编码 `TOTALS 17 0`:V46 从 17 条长到 19 条那天,红检就开始
+# 「🔴 基线不是十七绿零红 ⇒ 拒绝跑红检」并退出 2 —— **16 个变异点一个都没再跑过**,
+# 而 commit 里那句"16 咬 0 漏"在 HEAD 上已经不可复现。
+# 条数是**另一处的事实的拷贝**(判据文件说了算),抄过来就会过期;
+# 红检真正需要的前提只有一个:开跑时不许带着红(否则分不清「变异咬红的」和
+# 「本来就红的」)。本机为"锚点过期本身就是问题"记过 4 次账,这次是它自己犯。
+if [[ ! "$base_pass" =~ ^[0-9]+$ || ! "$base_fail" =~ ^[0-9]+$ ]]; then
+  echo "🔴 基线跑不出 TOTALS 行($base_totals)⇒ 拒绝跑红检(提取版自己就坏了)。"
+  printf '%s\n' "$BASELINE"; exit 2
+fi
+if [[ "$base_fail" -ne 0 || "$base_pass" -eq 0 ]]; then
+  echo "🔴 基线不是零红($base_totals)⇒ 拒绝跑红检。"
   echo "   带着红跑红检,分不清「变异咬红的」和「本来就红的」。"
   printf '%s\n' "$BASELINE"; exit 2
 fi
-echo "基线: $base_totals(与完整 oracle 里 V46 段一致)"
+echo "基线: $base_totals(提取版 $base_pass 条断言全绿)"
 
 mutate() {  # mutate <编号> <该打红的断言关键字>   (python 从 stdin 喂)
   local id="$1" target="$2" py out
