@@ -319,6 +319,15 @@ if s.count(old)!=1: sys.exit(1)
 open(p,'w',encoding='utf-8').write(s.replace(old,'"command(cat)", "command(git log)",'))
 PY
 
+mutate M23 "V46㉑" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old="- NO PIPES, NO REDIRECTS, NO CHAINING. 'git diff X | grep Y'"
+new="- NO PIPES, NO REDIRECTS, NO CHAINING. \\`git diff X | grep Y\\`"
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+
 echo "──────────────────────────────────────────────────────"
 echo "红检结果: 咬住 $BIT 条,漏网 $MISS 条"
 restore
