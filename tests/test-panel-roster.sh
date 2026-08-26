@@ -248,22 +248,15 @@ check "R9c: 没派也没 state 的腿仍然照实印 off" \
 echo "[R10] 一条腿都没派(全 off)也要照实印,不许炸(评审腿 F4 的覆盖缺口)"
 d10="$(mktemp -d)"; mkdir -p "$d10/bin" "$d10/raw"
 cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/panel-roster" "$d10/bin/"
-cat > "$d10/raw/none.plan" <<'PLAN'
-task=t
-impact-risk=self
-requested-budget=0
-selected-count=0
-selected=none
-snapshot-head=abc123
-leg	submimo	0	off
-leg	subdeepseek	0	off
-leg	subglm	0	off
-leg	subkimi	0	off
-PLAN
+{
+  printf '%s\n' 'task=t' 'impact-risk=self' 'requested-budget=0' \
+    'selected-count=0' 'selected=none' 'snapshot-head=abc123'
+  for leg in "${_ALL_LEGS[@]}"; do printf 'leg\t%s\t0\toff\n' "$leg"; done
+} > "$d10/raw/none.plan"
 out10="$("$d10/bin/panel-roster" "$d10/raw/none" 2>&1)"; rc10=$?
 check "R10: 全 off 时正常退出" $([[ "$rc10" -eq 0 ]]; echo $?)
-check "R10: 四条腿都印 off" \
-  $([[ "$(grep -o '=off' <<<"$out10" | wc -l)" -eq 4 ]]; echo $?)
+check "R10: 花名册全池都印 off" \
+  $([[ "$(grep -o '=off' <<<"$out10" | wc -l)" -eq "${#_ALL_LEGS[@]}" ]]; echo $?)
 
 # ---------------------------------------------------------------- R11
 echo "[R11] 杀法二:SIGTERM 打**整个进程组**(断线的杀法,不是 timeout 的)"

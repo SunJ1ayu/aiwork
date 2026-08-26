@@ -10,7 +10,7 @@
 #       shell must not pre-expand globs against subdeepseek's own CWD (needs set -f).
 #   V3  panel-review: a reviewer's early stderr failure is captured to a .err
 #       sidecar (not swallowed, not racing the reviewer's own .log); empty
-#       sidecars are removed on success; exit code is 1 only if ALL THREE fail.
+#       sidecars are removed on success; exit code is 1 only if all dispatched legs fail.
 #   V4  submimo-review: empty / null / verdict-less model output exits non-zero
 #       (log still written, reason on stderr); explore mode (--mode explore /
 #       REVIEW_MODE=explore, flag wins) is exempt from the verdict check; a
@@ -4505,14 +4505,14 @@ EOF
   grep -q 'submimo=SKIP(health:quota)' "$d/H1.roster"; check "V43: roster 如实记 quota skip" $?
   check "V43: 少一条额度腿不阻断有证据的本轮" $([[ $rc -eq 0 ]]; echo $?)
 
-  # ④ 初始两条结论冲突 ⇒ 只追加第三条，不直接四条全开。
+  # ④ 初始两条结论冲突 ⇒ 只追加一条 spare，不直接全池派发。
   : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
   env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
     PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
     STUB_MIMO_VERDICT=PASS STUB_DEEPSEEK_VERDICT=BLOCK \
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/C1" >/dev/null 2>&1
   count="$(wc -l < "$d/calls" | tr -d ' ')"
-  check "V43: 冲突时追加到三审而非四审" $([[ $count -eq 3 ]]; echo $?)
+  check "V43: 冲突时只追加一条 spare，不直接全池派发" $([[ $count -eq 3 ]]; echo $?)
   grep -q 'escalation=conflict' "$d/C1.roster"; check "V43: roster 记下冲突升级原因" $?
 
   # ⑤ 一条腿进程失败同样加第三条；主 Agent仍按现有证据裁，不要求全票。
@@ -5181,8 +5181,9 @@ GUARD_PROBE
 }
 
 v0_parent_panel_env_is_scrubbed
-# 老判据逐条复核四腿各自的安全合约；显式要求 all，避免它们偷偷依赖新的二审默认值。
-export PANEL_REVIEW_BUDGET=4
+# 老判据逐条复核池内各腿的安全合约；最大预算从唯一花名册派生，避免新增腿后漏审。
+mapfile -t _oracle_pool_legs < <( . "$BIN/_panel-roster-lib.sh"; printf '%s\n' "${PANEL_LEGS_ORDER[@]}" )
+export PANEL_REVIEW_BUDGET="${#_oracle_pool_legs[@]}"
 REVIEW_NO_MY_REVIEW=1 v1_untracked_content
 REVIEW_NO_MY_REVIEW=1 v1_no_untracked_and_nonrepo
 REVIEW_NO_MY_REVIEW=1 v2_glob_not_pre_expanded
