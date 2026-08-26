@@ -119,6 +119,11 @@ mkdir -p "$AGY_HOME_DIR"
 [[ -f "$OWNER_TOKEN" ]] || die "找不到 agy 凭证($OWNER_TOKEN)⇒ 拒跑。
   业主需要跑一次 \`agy\` 完成 OAuth(会打印授权网址,要人在浏览器里点)。"
 # 🔴 复制,不是 ln -s。链接会让腿写穿到业主的登录上,而掉登录只有他本人能修。
+# trap 装在 **cp 之前**:`cp` 成功而 `chmod` 失败(set -e)那一瞬间,
+# 凭证已经在盘上、而擦除还没挂上。窗口很小,但这条腿护的是不可逆的东西。
+# (第二轮四审 subkimi 与 gemini 腿各自独立点了这处。)
+_subgemini_wipe_token() { rm -f "$AGY_HOME_DIR/antigravity-oauth-token"; }
+trap '_subgemini_wipe_token' EXIT
 rm -f "$AGY_HOME_DIR/antigravity-oauth-token"
 cp "$OWNER_TOKEN" "$AGY_HOME_DIR/antigravity-oauth-token"
 chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"
@@ -128,8 +133,6 @@ chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"
 # 注释里原来那句"每次重写,不留隔夜残留"只对 settings.json 成立,对 token 不成立。
 # trap 装在**拷贝之后立刻**,不等 workspace 那一步:中间任何一次 die(预检失败、
 # workspace 建不起来)都不许把凭证留在盘上。(四审 F9/F6,判据 V46⑬)
-_subgemini_wipe_token() { rm -f "$AGY_HOME_DIR/antigravity-oauth-token"; }
-trap '_subgemini_wipe_token' EXIT
 # 🔴 遥测:业主在首次向导里亲手关掉了数据收集,但那条写在**他的** home。
 # 换 HOME 之后评审 home 是全新的、没有 settings.json ⇒ 走默认值 ⇒ 他的选择被绕过,
 # 而这条腿读的正是他的仓库代码。每次重写。

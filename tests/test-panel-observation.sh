@@ -5,6 +5,22 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 🔴 **这套判据必须是隔离的**:panel-review 的选腿/开关全走环境变量,而这套判据
+# 恰恰在测选腿与派发。调用者环境里飘着一个 `PANEL_GEMINI_LEG=off`,整段就变成
+# 50/5 —— 也就是说**判卷防线能被一个环境变量悄悄关掉**,而红绿看起来像代码的问题。
+# 2026-08-26 第二轮四审的 subkimi 腿实测出来的(它自己没来得及给裁决行,
+# 但这条是那一轮最值钱的发现之一)。tests/test-review-tooling.sh 早就有这道 scrub,
+# 这份没有 —— 又一次「守卫要守对门」:同一道闸,只装在了一扇门上。
+# 本机为"判据里飘着的全局 export"记过账(08-18,一天五条假绿)。
+if [[ "${PANEL_OBS_ENV_SCRUBBED:-}" != "1" ]]; then
+  exec env -u PANEL_MIMO_LEG -u PANEL_DEEPSEEK_LEG -u PANEL_GLM_LEG \
+    -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG \
+    -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
+    -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
+    -u PANEL_DIFF_BASE -u PANEL_INCLUDE \
+    PANEL_OBS_ENV_SCRUBBED=1 bash "$0" "$@"
+fi
 # 腿名单的**唯一源**。判据自己也不许抄第二份 —— 抄了就会像 08-26 那样:
 # 名单上五条腿,判据只问得出四条。
 . "$ROOT/bin/_panel-roster-lib.sh"

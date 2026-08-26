@@ -4668,13 +4668,19 @@ STUB
   # ⑧d 每条腿的开关变量都必须出现在本判据顶部那两份 PANEL_* 清单里。
   #    漏一个 ⇒ 那条腿的开关会从调用者环境**继承**进来,判据测到的就不是默认合约
   #    (本文件顶上那段注释写的正是这件事)。PANEL_GEMINI_LEG 就漏了 —— 加腿第七处。
+  # 🔴 **两份判据都要查**。原来只查 tests/test-review-tooling.sh —— 而派发判据
+  # tests/test-panel-observation.sh 当时根本没有 scrub,一个 PANEL_GEMINI_LEG=off
+  # 就能把它从 55/0 变成 50/5(2026-08-26 第二轮四审 subkimi 实测)。
+  # 同一道闸只装在一扇门上,是本仓的老账「守卫要守对门」。
   local _sw _miss=""
   for _sw in $( . "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null
                 for l in "${PANEL_LEGS_ORDER[@]}"; do panel_leg_switch "$l"; done ); do
     [[ "$(grep -c -- "-u $_sw\b\|^[[:space:]]*$_sw\b\|[[:space:]]$_sw\b" "$PWD/tests/test-review-tooling.sh")" -ge 2 ]] \
-      || _miss+="${_miss:+,}$_sw"
+      || _miss+="${_miss:+,}$_sw(review-tooling)"
+    grep -q -- "-u $_sw\b" "$PWD/tests/test-panel-observation.sh" \
+      || _miss+="${_miss:+,}$_sw(panel-observation)"
   done
-  check "V46⑧d: 每条腿的开关变量都在判据顶部的两份 PANEL_* 清单里(缺:${_miss:-无})" \
+  check "V46⑧d: 每条腿的开关变量在**两套**判据里都被清理(缺:${_miss:-无})" \
     "$([[ -z "$_miss" ]] && echo 0 || echo 1)"
 
   # ⑩ headless 权限白名单:没有它,这条腿会**交白卷而看起来一切正常**。
