@@ -318,7 +318,18 @@ HAS_VERDICT=0
 # 那次死在 `git diff … | grep …` 一个管道上,几分钟的真评审一个字都没留下。
 # 我们改不了 agy,但报告可以先落盘 —— write_file 本来就授权在这份可丢弃副本上。
 # **必须标明出处**:一份"被丢弃那轮的残骸"不许读起来像正常产出(同 V19 降级横幅)。
-if [[ $HAS_VERDICT -eq 0 && -s "$SALVAGE_FILE" ]]; then
+# 捞之前先问它有没有内容:**只有一行裁决的残骸不收**。那确实是模型写的(不是伪造),
+# 但它是一份没有理由的评审 —— 收下等于给这一轮盖橡皮图章。
+# (第三轮四审 submimo 点的;判据 V46㉓。)阈值取 3 行非空正文:够低,不会误伤
+# 一份"短但有话"的报告;又足以挡住只写了裁决就被砍的那种。
+_salvage_body_lines() {
+  grep -vE '^[[:space:]]*$' "$SALVAGE_FILE" 2>/dev/null \
+    | grep -viE '^[[:space:]]*[*_`]*[[:space:]]*(Conclusion|Verdict|结论)[[:space:]]*[：:]' | wc -l
+}
+if [[ $HAS_VERDICT -eq 0 && -s "$SALVAGE_FILE" ]] && [[ "$(_salvage_body_lines)" -lt 3 ]]; then
+  echo "subgemini: 工作区里那份报告只有裁决行、没有理由($(_salvage_body_lines) 行正文)⇒ 不收。
+  那是模型写完裁决就被砍的残骸;收下它等于给这一轮盖个橡皮图章。日志:$LOG_FILE" >&2
+elif [[ $HAS_VERDICT -eq 0 && -s "$SALVAGE_FILE" ]]; then
   { echo
     echo "⚠️  下面这份报告是**从工作区里捞出来的**:模型 stdout 零产出"
     echo "    (agy 的老毛病:一次 soft-deny 就把整轮扔掉),而它把报告写进了"

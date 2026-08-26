@@ -4541,13 +4541,21 @@ if [[ -n "\${STUB_SETTINGS_OUT:-}" ]]; then
 fi
 # 一起步就被 soft-deny 砍掉:stdout 零产出、什么文件都不写
 [[ -n "\${STUB_SILENT:-}" ]] && exit 0
+# 只写了一行裁决就被砍:文件里除了裁决什么都没有
+if [[ -n "\${STUB_VERDICT_ONLY:-}" ]]; then
+  f=""; prev=""
+  for a in "\$@"; do [[ "\$prev" == "-p" ]] && f="\$(grep -oE '[^ ]*\.subgemini-review-[^ ]*\.md' <<<"\$a" | head -1)"; prev="\$a"; done
+  [[ -n "\$f" ]] && printf 'Conclusion: PASS\n' > "\$f"
+  exit 0
+fi
 if [[ -n "\${STUB_WRITE_ONLY:-}" ]]; then
   # 模拟 agy 的致命形态:干了一堆活、把报告写进了工作区,然后**整轮被丢弃、stdout 零产出**。
   # 落点**从提示词里读**(和真模型一样)—— wrapper 每轮换一个名字,桩不许自己猜一个
   # 固定名,那样测的就不是真实通道了(V46㉒ 之后这里咬过一次)。
   f=""; prev=""
   for a in "\$@"; do [[ "\$prev" == "-p" ]] && f="\$(grep -oE '[^ ]*\.subgemini-review-[^ ]*\.md' <<<"\$a" | head -1)"; prev="\$a"; done
-  [[ -n "\$f" ]] && printf '副本里的报告\nConclusion: BLOCK\n' > "\$f"
+  # 写一份**有内容**的报告(真报告都有理由;只有裁决行的那种由 ㉓ 单独测)
+  [[ -n "\$f" ]] && printf '副本里的报告\n- 第一条理由\n- 第二条理由\n- 第三条理由\nConclusion: BLOCK\n' > "\$f"
   exit 0
 fi
 if [[ -n "\${STUB_NO_VERDICT:-}" ]]; then echo "看起来还行,没啥大问题。"; exit 0; fi
@@ -4951,6 +4959,19 @@ STUB
     ok "V46⑳: 提示词点名了管道这条死法(真链上唯一真咬死过它的)"
   else
     bad "V46⑳: 提示词没提管道 —— 模型会以为「命令在白名单里」就安全,而一个管道就让整轮报废"
+  fi
+
+  # ㉓ 捞出来的报告**只有一行裁决**时不许收。submimo 在第三轮四审里点的:
+  # 模型写了 "Conclusion: PASS" 就被砍 ⇒ 那确实是模型写的(不是伪造),
+  # 但它是**一份没有理由的评审** —— 收下它等于给这一轮盖个橡皮图章。
+  # 捞报告这条通道本来就是残骸回收,回收的东西至少得有内容。
+  rm -f "$W/o14.log"
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_VERDICT_ONLY=1 \
+         "$BIN/subgemini" review "$W/task.md" "$W/o14.log" "$W/repo" 2>&1)"; rc=$?
+  if [[ $rc -ne 0 ]]; then
+    ok "V46㉓: 捞出来的报告只有裁决行、没有理由 ⇒ 不收(不许盖橡皮图章)"
+  else
+    bad "V46㉓: 只有一行裁决的残骸被当成完整评审收下了(rc=$rc)"
   fi
 
   # ㉒ 🔴 **不许把仓里本来就有的文件当成模型的结论。**
