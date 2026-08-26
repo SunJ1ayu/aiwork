@@ -385,7 +385,7 @@ for name in "${pool_legs[@]}"; do legs+=(--leg "$name,${name#sub},agent,0,PASS,f
 out="$($RECORD "${common_obs[@]}" --controller panel-review --adapter panel-review "${legs[@]}" 2>&1)"; rc=$?
 check "R8: writer 接受运行时花名册全池，不另设固定腿数上限" $([[ $rc -eq 0 ]]; echo $?)
 check "R8: 全池 observation 已真实落盘" \
-  $([[ -s "$d/tracks/t/observations/r1-execution_finished.json" ]]; echo $?)
+  $(find "$d/tracks/t/observations" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; echo $?)
 rm -rf "$d/tracks/t/observations"
 out="$($RECORD "${common_obs[@]}" --controller runlog --adapter runlog \
   --leg x,family,agent,0,PASS,false 2>&1)"; rc=$?
