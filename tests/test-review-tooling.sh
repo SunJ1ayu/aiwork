@@ -1878,11 +1878,23 @@ v22_head_moved_during_review() {
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
 
-  # 老实的三条腿:HEAD 不动
-  for leg in submimo subdeepseek subglm subkimi; do
+  # 🔴 桩腿名单也得从唯一源派生。原来这里硬编码四条腿 ⇒ 第五条腿没有桩、跑不出日志,
+  # 而下面那句 `[[ -s "$f" ]] || continue` 会安静地跳过它 ——
+  # "每份腿日志都要带横幅"这条断言,对它**一次都没有执行过**。
+  # 判据循环从表派生(08-26 上午)时我只改了检查那一半,夹具这一半漏了:
+  # **同一个事实存两处、只更新其中一个**,本单第 N 次。
+  # 两条腿在两轮里各自独立指到这处(08-26 真链 subgemini 第二轮 W3、四审 subdeepseek M3)。
+  # `--all` 的现行契约仍是「四审」(预算上限 4),而花名册有五条轮换腿。
+  # 所以不能用「一轮同时生出五份日志」当题面——那会永远红在正确的预算上。
+  # 下面用两个确定的轮换窗口 0..3 / 1..4,联合覆盖五条腿。
+  local _rl="$BIN/_panel-roster-lib.sh" leg
+  local -a _legs
+  mapfile -t _legs < <( . "$_rl" 2>/dev/null; printf '%s\n' ${PANEL_LEGS_ORDER[@]+"${PANEL_LEGS_ORDER[@]}"} )
+  for leg in "${_legs[@]}"; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
   done
-  bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/H1" >"$d/h1.out" 2>&1
+  PANEL_SELECTION_START=0 PANEL_STAGGER_MAX=0 PANEL_STATE_DIR="$d/state" \
+    bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/H1" >"$d/h1.out" 2>&1
   if grep -qi "HEAD 从\|HEAD moved" "$d/h1.out"; then bad "V22a: HEAD 没动时不许报"; else ok "V22a: HEAD 没动时不许报"; fi
   if grep -qi "HEAD 从" "$d/H1.submimo.log"; then bad "V22a: HEAD 没动时日志不许被加尾巴"; else ok "V22a: HEAD 没动时日志不许被加尾巴"; fi
 
@@ -1894,21 +1906,36 @@ echo "STUB PASS" > "$3"
 exit 0
 EOF
   chmod +x "$pb/submimo"
-  bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/H2" >"$d/h2.out" 2>&1
+  PANEL_SELECTION_START=0 PANEL_STAGGER_MAX=0 PANEL_STATE_DIR="$d/state" \
+    bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/H2" >"$d/h2.out" 2>&1
   grep -qi "HEAD 从" "$d/h2.out"; check "V22a: HEAD 漂移在 stdout 报出来" $?
-  # 报告会被单独读到(归档/断线重连),所以横幅必须跟着结论走 —— 每一份腿日志都要有
+  # 第二个窗口让 subgemini 被选中;由它提交,再问同一条横幅契约。
+  printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/submimo"
+  cat > "$pb/subgemini" <<'EOF'
+#!/usr/bin/env bash
+git -C "$4" commit -q --allow-empty -m "Gemini 腿在评审期间观测到新 HEAD"
+echo "STUB PASS" > "$3"
+exit 0
+EOF
+  chmod +x "$pb/submimo" "$pb/subgemini"
+  PANEL_SELECTION_START=1 PANEL_STAGGER_MAX=0 PANEL_STATE_DIR="$d/state" \
+    bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/H3" >"$d/h3.out" 2>&1
+  grep -qi "HEAD 从" "$d/h3.out"; check "V22a: Gemini 被选中时 HEAD 漂移也报到 stdout" $?
+
+  # 报告会被单独读到(归档/断线重连),所以横幅必须跟着结论走。
   local missed=0 f
-  # 🔴 这里原本硬编码四条腿的日志名 —— 我 08-26 把实现改成按 LEGS 循环追加横幅之后,
-  # **判据没跟上**:第五条腿的报告有没有收到横幅,这条断言根本没问过。
-  # 同一单里同一种病的第 N 次(名单单点更新、判据漏跟),这次是 subgemini 腿自己
-  # 在真链评审里抓到的。改成从唯一源派生,加第六条腿时自动跟上。
-  local _rl="$BIN/_panel-roster-lib.sh"; local _legs
-  _legs="$( . "$_rl" 2>/dev/null; printf '%s\n' ${PANEL_LEGS_ORDER[@]+"${PANEL_LEGS_ORDER[@]}"} )"
-  for f in $(printf '%s\n' "$_legs" | sed "s#^#$d/H2.#; s#\$#.log#"); do
-    [[ -s "$f" ]] || continue
+  # 🔴 两个窗口的腿名都从唯一源派生;「被选中却没日志」不再静默放行。
+  for leg in "${_legs[@]:0:4}"; do
+    f="$d/H2.$leg.log"
+    [[ -s "$f" ]] || { missed=1; echo "     (压根没有这条腿的日志: $f)"; continue; }
     grep -qi "HEAD 从" "$f" || { missed=1; echo "     (缺横幅: $f)"; }
   done
-  check "V22a: 每份腿日志尾部都带 HEAD 漂移横幅" $([[ $missed -eq 0 ]]; echo $?)
+  for leg in "${_legs[@]:1:4}"; do
+    f="$d/H3.$leg.log"
+    [[ -s "$f" ]] || { missed=1; echo "     (压根没有这条腿的日志: $f)"; continue; }
+    grep -qi "HEAD 从" "$f" || { missed=1; echo "     (缺横幅: $f)"; }
+  done
+  check "V22a: 五条腿被选中时,各自日志尾部都带 HEAD 漂移横幅" $([[ $missed -eq 0 ]]; echo $?)
   # 原结论不许被横幅顶掉
   grep -q "STUB PASS" "$d/H2.subdeepseek.log"; check "V22a: 加横幅不吞掉腿的原文" $?
   rm -rf "$d"
