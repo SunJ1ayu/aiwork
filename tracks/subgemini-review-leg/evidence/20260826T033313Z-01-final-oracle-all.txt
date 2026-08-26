@@ -1,0 +1,16 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    final-oracle-all
+cmd:     bash tests/test-review-tooling.sh
+cwd:     /root/aiwork(仓根)
+commit:  94fc0a1
+dirty:   no(跑之前采的;含未跟踪文件)
+head-before: 94fc0a1ac41522bfc50eb568ae723e01a6f9329d
+source-view-before: sha256:65b470fa1e6b9e1064f4b7d0d9ec1739dd122bfa3b1b747b064417e7cc385615
+started: 2026-08-26T03:33:13Z
+---------------- 输出开始 ----------------
+command-rc: 143
+head-after: 94fc0a1ac41522bfc50eb568ae723e01a6f9329d
+source-view-after:  sha256:65b470fa1e6b9e1064f4b7d0d9ec1739dd122bfa3b1b747b064417e7cc385615
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: final-oracle-all rc=143 commit=94fc0a1 dirty=no final=yes at=2026-08-26T03:33:13Z file=tracks/subgemini-review-leg/evidence/20260826T033313Z-01-final-oracle-all.txt

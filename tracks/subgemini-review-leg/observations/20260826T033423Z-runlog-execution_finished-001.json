@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "subgemini-review-leg",
+  "run_id": "20260826T033313Z-01-final-oracle-all",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "final-oracle-all",
+  "started_at": "2026-08-26T03:33:13Z",
+  "finished_at": "2026-08-26T03:34:23Z",
+  "duration_ms": 70471,
+  "exit_code": 143,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 143,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

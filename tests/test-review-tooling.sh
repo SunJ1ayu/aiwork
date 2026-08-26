@@ -3951,6 +3951,37 @@ HD_FIXTURE
   [[ $? -eq 0 ]]
   check "V41⑥: 缩进的 EOF 不算结束标记 —— 不许提前出 heredoc(错位=漏报)" $?
 
+  # ⑦/⑧ 🔴 `$( … )` 是一个**新的引号上下文**,状态机进得去也得出得来。
+  # 2026-08-26 实事故:本文件 4957 行那句
+  #     prompt_txt="$(sed -n '/^PROMPT="/,/^Conclusion: …/p' "$BIN/subgemini")"
+  # 里,单引号**内**的那个 `"` 被状态机当成外层双引号的收尾 ⇒ 引号奇偶当场反相,
+  # 其后 108 行整段被判成"在单引号里" —— 一箭双雕的两种坏:
+  #   · 误报:一行安全的 `grep -q '<反引号>'` 被报成暴露点(实测 bash 不执行它);
+  #   · 盲区:我往那段里插一句真危险的 python3 -c "… # <反引号>touch X<反引号> …",
+  #     闸**一声不吭**。误报还看得见,盲区看不见 —— 这才是这道闸最贵的坏法。
+  # 所以两条一起钉:同一个形状,一条问"不许报",一条问"必须报得出、且报对行"。
+  cat > "$d/subctx_ok.sh" <<'SUBCTX_OK'
+val="$(sed -n '/^PROMPT="/,/^Conclusion: PASS/p' "$SOME_FILE")"
+if grep -q '`' <<<"$val"; then echo found; fi
+SUBCTX_OK
+  python3 "$lint" "$d/subctx_ok.sh" >/dev/null 2>&1
+  [[ $? -eq 0 ]]
+  check "V41⑦: \$( ) 里的引号不许把后面整段带偏(单引号里的双引号 ⇒ 误报)" $?
+
+  cat > "$d/subctx_blind.sh" <<'SUBCTX_BLIND'
+val="$(sed -n '/^PROMPT="/,/^Conclusion: PASS/p' "$SOME_FILE")"
+python3 -c "
+import sys
+# V41_BLINDSPOT_MARKER 这句注释里的 `date` 会被 shell 真跑掉
+sys.exit(0)"
+SUBCTX_BLIND
+  out="$(python3 "$lint" "$d/subctx_blind.sh" 2>&1)"; rc=$?
+  # 只问 rc=1 不够:上面那种误报也会给 rc=1 —— 那样这条断言会**为了错误的理由变绿**。
+  # 必须问"报出来的是不是那一行"。
+  [[ $rc -eq 1 ]] && grep -q "V41_BLINDSPOT_MARKER" <<<"$out"
+  check "V41⑧: 同一形状之后的真危险行必须报得出来(盲区=漏报,比误报更贵)" $?
+  [[ $rc -eq 1 ]] || echo "    (盲区实况:$out)"
+
   rm -rf "$d"
 }
 
