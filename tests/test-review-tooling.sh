@@ -161,13 +161,14 @@ echo "${STUB_OC_OUT:-Conclusion: PASS}"
 OCSTUB
   chmod +x "$1/opencode"
 }
-# 读它生成的配置:occfg <配置路径> model|steps|baseURL|tools_off|bash_perm
+# 读它生成的配置:occfg <配置路径> model|provider_models|steps|baseURL|tools_off|bash_perm
 occfg() {
   python3 - "$1" "$2" <<'OCCFG'
 import json, sys
 c = json.load(open(sys.argv[1])); q = sys.argv[2]
 a = list(c["agent"].values())[0]; pv = list(c["provider"].values())[0]
 if   q == "model":     print(a.get("model"))
+elif q == "provider_models": print(" ".join(sorted(pv.get("models", {}))))
 elif q == "steps":     print(a.get("steps"))
 elif q == "baseURL":   print(pv["options"]["baseURL"])
 elif q == "tools_off": print(" ".join(sorted(k for k, v in a.get("tools", {}).items() if v is False)))
@@ -2232,7 +2233,7 @@ PYEOF2
   printf '# review this\n' > "$d/t.md"
   get() { python3 -c "import json,sys;v=json.load(open(sys.argv[1]))['env'].get(sys.argv[2]);print('' if v is None else v)" "$1" "$2"; }
 
-  # ── ① 默认模型:两条形态都必须是 glm-5.3(Go 上这把 key 能用的旗舰档)
+  # ── ① 默认模型:两条形态都必须是 glm-5.3-flash(Go 上已开放的低成本档)
   # 2026-08-18:底座腿改跑 opencode ⇒ "默认模型是什么"要去它生成的配置里问,
   # claude 那套 ANTHROPIC_DEFAULT_*_MODEL 对这条腿已经不再生效(供应商表里那几个
   # claude 专用值留着是为了将来切回,**不是活路径**,所以不许再拿它们当断言对象)。
@@ -2242,15 +2243,15 @@ PYEOF2
     bash "$b/subglm-agent" review "$d/t.md" "$d/m1.log" "$d/repo" >/dev/null 2>&1
   local m1cfg="$m1home/.config/opencode/opencode.json"
   if [[ -f "$m1cfg" ]]; then
-    [[ "$(occfg "$m1cfg" model)" == "go/glm-5.3" ]]
-    check "V26: 底座腿默认模型 glm-5.3(在 opencode 配置里)" $?
+    [[ "$(occfg "$m1cfg" model)" == "go/glm-5.3-flash" ]]
+    check "V26: 底座腿默认模型 glm-5.3-flash(在 opencode 配置里)" $?
   else
-    bad "V26: 底座腿默认模型 glm-5.3(在 opencode 配置里)"; echo "    (没生成配置 ⇒ 测空气)"
+    bad "V26: 底座腿默认模型 glm-5.3-flash(在 opencode 配置里)"; echo "    (没生成配置 ⇒ 测空气)"
   fi
   env PATH="$b:$PATH" CAPTURE="$d/m2.json" ZHIPU_API_KEY=zk \
     bash "$b/subglm" review "$d/t.md" "$d/m2.log" "$d/repo" >/dev/null 2>&1
-  [[ "$(get "$d/m2.json" MIMO_MODEL)" == "glm-5.3" ]]
-  check "V26: 聊天腿默认模型 glm-5.3" $?
+  [[ "$(get "$d/m2.json" MIMO_MODEL)" == "glm-5.3-flash" ]]
+  check "V26: 聊天腿默认模型 glm-5.3-flash" $?
 
   # ── ② 默认 key 文件搬到 ~/.config/opencode-go/(旧的 zhipu/auth.json 是另一家的账)
   #    用假 HOME 跑:没 key 时它必须**点名新路径**并且**在调 claude 之前就死**。
@@ -2433,7 +2434,7 @@ EOF
   local h
   h="$(bash "$BIN/subagent" -h 2>&1)"
   [[ "$h" != *glm-4.6v* ]];  check "V27: subagent -h 不许还写着 glm-4.6v" $?
-  [[ "$h" == *glm-5.3* ]];   check "V27: subagent -h 要写现在的默认模型 glm-5.3" $?
+  [[ "$h" == *glm-5.3-flash* ]]; check "V27: subagent -h 要写现在的默认模型 glm-5.3-flash" $?
   h="$(bash "$BIN/subchat" -h 2>&1)"
   [[ "$h" != *glm-4.6v* ]];  check "V27: subchat -h 不许还写着 glm-4.6v" $?
   # 08-18 收口时把这条**搬到问得出的地方**:原版禁的是字符串 "bigmodel",
@@ -2495,14 +2496,32 @@ EOF
   else ok "V28: GLM 腿不许再调 claude 壳"; fi
 
   # ── ② 模型走订阅那个 provider(默认 provider 是按量付费,实测 Insufficient balance)
-  grep -q -- "go/glm-5.3" "$d/oc.txt" 2>/dev/null
-  check "V28: 模型是 go/glm-5.3(订阅 provider,不是默认按量付费那个)" $?
+  grep -q -- "go/glm-5.3-flash" "$d/oc.txt" 2>/dev/null
+  check "V28: 模型是 go/glm-5.3-flash(订阅 provider,不是默认按量付费那个)" $?
   grep -q -- "--agent" "$d/oc.txt" 2>/dev/null
   check "V28: 显式指定 --agent(不许吃 opencode 的默认档)" $?
   # **不许用内置 plan 档**:实测它自称"禁掉所有编辑工具",而解析出来的配置是
   # write/edit/bash 全开 + 权限 * allow ⇒ 它的只读靠模型自觉,不是闸。
   grep -qE -- "--agent[= ]+plan" "$d/oc.txt" 2>/dev/null
   check "V28: 不许用内置 plan 档当只读保证(它是模型自觉,不是机械锁)" $([[ $? -ne 0 ]]; echo $?)
+
+  # ── ②b 运行时模型只有一个来源。subagent 早已把 ZHIPU_MODEL 解析成 MODEL，
+  # 但 opencode 分支曾绕开它、继续读硬编码 OC_MODEL_ID：环境变量看似支持，主路径
+  # 实际无效。配置 provider map / agent model / CLI argv / 日志身份四处必须一起跟随。
+  local override_home="$d/ochome-override"
+  env PATH="$b:$PATH" CAPTURE="$d/oc-override.txt" CAPTURE_CLAUDE="$d/claude-override.txt" \
+    OPENCODE_REVIEW_HOME="$override_home" ZHIPU_API_KEY=zk ZHIPU_MODEL=glm-custom \
+    bash "$b/subglm-agent" review "$d/t.md" "$d/g-override.log" "$d/repo" >/dev/null 2>"$d/g-override.err"; rc=$?
+  [[ $rc -eq 0 ]]
+  check "V28: ZHIPU_MODEL override 下 agent 腿仍正常收尾" $?
+  grep -q -- "go/glm-custom" "$d/oc-override.txt" 2>/dev/null
+  check "V28: ZHIPU_MODEL override 到达 opencode -m argv" $?
+  grep -q '^model: go/glm-custom$' "$d/g-override.log" 2>/dev/null
+  check "V28: ZHIPU_MODEL override 到达日志身份" $?
+  [[ "$(occfg "$override_home/.config/opencode/opencode.json" model)" == "go/glm-custom" ]]
+  check "V28: ZHIPU_MODEL override 到达 agent 配置" $?
+  [[ "$(occfg "$override_home/.config/opencode/opencode.json" provider_models)" == "glm-custom" ]]
+  check "V28: ZHIPU_MODEL override 到达 provider model map" $?
 
   # ── ③ 配置隔离:HOME 必须被换掉,否则污染 /root/.config/opencode(我的真配置)
   grep -q "^HOME: $ochome" "$d/oc.txt" 2>/dev/null
@@ -2643,8 +2662,8 @@ EOF
   check "V28: 机器上没装 claude 也不影响 opencode 底座的腿" $?
 
   # ── ⑬ 日志头印**完整**模型 id(带 provider 前缀),别印一个调用时并不存在的名字
-  grep -q "^model: go/glm-5.3$" "$d/g12.log" 2>/dev/null
-  check "V28: 日志头印完整模型 id go/glm-5.3(不是裸 glm-5.3)" $?
+  grep -q "^model: go/glm-5.3-flash$" "$d/g12.log" 2>/dev/null
+  check "V28: 日志头印完整模型 id go/glm-5.3-flash(不是裸 glm-5.3-flash)" $?
 
   # ── ⑭ key 不许经命令行传给写配置那步(进程存续期间 ps 看得见),
   #    且配置文件**创建即 600**,不许先 644 再 chmod(中断在中间会留下可读的 key 文件)。

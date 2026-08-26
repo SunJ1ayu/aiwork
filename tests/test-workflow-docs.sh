@@ -82,9 +82,10 @@ for f in "$SOURCE/CLAUDE.md" "$SOURCE/skills/track/SKILL.md" "$SOURCE/skills/pan
   check "W3: ${f#$SOURCE/} 使用两个正交轴且 high=2" $?
 done
 
-grep -q 'OC_MODEL_ID="glm-5.3"' "$ROOT/bin/subagent" \
-  && grep -q '默认模型 `glm-5.3`' "$SOURCE/skills/panel/references/legs.md"
-check "W3: GLM 唯一源与实现都是 5.3" $?
+grep -q 'DEFAULT_MODEL="glm-5.3-flash"' "$ROOT/bin/subagent" \
+  && ! grep -q 'OC_MODEL_ID=' "$ROOT/bin/subagent" \
+  && grep -q '默认模型 `glm-5.3-flash`' "$SOURCE/skills/panel/references/legs.md"
+check "W3: GLM 默认是 5.3 Flash，agent 没有第二模型源" $?
 grep -q 'DEFAULT_MAX_TURNS=200' "$ROOT/bin/subagent" \
   && grep -q '轮次上限.*\*\*200\*\*' "$SOURCE/skills/panel/references/legs.md"
 check "W3: DeepSeek 唯一源与实现都是 200 turns" $?
