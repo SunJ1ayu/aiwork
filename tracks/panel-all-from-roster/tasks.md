@@ -8,4 +8,4 @@
 - [x] 写出由花名册派生的全池派发、帮助与 observation 红判据，并单独提交。
 - [x] 实现动态 `--all` 和动态帮助，移除 observation 数字上限。
 - [x] 更新现行说明，保留历史叙事中的实际数字。
-- [ ] 跑相关套件与完整 tooling runner，记录主裁。
+- [x] 跑相关套件与完整 tooling runner，记录主裁。

@@ -1,7 +1,7 @@
 # Proposal: panel-all-from-roster
 
 - Date: 2026-08-26
-- Status: open
+- Status: completed (kept active because external-review coverage was explicitly skipped)
 
 ## Goal
 

@@ -17,6 +17,6 @@
     "model": "gpt-5"
   },
   "outcome": {
-    "verdict": null
+    "verdict": "PASS"
   }
 }
