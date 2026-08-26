@@ -4771,10 +4771,11 @@ STUB
   # ⑧d 每条腿的开关变量都必须出现在本判据顶部那两份 PANEL_* 清单里。
   #    漏一个 ⇒ 那条腿的开关会从调用者环境**继承**进来,判据测到的就不是默认合约
   #    (本文件顶上那段注释写的正是这件事)。PANEL_GEMINI_LEG 就漏了 —— 加腿第七处。
-  # 🔴 **两份判据都要查**。原来只查 tests/test-review-tooling.sh —— 而派发判据
+  # 🔴 **三份判据都要查**。原来只查 tests/test-review-tooling.sh —— 而派发判据
   # tests/test-panel-observation.sh 当时根本没有 scrub,一个 PANEL_GEMINI_LEG=off
   # 就能把它从 55/0 变成 50/5(2026-08-26 第二轮四审 subkimi 实测)。
-  # 同一道闸只装在一扇门上,是本仓的老账「守卫要守对门」。
+  # 第三轮四审又实测:tests/test-panel-roster.sh 继承 PANEL_GEMINI_LEG=off
+  # 后 R5 从 34/0 变成 33/1。同一道闸漏装第三扇门,还是老账「守卫要守对门」。
   local _sw _miss=""
   for _sw in $( . "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null
                 for l in "${PANEL_LEGS_ORDER[@]}"; do panel_leg_switch "$l"; done ); do
@@ -4782,8 +4783,10 @@ STUB
       || _miss+="${_miss:+,}$_sw(review-tooling)"
     grep -q -- "-u $_sw\b" "$PWD/tests/test-panel-observation.sh" \
       || _miss+="${_miss:+,}$_sw(panel-observation)"
+    grep -q -- "-u $_sw\b" "$PWD/tests/test-panel-roster.sh" \
+      || _miss+="${_miss:+,}$_sw(panel-roster)"
   done
-  check "V46⑧d: 每条腿的开关变量在**两套**判据里都被清理(缺:${_miss:-无})" \
+  check "V46⑧d: 每条腿的开关变量在**三套**判据里都被清理(缺:${_miss:-无})" \
     "$([[ -z "$_miss" ]] && echo 0 || echo 1)"
 
   # ⑩ headless 权限白名单:没有它,这条腿会**交白卷而看起来一切正常**。
@@ -5103,6 +5106,67 @@ STUB
   fi
 }
 
+# ── V47:mutation runner 的中断恢复只许有一个生命周期 owner ────────────
+v47_mutation_runner_signal_guard() {
+  echo "V47: mutation runner 被信号砍掉也必须还原靶子"
+  local helper="$PWD/tests/_mutation-guard.sh" d target ready pid rc before after script spec
+  if [[ -f "$helper" ]]; then
+    ok "V47a: mutation 生命周期有共享 owner(不再每份脚本各装一套 trap)"
+  else
+    bad "V47a: 缺 tests/_mutation-guard.sh —— 中断恢复仍分散在各脚本,新红检会继续漏门"
+    return
+  fi
+
+  # 集成闸:三份红检都必须把备份 / inflight / 信号还原交给同一个 owner。
+  local missed=""
+  for spec in \
+    'mutation-panel-roster.sh:panel-roster' \
+    'mutation-dead-leg-streak.sh:dead-leg-streak' \
+    'mutation-subgemini.sh:subgemini'; do
+    script="${spec%%:*}"
+    grep -qF "mutation_guard_start \"${spec#*:}\"" "$PWD/tests/$script" \
+      || missed+="${missed:+,}$script"
+  done
+  check "V47b: 三份 mutation runner 都接上共享 guard(缺:${missed:-无})" \
+    "$([[ -z "$missed" ]] && echo 0 || echo 1)"
+
+  # 行为闸:只破坏临时靶文件。等它真被改写后对**整个进程组**发 TERM,
+  # 要求信号退出码保真、靶子还原、inflight 清掉。
+  d="$(mktemp -d)"; target="$d/target"; ready="$d/ready"
+  printf 'pristine\n' > "$target"; before="$(sha256sum "$target" | cut -d' ' -f1)"
+  cat > "$d/probe.sh" <<'GUARD_PROBE'
+#!/usr/bin/env bash
+set -uo pipefail
+ROOT="$1"; target="$2"; ready="$3"
+TARGETS=("$target")
+. "$ROOT/tests/_mutation-guard.sh" || exit 2
+mutation_guard_start "signal-probe"
+printf 'mutated\n' > "$target"
+printf 'ready\n' > "$ready"
+sleep 30
+GUARD_PROBE
+  chmod +x "$d/probe.sh"
+  setsid bash "$d/probe.sh" "$PWD" "$target" "$ready" >/dev/null 2>&1 & pid=$!
+  local i=0
+  while [[ ! -s "$ready" && -d "/proc/$pid" && $i -lt 100 ]]; do sleep 0.05; i=$((i+1)); done
+  if [[ ! -s "$ready" ]]; then
+    bad "V47c: 共享 guard 探针没跑到变异点"
+    kill -TERM -- "-$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
+  else
+    kill -TERM -- "-$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null; rc=$?
+    after="$(sha256sum "$target" | cut -d' ' -f1)"
+    check "V47c: TERM 砍整组后靶子还原、信号码保真(rc=$rc)" \
+      "$([[ "$after" == "$before" && "$rc" -eq 143 ]] && echo 0 || echo 1)"
+    if find "$d/state" -name '*.inflight' -print -quit 2>/dev/null | grep -q .; then
+      bad "V47d: 正常完成信号还原后仍留 inflight 痕迹"
+    else
+      ok "V47d: 信号还原完成后 inflight 痕迹已清"
+    fi
+  fi
+  rm -rf "$d"
+}
+
 v0_parent_panel_env_is_scrubbed
 # 老判据逐条复核四腿各自的安全合约；显式要求 all，避免它们偷偷依赖新的二审默认值。
 export PANEL_REVIEW_BUDGET=4
@@ -5155,6 +5219,7 @@ v44_dead_leg_stops_rotating
 # 红的绿的全是空的(第一版就是这样:V46① 的 PASS 是被反锚定闸拦出来的假绿,
 # 不是被模型闸拦的 —— 文件里 V26 上方就写着这条警告,我读过还是踩了)。
 REVIEW_NO_MY_REVIEW=1 v46_subgemini_leg
+v47_mutation_runner_signal_guard
 v45_oracle_never_touches_owner_credentials   # ← 必须排在最后:它问的是前面所有段跑完之后的状态
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
