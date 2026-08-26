@@ -1,7 +1,7 @@
 # Proposal: subgemini-review-leg
 
 - Date: 2026-08-25
-- Status: open
+- Status: completed
 
 ## Goal
 
