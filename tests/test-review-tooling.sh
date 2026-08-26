@@ -1898,7 +1898,13 @@ EOF
   grep -qi "HEAD 从" "$d/h2.out"; check "V22a: HEAD 漂移在 stdout 报出来" $?
   # 报告会被单独读到(归档/断线重连),所以横幅必须跟着结论走 —— 每一份腿日志都要有
   local missed=0 f
-  for f in "$d/H2.submimo.log" "$d/H2.subdeepseek.log" "$d/H2.subglm.log" "$d/H2.subkimi.log"; do
+  # 🔴 这里原本硬编码四条腿的日志名 —— 我 08-26 把实现改成按 LEGS 循环追加横幅之后,
+  # **判据没跟上**:第五条腿的报告有没有收到横幅,这条断言根本没问过。
+  # 同一单里同一种病的第 N 次(名单单点更新、判据漏跟),这次是 subgemini 腿自己
+  # 在真链评审里抓到的。改成从唯一源派生,加第六条腿时自动跟上。
+  local _rl="$BIN/_panel-roster-lib.sh"; local _legs
+  _legs="$( . "$_rl" 2>/dev/null; printf '%s\n' ${PANEL_LEGS_ORDER[@]+"${PANEL_LEGS_ORDER[@]}"} )"
+  for f in $(printf '%s\n' "$_legs" | sed "s#^#$d/H2.#; s#\$#.log#"); do
     [[ -s "$f" ]] || continue
     grep -qi "HEAD 从" "$f" || { missed=1; echo "     (缺横幅: $f)"; }
   done

@@ -24,12 +24,47 @@ export ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ORACLE_FILE="$ROOT/tests/test-review-tooling.sh"
 TARGETS=("$ROOT/bin/subgemini" "$ROOT/bin/_panel-roster-lib.sh")
 
+# ── 被砍也要还原,还原不成要留下痕迹 ───────────────────────────────────────
+# 🔴 2026-08-26 实事故:这个脚本跑超时被外层 SIGTERM 砍掉,而 **bash 的 EXIT trap
+# 在被信号打死时不执行** ⇒ M13 的变异(`write_agy_settings "$REPO_DIR"` 改成
+# `"$SOURCE_REPO"`)**留在了工作树里**。我随后扫了一遍变异特征、恰好漏掉那一条,
+# 于是写下"文件是干净的";接下来两次判据都是 25/2,我先怀疑并发、又怀疑锁,
+# 查了三轮才发现红的是**我自己被污染的实现**。差一步就把它提交上去。
+#
+# ⇒ 两道:① INT/TERM/HUP 也还原(EXIT 一个不够);
+#         ② 还原不成时留一份 inflight 痕迹,**下一次拒绝再跑**并说清楚 ——
+#           不许让下一个人对着一份被变异过的实现去查判据。
+STATE_DIR="${MUTATION_STATE_DIR:-$ROOT/.mutation-state}"
+INFLIGHT="$STATE_DIR/mutation-subgemini.inflight"
+mkdir -p "$STATE_DIR"
+if [[ -e "$INFLIGHT" ]]; then
+  echo "🔴 上一轮红检**没跑完就被砍了**(痕迹:$INFLIGHT)⇒ 拒绝再跑。"
+  echo "   靶子文件可能还留着变异,而变异过的实现看起来只是"判据莫名其妙红了"。"
+  echo "   先做这三件事:"
+  echo "     1) 看 \`git diff\` 里的靶子文件,确认它们是**你自己写的那一版**;"
+  echo "     2) 对不上就从痕迹里记的备份还原,或 git checkout;"
+  echo "     3) 确认干净之后删掉 $INFLIGHT 再跑。"
+  echo "   痕迹内容:"; sed 's/^/     /' "$INFLIGHT"
+  exit 3
+fi
+# 只做上面那道自检就退出(判据 V46⑰ 用它,不必真跑一轮变异)
+[[ -n "${MUTATION_SELFCHECK:-}" ]] && { echo "自检:没有未收尾的红检痕迹,可以跑。"; exit 0; }
+
 declare -A BEFORE
 for f in "${TARGETS[@]}"; do BEFORE["$f"]="$(sha256sum "$f" | cut -d' ' -f1)"; done
 BACKUP="$(mktemp -d)"
 for f in "${TARGETS[@]}"; do cp "$f" "$BACKUP/$(basename "$f")"; done
+{ echo "started=$(date -Is) pid=$$"
+  echo "backup=$BACKUP"
+  for f in "${TARGETS[@]}"; do echo "pristine ${BEFORE[$f]} $f"; done
+} > "$INFLIGHT"
 restore() { for f in "${TARGETS[@]}"; do cp -f "$BACKUP/$(basename "$f")" "$f"; done; }
-trap 'restore; rm -rf "$BACKUP"' EXIT
+_finish() { restore; rm -f "$INFLIGHT"; rm -rf "$BACKUP"; }
+trap '_finish' EXIT
+# 信号那一路:还原之后**用信号本来的码退出**,别假装成功。
+trap '_finish; trap - INT TERM HUP; kill -s INT $$' INT
+trap '_finish; trap - INT TERM HUP; kill -s TERM $$' TERM
+trap '_finish; trap - INT TERM HUP; kill -s HUP $$' HUP
 
 run_oracle() {   # 只跑 V46 那一段
   { echo 'PASS=0; FAIL=0'
@@ -152,14 +187,74 @@ if s.count(old)!=1: sys.exit(1)
 open(p,'w',encoding='utf-8').write(s.replace(old,'--output-format text'))
 PY
 
-mutate M8 "V46⑧" <<'PY'
+mutate M8 "V46⑧a" <<'PY'
 import os,sys
 p=os.environ['ROOT']+'/bin/_panel-roster-lib.sh'; s=open(p,encoding='utf-8').read()
-old='PANEL_LEGS_ORDER=(submimo subdeepseek subglm subkimi subgemini)'
+old='  "subgemini|google|subgemini||PANEL_GEMINI_LEG"\n'
 if s.count(old)!=1: sys.exit(1)
-open(p,'w',encoding='utf-8').write(s.replace(old,'PANEL_LEGS_ORDER=(submimo subdeepseek subglm subkimi)'))
+open(p,'w',encoding='utf-8').write(s.replace(old,''))
 PY
 
+# ── 08-26 新增:四审那六条发现各自配一个变异点 ────────────────────────────
+# 它们都在修复前**真的红过**(收据 20260826T005701Z),这里是为了防**以后**回退。
+mutate M16 "V46⑧c" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/_panel-roster-lib.sh'; s=open(p,encoding='utf-8').read()
+old='"subgemini|google|subgemini||PANEL_GEMINI_LEG"'
+new='"subgemini|gemini|subgemini||PANEL_GEMINI_LEG"'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+
+mutate M17 "V46⑫" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='env HOME="$REVIEW_HOME" "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS"'
+new='env HOME="$REVIEW_HOME" timeout "$TIMEOUT_SECONDS"'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+
+mutate M18 "V46⑬" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='_subgemini_wipe_token() { rm -f "$AGY_HOME_DIR/antigravity-oauth-token"; }'
+new='_subgemini_wipe_token() { :; }'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+
+mutate M19 "V46⑭" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='flock -n 9 || die "另一条 subgemini'
+new='true || die "另一条 subgemini'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+
+mutate M20 "V46⑮" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='[[ -f "$TASK_FILE" ]] || die "task file not found'
+new='[[ -f "$TASK_FILE" ]] || true || die "task file not found'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+
+mutate M21 "V46⑯" <<'PY'
+import os,sys,re
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+# 锚点必须咬**超时那一支里**的横幅块。上一版只写"第一个 { echo ... } >> LOG_FILE",
+# 而我后来在它前面加了"捞报告"块 ⇒ 变异删错了块,红检当场报 M21 漏网。
+# 锚点漂移的第 N 次:锚点要认**它所在的那段逻辑**,不是认形状。
+i = s.index('if [[ $RC -eq 124 ]]; then')
+m = re.search(r'\n  \{ echo\n(?:.*\n)*?  \} >> "\$LOG_FILE"\n', s[i:])
+if not m: sys.exit(1)
+seg = s[i:][m.start():m.end()]
+if 'TIMEOUT_SECONDS' not in seg: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s[:i+m.start()]+'\n'+s[i+m.end():])
+PY
 mutate M9a "V46⑨a" <<'PY'
 import os,sys
 p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
@@ -227,6 +322,7 @@ PY
 echo "──────────────────────────────────────────────────────"
 echo "红检结果: 咬住 $BIT 条,漏网 $MISS 条"
 restore
+rm -f "$INFLIGHT"
 drift=0
 for f in "${TARGETS[@]}"; do
   now="$(sha256sum "$f" | cut -d' ' -f1)"

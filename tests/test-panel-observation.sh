@@ -222,6 +222,22 @@ check "P6: panel label 在 producer 端截到 schema 的 128 字节上限" $?
 # 所以这一段:① 问行为(桩腿到底有没有被执行),不 grep 源码;
 #             ② 对**名单上的每一条腿**各问一遍 —— 加第六条腿时判据自动跟着覆盖,
 #                不用"记得回来改判据"(那从来靠不住)。
+# 🔴 桩腿是按"腿名 / 腿名-agent"两种命名无条件铺的,所以**表里把二进制名写错时
+# P7 照样全绿**,而生产环境里 `-x "$BIN/<那个名字>"` 为假 ⇒ 那条腿被静默标成 off、
+# 永远不派。判据绿、腿不在 —— 正是这一单从头到尾在治的那种病。
+# (2026-08-26 subgemini 腿自己真链跑出来的发现;我自审只把它当"错误信息会指错地方",
+#  它指出更狠的一面:**这是假绿**。)
+# ⇒ 先问一句真实世界的:表里声明的二进制,在**真的 bin/ 里**存不存在、可不可执行。
+echo "[P7pre] 腿表里声明的二进制必须在真实 bin/ 里存在(桩腿铺得再全也不算数)"
+for leg in "${PANEL_LEGS_ORDER[@]}"; do
+  agent="$(panel_leg_agent "$leg")"; chat="$(panel_leg_chat "$leg")"
+  check "P7pre[$leg]: 底座腿 bin/$agent 存在且可执行" \
+    $([[ -n "$agent" && -x "$ROOT/bin/$agent" ]]; echo $?)
+  if [[ -n "$chat" ]]; then
+    check "P7pre[$leg]: 聊天腿 bin/$chat 存在且可执行" $([[ -x "$ROOT/bin/$chat" ]]; echo $?)
+  fi
+done
+
 echo "[P7] 花名册上的每条腿都必须真的派得出去,且家族记账不空"
 # 夹具复位:P3 把 subdeepseek-agent 换成了失败桩、P5 把 decision.json 改成了 self。
 # 不复位 ⇒ P7 量到的是那些残留而不是派发本身(第一版全 26 红,**误报是我自己造的**)。

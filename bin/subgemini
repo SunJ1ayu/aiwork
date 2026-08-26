@@ -75,6 +75,12 @@ my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subgemini" || exit 1
 
 [[ "$MODE" == "review" ]] || { usage; exit 2; }
 
+# 🔴 任务文件不存在就拒跑。原来是下面那句 `cat "$TASK_FILE" 2>/dev/null || true`
+# 把一切错误吞掉:路径写错时腿拿到一份**没有任务的提示词**,照样可能吐一个裁决行
+# ⇒ 收一个 PASS,而它什么都没审。"看起来跑完了、其实没审"是这套系统最贵的失败,
+# 而这是它最便宜的一条入口。subkimi 早就是这么挡的。(四审 F8,判据 V46⑮)
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE(任务文件不存在 ⇒ 拒跑,不许审一份空提示词)"
+
 # ── 模型硬闸 ────────────────────────────────────────────────────────────
 # 这不是"默认值",是闸。agy 的 models 表里同时有 claude-sonnet-4-6 /
 # claude-opus-4-6-thinking / gpt-oss-120b。这条腿在花名册里代表 **Google 家族**,
@@ -93,7 +99,21 @@ review_home_guard subgemini "$REVIEW_HOME" "$SOURCE_REPO" AGY_REVIEW_HOME || exi
 
 if [[ -n "${REVIEW_PRINT_HOME:-}" ]]; then printf '%s\n' "$REVIEW_HOME"; exit 0; fi
 
-# ── 隔离 home:凭证用复制(不是链接)+ 关掉遥测 ────────────────────────────
+# ── 隔离 home:同一时刻只许一条腿用 ──────────────────────────────────────
+# 🔴 `AGY_REVIEW_HOME` 是**固定路径**,而 settings.json 里写着**每次不同**的副本路径
+# (read_file 授权)。两条 subgemini 撞上(panel 与手动跑并行、或两轮 panel 相撞),
+# 后写的会把先跑那条的授权改成指向自己的副本 ⇒ 先跑那条突然读不到自己的仓、交白卷,
+# 而错误长得像额度或凭证问题。2026-08-26 判据 V46⑭ 实测过这条串味,不是推论。
+# 取**非阻塞**锁、响亮失败:一条腿在等另一条的沉默,比一次明确的拒跑贵得多。
+# (没做"每轮一个新 home":agy 的 conversations DB 是 subgemini-diag 唯一的输入,
+#  它需要一个稳定路径;而新 home 的首跑向导行为在闭源二进制上是未知的。)
+mkdir -p "$REVIEW_HOME"
+exec 9>"$REVIEW_HOME/.subgemini.lock" || die "开不了评审 home 的锁文件($REVIEW_HOME/.subgemini.lock)"
+flock -n 9 || die "另一条 subgemini 正在用同一个评审 home($REVIEW_HOME)⇒ 拒跑。
+  两条并发会互相覆盖 settings.json 里的读授权,先跑那条会突然读不到自己的副本、
+  交白卷,而错误长得像额度或凭证问题。等它跑完,或用 AGY_REVIEW_HOME=<别的路径> 分开跑。"
+
+# ── 凭证用复制(不是链接)+ 关掉遥测 ─────────────────────────────────────
 AGY_HOME_DIR="$REVIEW_HOME/.gemini/antigravity-cli"
 mkdir -p "$AGY_HOME_DIR"
 [[ -f "$OWNER_TOKEN" ]] || die "找不到 agy 凭证($OWNER_TOKEN)⇒ 拒跑。
@@ -102,9 +122,17 @@ mkdir -p "$AGY_HOME_DIR"
 rm -f "$AGY_HOME_DIR/antigravity-oauth-token"
 cp "$OWNER_TOKEN" "$AGY_HOME_DIR/antigravity-oauth-token"
 chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"
+# 🔴 **跑完即删**。这份副本内含 refresh_token(它自己能刷新),一份能自己刷新的
+# 长期凭证不该在盘上过夜:多一份泄漏面,而且闭源二进制若做 refresh-token 轮换,
+# 副本抢先刷新就可能把业主的登录刷失效 —— 正是本单最不能接受的那种不可逆损害。
+# 注释里原来那句"每次重写,不留隔夜残留"只对 settings.json 成立,对 token 不成立。
+# trap 装在**拷贝之后立刻**,不等 workspace 那一步:中间任何一次 die(预检失败、
+# workspace 建不起来)都不许把凭证留在盘上。(四审 F9/F6,判据 V46⑬)
+_subgemini_wipe_token() { rm -f "$AGY_HOME_DIR/antigravity-oauth-token"; }
+trap '_subgemini_wipe_token' EXIT
 # 🔴 遥测:业主在首次向导里亲手关掉了数据收集,但那条写在**他的** home。
 # 换 HOME 之后评审 home 是全新的、没有 settings.json ⇒ 走默认值 ⇒ 他的选择被绕过,
-# 而这条腿读的正是他的仓库代码。每次重写,不留隔夜残留。
+# 而这条腿读的正是他的仓库代码。每次重写。
 # 写评审 home 的 settings。**分两次调用**:
 #   第一次(无参)在预检之前 —— 预检只调 `agy models`,不需要文件权限;
 #   第二次(带可丢弃副本的路径)在 workspace 准备之后 —— 那时才知道副本在哪。
@@ -125,9 +153,14 @@ chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"
 #     ⚠️ **分组语法是死的**:实测 `command(git log)` 通过、`command(git (log|diff))`
 #     被拒 —— 而官方文档的例子恰恰是分组写法。照文档写 = 规则静默失效 = 腿交白卷。
 # 🔴 绝不用 --dangerously-skip-permissions:那会把网络与仓外写一并放开。
-# 白名单不是这条腿的安全边界 —— 真正的边界是"可丢弃副本 + 原仓 ro-repo-exec 只读"。
-# 它挡不住所有花招(`git diff --output=` 那类,08-19 已实证),但挡得住误伤,
-# 并且让腿的能力边界是写下来的、可审的。
+# 白名单不是这条腿的安全边界 —— 边界是"可丢弃副本 + 原仓 ro-repo-exec 只读挂载",
+# 而那道挂载 2026-08-26 才真的接上(在下面 RO_EXEC 那一段;之前这句话是**假的**)。
+# 白名单挡得住误伤、并且让腿的能力边界是写下来可审的,但它挡不住 git 自己的参数
+# (`git diff --output=` 写、`git diff --no-index` 读,08-19 已实证)。
+# ⚠️ 仍然敞着、且**四条 agent 腿都一样**的口子:namespace 只把被评审的原仓变只读,
+#    管不住仓**外**的读(`~/.ssh`、业主凭证)。要堵它得给 ro-repo-exec 加"遮住
+#    敏感路径"的能力,那是跨四条腿的改动,单开一单(tasks.md 敞账 D3),
+#    不在这条腿里假装已经解决。
 write_agy_settings() {   # write_agy_settings [可丢弃副本路径]
   local ws="${1:-}" scoped=""
   [[ -n "$ws" ]] && scoped="\"read_file($ws)\", \"write_file($ws)\", "
@@ -157,7 +190,7 @@ AGY_BIN="${AGY_BIN:-$(command -v agy 2>/dev/null || echo "$HOME/.local/bin/agy")
 # ── 预检:凭证活着吗 ────────────────────────────────────────────────────
 # 存在的理由:未登录时 `agy -p` **一个字都不印、也不退出**(实测 40s)。
 # 没有这一步,失效凭证的表现是"腿像在跑,然后超时",和额度耗尽长得一模一样。
-PRE="$(env HOME="$REVIEW_HOME" timeout 90 "$AGY_BIN" models </dev/null 2>&1 || true)"
+PRE="$(env HOME="$REVIEW_HOME" timeout 90 "$AGY_BIN" models </dev/null 2>&1 9>&- || true)"
 grep -q '^gemini-' <<<"$PRE" \
   || die "agy 凭证预检失败 ⇒ 拒绝派发(不进入静默挂死)。agy 说:
 $(printf '%s' "$PRE" | head -3)
@@ -173,11 +206,22 @@ REVIEW_WORKSPACE_ACTIVE=1
 SOURCE_REPO="$REVIEW_SOURCE_REPO"
 REPO_DIR="$(review_workspace_repo)" || exit 78
 
+# 🔴 原仓**物理只读**:和 subkimi / submimo / subagent 一样,把模型命令放进
+# ro-repo-exec 的 mount namespace 里跑。2026-08-26 之前这条腿只在注释里写着
+# "原仓 ro-repo-exec 只读",代码里一个字都没接 —— 四审两条腿各自 grep 出来,
+# 判据 V46⑫ 用假模型试写实测过:**当时真能写进被评审的原仓**。
+# 命令白名单挡不住这个(`git diff --output=<路径>` 08-19 已实证),它从来不是边界。
+# fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+
 # 副本路径现在才知道 —— 重写 settings,把 read_file/write_file 授权**限定到它身上**。
 write_agy_settings "$REPO_DIR"
 
 _subgemini_cleanup() {
   local rc=$?
+  # 凭证副本永远先擦掉 —— 这个 trap 覆盖了上面那个只擦凭证的,擦的动作不能跟着丢。
+  _subgemini_wipe_token
   if [[ "${REVIEW_WORKSPACE_ACTIVE:-0}" -eq 1 ]]; then
     review_workspace_cleanup \
       || echo "subgemini: 警告:review workspace 清理失败:${REVIEW_WORKSPACE_DIR:-?}" >&2
@@ -196,15 +240,30 @@ TASK_TEXT="$(cat "$TASK_FILE" 2>/dev/null || true)"
 # 零产出**(不是"换个工具继续")。所以治本的办法不是把它想跑的命令一个个加进白名单
 # (2026-08-26 连追四轮:RunCommand → read_file → git 分组语法 → `bash tests/...`,
 # 追不完),而是**让它一开始就不去调那些工具**。
+SALVAGE_FILE="$REPO_DIR/SUBGEMINI-REVIEW.md"
+# 🔴 提示词里**绝不许出现反引号**:在双引号串里它就是命令替换,写进去的那一刻
+# 就会被 shell 真跑一遍。2026-08-26 我拿 git 命令当例子写进这段提示词,
+# 判据当场 12 红,错误信息是 git 自己吐的 "ambiguous argument X" —— 它真跑了。
+# 本仓 08-19 为"判据注释里的反引号被 shell 执行"记过一次账(判据 V41),这是第二次,
+# 换了个地方(实现的提示词里)。写例子一律用单引号。
 PROMPT="You are a code reviewer. Read the repository yourself; do not assume a diff was pasted.
 
 SANDBOX CONSTRAINTS — read this first, it decides whether your review survives:
 - You CAN read any file in this workspace with your file-reading tools. Use them freely.
-- You CANNOT run shell commands, EXCEPT read-only git:
+- You CANNOT run shell commands, EXCEPT read-only git, run BARE:
   git log / git diff / git status / git show / git ls-files / git rev-parse / git blame
+- NO PIPES, NO REDIRECTS, NO CHAINING. 'git diff X | grep Y', 'cmd > file', 'a && b'
+  all count as running a DIFFERENT command that is not allowed. A real run died exactly
+  this way: 43 steps of good work, then one 'git diff … | grep …' — and everything was lost.
+  If you want to search inside a diff, read the file instead, or run the git command bare.
 - Do NOT try to run tests, build, install, or execute any script (no bash/sh/python/npm).
   Those are blocked, and a single blocked attempt ABORTS YOUR ENTIRE RUN WITH ZERO OUTPUT —
   your whole review would be lost. Base your review on READING the code.
+
+SAVE YOUR WORK AS YOU GO — this is your insurance against the above:
+Write your review into the file $SALVAGE_FILE (you have write access to it), starting with
+the verdict line, and keep updating it. If your run is aborted, that file is the ONLY thing
+that survives; whatever you only printed is thrown away. Print the review as well at the end.
 
 $TASK_TEXT
 
@@ -222,9 +281,12 @@ Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"
 } > "$LOG_FILE"
 
 set +e
-( cd "$REPO_DIR" && env HOME="$REVIEW_HOME" timeout "$TIMEOUT_SECONDS" \
+# `9>&-`:把评审 home 那把锁的 fd **对模型这一支关掉**。不关的话它被整棵子进程树
+# 继承 ⇒ 腿被砍留下的孤儿会替它举着锁 ⇒ 之后每一轮都被判成"撞车",而根本没有腿在跑。
+# 断线砍腿在本机是反复发生的事,所以这不是理论风险(判据 V46⑱ 用 setsid 孤儿实证)。
+( cd "$REPO_DIR" && env HOME="$REVIEW_HOME" "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" \
     "$AGY_BIN" -p "$PROMPT" --model "$MODEL" --add-dir "$REPO_DIR" \
-    --output-format text </dev/null ) >> "$LOG_FILE" 2>&1
+    --output-format text </dev/null ) >> "$LOG_FILE" 2>&1 9>&-
 RC=$?
 set -e
 
@@ -240,9 +302,33 @@ _RL="$BIN_DIR/_panel-roster-lib.sh"
 HAS_VERDICT=0
 [[ "$(verdict_of "$LOG_FILE")" != "UNKNOWN" ]] && HAS_VERDICT=1
 
+# 🔴 stdout 零产出时,把副本里的报告捞出来(2026-08-26 真链实测立的这道)。
+# agy 的行为:**一次 soft-deny 就把整轮扔掉**,哪怕它已经干了 43 步的活。
+# 那次死在 `git diff … | grep …` 一个管道上,几分钟的真评审一个字都没留下。
+# 我们改不了 agy,但报告可以先落盘 —— write_file 本来就授权在这份可丢弃副本上。
+# **必须标明出处**:一份"被丢弃那轮的残骸"不许读起来像正常产出(同 V19 降级横幅)。
+if [[ $HAS_VERDICT -eq 0 && -s "$SALVAGE_FILE" ]]; then
+  { echo
+    echo "⚠️  下面这份报告是**从工作区里捞出来的**:模型 stdout 零产出"
+    echo "    (agy 的老毛病:一次 soft-deny 就把整轮扔掉),而它把报告写进了"
+    echo "    副本里的 SUBGEMINI-REVIEW.md。它可能是**半截的** —— 按此折扣。"
+    echo "---- 捞出来的内容开始 ----"
+    cat "$SALVAGE_FILE"
+    echo "---- 捞出来的内容结束 ----"
+  } >> "$LOG_FILE"
+  [[ "$(verdict_of "$LOG_FILE")" != "UNKNOWN" ]] && HAS_VERDICT=1
+fi
+
 # 超时但裁决已经落盘 = 完整的评审,不是丢失的
 if [[ $RC -eq 124 ]]; then
   [[ $HAS_VERDICT -eq 1 ]] || die "agy timed out after ${TIMEOUT_SECONDS}s with no verdict (log: $LOG_FILE)"
+  # 横幅**写进日志本身**,不只印在 stderr:这份结论以后会被单独读到(归档、断线
+  # 重连),那时终端上那行早就没了,而一份"写完裁决就被砍"的报告长得和完整评审
+  # 一模一样。同 V19 降级横幅的理由。(判据 V46⑯)
+  { echo
+    echo "⚠️  超时被砍(${TIMEOUT_SECONDS}s)—— 裁决行在超时前已经写下,所以这份报告收下了,"
+    echo "    但它是**部分运行**:裁决之后本该继续展开的理由没写完。给权重时按此折扣。"
+  } >> "$LOG_FILE"
   echo "subgemini: timed out after ${TIMEOUT_SECONDS}s, but a verdict was already written — accepting." >&2
   exit 0
 fi

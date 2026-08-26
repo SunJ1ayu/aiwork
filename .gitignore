@@ -44,3 +44,6 @@ out
 # 已入库的那几份用 `git rm --cached` 撤出,盘上留着;历史里也还查得到
 # (`git show <commit>:.mimocode/plans/<file>`),证据不会丢。
 .mimocode
+
+# 红检被硬杀(kill -9)时留下的痕迹目录 —— 是状态不是产物,不进版本库
+.mutation-state/
