@@ -4536,6 +4536,8 @@ fi
 if [[ -n "\${STUB_NO_VERDICT:-}" ]]; then echo "看起来还行,没啥大问题。"; exit 0; fi
 echo "审完了。"; echo "Conclusion: PASS"
 [[ -n "\${STUB_HANG:-}" ]] && sleep 30
+# 留下一个**继承了 wrapper 全部 fd** 的后台孤儿(腿被砍/模型自己起后台进程都是这形状)
+[[ -n "\${STUB_ORPHAN:-}" ]] && setsid sleep 8 >/dev/null 2>&1 &
 exit 0
 STUB
   chmod +x "$W/bin/agy"
@@ -4621,10 +4623,16 @@ STUB
   #    却在第 309 行又自己写了一份 `LEGS=(submimo subdeepseek subglm subkimi)`。
   #    **腿名单实际有两份**,我加腿只改了花名册那份 ⇒ 花名册上看得见它、
   #    panel-review 永远派不出它,而断言绿着。加腿必然漏一处,这次漏的是我。
-  if grep -q 'subgemini' "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null; then
+  # 🔴 这条原来是 `grep -q 'subgemini' bin/_panel-roster-lib.sh` —— 2026-08-26 红检
+  #    M8 当场照出它是**假绿**:把整条腿从表里删掉,它照样绿,因为那张表上面的注释
+  #    里全是 "subgemini" 这几个字母。**拿文本出现过冒充数据结构**,本仓的老病,
+  #    而我正是在修同一种病的这一单里又写了一条。改成问**数据**:名单里到底有没有它。
+  local order; order="$( . "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null
+                        printf '%s\n' ${PANEL_LEGS_ORDER[@]+"${PANEL_LEGS_ORDER[@]}"} )"
+  if grep -qx 'subgemini' <<<"$order"; then
     ok "V46⑧a: PANEL_LEGS_ORDER 含 subgemini"
   else
-    bad "V46⑧a: 花名册里没有 subgemini"
+    bad "V46⑧a: 花名册的腿名单里没有 subgemini(实际:$(tr '\n' ' ' <<<"$order"))"
   fi
   # ⑧b 名单**只许有一份**:panel-review 不许自己再硬编码一份腿名单
   if grep -qE '^LEGS=\((submimo|subdeepseek|subglm|subkimi)' "$PWD/bin/panel-review" 2>/dev/null; then
@@ -4833,14 +4841,26 @@ STUB
   # ⇒ 量具必须做到两件事:被信号打死也还原;万一没还原成,**下一次拒绝再跑**
   #    并说清楚为什么(而不是让人对着一份被污染的实现查判据)。
   local mdir mguard mout mrc
-  mdir="$(mktemp -d)"; mguard="$mdir/.mutation-subgemini.inflight"
+  # 痕迹文件名是**契约的一部分**(红检拒跑时会把这个路径打印出来叫人去看),
+  # 所以判据在这里直接造它;名字对不上的话这道闸等于不存在(第一版就是这么假红的)。
+  mdir="$(mktemp -d)"; mguard="$mdir/mutation-subgemini.inflight"
   : > "$mguard"
-  mout="$(MUTATION_STATE_DIR="$mdir" timeout 60 bash "$PWD/tests/mutation-subgemini.sh" 2>&1)"; mrc=$?
+  # 🔴 用 `MUTATION_SELFCHECK=1` 只跑那道自检就退出。不这么写会出两件事:
+  #   ① **递归** —— 红检的基线正是"提取 V46 跑一遍",而 V46 里就有这一条;
+  #   ② 真跑一轮变异再把它砍掉,等于**每跑一次判据就复现一次那个事故**。
+  mout="$(MUTATION_STATE_DIR="$mdir" MUTATION_SELFCHECK=1 timeout 60 \
+          bash "$PWD/tests/mutation-subgemini.sh" 2>&1)"; mrc=$?
   if [[ $mrc -ne 0 ]] && grep -qE '没跑完|被砍|inflight|变异' <<<"$mout"; then
     ok "V46⑰: 上一轮红检没还原干净 ⇒ 下一次红检拒绝再跑,并说清原因"
   else
     bad "V46⑰: 留着「红检没跑完」的痕迹,红检竟然照跑(rc=$mrc)—— 被污染的实现会被当成判据的问题查半天"
   fi
+  # 反面:没有痕迹时自检必须**放行**(否则这道闸等于永远拒绝,红检就没人跑了)
+  rm -f "$mguard"
+  mout="$(MUTATION_STATE_DIR="$mdir" MUTATION_SELFCHECK=1 timeout 60 \
+          bash "$PWD/tests/mutation-subgemini.sh" 2>&1)"; mrc=$?
+  check "V46⑰b: 没有痕迹时自检放行(闸不许永远拒绝,那样红检就再没人跑了)" \
+    "$([[ $mrc -eq 0 ]] && echo 0 || echo 1)"
   rm -rf "$mdir"
 
   # ⑯ 超时但裁决已落盘 ⇒ 接受,但**必须在报告里说它是超时的部分运行**。
@@ -4853,6 +4873,25 @@ STUB
     ok "V46⑯: 超时但有裁决 ⇒ 接受,且横幅写进报告本身(不只印在终端上)"
   else
     bad "V46⑯: 超时接受了(rc=$rc)却没在报告里留下横幅 —— 事后读到它的人分不出这是部分运行"
+  fi
+
+  # ⑱ 🔴 锁不许被**孤儿**举着(这是我自己 08-26 引入的真 bug,探针实证)。
+  # `exec 9>` 开的 fd 不是 close-on-exec ⇒ 模型进程连同它留下的任何后台进程都继承它,
+  # 于是锁的寿命不再是"这一轮腿的寿命",而是"最后一个继承者死掉"。
+  # 断线砍腿在本机是**反复发生**的事,一个活着的孤儿会让之后每一轮都被拒,
+  # 而屏幕上根本没有腿在跑 —— **一个对着幻影报警的闸,比没有闸更坏**
+  #(它会逼出"把闸删掉"这种正好相反的修法)。修法:模型那一支关掉 fd 9。
+  # 我自审时写下过这条疑虑但**没有证明**,第一次探针用的桩太弱(孤儿跟着被杀)没复现;
+  # 换成 setsid 的孤儿之后一次就复现了。⇒ 自检句:没复现不等于不存在,先问探针够不够狠。
+  rm -f "$W/o10.log" "$W/o11.log"
+  PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_ORPHAN=1 \
+    "$BIN/subgemini" review "$W/task.md" "$W/o10.log" "$W/repo" >/dev/null 2>&1; rc=$?
+  out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" \
+         "$BIN/subgemini" review "$W/task.md" "$W/o11.log" "$W/repo" 2>&1)"; local rc2=$?
+  if [[ $rc2 -eq 0 ]]; then
+    ok "V46⑱: 上一轮留下的后台孤儿没有把锁举着(下一轮照跑)"
+  else
+    bad "V46⑱: 孤儿举着锁,下一轮被误判成撞车(rc=$rc2)—— 闸在对着幻影报警:$(head -1 <<<"$out")"
   fi
 }
 
