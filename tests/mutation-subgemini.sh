@@ -328,6 +328,15 @@ if s.count(old)!=1: sys.exit(1)
 open(p,'w',encoding='utf-8').write(s.replace(old,new))
 PY
 
+mutate M24 "V46㉒" <<'PY'
+import os,sys
+p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
+old='SALVAGE_FILE="$REPO_DIR/.subgemini-review-$$-$(date +%s).md"'
+new='SALVAGE_FILE="$REPO_DIR/SUBGEMINI-REVIEW.md"'
+if s.count(old)!=1: sys.exit(1)
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+
 echo "──────────────────────────────────────────────────────"
 echo "红检结果: 咬住 $BIT 条,漏网 $MISS 条"
 restore

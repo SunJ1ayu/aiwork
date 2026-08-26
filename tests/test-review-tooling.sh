@@ -4542,10 +4542,12 @@ fi
 # 一起步就被 soft-deny 砍掉:stdout 零产出、什么文件都不写
 [[ -n "\${STUB_SILENT:-}" ]] && exit 0
 if [[ -n "\${STUB_WRITE_ONLY:-}" ]]; then
-  # 模拟 agy 的致命形态:干了一堆活、把报告写进了工作区,然后**整轮被丢弃、stdout 零产出**
-  d=""; prev=""
-  for a in "\$@"; do [[ "\$prev" == "--add-dir" ]] && d="\$a"; prev="\$a"; done
-  printf '副本里的报告\nConclusion: BLOCK\n' > "\$d/SUBGEMINI-REVIEW.md"
+  # 模拟 agy 的致命形态:干了一堆活、把报告写进了工作区,然后**整轮被丢弃、stdout 零产出**。
+  # 落点**从提示词里读**(和真模型一样)—— wrapper 每轮换一个名字,桩不许自己猜一个
+  # 固定名,那样测的就不是真实通道了(V46㉒ 之后这里咬过一次)。
+  f=""; prev=""
+  for a in "\$@"; do [[ "\$prev" == "-p" ]] && f="\$(grep -oE '[^ ]*\.subgemini-review-[^ ]*\.md' <<<"\$a" | head -1)"; prev="\$a"; done
+  [[ -n "\$f" ]] && printf '副本里的报告\nConclusion: BLOCK\n' > "\$f"
   exit 0
 fi
 if [[ -n "\${STUB_NO_VERDICT:-}" ]]; then echo "看起来还行,没啥大问题。"; exit 0; fi
