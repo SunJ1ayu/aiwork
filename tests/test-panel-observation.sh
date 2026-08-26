@@ -252,6 +252,17 @@ for leg in "${PANEL_LEGS_ORDER[@]}"; do
   if [[ -n "$chat" ]]; then
     check "P7pre[$leg]: 聊天腿 bin/$chat 存在且可执行" $([[ -x "$ROOT/bin/$chat" ]]; echo $?)
   fi
+  # 🔴 **二进制得是这条腿自己的**。只问"存在"挡不住**交叉接线**:把某条腿的底座腿
+  # 指到**另一条腿已经存在的**二进制上(例如 subgemini 的底座腿写成 subkimi)——
+  # 文件存在、桩跑得起来、P7 全绿,而生产环境里那条腿跑的是**别人家的模型**,
+  # 花名册和归档闸却照旧按它自己的家族记账。**"覆盖两个不同家族"当场变成假话。**
+  # 第三轮四审 subdeepseek(M1)与第二轮 subkimi 各自独立指到这处;
+  # 我自审时把它判成"错误信息会指错地方"而**决定不加** —— 判错了,这里改判。
+  # 约定:二进制名必须是腿名本身或以"腿名-"开头(现有五条腿都是 subX / subX-agent)。
+  for bin_name in "$agent" ${chat:+"$chat"}; do
+    check "P7pre[$leg]: $bin_name 是这条腿自己的二进制(不许交叉接到别条腿上)" \
+      $([[ "$bin_name" == "$leg" || "$bin_name" == "$leg-"* ]]; echo $?)
+  done
 done
 
 echo "[P7] 花名册上的每条腿都必须真的派得出去,且家族记账不空"
