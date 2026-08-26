@@ -287,6 +287,7 @@ v0_parent_panel_env_is_scrubbed() {
     PANEL_STATE_DIR=/tmp/bad-panel-state PANEL_STAGGER_MAX=9 \
     PANEL_IMPACT_RISK=self PANEL_REVIEW_BUDGET=4 PANEL_ORACLE_CMD=false \
     PANEL_GLM_LEG=off PANEL_DEEPSEEK_LEG=off PANEL_MIMO_LEG=off PANEL_KIMI_LEG=off \
+    PANEL_GEMINI_LEG=off \
     bash "$0" >/dev/null 2>&1
   check "V0: 套件入口一次性清理 PANEL_* 控制变量" $?
 }
@@ -4606,6 +4607,10 @@ v46_subgemini_leg() {
   local W stub_log rc out
   W="$(mktemp -d)"; trap 'rm -rf "$W"' RETURN
   mkdir -p "$W/bin" "$W/home" "$W/repo"
+  # 这里只验证凭证副本的权限、隔离与清理,不应依赖业主此刻真的登录着。
+  # 用夹具 token 封住输入,隔离 HOME 或新机器上仍然是同一道题。
+  printf 'fixture-owner-token\n' > "$W/owner-token"; chmod 600 "$W/owner-token"
+  local AGY_OWNER_TOKEN="$W/owner-token"; export AGY_OWNER_TOKEN
   ( cd "$W/repo" && git init -q . && echo hi > a.txt && git add -A && git commit -qm init ) >/dev/null 2>&1
   stub_log="$W/agy-args.log"
 
@@ -5146,7 +5151,8 @@ printf 'ready\n' > "$ready"
 sleep 30
 GUARD_PROBE
   chmod +x "$d/probe.sh"
-  setsid bash "$d/probe.sh" "$PWD" "$target" "$ready" >/dev/null 2>&1 & pid=$!
+  MUTATION_STATE_DIR="$d/state" \
+    setsid bash "$d/probe.sh" "$PWD" "$target" "$ready" >/dev/null 2>&1 & pid=$!
   local i=0
   while [[ ! -s "$ready" && -d "/proc/$pid" && $i -lt 100 ]]; do sleep 0.05; i=$((i+1)); done
   if [[ ! -s "$ready" ]]; then

@@ -29,13 +29,10 @@ build_runner() {
   } > "$ORACLE"
 }
 
-declare -A BEFORE
-for f in "${TARGETS[@]}"; do BEFORE["$f"]="$(sha256sum "$f" | cut -d' ' -f1)"; done
-BACKUP="$(mktemp -d)"
-for f in "${TARGETS[@]}"; do cp "$f" "$BACKUP/$(basename "$f")"; done
-restore() { for f in "${TARGETS[@]}"; do cp -f "$BACKUP/$(basename "$f")" "$f"; done; }
-cleanup() { restore; rm -f "$ORACLE"; }
-trap cleanup EXIT
+mutation_dead_leg_cleanup() { rm -f "$ORACLE"; }
+MUTATION_GUARD_ON_FINISH=mutation_dead_leg_cleanup
+. "$ROOT/tests/_mutation-guard.sh" || exit 2
+mutation_guard_start "dead-leg-streak"
 
 build_runner
 BIT=0; MISS=0

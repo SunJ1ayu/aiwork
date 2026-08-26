@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # 红检:把 subgemini 的实现**故意改坏**,看 V46 咬不咬得住。
 #
-# 存在的理由:V46 十条全绿只说明"现在没红",不说明"改坏了会红"。
+# 存在的理由:V46 全绿只说明"现在没红",不说明"改坏了会红"。
 # 本机记过账的是一整族病:永远绿的瞎断言、锚点过期、拿文本位置冒充代码结构。
 # 每个变异点名**它该打红哪一条**;打不红 = 那条断言是摆设,当场报漏网。
 # **锚点没命中也算漏网** —— 锚点过期本身就是问题(本机记过 4 次)。
 #
-# ⚠️ 取舍:完整 oracle(tests/test-review-tooling.sh)跑一遍 ~5 分钟,十个变异点
-# 就是 50 分钟。这里**只提取 V46 那一个函数**跑,单次几秒。代价是"提取出来的
+# ⚠️ 取舍:完整 oracle(tests/test-review-tooling.sh)跑一遍 ~5 分钟,每个变异都重跑
+# 会慢到没人跑。这里**只提取 V46 那一个函数**跑,单次几秒。代价是"提取出来的
 # 跑法"可能和它在完整 oracle 里的跑法不一致 —— 所以基线那一步会检查:
-# 提取版必须跑出十条 PASS、零 FAIL,与完整 oracle 里 V46 段一致,否则拒绝继续。
+# 提取版必须跑出非零 PASS、零 FAIL,否则拒绝继续。
 #
 # 🔴 靶子用**断言编号**(V46①)而不是断言全文。第一版用了 PASS 那句的全文,
 # 结果十条里七条被报成「漏网」,全是假的:V46 的 ok/bad 是**两套措辞**
@@ -34,37 +34,8 @@ TARGETS=("$ROOT/bin/subgemini" "$ROOT/bin/_panel-roster-lib.sh")
 # ⇒ 两道:① INT/TERM/HUP 也还原(EXIT 一个不够);
 #         ② 还原不成时留一份 inflight 痕迹,**下一次拒绝再跑**并说清楚 ——
 #           不许让下一个人对着一份被变异过的实现去查判据。
-STATE_DIR="${MUTATION_STATE_DIR:-$ROOT/.mutation-state}"
-INFLIGHT="$STATE_DIR/mutation-subgemini.inflight"
-mkdir -p "$STATE_DIR"
-if [[ -e "$INFLIGHT" ]]; then
-  echo "🔴 上一轮红检**没跑完就被砍了**(痕迹:$INFLIGHT)⇒ 拒绝再跑。"
-  echo "   靶子文件可能还留着变异,而变异过的实现看起来只是"判据莫名其妙红了"。"
-  echo "   先做这三件事:"
-  echo "     1) 看 \`git diff\` 里的靶子文件,确认它们是**你自己写的那一版**;"
-  echo "     2) 对不上就从痕迹里记的备份还原,或 git checkout;"
-  echo "     3) 确认干净之后删掉 $INFLIGHT 再跑。"
-  echo "   痕迹内容:"; sed 's/^/     /' "$INFLIGHT"
-  exit 3
-fi
-# 只做上面那道自检就退出(判据 V46⑰ 用它,不必真跑一轮变异)
-[[ -n "${MUTATION_SELFCHECK:-}" ]] && { echo "自检:没有未收尾的红检痕迹,可以跑。"; exit 0; }
-
-declare -A BEFORE
-for f in "${TARGETS[@]}"; do BEFORE["$f"]="$(sha256sum "$f" | cut -d' ' -f1)"; done
-BACKUP="$(mktemp -d)"
-for f in "${TARGETS[@]}"; do cp "$f" "$BACKUP/$(basename "$f")"; done
-{ echo "started=$(date -Is) pid=$$"
-  echo "backup=$BACKUP"
-  for f in "${TARGETS[@]}"; do echo "pristine ${BEFORE[$f]} $f"; done
-} > "$INFLIGHT"
-restore() { for f in "${TARGETS[@]}"; do cp -f "$BACKUP/$(basename "$f")" "$f"; done; }
-_finish() { restore; rm -f "$INFLIGHT"; rm -rf "$BACKUP"; }
-trap '_finish' EXIT
-# 信号那一路:还原之后**用信号本来的码退出**,别假装成功。
-trap '_finish; trap - INT TERM HUP; kill -s INT $$' INT
-trap '_finish; trap - INT TERM HUP; kill -s TERM $$' TERM
-trap '_finish; trap - INT TERM HUP; kill -s HUP $$' HUP
+. "$ROOT/tests/_mutation-guard.sh" || exit 2
+mutation_guard_start "subgemini"
 
 run_oracle() {   # 只跑 V46 那一段
   { echo 'PASS=0; FAIL=0'
@@ -340,7 +311,6 @@ PY
 echo "──────────────────────────────────────────────────────"
 echo "红检结果: 咬住 $BIT 条,漏网 $MISS 条"
 restore
-rm -f "$INFLIGHT"
 drift=0
 for f in "${TARGETS[@]}"; do
   now="$(sha256sum "$f" | cut -d' ' -f1)"

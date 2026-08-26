@@ -16,12 +16,8 @@ ORACLE="$ROOT/tests/test-panel-roster.sh"
 # panel-roster 也在名单里:M13 要变异它的 usage 文本。**不在名单 = 变异了还不回去**
 TARGETS=("$ROOT/bin/panel-review" "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/panel-roster")
 
-declare -A BEFORE
-for f in "${TARGETS[@]}"; do BEFORE["$f"]="$(sha256sum "$f" | cut -d' ' -f1)"; done
-BACKUP="$(mktemp -d)"
-for f in "${TARGETS[@]}"; do cp "$f" "$BACKUP/$(basename "$f")"; done
-restore() { for f in "${TARGETS[@]}"; do cp -f "$BACKUP/$(basename "$f")" "$f"; done; }
-trap restore EXIT
+. "$ROOT/tests/_mutation-guard.sh" || exit 2
+mutation_guard_start "panel-roster"
 
 BIT=0; MISS=0
 # 基线:没变异时判据说了什么。靶子名必须在这里面**字面**存在,否则就是靶子过期
