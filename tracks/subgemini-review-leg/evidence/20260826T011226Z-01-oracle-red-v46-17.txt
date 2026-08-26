@@ -1,0 +1,40 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    oracle-red-v46-17
+cmd:     bash -c \{\ echo\ \"PASS=0\;\ FAIL=0\"\;\ echo\ \"ok\(\)\{\ echo\ \\\"\ \ PASS:\ \\\$1\\\"\;\ PASS=\\\$\(\(PASS+1\)\)\;\ \}\"\;\ echo\ \"bad\(\)\{\ echo\ \\\"\ \ FAIL:\ \\\$1\\\"\;\ FAIL=\\\$\(\(FAIL+1\)\)\;\ \}\"\;\ echo\ \"check\(\)\{\ if\ \[\[\ \\\"\\\$2\\\"\ -eq\ 0\ \]\]\;\ then\ ok\ \\\"\\\$1\\\"\;\ else\ bad\ \\\"\\\$1\\\"\;\ fi\;\ \}\"\;\ awk\ \"/\^v46_subgemini_leg\\\(\\\)\ \\\{/\,/\^\\\}/\"\ tests/test-review-tooling.sh\;\ echo\ \"REVIEW_NO_MY_REVIEW=1\ v46_subgemini_leg\"\;\ echo\ \"echo\ \\\"TOTALS\ \\\$PASS\ \\\$FAIL\\\"\"\;\ \}\ \|\ bash\ 2\>\&1\;\ exit\ \$\{PIPESTATUS\[1\]\}
+cwd:     /root/aiwork(仓根)
+commit:  aebf0a3
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-26T01:12:26Z
+---------------- 输出开始 ----------------
+V46: subgemini(Antigravity CLI 腿)
+  PASS: V46①: 非 gemini-* 模型被拒跑,且说得出真因
+  PASS: V46①b: 合法 gemini-* 档放行(rc=0)
+  PASS: V46②: 默认档确为 gemini-3.7-flash-high
+  PASS: V46③: 运行当中凭证是普通文件且权限 600(实际 600)
+  PASS: V46④: 评审 home 显式 enableTelemetry:false
+  PASS: V46⑤: agy rc=0 但无裁决行 ⇒ wrapper 判失败(实际 rc=1)
+  PASS: V46⑥: subgemini fix 被拒(rc=2)
+  PASS: V46⑦: 派发时显式传了 --add-dir(否则 agy 会写进自己的 scratch,腿等于没看见仓库)
+  PASS: V46⑧a: PANEL_LEGS_ORDER 含 subgemini
+  PASS: V46⑧b: panel-review 的腿名单不是自己硬编码的第二份
+  PASS: V46⑧c: 唯一源里 subgemini 的模型家族是 google(实际='google')
+  PASS: V46⑧d: 每条腿的开关变量都在判据顶部的两份 PANEL_* 清单里(缺:无)
+  PASS: V46⑩a: 评审 home 配了 headless 只读命令白名单(否则腿必然交白卷)
+  PASS: V46⑩d: 白名单没有放行绕过副本限定的通用文件命令
+  PASS: V46⑩b: 没有用 --dangerously-skip-permissions 抄近路
+  PASS: V46⑩c: 白名单没有用分组语法(它看着对、实测被拒)
+  PASS: V46⑪a: read_file 授权限定在具体路径上(不是 * 或 /)
+  PASS: V46⑪b: 授权路径是本腿的可丢弃副本(不是原仓,也不是别处)
+  PASS: V46⑨a: 反锚定闸真的拦住了未先自审的派发
+  PASS: V46⑨b: 运行期 home 落在被评审的仓内 ⇒ 拒跑
+  PASS: V46⑫: 腿写不进被评审的原仓(实际:source=BLOCKED)
+  PASS: V46⑫b: 只读防线没把腿弄死(仍然出结论,rc=0)
+  PASS: V46⑬: 凭证副本跑完即删(评审 home 里不留过夜的长期凭证)
+  PASS: V46⑭: 并发跑第二条腿时,先跑那条的读授权始终指着**它自己**的副本
+  PASS: V46⑭b: 撞上正在跑的另一条 ⇒ 响亮失败并说清原因
+  PASS: V46⑮: 任务文件不存在 ⇒ 响亮拒跑(不许审一份空任务还交 PASS)
+  FAIL: V46⑰: 留着「红检没跑完」的痕迹,红检竟然照跑(rc=124)—— 被污染的实现会被当成判据的问题查半天
+  PASS: V46⑯: 超时但有裁决 ⇒ 接受,且横幅写进报告本身(不只印在终端上)
+TOTALS 27 1
+---------------- 输出结束 ----------------
+runlog: oracle-red-v46-17 rc=0 commit=aebf0a3 dirty=yes at=2026-08-26T01:12:26Z file=tracks/subgemini-review-leg/evidence/20260826T011226Z-01-oracle-red-v46-17.txt

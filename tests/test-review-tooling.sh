@@ -86,7 +86,7 @@ if [[ "${REVIEW_TOOLING_ENV_SCRUBBED:-}" != "1" ]]; then
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
     -u PANEL_ORACLE_CMD -u PANEL_GLM_LEG -u PANEL_DEEPSEEK_LEG \
-    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG \
+    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG \
     REVIEW_TOOLING_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
 
@@ -96,7 +96,7 @@ if [[ "${REVIEW_TOOLING_ENV_PROBE:-}" == "1" ]]; then
   for _v in PANEL_DIFF_BASE PANEL_INCLUDE ZHIPU_INCLUDE DEEPSEEK_INCLUDE \
     PANEL_HEALTH_OVERRIDE PANEL_SELECTION_START PANEL_STATE_DIR PANEL_STAGGER_MAX \
     PANEL_IMPACT_RISK PANEL_REVIEW_BUDGET PANEL_ORACLE_CMD PANEL_GLM_LEG \
-    PANEL_DEEPSEEK_LEG PANEL_MIMO_LEG PANEL_KIMI_LEG; do
+    PANEL_DEEPSEEK_LEG PANEL_MIMO_LEG PANEL_KIMI_LEG PANEL_GEMINI_LEG; do
     [[ -z "${!_v+x}" ]] || exit 1
   done
   exit 0
@@ -4822,6 +4822,26 @@ STUB
   else
     bad "V46⑮: 任务文件不存在竟然放行了(rc=$rc) —— 腿会审一份空提示词然后交卷"
   fi
+
+  # ⑰ 🔴 红检被砍之后,不许**悄悄**把变异留在实现里。
+  # 2026-08-26 实事故:红检跑超 2 分钟被外层砍掉(SIGTERM),bash 的 EXIT trap 在
+  # 被信号打死时**不执行** ⇒ `write_agy_settings "$REPO_DIR"` 被 M13 改成了
+  # `"$SOURCE_REPO"` 并**一直留在工作树里**。我随后扫了一遍变异特征、漏掉了这一条,
+  # 于是写下"文件是干净的" —— 而接下来两次判据都是 25/2,我先怀疑了并发和锁,
+  # 查了三轮才发现红的是**我自己被污染的实现**。
+  # 差一步就把一个被变异过的 wrapper 提交上去(而它的表现是:腿的读授权指向原仓)。
+  # ⇒ 量具必须做到两件事:被信号打死也还原;万一没还原成,**下一次拒绝再跑**
+  #    并说清楚为什么(而不是让人对着一份被污染的实现查判据)。
+  local mdir mguard mout mrc
+  mdir="$(mktemp -d)"; mguard="$mdir/.mutation-subgemini.inflight"
+  : > "$mguard"
+  mout="$(MUTATION_STATE_DIR="$mdir" timeout 60 bash "$PWD/tests/mutation-subgemini.sh" 2>&1)"; mrc=$?
+  if [[ $mrc -ne 0 ]] && grep -qE '没跑完|被砍|inflight|变异' <<<"$mout"; then
+    ok "V46⑰: 上一轮红检没还原干净 ⇒ 下一次红检拒绝再跑,并说清原因"
+  else
+    bad "V46⑰: 留着「红检没跑完」的痕迹,红检竟然照跑(rc=$mrc)—— 被污染的实现会被当成判据的问题查半天"
+  fi
+  rm -rf "$mdir"
 
   # ⑯ 超时但裁决已落盘 ⇒ 接受,但**必须在报告里说它是超时的部分运行**。
   # 取舍本身合理(裁决写完才挂死,那份评审不算丢),但一份"完整评审"和一份
