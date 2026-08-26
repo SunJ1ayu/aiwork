@@ -73,8 +73,9 @@ fi
 echo "[W3] 文档说的默认预算、模型和 agent 档与实现一致"
 grep -q -- '--risk self|standard|high' "$ROOT/README.md"
 check "W3: README 公开 self/standard/high 风险档" $?
-grep -q -- '--all' "$ROOT/README.md" && ! grep -q 'all three' "$ROOT/README.md"
-check "W3: README 说明健康池二审与显式全审，不再声称固定三审" $?
+grep -q -- '--all.*current reviewer pool' "$ROOT/README.md" \
+  && grep -q '全池评审' "$SOURCE/skills/panel/SKILL.md"
+check "W3: README/panel skill 把 --all 表述为全池语义，不绑定四审或五审" $?
 
 for f in "$SOURCE/CLAUDE.md" "$SOURCE/skills/track/SKILL.md" "$SOURCE/skills/panel/SKILL.md"; do
   grep -q 'impact-risk' "$f" && grep -q 'design-uncertainty' "$f" && grep -q 'high=2' "$f"

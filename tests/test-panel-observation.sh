@@ -319,6 +319,26 @@ done
 check "P7: 各腿的模型家族两两不同(重了 ⇒ 归档闸数出来的覆盖是假的)" \
   $([[ "$(printf '%s\n' "${P7_FAMILY[@]}" | sort -u | wc -l)" -eq "${#P7_FAMILY[@]}" ]]; echo $?)
 
+echo "[P8] --all 的派发与 compact observation 都覆盖运行时花名册全池"
+: > "$calls"
+before="$(obs_count "$d")"
+prefix="$d/raw/p8-all"
+out="$(PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-p8" PANEL_STAGGER_MAX=0 \
+  bash "$d/bin/panel-review" --track current --risk standard --all \
+  "${common[@]}" "$prefix" 2>&1)"; rc=$?
+check "P8: track-bound --all 正常成功" $([[ $rc -eq 0 ]]; echo $?)
+check "P8: --all 真实调用数等于花名册长度" \
+  $([[ "$(wc -l < "$calls")" -eq "${#PANEL_LEGS_ORDER[@]}" ]]; echo $?)
+check "P8: 全池结果写成一份 observation，不因腿数变化丢证据" \
+  $([[ "$(obs_count "$d")" -eq $((before + 1)) ]]; echo $?)
+f="$(latest_obs "$d")"
+python3 - "$f" "${PANEL_LEGS_ORDER[@]}" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1], encoding="utf-8"))
+assert {leg["name"] for leg in p["actual"]["legs"]} == set(sys.argv[2:])
+PY
+check "P8: observation 腿名单等于运行时花名册，不抄固定数量" $?
+
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

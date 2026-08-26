@@ -257,19 +257,18 @@ out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
 check "R4: malformed panel leg 被干净阻断而不是让 ledger 崩溃" $([[ $rc -ne 0 ]]; echo $?)
 grep -q 'rule=field.type' <<<"$out"
 check "R4: malformed leg trace 点名类型错误" $?
-python3 - "$d/t/observations/run-1-execution_finished.json" <<'PY'
+mapfile -t pool_legs < <( . "$ROOT/bin/_panel-roster-lib.sh"; printf '%s\n' "${PANEL_LEGS_ORDER[@]}" )
+python3 - "$d/t/observations/run-1-execution_finished.json" "${pool_legs[@]}" <<'PY'
 import json,sys
 p=json.load(open(sys.argv[1])); p["actual"]["legs"]=[{
-  "name":"leg","family":"family","adapter":"agent","model":None,"state":"completed",
+  "name":name,"family":name.removeprefix("sub"),"adapter":"agent","model":None,"state":"completed",
   "exit_code":0,"verdict":"PASS","degraded":False,"duration_ms":None,
   "usage":{"input_tokens":None,"output_tokens":None,"total_tokens":None,"api_cost":None,"billing_mode":None}
-} for _ in range(5)]
+} for name in sys.argv[2:]]
 json.dump(p, open(sys.argv[1], "w"), indent=2)
 PY
 out="$($RECORD validate --phase shape "$d/t" 2>&1)"; rc=$?
-check "R4: panel observation 超过 4 legs ⇒ 拒绝伪装成 compact" $([[ $rc -ne 0 ]]; echo $?)
-grep -q 'rule=observation.legs_limit' <<<"$out"
-check "R4: legs 上限 trace 明确" $?
+check "R4: 当前花名册全池可写进 compact observation，容量只由字节上限约束" $([[ $rc -eq 0 ]]; echo $?)
 rm -rf "$d/t/observations"
 low_decision "$d/t" t '"ARCHIVED-SUPERSEDED"'
 $RECORD validate --phase archive "$d/t" >/dev/null 2>&1
@@ -382,10 +381,12 @@ out="$($RECORD "${common_obs[@]}" --controller runlog --adapter foo 2>&1)"; rc=$
 check "R8: controller/adapter mismatch 在写盘前拒绝" $([[ $rc -ne 0 ]]; echo $?)
 check "R8: adapter mismatch 不留下 observation" $([[ ! -d "$d/tracks/t/observations" ]]; echo $?)
 legs=()
-for n in 1 2 3 4 5; do legs+=(--leg "leg$n,family,agent,0,PASS,false"); done
+for name in "${pool_legs[@]}"; do legs+=(--leg "$name,${name#sub},agent,0,PASS,false"); done
 out="$($RECORD "${common_obs[@]}" --controller panel-review --adapter panel-review "${legs[@]}" 2>&1)"; rc=$?
-check "R8: writer 收到 5 panel legs 在写盘前拒绝" $([[ $rc -ne 0 ]]; echo $?)
-check "R8: legs 超限不留下 observation" $([[ ! -d "$d/tracks/t/observations" ]]; echo $?)
+check "R8: writer 接受运行时花名册全池，不另设固定腿数上限" $([[ $rc -eq 0 ]]; echo $?)
+check "R8: 全池 observation 已真实落盘" \
+  $([[ -s "$d/tracks/t/observations/r1-execution_finished.json" ]]; echo $?)
+rm -rf "$d/tracks/t/observations"
 out="$($RECORD "${common_obs[@]}" --controller runlog --adapter runlog \
   --leg x,family,agent,0,PASS,false 2>&1)"; rc=$?
 check "R8: 非 panel controller 带 --leg 给结构化 BLOCK、不是 traceback" \

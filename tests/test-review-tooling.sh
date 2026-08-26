@@ -1885,9 +1885,7 @@ v22_head_moved_during_review() {
   # 判据循环从表派生(08-26 上午)时我只改了检查那一半,夹具这一半漏了:
   # **同一个事实存两处、只更新其中一个**,本单第 N 次。
   # 两条腿在两轮里各自独立指到这处(08-26 真链 subgemini 第二轮 W3、四审 subdeepseek M3)。
-  # `--all` 的现行契约仍是「四审」(预算上限 4),而花名册有五条轮换腿。
-  # 所以不能用「一轮同时生出五份日志」当题面——那会永远红在正确的预算上。
-  # 下面用两个确定的轮换窗口 0..3 / 1..4,联合覆盖五条腿。
+  # `--all` 的契约是全池评审；数量只由花名册决定，不在判据里抄 4/5。
   local _rl="$BIN/_panel-roster-lib.sh" leg
   local -a _legs
   mapfile -t _legs < <( . "$_rl" 2>/dev/null; printf '%s\n' ${PANEL_LEGS_ORDER[@]+"${PANEL_LEGS_ORDER[@]}"} )
@@ -1910,7 +1908,7 @@ EOF
   PANEL_SELECTION_START=0 PANEL_STAGGER_MAX=0 PANEL_STATE_DIR="$d/state" \
     bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/H2" >"$d/h2.out" 2>&1
   grep -qi "HEAD 从" "$d/h2.out"; check "V22a: HEAD 漂移在 stdout 报出来" $?
-  # 第二个窗口让 subgemini 被选中;由它提交,再问同一条横幅契约。
+  # 由 subgemini 提交,再问同一条横幅契约；全池模式下它不应依赖轮换起点才被选中。
   printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/submimo"
   cat > "$pb/subgemini" <<'EOF'
 #!/usr/bin/env bash
@@ -1925,18 +1923,18 @@ EOF
 
   # 报告会被单独读到(归档/断线重连),所以横幅必须跟着结论走。
   local missed=0 f
-  # 🔴 两个窗口的腿名都从唯一源派生;「被选中却没日志」不再静默放行。
-  for leg in "${_legs[@]:0:4}"; do
+  # 🔴 腿名从唯一源派生;「全池模式却没日志」不再静默放行。
+  for leg in "${_legs[@]}"; do
     f="$d/H2.$leg.log"
     [[ -s "$f" ]] || { missed=1; echo "     (压根没有这条腿的日志: $f)"; continue; }
     grep -qi "HEAD 从" "$f" || { missed=1; echo "     (缺横幅: $f)"; }
   done
-  for leg in "${_legs[@]:1:4}"; do
+  for leg in "${_legs[@]}"; do
     f="$d/H3.$leg.log"
     [[ -s "$f" ]] || { missed=1; echo "     (压根没有这条腿的日志: $f)"; continue; }
     grep -qi "HEAD 从" "$f" || { missed=1; echo "     (缺横幅: $f)"; }
   done
-  check "V22a: 五条腿被选中时,各自日志尾部都带 HEAD 漂移横幅" $([[ $missed -eq 0 ]]; echo $?)
+  check "V22a: 全池每条腿的日志尾部都带 HEAD 漂移横幅" $([[ $missed -eq 0 ]]; echo $?)
   # 原结论不许被横幅顶掉
   grep -q "STUB PASS" "$d/H2.subdeepseek.log"; check "V22a: 加横幅不吞掉腿的原文" $?
   rm -rf "$d"
@@ -4436,8 +4434,8 @@ EOF
 }
 
 v43_health_aware_rotating_budget() {
-  echo "[V43] panel-review:健康池轮换二审 + 条件升级 + 显式四审"
-  local d pb repo state rc count
+  echo "[V43] panel-review:健康池预算评审 + 条件升级 + 显式全池评审"
+  local d pb repo state rc count help pool_count
   d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; state="$d/state"
   mkdir -p "$pb" "$repo" "$state"
   cp "$BIN/panel-review" "$pb/panel-review"
@@ -4447,26 +4445,35 @@ v43_health_aware_rotating_budget() {
     echo base > f.txt; git add -A; git commit -qm init )
 
   local leg
-  for leg in submimo subdeepseek subdeepseek-agent subglm subglm-agent subkimi; do
+  local -a pool_legs
+  mapfile -t pool_legs < <( . "$pb/_panel-roster-lib.sh" 2>/dev/null; printf '%s\n' ${PANEL_LEGS_ORDER[@]+"${PANEL_LEGS_ORDER[@]}"} )
+  pool_count="${#pool_legs[@]}"
+  for leg in "${pool_legs[@]}"; do
+    for leg in "$leg" "$leg-agent"; do
     cat > "$pb/$leg" <<'EOF'
 #!/usr/bin/env bash
 name="$(basename "$0")"
-case "$name" in
-  subdeepseek-agent) name=subdeepseek ;;
-  subglm-agent) name=subglm ;;
-esac
+name="${name%-agent}"
+verdict=PASS; rc=0
 case "$name" in
   submimo) verdict="${STUB_MIMO_VERDICT:-PASS}"; rc="${STUB_MIMO_RC:-0}" ;;
   subdeepseek) verdict="${STUB_DEEPSEEK_VERDICT:-PASS}"; rc="${STUB_DEEPSEEK_RC:-0}" ;;
   subglm) verdict="${STUB_GLM_VERDICT:-PASS}"; rc="${STUB_GLM_RC:-0}" ;;
   subkimi) verdict="${STUB_KIMI_VERDICT:-PASS}"; rc="${STUB_KIMI_RC:-0}" ;;
+  subgemini) verdict="${STUB_GEMINI_VERDICT:-PASS}"; rc="${STUB_GEMINI_RC:-0}" ;;
 esac
 printf '%s\n' "$name" >> "${STUB_CALLS:?}"
 printf 'Conclusion: %s\n' "$verdict" > "$3"
 exit "$rc"
 EOF
     chmod +x "$pb/$leg"
+    done
   done
+
+  help="$(bash "$pb/panel-review" --help 2>&1)"
+  local missing_help=0
+  for leg in "${pool_legs[@]}"; do grep -qF "$leg" <<<"$help" || missing_help=1; done
+  check "V43: --help 的评审池从花名册派生、成员一个不少" $([[ $missing_help -eq 0 ]]; echo $?)
 
   # ① 默认 high=2，不再全派；花名册必须说清选择与跳过。
   : > "$d/calls"
@@ -4518,7 +4525,7 @@ EOF
   check "V43: 失败腿触发第三审" $([[ $count -eq 3 ]]; echo $?)
   check "V43: 仍有有效评审时 panel 本身不因单腿失败 BLOCK" $([[ $rc -eq 0 ]]; echo $?)
 
-  # ⑥ 两个风险轴里人数预算只由 impact-risk 决定；显式 --all 仍能走四审。
+  # ⑥ 两个风险轴里人数预算只由 impact-risk 决定；显式 --all 派完整个当前池。
   : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
   env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=standard PANEL_SELECTION_START=0 \
     PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
@@ -4537,7 +4544,7 @@ EOF
   env -u PANEL_REVIEW_BUDGET PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
     bash "$pb/panel-review" --all --no-my-review "$d/t.md" "$repo" "$d/A1" >/dev/null 2>&1
   count="$(wc -l < "$d/calls" | tr -d ' ')"
-  check "V43: --all 显式保留四审路径" $([[ $count -eq 4 ]]; echo $?)
+  check "V43: --all 派出花名册中的整个当前池" $([[ $count -eq $pool_count ]]; echo $?)
 
   # ⑦ 提示词里的格式示例不是裁决；没有独立裁决行就没有有效证据。
   : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
