@@ -377,6 +377,38 @@ _nlegs="$(. "$ROOT/bin/_panel-roster-lib.sh"; echo "${#PANEL_LEGS_ORDER[@]}")"
 check "R13c: 也仍然写了花名册,每条腿照实印 off(共 $_nlegs 条)" \
   $([[ -s "$pre13.roster" ]] && [[ "$(grep -o '=off' "$pre13.roster" | wc -l)" -eq "$_nlegs" ]]; echo $?)
 
+# ── R14:裁决行解析的契约 ────────────────────────────────────────────────
+# 🔴 2026-08-26 实事故:第三轮四审三条腿全被记成 `verdict=UNKNOWN`,于是控制器
+# 判"这轮没结论"、多派了一条腿。翻日志才发现**两条腿都下了结论**:
+#   submimo 写的是 `**Conclusion: PASS**`(markdown 粗体),
+#   subdeepseek 写的是 `` `Conclusion: PASS` ``(反引号包着)。
+# `verdict_of` 的正则要求裁决**独占一行、前后什么都不许有**,于是把真裁决扔了。
+#
+# 严格是有理由的:提示词里原样含着 "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO",
+# 宽松匹配会把"没交卷"记成 PASS。但**加粗和反引号不是那种歧义** ——
+# 那一行的内容仍然只有一个裁决值,而那个例子行里有竖线,永远不会撞上。
+# ⇒ 契约钉在这里:**装饰要认,歧义不认**。
+# 这条是整套系统里最贵的一个函数(花名册/健康池/升级/observation 四处用它),
+# 而它在此之前**没有任何一份判据钉过它的行为**——今天之前它扔掉过多少条真裁决,
+# 我查不出来了。
+echo "[R14] 裁决行解析的契约:装饰要认,歧义不认"
+_vd() {  # _vd <一行文本> ; 打印 verdict_of 的判定
+  local f; f="$(mktemp)"; printf '%s\n' "$1" > "$f"
+  ( . "$ROOT/bin/_panel-roster-lib.sh"; verdict_of "$f" ); rm -f "$f"
+}
+check "R14a: 裸的 'Conclusion: PASS' ⇒ PASS"            $([[ "$(_vd 'Conclusion: PASS')" == PASS ]]; echo $?)
+check "R14b: markdown 粗体 '**Conclusion: PASS**' ⇒ PASS(真事故)" \
+  $([[ "$(_vd '**Conclusion: PASS**')" == PASS ]]; echo $?)
+check "R14c: 反引号包裹 '\`Conclusion: BLOCK\`' ⇒ BLOCK(真事故)" \
+  $([[ "$(_vd '`Conclusion: BLOCK`')" == BLOCK ]]; echo $?)
+check "R14d: 全角冒号 '结论:BLOCK' ⇒ BLOCK"             $([[ "$(_vd '结论:BLOCK')" == BLOCK ]]; echo $?)
+check "R14e: 提示词里那行(含竖线)⇒ UNKNOWN(不许把没交卷记成 PASS)" \
+  $([[ "$(_vd 'Conclusion: PASS | BLOCK | NEEDS_MORE_INFO')" == UNKNOWN ]]; echo $?)
+check "R14f: 行里还有别的话 ⇒ UNKNOWN(那不是裁决,是提到了裁决)" \
+  $([[ "$(_vd 'Conclusion: PASS 但我保留意见')" == UNKNOWN ]]; echo $?)
+check "R14g: 正文里顺口提一句 ⇒ UNKNOWN" \
+  $([[ "$(_vd 'just a mention: Conclusion: BLOCK')" == UNKNOWN ]]; echo $?)
+
 echo
 echo "---- 合计 PASS=$PASS FAIL=$FAIL ----"
 [[ "$FAIL" -eq 0 ]]
