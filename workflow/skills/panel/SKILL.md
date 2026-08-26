@@ -55,7 +55,8 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 `design-uncertainty` 决定是否需要 premise attack / 双出 / `panel-explore`；二者不能互相代替。
 `panel-review --track NAME --risk self|standard|high TASK_FILE [REPO_DIR] [LOG_PREFIX]` 默认 high=2，
 从健康池轮换不同模型家族。失败、降级、没有裁决、NEEDS_MORE_INFO 或裁决冲突时只追加
-一个健康 spare；`--all` 才是显式全审，留给判卷、沙箱、权限边界或二审无法收敛的特殊面。
+一个健康 spare；`--all` 才是显式**全池评审**，从唯一花名册派出当前全部已启用且可执行的腿，
+留给判卷、沙箱、权限边界或预算评审无法收敛的特殊面。池大小不是契约，增删腿不改这句话。
 **连续硬失败的腿会被停止轮换(2026-08-25 起)**:`health.tsv` 每条腿多记一个
 **连续硬失败次数**;连续 `PANEL_HEALTH_DEAD_STREAK`(默认 3)轮 rc≠0 ⇒ 那条腿
 **不再进入轮换,冷却过了也不放回来**,并在选腿段落打印一行说清:连续几轮、
@@ -72,8 +73,8 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 > 放回来:`PANEL_HEALTH_OVERRIDE=<leg>=healthy`,**跑成功一次 streak 自动清零**;
 > `PANEL_HEALTH_DEAD_STREAK=0` 关掉整个机制(**垃圾值会拒跑,不会静默关掉** ——
 > `abc` 和 `08` 都曾是"我以为开着其实关着";现在 fail-closed,rc=64)。
-> `--all` **照派死腿,但那行提示照打** —— 派它和告诉我它是死的不矛盾,
-> 而 `--all` 恰恰是最该知道"其实只有 3 条腿"的场合。
+> `--all` **照派全池里的死腿,但那行提示照打** —— 派它和告诉我它是死的不矛盾,
+> 而全池评审恰恰是最该知道“实际健康池已经缩水”的场合。
 >
 > **计的是"连续 rc≠0"的次数,不看错误是不是同一种**(不做错误文本分类:猜错就是误报)。
 > 所以提示写的是「连续 N 轮 rc≠0(最近一次:X)」,不会断言"都以 X 失败"。
@@ -107,8 +108,8 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 > · 一条腿被 `PANEL_*_LEG=off` 关掉期间,**streak 不会自己清** ——
 >   修好根因重新打开之后它可能仍是 dead,要 override 一次或跑一次 `--all`。
 
-**`--all` 会无视健康池的冷却**(选腿处显式跳过 healthy 判断)：冷却中的腿照派不误，
-所以刚炸过一轮之后仍能立刻全审——代价是明知会失败的腿也会占一份等待时间。
+**`--all` 会无视健康池的冷却**(选腿处显式跳过 healthy 判断)：冷却中的已启用腿照派不误，
+所以刚炸过一轮之后仍能立刻全池评审——代价是明知会失败的腿也会占一份等待时间。
 (2026-08-23 读 `bin/panel-review` 选腿段确认;无机械判据守这句,是读代码读来的。)
 `--track` 绑定 typed track 时，显式 `--budget` 只能增加证据，不能低于 self/standard/high 的
 0/1/2 机械预算；要做无归属实验必须明确 `--no-track`，但无归属事件不能满足 typed track 的
@@ -116,7 +117,8 @@ PASS 归档。归档会再核对成功 panel observation 中是否有 0/1/2 个�
 仓里有 typed active track 时，派发前必须显式给 `--track NAME` 或 `--no-track`；前者会在
 任何腿启动前校验 decision 已满足 dispatch 且 `impact.level == --risk`。实际腿、回落降级、
 总耗时、rc 与真实可得 usage 在全部腿结束后写回主仓 track 的紧凑 observation；prompt 和
-完整日志仍在仓外，不复制进 Git。单事件最多 64 KiB、panel 最多记录 4 条实际腿。
+完整日志仍在仓外，不复制进 Git。单事件最多 64 KiB；实际腿数量由当轮花名册派生，
+不在 observation schema 里再设一个会漂移的数字上限。
 每条实际派出的腿各写各的
 `<prefix>.<leg>.log`(默认前缀 `/root/aiwork/logs/panel-<task>-<ts>`)。一条腿失败不阻断
 其他腿;只有所有实际派出的腿都失败才非零退出。主自审必须在派发前已落盘，DEFAULT-ON

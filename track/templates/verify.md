@@ -6,7 +6,8 @@
 > `decision.json`；这里保留检查、理由、发现与主 Agent 仲裁说明，不复制枚举。
 
 > Panel hook — 软判断(correctness/security/edge/spec-drift)走 panel-review:
-> 主 agent 先独立审并落 findings,再跑 panel-review 的全部评审腿,主 agent 主裁。
+> 主 agent 先独立审并落 findings,再按 impact-risk 预算跑 panel-review；只有特殊控制面
+> 才显式 `--all` 做全池评审。最后仍由主 agent 主裁。
 > build/test 跑通是机械检查。
 
 ## Mechanical checks
@@ -31,7 +32,7 @@ runlog -t __NAME__ -- <判据命令>
 ## Review
 
 - 规格自查(读任何 panel 输出之前先答):<如果规格本身就是错的,会错成什么样、我怎么发现?
-  panel 只验"实现合不合规格",验不了"规格对不对" —— 四腿齐 PASS 不等于题是对的。>
+  panel 只验"实现合不合规格",验不了"规格对不对" —— 全池一致 PASS 也不等于题是对的。>
 - 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
   > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
   > **控制器没活到收尾时它压根不存在** —— 那时跑 `panel-roster <日志前缀>` 从盘上重建,

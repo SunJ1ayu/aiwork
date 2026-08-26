@@ -41,6 +41,10 @@ instructions; this README only maps the machinery.
   Extra context via `DEEPSEEK_INCLUDE`.
 - `bin/subglm` — Zhipu GLM, review-only chat wrapper over the engine.
   Extra context via `ZHIPU_INCLUDE`.
+- `bin/subkimi` — Kimi membership-backed, review-only agent leg with no chat fallback.
+- `bin/subgemini` — Gemini membership-backed, review-only Antigravity CLI leg with
+  no chat fallback. `bin/subgemini-diag` extracts denied tools/commands from its
+  local conversation database.
 - `bin/submimo-iso` — concurrency-safe submimo for two simultaneous
   driver agents (e.g. Claude + Codex).
 
@@ -70,7 +74,8 @@ agent to verify, never a verdict to adopt.
   no prompt/transcript, and therefore survive safe worktree cleanup. Unknown usage
   stays `null`; observation-write failure is loud without changing controller rc.
   The `observations/` directory accepts only direct regular JSON events (64 KiB
-  per event; at most four panel legs). Writers and readers share the same strict
+  per event; panel-leg capacity is bounded by that byte limit, not a duplicate count).
+  Writers and readers share the same strict
   schema, and staged machine facts remain guarded both before and after archive.
   Both CLI archive and staged manual archive validate execution plus the declared
   self/standard/high review floor (0/1/2 successful distinct model-family legs) before any sweep/move.
@@ -95,7 +100,9 @@ agent to verify, never a verdict to adopt.
 - `bin/panel-review --track NAME --risk self|standard|high TASK [REPO] [LOG_PREFIX]` —
   convergent review. Default high rotates two healthy model families; standard
   uses one and self uses none. Failure/degradation/conflict can add one spare;
-  `--all` explicitly requests every available reviewer. Use `--no-track`
+  `--all` explicitly requests the entire current reviewer pool (all enabled legs
+  whose configured executables are available). Pool membership comes from the
+  single roster table, so adding or removing a leg does not change this contract. Use `--no-track`
   explicitly when the review belongs to no typed active track. Main agent arbitrates.
   It exits non-zero only if every actually dispatched leg fails; failed legs
   keep a `.err` sidecar.

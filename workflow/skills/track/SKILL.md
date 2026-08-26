@@ -107,7 +107,8 @@ conversation history; reconstruct from the folder:
 planned/actual model 或 Adapter **可比较时**由 mismatch 明示，不相互覆盖；main 的 runlog 是验证
 controller，不冒充实际执行 Adapter，所以该维度拿不到时保持 null。agent→chat 回落是第二次真实
 dispatch，ledger 会在 degraded leg 之外另计一次 fallback dispatch。`observations/` 只准紧凑 JSON，
-不能夹带 transcript/子目录/symlink；单文件最多 64 KiB，panel 最多 4 条 legs。writer 写前与
+不能夹带 transcript/子目录/symlink；单文件最多 64 KiB，panel 腿数由运行时花名册决定、
+不另抄固定上限。writer 写前与
 reader/guard 共用同一 schema，未知敏感字段的 BLOCK trace 只报字段名、不回显内容。active 和
 archive 的机器源每次 staged 改动都持续校验；archive 对 working/staged 两种路径都 fail closed。
 

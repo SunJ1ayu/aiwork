@@ -54,7 +54,6 @@ BILLING_MODES = ("subscription", "api", "local")
 EXECUTION_ADAPTERS = ("main", "submimo", "delegate-codex", "claude-worktree")
 REVIEW_BUDGETS = {"self": 0, "standard": 1, "high": 2}
 MAX_OBSERVATION_BYTES = 64 * 1024
-MAX_OBSERVATION_LEGS = 4
 
 
 class DecisionError(Exception):
@@ -909,13 +908,6 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
     if root["controller"] == "panel-review":
         if not isinstance(legs, list):
             raise DecisionError("field.type", "observation.actual.legs", legs, "array for panel-review")
-        if len(legs) > MAX_OBSERVATION_LEGS:
-            raise DecisionError(
-                "observation.legs_limit",
-                "observation.actual.legs",
-                len(legs),
-                f"<= {MAX_OBSERVATION_LEGS} compact panel legs",
-            )
     elif legs is not None:
         raise DecisionError("field.type", "observation.actual.legs", legs, "null outside panel-review")
     for index, value_leg in enumerate(legs or []):

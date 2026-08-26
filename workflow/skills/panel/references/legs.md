@@ -35,7 +35,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 
 **底座 = opencode CLI 自己**(2026-08-18 晚,track opencode-agent-base)。
 和 subkimi 用原生 kimi-code、submimo 用官方 MiMoCode 是同一个形状 ——
-四条腿里三条现在都跑在厂商自己的 agent 底座上,只有 DeepSeek 还借 Claude Code 当壳
+当前池里只有 DeepSeek 还借 Claude Code 当壳,其余 agent 腿都跑各自的原生底座
 (它的 Anthropic 面做工具格式转换,借壳对它是通的)。
 
 `/root/aiwork/bin/subglm-agent`(底座腿,默认)/ `bin/subglm`(聊天腿),**只读评审**。
@@ -95,7 +95,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - 轮次上限在配置的 `steps` 字段(opencode 没有命令行开关,schema 里 `maxSteps` 已废弃),
   取供应商表里那个历史值 40 —— 换底座不许把上限弄丢。
 
-## subkimi (月之暗面 Kimi) — 第四条腿
+## subkimi (月之暗面 Kimi) — 轮换池成员
 
 `/root/aiwork/bin/subkimi`,Kimi 会员 OAuth,**从第一天起就是 agent 底座**:跑原生
 `kimi-code` CLI 的 headless 模式(`kimi -p`),评审员自己读仓库,无盲评、无需喂 INCLUDE。
@@ -114,7 +114,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - `panel-review` 把它纳入健康轮换池(`PANEL_KIMI_LEG=off` 关闭)，只有被预算选中或条件
   升级时才实际派出；**没有 chat 回落**。
 
-## subgemini (Gemini,跑在 Antigravity CLI 上) — 第五条轮换腿,2026-08-25 起
+## subgemini (Gemini,跑在 Antigravity CLI 上) — 轮换池成员,2026-08-25 起加入
 
 `/root/aiwork/bin/subgemini`,**只读评审**,没有 chat 回落。骑业主的 **Gemini 会员**
 OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
@@ -198,10 +198,10 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
   **当时腿真能写进被评审的原仓**。08-26 已把命令放进 `ro-repo-exec` 的 namespace。
   **教训不是"漏了一行",是"我把设计意图写成了既成事实"**。
   `--mode plan` 只出计划,但没验过那是机械锁还是模型自觉,**因此不拿它当防线**。
-- **仍然敞着(而且四条 agent 腿都一样)**:namespace 只把被评审的**原仓**变只读,
+- **仍然敞着(而且各 agent 腿都一样)**:namespace 只把被评审的**原仓**变只读,
   管不住仓**外**的读 —— `git diff --no-index /root/.ssh/id_rsa` 这类命令能把任意
   可读文件打进评审日志(08-19 已实证)。命令白名单是前缀匹配,挡不住 git 自己的参数,
-  它从来不是边界。要堵得给 `ro-repo-exec` 加"遮住敏感路径"的能力 ⇒ 跨四条腿,单开一单。
+  它从来不是边界。要堵得给 `ro-repo-exec` 加“遮住敏感路径”的能力 ⇒ 跨全部 agent 腿,单开一单。
 - **腿目前不能跑判据/测试**(track 的 E3):放行 `bash` 等于放弃"只看得见副本"这条边界。
   而 `ro-lock-teardown` 的 proposal 写着评审腿应当"能运行本地判据、编译和诊断" ——
   这笔账敞着,单开一单。
@@ -230,8 +230,8 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
 codex exec -C REPO -s read-only -o PREFIX.codex.log "评审任务书(要求中文回答)"
 ```
 
-- 与前四条的关键差别:**它不是弱模型**。前四条是弱模型,共同假阴性是它们结构上的盲区;
-  补一条 frontier 腿的价值 > 补第五条弱腿。
+- 与轮换池各腿的关键差别:**它不是弱模型**。池内腿的共同假阴性是它们结构上的盲区;
+  补一条 frontier 腿的价值 > 再补一条同档腿。
 - **`-s read-only` 必须带**——评审员不该有写权限。
 - **额度**:走 ChatGPT 订阅(`auth_mode=chatgpt`),不烧 Claude 额度。
 - `--output-schema FILE` 可以让它按 JSON Schema 输出裁决,比正则匹配 "Conclusion:" 稳

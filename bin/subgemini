@@ -160,9 +160,9 @@ chmod 600 "$AGY_HOME_DIR/antigravity-oauth-token"
 # 而那道挂载 2026-08-26 才真的接上(在下面 RO_EXEC 那一段;之前这句话是**假的**)。
 # 白名单挡得住误伤、并且让腿的能力边界是写下来可审的,但它挡不住 git 自己的参数
 # (`git diff --output=` 写、`git diff --no-index` 读,08-19 已实证)。
-# ⚠️ 仍然敞着、且**四条 agent 腿都一样**的口子:namespace 只把被评审的原仓变只读,
+# ⚠️ 仍然敞着、且**各 agent 腿都一样**的口子:namespace 只把被评审的原仓变只读,
 #    管不住仓**外**的读(`~/.ssh`、业主凭证)。要堵它得给 ro-repo-exec 加"遮住
-#    敏感路径"的能力,那是跨四条腿的改动,单开一单(tasks.md 敞账 D3),
+#    敏感路径"的能力,那是跨全部 agent 腿的改动,单开一单(tasks.md 敞账 D3),
 #    不在这条腿里假装已经解决。
 write_agy_settings() {   # write_agy_settings [可丢弃副本路径]
   local ws="${1:-}" scoped=""

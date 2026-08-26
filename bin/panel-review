@@ -3,10 +3,19 @@ set -uo pipefail
 
 # panel-review - select healthy review employees for one task, run them in
 # parallel, then let the main agent (the frontier model) arbitrate.
-#   submimo (MiMo) + subdeepseek (DeepSeek) + subglm (Zhipu GLM) [+ subkimi (Moonshot)]
+# The reviewer pool comes only from _panel-roster-lib.sh; no second leg list here.
 #
 # Each reviewer writes its own log; this script does NOT decide anything - it just
 # fans out the work and reports where the reports landed.
+
+BIN="$(dirname "$0")"
+
+# verdict_of / roster 渲染 / 腿池都住在 _panel-roster-lib.sh —— **只许有一份**。
+# usage 也从它渲染成员；否则新增腿时最先撒谎的就是 `--help`。
+. "$BIN/_panel-roster-lib.sh" || {
+  echo "🔴 panel-review: 找不到 $BIN/_panel-roster-lib.sh —— 花名册与腿池都在它里面,拒绝空跑。" >&2
+  exit 70
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -15,15 +24,19 @@ Usage:
 
 Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
 Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO or conflict adds
-one healthy spare. `--all` explicitly requests every available reviewer.
+one healthy spare. `--all` requests the entire current reviewer pool: every
+enabled leg whose configured executable is available.
 
-Reviewer pool:
-  submimo review  -> <LOG_PREFIX>.submimo.log
-  subdeepseek review -> <LOG_PREFIX>.subdeepseek.log
-  subglm review   -> <LOG_PREFIX>.subglm.log   (默认 agent 腿,后端 OpenCode Go;
-                                                 PANEL_GLM_LEG=agent 切底座腿 / off 关掉)
-  subkimi review  -> <LOG_PREFIX>.subkimi.log   (4th leg, only if installed;
-                                                 PANEL_KIMI_LEG=off disables)
+Reviewer pool (from _panel-roster-lib.sh):
+EOF
+  local spec name family agent chat switch fallback
+  for spec in "${PANEL_LEG_SPECS[@]}"; do
+    IFS='|' read -r name family agent chat switch <<< "$spec"
+    fallback="${chat:+; chat fallback=$chat}"
+    printf '  %-14s family=%-10s agent=%-20s switch=%s%s\n' \
+      "$name" "$family" "$agent" "$switch" "$fallback" >&2
+  done
+  cat >&2 <<'EOF'
 
 Args:
   TASK_FILE    markdown task/review brief (required)
@@ -32,8 +45,8 @@ Args:
 
 Options / env:
   --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
-  --budget N                 explicit initial budget, 0..4
-  --all                      explicit all-available review (special high risk)
+  --budget N                 explicit initial budget, 0..current pool size
+  --all                      explicit full-pool review (special high risk)
   --track NAME               bind dispatch/observation to a typed track in the main repo
   --no-track                 explicitly state that this review belongs to no track
   PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
@@ -85,7 +98,7 @@ while [[ $# -gt 0 ]]; do
       shift 2 ;;
     --budget)
       REVIEW_BUDGET="${2:-}"
-      [[ -n "$REVIEW_BUDGET" ]] || { echo "panel-review: --budget needs 0..4" >&2; exit 2; }
+      [[ -n "$REVIEW_BUDGET" ]] || { echo "panel-review: --budget needs a non-negative integer" >&2; exit 2; }
       shift 2 ;;
     --all) ALL_REVIEWERS=1; shift ;;
     --track)
@@ -106,27 +119,18 @@ case "$IMPACT_RISK" in
   *) echo "panel-review: invalid --risk '$IMPACT_RISK' (need self|standard|high)" >&2; exit 2 ;;
 esac
 [[ -n "$REVIEW_BUDGET" ]] || REVIEW_BUDGET="$RISK_BUDGET"
-[[ "$REVIEW_BUDGET" =~ ^[0-4]$ ]] || {
-  echo "panel-review: invalid review budget '$REVIEW_BUDGET' (need 0..4)" >&2; exit 2; }
-if [[ "$ALL_REVIEWERS" -eq 1 ]]; then REVIEW_BUDGET=4; fi
-# budget=4 is the explicit compatibility/high-risk path: retry every available
-# leg even when a previous round cooled it down. Explicit off still wins.
+POOL_SIZE="${#PANEL_LEGS_ORDER[@]}"
+if [[ ! "$REVIEW_BUDGET" =~ ^(0|[1-9][0-9]*)$ ]] || (( REVIEW_BUDGET > POOL_SIZE )); then
+  echo "panel-review: invalid review budget '$REVIEW_BUDGET' (need 0..$POOL_SIZE, derived from current pool)" >&2
+  exit 2
+fi
+if [[ "$ALL_REVIEWERS" -eq 1 ]]; then REVIEW_BUDGET="$POOL_SIZE"; fi
+# `--all` and an explicit maximum budget are the compatibility/high-risk path:
+# retry the entire current pool even when a previous round cooled a leg down.
+# Explicit off or a missing executable still wins.
 FORCE_ALL=0
-[[ "$REVIEW_BUDGET" -eq 4 ]] && FORCE_ALL=1
+[[ "$ALL_REVIEWERS" -eq 1 || "$REVIEW_BUDGET" -eq "$POOL_SIZE" ]] && FORCE_ALL=1
 
-BIN="$(dirname "$0")"
-
-# verdict_of / roster 渲染都住在 _panel-roster-lib.sh —— **只许有一份**。
-# panel-roster(事后重建)source 的是同一个文件,两条路算出来的必须一模一样。
-# **fail closed**:找不到就当场死,不许"打一行错继续跑"。
-# 本脚本没开 `set -e`,裸 `.` 在缺文件时只打一行错就往下走 ⇒ render_roster/verdict_of
-# 全部不存在 ⇒ 花名册静默变空、observation 一份不写,**而退出码还是 0**。
-# 2026-08-23 我就是这么把 21 条既有判据打红的(它们的夹具没复制这个库)。
-# 静默放过 = 假绿,和 `env '=key'` rc=0 那次是同一种病。
-. "$BIN/_panel-roster-lib.sh" || {
-  echo "🔴 panel-review: 找不到 $BIN/_panel-roster-lib.sh —— 花名册渲染在它里面,拒绝空跑。" >&2
-  exit 70
-}
 TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
 TASK_FILE="$1"
 REPO_DIR="${2:-$PWD}"
