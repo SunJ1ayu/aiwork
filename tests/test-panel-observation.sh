@@ -5,10 +5,28 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 腿名单的**唯一源**。判据自己也不许抄第二份 —— 抄了就会像 08-26 那样:
+# 名单上五条腿,判据只问得出四条。
+. "$ROOT/bin/_panel-roster-lib.sh"
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
+
+make_leg_stubs() { # bindir —— 每条腿铺一个健康桩(两种命名都铺)
+  local b="$1" leg bin_name
+  for leg in "${PANEL_LEGS_ORDER[@]}"; do
+    for bin_name in "$leg" "$leg-agent"; do
+      cat > "$b/$bin_name" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$(basename "$0")" >> "$PANEL_TEST_CALLS"
+printf 'Conclusion: PASS\n' > "$3"
+exit 0
+EOF
+      chmod +x "$b/$bin_name"
+    done
+  done
+}
 
 make_fixture() { # root
   local d="$1" b="$1/bin" repo="$1/repo"
@@ -16,15 +34,13 @@ make_fixture() { # root
   cp "$ROOT/bin/panel-review" "$b/panel-review"
   cp "$ROOT/bin/_panel-roster-lib.sh" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   cp "$ROOT/bin/track-record" "$b/track-record"
-  for leg in submimo subdeepseek subglm subkimi; do
-    cat > "$b/$leg" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$(basename "$0")" >> "$PANEL_TEST_CALLS"
-printf 'Conclusion: PASS\n' > "$3"
-exit 0
-EOF
-    chmod +x "$b/$leg"
-  done
+  # 🔴 桩腿名单**从唯一源长出来**,不在这里再抄一份(2026-08-26 subgemini 四审 F8)。
+  # 这里原本硬编码 `for leg in submimo subdeepseek subglm subkimi`,是全仓第五份腿名单:
+  # 加第五条腿时它没跟上 ⇒ 新腿在这套判据里静默 off ⇒ **P 系列永远问不到它**,
+  # 而 P 系列正是"派发真的发生了吗"的唯一行为级判据。名单漏一处,闸就瞎一只眼。
+  # 两种命名都铺桩(<腿名> 和 <腿名>-agent):底座腿/聊天腿哪个存在由实现决定,
+  # 判据不猜、也不因此长出对实现的第二份知识。
+  make_leg_stubs "$b"
   printf '# PANEL_PROMPT_SENTINEL\n' > "$d/task.md"
   cat > "$repo/tracks/current/decision.json" <<'EOF'
 {
@@ -191,6 +207,74 @@ p=json.load(open(sys.argv[1], encoding="utf-8"))
 assert len(p["label"]) == 128 and set(p["label"]) == {"x"}
 PY
 check "P6: panel label 在 producer 端截到 schema 的 128 字节上限" $?
+
+
+# ── P7 ────────────────────────────────────────────────────────────────────
+# 🔴 2026-08-26,subgemini 那一单的四审(两条腿各自独立命中,我自己去核也成立):
+#   `launch_leg` 的 case 里没有第五条腿的分支 ⇒ 选中它时**什么都不启动**,
+#   紧接着的 `LEG_PID[$name]=$!` 拿到的是**上一条腿**的 pid ⇒ `wait` 返回那条腿的
+#   退出码 ⇒ 花名册给它记 PASS、observation 记一条成功的腿 —— 而它一次都没跑。
+#   这是"看起来跑完了、其实没审"的终极形态,比腿失败危险得多。
+#
+#   当时专门为这件事写的断言是 `grep -q subgemini bin/panel-review`:
+#   **拿文本出现过冒充派发接上了**。补一行 LEG_CMD 映射它就变绿,而派发一直是断的。
+#
+# 所以这一段:① 问行为(桩腿到底有没有被执行),不 grep 源码;
+#             ② 对**名单上的每一条腿**各问一遍 —— 加第六条腿时判据自动跟着覆盖,
+#                不用"记得回来改判据"(那从来靠不住)。
+echo "[P7] 花名册上的每条腿都必须真的派得出去,且家族记账不空"
+# 夹具复位:P3 把 subdeepseek-agent 换成了失败桩、P5 把 decision.json 改成了 self。
+# 不复位 ⇒ P7 量到的是那些残留而不是派发本身(第一版全 26 红,**误报是我自己造的**)。
+make_leg_stubs "$d/bin"
+python3 - "$d/repo/tracks/current/decision.json" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1])); p["impact"]["level"] = "standard"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+declare -A P7_FAMILY=()
+for leg in "${PANEL_LEGS_ORDER[@]}"; do
+  : > "$calls"
+  ov=""
+  for other in "${PANEL_LEGS_ORDER[@]}"; do
+    [[ "$other" == "$leg" ]] && continue
+    ov+="${ov:+,}$other=cooldown:P7"
+  done
+  prefix="$d/raw/p7-$leg"
+  PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-p7-$leg" PANEL_STAGGER_MAX=0 \
+    PANEL_HEALTH_OVERRIDE="$ov" \
+    bash "$d/bin/panel-review" --track current --risk standard --budget 1 \
+    "${common[@]}" "$prefix" >/dev/null 2>&1
+  sel="$(sed -n 's/^selected=//p' "$prefix.plan" 2>/dev/null)"
+  entry="$(tr ',' '\n' <<<"$sel" | grep -F "$leg(" || true)"
+  check "P7[$leg]: 轮换真的选中了它(plan 的 selected 里有它)" $([[ -n "$entry" ]]; echo $?)
+  family="${entry#*(}"; family="${family%%/*}"
+  adapter="${entry##*/}"; adapter="${adapter%)}"
+  P7_FAMILY[$leg]="$family"
+  # 家族不能空:归档闸数的"覆盖了 N 个不同模型家族"就是从这里来的。
+  # 空 family 会让那条腿在覆盖核对里静默不算数 —— 一句读起来完全正常的假话。
+  check "P7[$leg]: 有模型家族(归档闸的家族覆盖核对靠它)—— 实际='$family'" \
+    $([[ "$family" =~ ^[a-z][a-z0-9_-]*$ ]]; echo $?)
+  # **真的被执行了**:桩腿被调用时会把自己的名字写进 calls。
+  check "P7[$leg]: 适配器 $adapter 真的被执行了(不是只出现在名单里)" \
+    $(grep -qxF "$adapter" "$calls" 2>/dev/null; echo $?)
+  # 退出码落盘:花名册/健康池全靠它,没有它这条腿在事后是查不到死活的。
+  check "P7[$leg]: 它自己的 state 落盘且 rc=0" \
+    $([[ -s "$prefix.$leg.state" ]] && grep -qx 'rc=0' "$prefix.$leg.state"; echo $?)
+  f="$(latest_obs "$d")"
+  python3 - "$f" "$leg" "$family" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1], encoding="utf-8"))
+legs = {x["name"]: x for x in p["actual"]["legs"]}
+leg = legs[sys.argv[2]]
+assert leg["family"], "observation 里这条腿的 family 是空的:%r" % (leg,)
+assert leg["family"] == sys.argv[3], (leg["family"], sys.argv[3])
+PY
+  check "P7[$leg]: observation 里的 family 非空且与 plan 一致" $?
+done
+# 家族两两不同,否则"两个不同家族的腿"这句话可以被两条同家族的腿满足 ——
+# 而那正是 impact-risk=high 的全部意义所在。
+check "P7: 各腿的模型家族两两不同(重了 ⇒ 归档闸数出来的覆盖是假的)" \
+  $([[ "$(printf '%s\n' "${P7_FAMILY[@]}" | sort -u | wc -l)" -eq "${#P7_FAMILY[@]}" ]]; echo $?)
 
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="
