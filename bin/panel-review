@@ -215,82 +215,39 @@ TASKNAME="$(basename "${TASK_FILE%.*}")"
 LOG_PREFIX="${3:-$TOOL_ROOT/logs/panel-${TASKNAME}-${TS}}"
 mkdir -p "$(dirname "$LOG_PREFIX")"
 
-# GLM leg selection.
-# 开关史:2026-08-04 智谱账号余额不足(429 / 1113),这条腿每轮只是白等一次超时,
-# 还让"四审"看起来满编、实际三腿 ⇒ 用户拍板「先关掉」,默认 off。
-# **2026-08-18 默认翻回开着**:后端换成业主的 OpenCode Go 订阅,欠费这个理由消失了。
-# 「默认关着」当初是为欠费立的,不是永久规格 —— 理由没了还留着,四审就永远只有三腿
-# (这条腿已经这样关了两周)。没钱/出故障时的关法仍在:`PANEL_GLM_LEG=off`。
+# ── 各腿:表 → 本轮实际用哪个二进制 ───────────────────────────────────────
+# 🔴 腿的身份(家族/底座腿/聊天腿/开关)**只写在 `_panel-roster-lib.sh` 的
+# `PANEL_LEG_SPECS` 里**,连同各腿开关的历史与理由。这里只做解析,不再按腿名分支。
+# 2026-08-26 之前这一段是五个手写的 if 块 + 一张手写的映射表 + 派发/家族/日志共六处
+# case,加第五条腿时我漏了四处 —— 详情记在那张表上面。
 #
-# **默认档 = agent(底座腿,自己读仓库)。** 这一格 08-18 一天之内翻了两次,
-# 两次都是被事实推的,记下来免得下次又当成偏好来回改:
-#   白天:后端换到 OpenCode Go,而底座腿当时是**借 Claude Code 当壳**的;
-#         Go 的 Anthropic 面不做工具格式转换,带 Anthropic 形状的 tools 一律 400
-#         (实测三档:无工具 200 / Anthropic 形状 400 / OpenAI 形状 200)⇒ 只能默认 chat。
-#   晚上:**底座换成 opencode CLI 自己**(track opencode-agent-base),工具形状天然对得上
-#         ⇒ 400 这个前提没了,默认档翻回 agent。端到端实跑为证:它自己跑 git status /
-#         Read / Glob,抓到埋的雷并给出裁决行。
-# 底座腿的价值就是自己读仓库、不靠别人喂 diff;聊天腿看不见仓库,派它要带 PANEL_INCLUDE
-# (下面那条 `HINT: chat leg in play and PANEL_INCLUDE is empty` 就是提醒这件事的)。
-# **这里不写行号**:上一版写了"第 207 行",而我加的注释自己就把它推到了 221 行 ——
-# 写下的那一刻就是错的。行号不是身份。
-# 取值:agent = 底座腿(默认);chat = 聊天腿(只看得见喂给它的东西);off = 不派发。
-GLM_LEG="${PANEL_GLM_LEG:-agent}"
-GLM_CMD=""
-if [[ "$GLM_LEG" == "off" ]]; then
-  GLM_CMD=""                      # 关着:不派发、不报 rc
-elif [[ "$GLM_LEG" == "agent" && -x "$BIN/subglm-agent" ]]; then
-  GLM_CMD="$BIN/subglm-agent"
-else
-  GLM_CMD="$BIN/subglm"           # 要 agent 但没装 → 回落聊天腿(老行为,不许退化)
-fi
-
-# DeepSeek leg selection: agent base (subdeepseek-agent = DeepSeek via
-# Claude Code, reads the repo itself) is the default when installed;
-# PANEL_DEEPSEEK_LEG=chat forces the chat leg
-# (subdeepseek -> DeepSeek official chat API), which goes
-# blind on an empty diff. Mirrors the GLM leg above.
-DEEPSEEK_LEG="${PANEL_DEEPSEEK_LEG:-agent}"
-if [[ "$DEEPSEEK_LEG" == "off" ]]; then
-  DEEPSEEK_CMD=""
-elif [[ "$DEEPSEEK_LEG" == "agent" && -x "$BIN/subdeepseek-agent" ]]; then
-  DEEPSEEK_CMD="$BIN/subdeepseek-agent"
-else
-  DEEPSEEK_CMD="$BIN/subdeepseek"
-fi
-
-# MiMo has one agent implementation; expose the same explicit off switch as the
-# other providers so a known-empty quota is configuration, not a wasted timeout.
-MIMO_CMD=""
-if [[ "${PANEL_MIMO_LEG:-agent}" != "off" && -x "$BIN/submimo" ]]; then
-  MIMO_CMD="$BIN/submimo"
-fi
-
-# Kimi leg (4th reviewer, Moonshot kimi-code agent base): auto-enabled when
-# subkimi is installed; PANEL_KIMI_LEG=off disables. There is no chat fallback -
-# absent or disabled just means the classic 3-leg panel.
-KIMI_CMD=""
-if [[ "${PANEL_KIMI_LEG:-agent}" != "off" && -x "$BIN/subkimi" ]]; then
-  KIMI_CMD="$BIN/subkimi"
-fi
-
-# Gemini leg (5th reviewer, Google Antigravity CLI agent base): auto-enabled when
-# subgemini is installed; PANEL_GEMINI_LEG=off disables. No chat fallback.
-GEMINI_CMD=""
-if [[ "${PANEL_GEMINI_LEG:-agent}" != "off" && -x "$BIN/subgemini" ]]; then
-  GEMINI_CMD="$BIN/subgemini"
-fi
-
-SUBMIMO_LOG="${LOG_PREFIX}.submimo.log"
-SUBDEEPSEEK_LOG="${LOG_PREFIX}.subdeepseek.log"
-SUBGLM_LOG="${LOG_PREFIX}.subglm.log"
-SUBKIMI_LOG="${LOG_PREFIX}.subkimi.log"
-SUBGEMINI_LOG="${LOG_PREFIX}.subgemini.log"
-SUBMIMO_ERR="${SUBMIMO_LOG}.err"
-SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
-SUBGLM_ERR="${SUBGLM_LOG}.err"
-SUBKIMI_ERR="${SUBKIMI_LOG}.err"
-SUBGEMINI_ERR="${LOG_PREFIX}.subgemini.log.err"
+# 开关取值:agent = 底座腿(自己读仓库,默认);chat = 聊天腿(只看得见喂给它的
+# 东西,要配 PANEL_INCLUDE);off = 不派发、不报 rc。
+# 要 agent 但没装底座腿 ⇒ 回落聊天腿(老行为,不许退化);没有聊天腿的腿就是它自己。
+LEGS=("${PANEL_LEGS_ORDER[@]}")
+declare -A LEG_CMD LEG_CHAT LEG_LOG LEG_ERR LEG_AVAILABLE LEG_HEALTH LEG_SELECTED LEG_RC LEG_OVERRIDE_OK
+for _leg in "${LEGS[@]}"; do
+  # fail-closed:表里没有这条腿就当场拒跑。静默继续 = 一条没有家族、没有二进制的
+  # "腿"照样进花名册,而它的每一句都是假的。
+  _agent="$(panel_leg_agent "$_leg")" || { echo "panel-review: 腿 $_leg 不在 PANEL_LEG_SPECS 表里 ⇒ 拒绝派发(fail-closed)" >&2; exit 70; }
+  _chat="$(panel_leg_chat "$_leg")"
+  _switch="$(panel_leg_switch "$_leg")"
+  _mode="${!_switch:-agent}"
+  if [[ "$_mode" == "off" ]]; then
+    _cmd=""
+  elif [[ "$_mode" == "agent" && -x "$BIN/$_agent" ]]; then
+    _cmd="$BIN/$_agent"
+  elif [[ -n "$_chat" ]]; then
+    _cmd="$BIN/$_chat"
+  else
+    _cmd="$BIN/$_agent"
+  fi
+  LEG_CMD[$_leg]="$_cmd"
+  LEG_CHAT[$_leg]="${_chat:+$BIN/$_chat}"
+  LEG_LOG[$_leg]="${LOG_PREFIX}.$_leg.log"
+  LEG_ERR[$_leg]="${LOG_PREFIX}.$_leg.log.err"
+done
+unset _leg _agent _chat _switch _mode _cmd
 
 # ── 健康池 + 轮换选择 ────────────────────────────────────────────────────
 # 不额外发探活请求；只吃显式状态和最近一次真实评审结果。未知视为可尝试。
@@ -314,19 +271,6 @@ if [[ ! "$HEALTH_DEAD_STREAK" =~ ^(0|[1-9][0-9]*)$ ]]; then
   exit 64
 fi
 mkdir -p "$PANEL_STATE_DIR"
-
-# 🔴 腿名单**只许有一份** —— 用花名册库里的 PANEL_LEGS_ORDER,不在这里另写。
-# 2026-08-26 实证:这里原本硬编码 `LEGS=(submimo subdeepseek subglm subkimi)`,
-# 而 `_panel-roster-lib.sh` 顶上就写着"只许有一份"。加第五条腿(subgemini)时
-# 我只改了花名册那份 ⇒ 花名册上看得见它、这里永远派不出它,判据还绿着。
-# 加腿时必然漏一处的结构,现在拆掉了。判据 V46⑧b 盯着。
-LEGS=("${PANEL_LEGS_ORDER[@]}")
-declare -A LEG_CMD LEG_LOG LEG_ERR LEG_AVAILABLE LEG_HEALTH LEG_SELECTED LEG_RC LEG_OVERRIDE_OK
-LEG_CMD[submimo]="$MIMO_CMD";             LEG_LOG[submimo]="$SUBMIMO_LOG";         LEG_ERR[submimo]="$SUBMIMO_ERR"
-LEG_CMD[subdeepseek]="$DEEPSEEK_CMD";     LEG_LOG[subdeepseek]="$SUBDEEPSEEK_LOG"; LEG_ERR[subdeepseek]="$SUBDEEPSEEK_ERR"
-LEG_CMD[subglm]="$GLM_CMD";               LEG_LOG[subglm]="$SUBGLM_LOG";           LEG_ERR[subglm]="$SUBGLM_ERR"
-LEG_CMD[subkimi]="$KIMI_CMD";             LEG_LOG[subkimi]="$SUBKIMI_LOG";         LEG_ERR[subkimi]="$SUBKIMI_ERR"
-LEG_CMD[subgemini]="$GEMINI_CMD";         LEG_LOG[subgemini]="$SUBGEMINI_LOG";     LEG_ERR[subgemini]="$SUBGEMINI_ERR"
 
 override_health() {  # override_health <leg>; prints explicit status or nothing
   local leg="$1" pair key value
@@ -477,7 +421,7 @@ for _leg in "${LEGS[@]}"; do
     _dfirst="$(awk -F '\t' -v n="$_leg" '$1==n {f=$5} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
     _dlog="$(awk -F '\t' -v n="$_leg" '$1==n {f=$6} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
     if [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
-      echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: ${_leg#sub})"
+      echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: $(panel_leg_family "$_leg"))"
     else
       echo "  $_leg = skipped(health:$_dinfo)"
     fi
@@ -494,7 +438,7 @@ for _leg in "${LEGS[@]}"; do
       echo "     处理完强行放回:PANEL_HEALTH_OVERRIDE=$_leg=healthy(跑成功一次 streak 自动清零)"
     fi
   elif [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
-    echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: ${_leg#sub})"
+    echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: $(panel_leg_family "$_leg"))"
   elif [[ "${LEG_HEALTH[$_leg]}" == "off" ]]; then
     echo "  $_leg = off/unavailable"
   elif [[ "${LEG_HEALTH[$_leg]}" != "healthy" ]]; then
@@ -524,9 +468,13 @@ if [[ "$SELECTED_COUNT" -lt "$RISK_BUDGET" ]]; then
 fi
 # A chat leg with nothing attached beyond the diff cannot review the oracle itself
 # ("是规格错还是实现错"就查不了)。Nudge, never block — the arbiter decides.
-if [[ -z "${PANEL_INCLUDE:-}" ]] \
-   && { { [[ "${LEG_SELECTED[subglm]}" -eq 1 ]] && [[ "$(basename "$GLM_CMD")" == "subglm" ]]; } \
-     || { [[ "${LEG_SELECTED[subdeepseek]}" -eq 1 ]] && [[ "$(basename "$DEEPSEEK_CMD")" == "subdeepseek" ]]; }; }; then
+_chat_in_play=0
+for _leg in "${LEGS[@]}"; do
+  [[ "${LEG_SELECTED[$_leg]}" -eq 1 && -n "${LEG_CHAT[$_leg]}" \
+     && "${LEG_CMD[$_leg]}" == "${LEG_CHAT[$_leg]}" ]] && _chat_in_play=1
+done
+unset _leg
+if [[ -z "${PANEL_INCLUDE:-}" && "$_chat_in_play" -eq 1 ]]; then
   echo "  HINT: chat leg in play and PANEL_INCLUDE is empty — it only sees the incremental diff."
   echo "        Pass PANEL_INCLUDE=\"tests/test_x.py tests/e2e/y.mjs\" so it can review the oracle too."
 fi
@@ -666,18 +614,16 @@ session_run() {  # session_run <statefile> <cmd...>
 }
 declare -A LEG_PID
 launch_leg() {  # launch_leg <name>
-  local name="$1" cmd="${LEG_CMD[$1]}" log="${LEG_LOG[$1]}" err="${LEG_ERR[$1]}"
-  case "$name" in
-    submimo|subkimi)
-      session_run "${log%.log}.state" "$cmd" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err" &
-      ;;
-    subdeepseek)
-      run_leg "$cmd" "$BIN/subdeepseek" "$log" "$err" "$name" &
-      ;;
-    subglm)
-      run_leg "$cmd" "$BIN/subglm" "$log" "$err" "$name" &
-      ;;
-  esac
+  local name="$1" cmd="${LEG_CMD[$1]}" log="${LEG_LOG[$1]}" err="${LEG_ERR[$1]}" chat="${LEG_CHAT[$1]}"
+  # 🔴 派发**不再按腿名分支**(2026-08-26,subgemini 那一单的四审,两条腿独立命中)。
+  # 原来这里是 `case "$name" in submimo|subkimi) … subdeepseek) … subglm) …`,
+  # 加第五条腿时我漏了这一处:case 落空 ⇒ **什么都不启动**,而紧接着的
+  # `LEG_PID[$name]=$!` 拿到的是**上一条腿**的 pid ⇒ `wait` 返回那条腿的退出码 ⇒
+  # 屏幕上印 "subgemini rc=0"、花名册记 PASS、observation 记一条成功的腿,
+  # 而它一次都没跑。**"看起来跑完了、其实没审"是这套系统最贵的一种失败。**
+  # 现在只剩一条路:run_leg。没有聊天腿回落的腿把 chat 传成它自己 ⇒ run_leg 不回落
+  # (它自己第一行就是 `[[ $rc -eq 0 || "$agent" == "$chat" ]] && return`)。
+  run_leg "$cmd" "${chat:-$cmd}" "$log" "$err" "$name" &
   LEG_PID[$name]=$!
 }
 
@@ -691,12 +637,10 @@ selected_identities() {
   local name out="" family cmd
   for name in "${LEGS[@]}"; do
     [[ "${LEG_SELECTED[$name]}" -eq 1 ]] || continue
-    case "$name" in
-      submimo) family=xiaomi ;;
-      subdeepseek) family=deepseek ;;
-      subglm) family=zhipu ;;
-      subkimi) family=moonshot ;;
-    esac
+    # 🔴 `local family` 在 set -u 下**未赋值**:case 落空时下一行引用它整个函数就崩,
+    # plan 里的 `selected=` 变成空行 —— "派了谁"这件事当场丢失,而屏幕上一切正常。
+    # 2026-08-26 探针实测到的就是这个(第五条腿没有 case 分支)。表 + fail-closed。
+    family="$(panel_leg_family "$name")" || { echo "panel-review: 腿 $name 没有模型家族(不在 PANEL_LEG_SPECS 里)⇒ 拒绝派发" >&2; exit 70; }
     cmd="$(basename "${LEG_CMD[$name]}")"
     out+="${out:+,}$name($family/$cmd)"
   done
@@ -857,14 +801,17 @@ if [[ -n "$HEAD_BEFORE" && -n "$HEAD_AFTER" && "$HEAD_BEFORE" != "$HEAD_AFTER" ]
   echo "  ⚠️  评审期间仓库 HEAD 从 $HEAD_BEFORE 移到 $HEAD_AFTER —— 各腿看到的可能不是同一棵树。"
   echo "     腿报告里的「仓库正在被改/文件对不上」多半是这个,不是被评代码的问题;"
   echo "     受影响就重跑,别拿它当 finding(2026-08-05 实事故:一条腿为此白跑 25 分钟)。"
-  for _log in "$SUBMIMO_LOG" "$SUBDEEPSEEK_LOG" "$SUBGLM_LOG" "$SUBKIMI_LOG"; do
+  # 名单第五份拷贝(2026-08-26 四审顺出来的):这里原本手抄了四条腿的日志变量,
+  # 第五条腿的报告因此收不到这条警告。改成走 LEG_LOG,加腿自动跟上。
+  for _leg in "${LEGS[@]}"; do
+    _log="${LEG_LOG[$_leg]}"
     [[ -s "$_log" ]] || continue
     { echo
       echo "⚠️  评审期间仓库 HEAD 从 $HEAD_BEFORE 移到 $HEAD_AFTER(本报告尾部由 panel-review 追加)。"
       echo "    这条腿读到的树可能不是你现在看到的那棵;它若抱怨「仓库正在被人改」,那是这个原因。"
     } >> "$_log"
   done
-  unset _log
+  unset _log _leg
 fi
 
 echo -n "panel-review: done."
@@ -935,20 +882,15 @@ if [[ -n "$TRACK_NAME" ]]; then
   _obs_legs=(); _obs_degraded=false
   for _leg in "${LEGS[@]}"; do
     [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
-    case "$_leg" in
-      submimo) _family=xiaomi ;;
-      subdeepseek) _family=deepseek ;;
-      subglm) _family=zhipu ;;
-      subkimi) _family=moonshot ;;
-    esac
+    # 归档闸数的"覆盖了 N 个不同模型家族"就是数这个字段。取不到 ⇒ 拒跑,
+    # 不许写一条 family 为空的腿进去(它会静默不算数,而报告读起来完全正常)。
+    _family="$(panel_leg_family "$_leg")" || { echo "panel-review: 腿 $_leg 没有模型家族 ⇒ 拒绝写 observation" >&2; exit 70; }
     _adapter="$(basename "${LEG_CMD[$_leg]}")"
     _degraded=false
     if [[ -e "${LEG_LOG[$_leg]%.log}.agent.log" || -e "${LEG_LOG[$_leg]%.log}.agent.log.err" ]]; then
       _degraded=true; _obs_degraded=true
-      case "$_leg" in
-        subdeepseek) _adapter=subdeepseek ;;
-        subglm) _adapter=subglm ;;
-      esac
+      # 降级 = 底座腿死了、聊天腿顶上来的 ⇒ 落盘的适配器要是**聊天腿**那个。
+      [[ -n "${LEG_CHAT[$_leg]}" ]] && _adapter="$(basename "${LEG_CHAT[$_leg]}")"
     fi
     _verdict="$(verdict_of "${LEG_LOG[$_leg]}")"
     [[ "$_verdict" == UNKNOWN ]] && _verdict=null

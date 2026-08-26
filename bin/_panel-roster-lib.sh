@@ -14,7 +14,70 @@
 #   · .state **腿自己在 setsid 出去的那个会话里**写(控制器死了它照样写得成)
 #   · .final 控制器正常收尾才写;缺了不是错,只说明它没活到最后
 
-PANEL_LEGS_ORDER=(submimo subdeepseek subglm subkimi subgemini)
+# ── 腿的身份表:**一条腿的全部身份只写在这一行里** ────────────────────────
+# 字段:腿名 | 模型家族 | 底座腿二进制 | 聊天腿二进制(空=没有回落) | 开关变量
+#
+# 🔴 为什么是一张表(2026-08-26,track subgemini-review-leg 的四审):
+# 加第五条腿时,这些事实在仓里散着**六份**拷贝,我改了两份、漏了四份:
+#   ① panel-review 的 `launch_leg` case —— 漏 ⇒ 选中它时什么都不启动,而紧接着的
+#      `LEG_PID[$name]=$!` 拿到上一条腿的 pid ⇒ **给它记一个假的 rc=0**;
+#   ② `selected_identities` 的 family case —— 漏 ⇒ `local family` 在 set -u 下未赋值
+#      ⇒ 整个函数崩,plan 里 `selected=` 变成空行(派了谁这件事当场丢失);
+#   ③ observation 的 `_family` case —— 漏 ⇒ 归档闸数"覆盖了几个不同模型家族"时
+#      这条腿静默不算数;
+#   ④ 屏幕上那行 `family: ${_leg#sub}` —— 它印的"family"是**另一套词**(glm/gemini),
+#      和归档闸用的(zhipu/google)对不上,读起来却像同一件事;
+#   ⑤ HEAD 移动时给各腿日志追加横幅的那个循环 —— 漏 ⇒ 新腿的报告不带那条警告;
+#   ⑥ tests/test-panel-observation.sh 的桩腿名单 —— 漏 ⇒ 判据永远问不到新腿。
+# 「同一个事实存两处、只更新其中一个」是本机记账最多的一族毛病。修法不是"下次记得
+# 改六处",是**让它只有一处**:下面这张表 + 几个取值函数,其余全部由它派生。
+#
+# 各腿开关的历史(理由要留着,免得下次当成偏好来回改):
+#   subglm  `PANEL_GLM_LEG`:08-04 智谱欠费 ⇒ 默认 off;08-18 换成业主的 OpenCode Go
+#           订阅,欠费这个理由消失 ⇒ 默认翻回 agent。同日默认档也翻了两次:
+#           借 Claude Code 当壳时 Go 的 Anthropic 面对带工具的请求一律 400 ⇒ 只能 chat;
+#           底座换成 opencode CLI 自己之后工具形状天然对得上 ⇒ 翻回 agent。
+#   subdeepseek `PANEL_DEEPSEEK_LEG`:同形状,chat 强制走官方 chat API(空 diff 会瞎)。
+#   submimo `PANEL_MIMO_LEG` / subkimi `PANEL_KIMI_LEG` / subgemini `PANEL_GEMINI_LEG`:
+#           只有底座腿,没有聊天腿回落 —— 关掉就是少一条腿,不是降级。
+PANEL_LEG_SPECS=(
+  "submimo|xiaomi|submimo||PANEL_MIMO_LEG"
+  "subdeepseek|deepseek|subdeepseek-agent|subdeepseek|PANEL_DEEPSEEK_LEG"
+  "subglm|zhipu|subglm-agent|subglm|PANEL_GLM_LEG"
+  "subkimi|moonshot|subkimi||PANEL_KIMI_LEG"
+  "subgemini|google|subgemini||PANEL_GEMINI_LEG"
+)
+
+# 腿名单从表里长出来。**不许在别处再写第二份**(上面那六条就是这么来的)。
+PANEL_LEGS_ORDER=()
+for _panel_spec in "${PANEL_LEG_SPECS[@]}"; do
+  PANEL_LEGS_ORDER+=("${_panel_spec%%|*}")
+done
+unset _panel_spec
+
+# 取值函数一律 **fail-closed**:表里没有这条腿就返回非零、什么都不印。
+# 调用方必须当场拒跑 —— 静默的空 family 会变成一句读起来完全正常的假话
+# (「覆盖了两个不同模型家族」,而其中一条根本没被数进去)。
+panel_leg_field() {  # panel_leg_field <腿名> <family|agent|chat|switch>
+  local leg="$1" want="$2" spec name family agent chat switch
+  for spec in "${PANEL_LEG_SPECS[@]}"; do
+    IFS='|' read -r name family agent chat switch <<< "$spec"
+    [[ "$name" == "$leg" ]] || continue
+    case "$want" in
+      family) printf '%s\n' "$family" ;;
+      agent)  printf '%s\n' "$agent" ;;
+      chat)   printf '%s\n' "$chat" ;;
+      switch) printf '%s\n' "$switch" ;;
+      *) return 2 ;;
+    esac
+    return 0
+  done
+  return 1
+}
+panel_leg_family() { panel_leg_field "$1" family; }
+panel_leg_agent()  { panel_leg_field "$1" agent; }
+panel_leg_chat()   { panel_leg_field "$1" chat; }
+panel_leg_switch() { panel_leg_field "$1" switch; }
 
 verdict_of() {  # verdict_of <log>; PASS/BLOCK/NEEDS_MORE_INFO/UNKNOWN
   local found

@@ -1,0 +1,67 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    dispatch-green
+cmd:     bash tests/test-panel-observation.sh
+cwd:     /root/aiwork(仓根)
+commit:  68df60f
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-26T01:00:47Z
+---------------- 输出开始 ----------------
+=== panel typed observation oracle ===
+[P1] typed active track 存在时归属必须显式，且 risk 在派腿前机械一致
+  PASS: P1: 未给 --track/--no-track ⇒ 拒绝
+  PASS: P1: 拒绝发生在任何腿调用前
+  PASS: P1: 错误告诉调用者两个显式选择
+  PASS: P1: decision=high 但 CLI=standard ⇒ 拒绝
+  PASS: P1: risk 不一致仍在任何腿调用前
+  PASS: P1: risk mismatch 给 rule/actual/expected trace
+  PASS: P1: typed high 显式 --budget 0 也不许绕空两条评审腿
+  PASS: P1: typed budget 降档仍在任何腿调用前拒绝
+  PASS: P1: budget 降档报警给 actual risk/minimum
+  PASS: P1: 显式 --no-track 仍可评审
+  PASS: P1: --no-track 不伪造归属 observation
+[P2] 匹配 track 的 panel 在全部腿结束后写实际腿/降级/耗时/null usage
+  PASS: P2: 匹配的 typed panel 正常成功
+  PASS: P2: 主仓 track 下恰有一份 observation
+  PASS: P2: schema 只含 compact actual facts，不复制 prompt/log
+[P3] agent→chat 回落必须在 observation 中降级，不只留在实时 stdout
+  PASS: P3: 回落聊天腿后 controller 仍成功
+  PASS: P3: actual adapter/降级资格跟着结论落盘
+[P4] observation writer 失败可见，但不改 panel 原有 rc
+  PASS: P4: writer 失败不把原本 rc=0 的 panel 改红
+  PASS: P4: writer 失败明确报警
+  PASS: P4: writer 失败不伪造事件
+[P5] self budget=0 有 controller event，但 external dispatch_count 必须为 0
+  PASS: P5: self/no-external-review 正常成功
+  PASS: P5: 空 legs 的 panel run 不被伪记成一次外腿 dispatch
+[P6] task basename 过长也不许让成功 controller 丢 observation
+  PASS: P6: panel label 在 producer 端截到 schema 的 128 字节上限
+[P7] 花名册上的每条腿都必须真的派得出去,且家族记账不空
+  PASS: P7[submimo]: 轮换真的选中了它(plan 的 selected 里有它)
+  PASS: P7[submimo]: 有模型家族(归档闸的家族覆盖核对靠它)—— 实际='xiaomi'
+  PASS: P7[submimo]: 适配器 submimo 真的被执行了(不是只出现在名单里)
+  PASS: P7[submimo]: 它自己的 state 落盘且 rc=0
+  PASS: P7[submimo]: observation 里的 family 非空且与 plan 一致
+  PASS: P7[subdeepseek]: 轮换真的选中了它(plan 的 selected 里有它)
+  PASS: P7[subdeepseek]: 有模型家族(归档闸的家族覆盖核对靠它)—— 实际='deepseek'
+  PASS: P7[subdeepseek]: 适配器 subdeepseek-agent 真的被执行了(不是只出现在名单里)
+  PASS: P7[subdeepseek]: 它自己的 state 落盘且 rc=0
+  PASS: P7[subdeepseek]: observation 里的 family 非空且与 plan 一致
+  PASS: P7[subglm]: 轮换真的选中了它(plan 的 selected 里有它)
+  PASS: P7[subglm]: 有模型家族(归档闸的家族覆盖核对靠它)—— 实际='zhipu'
+  PASS: P7[subglm]: 适配器 subglm-agent 真的被执行了(不是只出现在名单里)
+  PASS: P7[subglm]: 它自己的 state 落盘且 rc=0
+  PASS: P7[subglm]: observation 里的 family 非空且与 plan 一致
+  PASS: P7[subkimi]: 轮换真的选中了它(plan 的 selected 里有它)
+  PASS: P7[subkimi]: 有模型家族(归档闸的家族覆盖核对靠它)—— 实际='moonshot'
+  PASS: P7[subkimi]: 适配器 subkimi 真的被执行了(不是只出现在名单里)
+  PASS: P7[subkimi]: 它自己的 state 落盘且 rc=0
+  PASS: P7[subkimi]: observation 里的 family 非空且与 plan 一致
+  PASS: P7[subgemini]: 轮换真的选中了它(plan 的 selected 里有它)
+  PASS: P7[subgemini]: 有模型家族(归档闸的家族覆盖核对靠它)—— 实际='google'
+  PASS: P7[subgemini]: 适配器 subgemini 真的被执行了(不是只出现在名单里)
+  PASS: P7[subgemini]: 它自己的 state 落盘且 rc=0
+  PASS: P7[subgemini]: observation 里的 family 非空且与 plan 一致
+  PASS: P7: 各腿的模型家族两两不同(重了 ⇒ 归档闸数出来的覆盖是假的)
+=== total: 48 passed, 0 failed ===
+---------------- 输出结束 ----------------
+runlog: dispatch-green rc=0 commit=68df60f dirty=yes at=2026-08-26T01:00:47Z file=tracks/subgemini-review-leg/evidence/20260826T010047Z-01-dispatch-green.txt
