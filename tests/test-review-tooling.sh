@@ -3814,9 +3814,25 @@ v41_oracle_never_executes_its_own_comments() {
 # shell 引号状态机:找出「会被 shell 当成命令替换执行」的反引号。
 # 安全:单引号内 / shell 注释内 / <<'X' 这种加引号的 heredoc 内 / 反斜杠转义过的
 # 危险:双引号内(python3 -c "…" 的块正是这种)/ 裸露的 / 没加引号的 heredoc 内
+#
+# 🔴 `$( … )` 是一个**新的引号上下文**(2026-08-26,track subgemini-review-leg)。
+# 第一版把它当成"还在双引号里"继续扫,于是下面这种再普通不过的写法:
+#     x="$(sed -n '/^PROMPT="/,/^Conclusion: …/p' "$F")"
+# 里,单引号**内**的那个 " 会被当成外层双引号的收尾 —— 引号奇偶当场反相,
+# 其后一百多行被判成"在单引号里"**从此不被扫**(盲区),同一处还会把后面
+# 一行安全的 grep -q '<反引号>' 报成暴露点(误报)。两种坏,一个根因。
+# 修法:进 $( 压栈、遇到配对的 ) 弹栈,里面从**干净的 N 状态**重新开始。
+# 判据 V41⑦(不许误报)/ V41⑧(不许留盲区)分别钉这两面。
+#
+# 跨行双引号块里的 $( ):只报**这段双引号自己的文本里换过行之后**才出现的那些。
+# 认了嵌套之后,"跨行就一律报"会把每一个正常的多行 x="$(cmd \ … )" 都报成
+# 暴露点(对照组 V41⑨ 守着)。真正要抓的形状是"嵌在另一门语言的代码块里":
+# 08-19 那次是 python3 -c "…\n# 注释里的 $(touch X)…" —— 替换出现在**后续行**上。
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
-n = len(src); i = 0; st = 'N'; hd = None; hits = []; dstart = 0; pend = []
+n = len(src); i = 0; st = 'N'; hd = None; hits = []; dstart = 0
+stack = []   # $( … ) 上下文栈:(外层 st, 外层 dstart, 本层已进的普通括号深度)
+def ln(off): return src.count('\n', 0, off) + 1
 while i < n:
     c = src[i]
     if hd is not None:
@@ -3833,30 +3849,26 @@ while i < n:
             while k < j:
                 if src[k] == '\\': k += 2; continue
                 if src[k] == '`':
-                    hits.append(src.count('\n', 0, k) + 1); break
+                    hits.append(ln(k)); break
                 k += 1
         i = j + 1
     elif st == 'S':
         st = 'N' if c == "'" else 'S'; i += 1
     elif st == 'D':
         # `…` 一律报:现代 shell 里没人拿它做有意的命令替换($( ) 早就取代了),实测 0 误报。
-        # $( ) 不能一律报 —— "$(cmd)" 是正常写法(本文件就有 155 处)。判别靠**跨行**:
-        # 跨行的双引号串在 shell 里基本只有一种用途 —— 喂一整段代码/文本(python3 -c "…"),
-        # 那里面的 $( ) 和反引号一样会被真执行。08-19 实测:$(touch X) 真把文件写出来了。
         if c == '\\': i += 2
-        elif c == '"':
-            if src.count('\n', dstart, i) > 0: hits.extend(pend)
-            pend = []; st = 'N'; i += 1
-        elif c == '`': hits.append(src.count('\n', 0, i) + 1); i += 1
+        elif c == '"': st = 'N'; i += 1
+        elif c == '`': hits.append(ln(i)); i += 1
         elif src.startswith('$(', i):
-            pend.append(src.count('\n', 0, i) + 1); i += 2
+            if src.count('\n', dstart, i) > 0: hits.append(ln(i))
+            stack.append((st, dstart, 0)); st = 'N'; i += 2
         else: i += 1
     else:
         if c == '\\': i += 2
         elif c == '#' and (i == 0 or src[i-1] in ' \t\n'):
             j = src.find('\n', i); i = n if j < 0 else j
         elif c == "'": st = 'S'; i += 1
-        elif c == '"': st = 'D'; dstart = i; pend = []; i += 1
+        elif c == '"': st = 'D'; dstart = i; i += 1
         elif src.startswith('<<', i):
             m = re.match(r"<<(-?)\s*('([^']+)'|\"([^\"]+)\"|([A-Za-z_]\w*))", src[i:i+64])
             if m:
@@ -3866,7 +3878,16 @@ while i < n:
                 j = src.find('\n', i); i = (n if j < 0 else j) + 1
                 hd = (tok, quoted, dash); continue
             i += 2
-        elif c == '`': hits.append(src.count('\n', 0, i) + 1); i += 1
+        elif src.startswith('$(', i):
+            stack.append((st, dstart, 0)); st = 'N'; i += 2
+        elif c == '(' and stack:
+            _st, _ds, depth = stack[-1]; stack[-1] = (_st, _ds, depth + 1); i += 1
+        elif c == ')' and stack:
+            _st, _ds, depth = stack[-1]
+            if depth > 0: stack[-1] = (_st, _ds, depth - 1)
+            else: stack.pop(); st, dstart = _st, _ds
+            i += 1
+        elif c == '`': hits.append(ln(i)); i += 1
         else: i += 1
 lines = src.split('\n')
 for l in sorted(set(hits)):
@@ -3981,6 +4002,22 @@ SUBCTX_BLIND
   [[ $rc -eq 1 ]] && grep -q "V41_BLINDSPOT_MARKER" <<<"$out"
   check "V41⑧: 同一形状之后的真危险行必须报得出来(盲区=漏报,比误报更贵)" $?
   [[ $rc -eq 1 ]] || echo "    (盲区实况:$out)"
+
+  # ⑨ 对照组 🔴 修 ⑦⑧ 时最容易顺手造出来的新病:把"跨行双引号块里的 $( ) 一律报"
+  # 当成规则。状态机认了 $( … ) 之后,这条规则会把**每一个**跨行命令替换都报成暴露点
+  # (本文件里就有 3 处正常写法)—— 误报会逼出"绕开这道闸"的习惯,和假绿一样坏。
+  # 收紧后的契约:只报**这段双引号自己的文本里换过行之后**才出现的替换
+  # ——那才是"嵌在另一门语言的代码块里"的形状(08-19 那次就是)。
+  # 这条在修改前后都必须是绿的(实测:旧量具 rc=0、新量具 rc=0),它是对照组不是新断言。
+  cat > "$d/multiline_ok.sh" <<'ML_FIXTURE'
+changed="$(comm -3 <(printf '%s' "$A" | sort) \
+                   <(printf '%s' "$B" | sort) | head -5)"
+out="$(cd "$d" && env -u FOO BAR=1 \
+  bash ./thing.sh 2>&1)"
+ML_FIXTURE
+  python3 "$lint" "$d/multiline_ok.sh" >/dev/null 2>&1
+  [[ $? -eq 0 ]]
+  check "V41⑨: 合法的跨行 \$( … ) 惯用法不许被报(对照组:收紧不是放宽)" $?
 
   rm -rf "$d"
 }
