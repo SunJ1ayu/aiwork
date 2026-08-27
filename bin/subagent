@@ -55,7 +55,7 @@ Environment (PREFIX = DEEPSEEK | ZHIPU):
   <PREFIX>_TIMEOUT        seconds before timeout (default 900)
   <PREFIX>_MAX_TURNS      agent turn cap (per-provider default; see the table)
   <PREFIX>_API_KEY        overrides the key read from the auth file
-  <PREFIX>_ANTHROPIC_URL  Anthropic-compatible base URL
+  <PREFIX>_ANTHROPIC_URL  Anthropic-compatible base URL (DeepSeek; dormant for OpenCode GLM)
   <PREFIX>_AUTH_FILE      auth file, {"key":"..."} (default ~/.config/<name>/auth.json)
 EOF
 }

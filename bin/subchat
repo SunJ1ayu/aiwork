@@ -90,11 +90,11 @@ case "$PROVIDER" in
     # (业主的 $10/月订阅)。理由是 bigmodel 那把 key 欠费,不是端点更好。
     # 方舟 key 仍在 auth.json.ark-bak,智谱 key 仍在 ~/.config/zhipu/auth.json。
     #
-    # 注意这是**聊天腿**(空 diff 会瞎)。**2026-08-18 起它就是 GLM 的默认腿** ——
-    # 底座腿在 Go 上会 400(Go 不做工具格式转换),理由全文在 bin/panel-review 里。
-    # 所以派它时记得带 ZHIPU_INCLUDE / PANEL_INCLUDE,否则它只看得见增量 diff。
-    # 它走 OpenAI 兼容面,认证仍是 Authorization: Bearer(和底座腿那边的
-    # x-api-key 不是一回事 —— 两个面的规矩不同,别顺手统一)。
+    # 注意这是**聊天回落腿**(空 diff 会瞎)。当前默认是以 opencode CLI 为底座的
+    # subglm-agent；只有显式 PANEL_GLM_LEG=chat，或 agent 缺失/失败时才走这里。
+    # 回落到这里时记得带 ZHIPU_INCLUDE / PANEL_INCLUDE,否则它只看得见增量 diff。
+    # 它走 OpenAI 兼容面,认证是 Authorization: Bearer；当前 agent 则把 key 放进
+    # OpenCode provider 配置的 apiKey 字段。两个入口形状不同,别顺手统一。
     DEFAULT_MODEL="glm-5.3-flash"
     ENDPOINT_ENV_VAR="MIMO_CHAT_COMPLETIONS_URL"  # exact URL, engine appends nothing
     ENDPOINT="${ZHIPU_CHAT_COMPLETIONS_URL:-https://opencode.ai/zen/go/v1/chat/completions}"

@@ -89,10 +89,11 @@ check "W3: GLM 默认是 5.3 Flash，agent 没有第二模型源" $?
 grep -q 'AGENT_BASE="opencode"' "$ROOT/bin/subagent" \
   && grep -q 'OC_BASE_URL="https://opencode.ai/zen/go/v1"' "$ROOT/bin/subagent" \
   && grep -q 'GLM_LEG="${PANEL_GLM_LEG:-agent}"' "$ROOT/bin/panel-explore" \
-  && grep -q '当前 agent = `opencode.ai/zen/go/v1`' "$SOURCE/skills/panel/references/legs.md" \
+  && grep -q '当前 agent =' "$SOURCE/skills/panel/references/legs.md" \
+  && grep -q '`opencode.ai/zen/go/v1`(OpenAI-compatible provider base)' "$SOURCE/skills/panel/references/legs.md" \
   && grep -q 'agent 腿(默认).*opencode CLI' "$SOURCE/skills/panel/references/legs.md"
 check "W3: GLM 当前默认路径是 opencode agent，文档端点与实现一致" $?
-! grep -Eq '就是 GLM 的默认腿|default=chat|默认档必须.*聊天腿|08-18 起不是了|GLM 跑在 Claude Code 壳上' \
+! grep -Eq '就是 GLM 的默认腿|default=chat|默认档必须.*聊天腿|08-18 起不是了|GLM 跑在 Claude Code 壳上|底座腿那边的.*x-api-key' \
   "$ROOT/bin/subchat" "$ROOT/tests/test-review-tooling.sh" "$SOURCE/skills/panel/references/legs.md" \
   && ! grep -q 'agent = `opencode.ai/zen/go`' "$SOURCE/skills/panel/references/legs.md"
 check "W3: 活文档和承重注释不再把聊天腿或 Claude 壳写成当前默认" $?

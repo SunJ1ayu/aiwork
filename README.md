@@ -37,10 +37,10 @@ instructions; this README only maps the machinery.
 
 - `bin/submimo` — MiMo on the official agent CLI (`mimo run`); the only
   executor with `fix` mode. `review` uses the plan agent read-only.
-- `bin/subdeepseek` — DeepSeek official, review-only chat wrapper (formerly subsense) over the engine.
-  Extra context via `DEEPSEEK_INCLUDE`.
-- `bin/subglm` — Zhipu GLM, review-only chat wrapper over the engine.
-  Extra context via `ZHIPU_INCLUDE`.
+- `bin/subdeepseek-agent` / `bin/subdeepseek` — DeepSeek review-only default agent
+  leg plus chat fallback (formerly subsense). Extra chat context via `DEEPSEEK_INCLUDE`.
+- `bin/subglm-agent` / `bin/subglm` — GLM review-only default OpenCode agent leg plus
+  chat fallback. Extra chat context via `ZHIPU_INCLUDE`.
 - `bin/subkimi` — Kimi membership-backed, review-only agent leg with no chat fallback.
 - `bin/subgemini` — Gemini membership-backed, review-only Antigravity CLI leg with
   no chat fallback. `bin/subgemini-diag` extracts denied tools/commands from its

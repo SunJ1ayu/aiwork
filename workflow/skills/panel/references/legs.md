@@ -46,14 +46,14 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
   → 07-25 切回 bigmodel → **08-18 OpenCode Go**。
   旧 key 原样留在 `~/.config/zhipu/auth.json`(另一家的账,充值可切回),方舟 key 在
   `auth.json.ark-bak`。
-- **认证 header 风格不一样,这是换后端时最容易栽的地方**:Go 的 Anthropic 面**只认
-  `x-api-key`**(= `ANTHROPIC_API_KEY`);用 `Authorization: Bearer`(= `ANTHROPIC_AUTH_TOKEN`,
-  deepseek 腿走的那种)实测直接 401 `Missing API key`。key 传对、header 传错 ⇒ 腿是死的,
-  而日志上只看得见"模型没回话"。`subagent` 供应商表里的 `AUTH_ENV` 一格就是为它设的。
-- 端点:chat = `opencode.ai/zen/go/v1/chat/completions`,agent = `opencode.ai/zen/go`
-  **(底座腿这个不带 `/v1`)**。claude CLI 自己会补 `/v1/messages`,写成 `.../go/v1`
-  会打到 `/zen/go/v1/v1/messages`(404),而 CLI 把这个 404 报成**「模型不存在」**——
-  地址 bug 伪装成模型名 bug,08-18 照着"模型名错"查了半天。
+- **当前 agent 认证路径**:`subglm-agent` 把 key 写进隔离 OpenCode provider 配置的
+  `apiKey` 字段(配置创建即 600，key 不走 argv)；chat 回落腿走
+  `Authorization: Bearer`。供应商表里的 `AUTH_ENV=ANTHROPIC_API_KEY` 是旧 Claude 壳路径
+  留下的休眠配置，不是当前 OpenCode agent 的认证通道。
+- 端点:chat = `opencode.ai/zen/go/v1/chat/completions`,当前 agent =
+  `opencode.ai/zen/go/v1`(OpenAI-compatible provider base)。历史 Claude 壳路径才使用
+  不带 `/v1` 的 `opencode.ai/zen/go`，因为 claude CLI 会自己补 `/v1/messages`；两条路径
+  不能混写，否则会把已退场底座的约束冒充成当前契约。
 - **聊天腿必须带 User-Agent**:urllib 的默认 UA(`Python-urllib/3.x`)被 Cloudflare
   前置的端点 403(error code 1010)。同一个请求 curl 200 / urllib 403,只差这一行。
 - **Go 上有哪些 glm 档**(08-27 实测 `/v1/models`):`glm-5` `glm-5.1` `glm-5.2`
@@ -66,11 +66,10 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
   模型覆盖 `ZHIPU_MODEL`,加文件 `ZHIPU_INCLUDE`。
   (**env 变量名仍是 `ZHIPU_*`**:它是"第三条腿"的前缀,不是"智谱"的缩写。改名要动
   供应商表、判据、文档三处,这单不做 —— 但别被名字骗了,它现在打的是 OpenCode Go。)
-- **agent 腿(07-05 起是默认,08-18 起不是了 —— 见下一条)**:`subglm-agent`,GLM 跑在 Claude Code 壳上
-  (headless `claude -p` 打 OpenCode Go 的 Anthropic 兼容端点,env **只按次注入,绝不写进
-  `~/.claude/settings.json`**)。评审员自己读仓库(Read/Glob/Grep + 只读 git;
-  Write/Edit/subagent 硬禁),无盲评、无需手工喂 INCLUDE,和引擎一样有裁决 gate。
-  `PANEL_GLM_LEG=chat` 强制回落,`PANEL_GLM_LEG=off` 关掉。烧订阅额度,不烧 Claude 额度。
+- **agent 腿(默认)，底座是 opencode CLI**:`subglm-agent` 用隔离 HOME 生成只读 agent
+  配置后 headless 运行 `opencode run`。评审员自己读仓库、在可丢弃副本里跑本地判据；
+  Write/Edit/Task/联网工具关闭，原仓由外层只读挂载保护。无盲评、无需手工喂 INCLUDE，
+  和 chat 引擎一样有裁决 gate。烧 OpenCode Go 订阅额度，不烧 Claude 额度。
 - **为什么不再借 Claude Code 当壳**(08-18 白天踩的坑,记着别走回头路):Go 的
   Anthropic 面**不做工具格式转换**,带 Anthropic 形状的 tools 一律 400
   「Missing required input field: `tools[0].function.name`」(实测三档:无工具 200 /

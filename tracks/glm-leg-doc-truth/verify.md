@@ -24,10 +24,18 @@ runlog -t glm-leg-doc-truth -- <判据命令>
 
 ```
 runlog: oracle-red rc=1 commit=7a5245d dirty=yes at=2026-08-27T02:59:21Z file=tracks/glm-leg-doc-truth/evidence/20260827T025921Z-01-oracle-red.txt
+runlog: green-docs rc=1 commit=1cdfb77 dirty=yes at=2026-08-27T03:01:14Z file=tracks/glm-leg-doc-truth/evidence/20260827T030114Z-01-green-docs.txt
+runlog: green-docs-r2 rc=0 commit=1cdfb77 dirty=yes at=2026-08-27T03:02:03Z file=tracks/glm-leg-doc-truth/evidence/20260827T030203Z-01-green-docs-r2.txt
+runlog: green-docs-r3 rc=0 commit=1cdfb77 dirty=yes at=2026-08-27T03:03:44Z file=tracks/glm-leg-doc-truth/evidence/20260827T030344Z-01-green-docs-r3.txt
 ```
 
 - `oracle-red`:旧状态 32 项通过、4 项失败；失败精确覆盖 OpenCode agent/端点、旧默认腿
   断言、README/help 入口说明和 Gemini 员工枚举，没有既有项目误红。
+- `green-docs`:35/1；唯一失败是判据把 endpoint 标签和值限定在同一物理行，属于排版误报，
+  改为分别验证后重跑。
+- `green-docs-r2`:36/0；其后人工复扫又发现 chat 注释仍把旧 x-api-key 路径写成当前 agent，
+  补充修正与禁用词后由 r3 取代。
+- `green-docs-r3`:36/0；最终定向文档契约全绿，规范源与部署副本逐字一致。
 
 ## Review
 

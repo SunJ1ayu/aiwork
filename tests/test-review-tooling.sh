@@ -924,7 +924,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   check "agent: fix refused" $([[ $rc -ne 0 ]]; echo $?)
   bash "$b/subdeepseek-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
 
-  # panel-review leg selection: default=chat, PANEL_GLM_LEG=agent/chat, missing agent
+  # panel-review leg selection: default=agent, PANEL_GLM_LEG=agent/chat, missing agent
   local pb="$d/panelbin"; mkdir -p "$pb"
   cp "$BIN/panel-review" "$pb/panel-review"
   cp "$BIN/_panel-roster-lib.sh" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
@@ -955,7 +955,7 @@ EOF
   # git status / git log / Read calc.py / Glob,抓到埋的雷,给出 Conclusion: BLOCK
   # (收据 smoke-real-leg)。关法(off)和强制聊天腿(chat)两条逃生路都保留。
   grep -q AGENT-LEG "$d/P1.subglm.log"; check "panel: GLM leg defaults to agent leg" $?
-  # 关法和强制走底座腿的能力都还在(哪天 Go 补上转换,靠这条切回去)
+  # 关法和显式固定当前底座腿的能力都还在。
   PANEL_GLM_LEG=agent bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P1b" >/dev/null 2>&1
   grep -q AGENT-LEG "$d/P1b.subglm.log"; check "panel: PANEL_GLM_LEG=agent 仍能强制走底座腿" $?
   PANEL_GLM_LEG=chat bash "$pb/panel-review" --no-my-review "$d/t.md" "$d" "$d/P2" >/dev/null 2>&1
@@ -2197,12 +2197,12 @@ v24_no_env_backdoor_and_coverage_report() {
 
 # ---------------------------------------------------------------- V26
 # GLM 腿换后端:智谱开放平台 bigmodel(欠费,08-04 起默认关着)→ **OpenCode Go**
-# ($10/月订阅,业主 2026-08-18 买的)。壳一个字没换,换的是端点/key/模型。
+# ($10/月订阅,业主 2026-08-18 买的)。当天白天先只换端点/key/模型，晚间又把 agent
+# 底座从 Claude 壳换成 opencode CLI；下面的断言已按晚间最终形态问当前消费点。
 #
 # 这一节问的是 V8/V9 问不出来的三件事:
-#   ① **认证 header 风格是表驱动的**。Go 的 Anthropic 面只认 x-api-key;
-#      我们的壳一直注的是 ANTHROPIC_AUTH_TOKEN(=Bearer),实测 401 "Missing API key"。
-#      传对 key、传错 header ⇒ 腿是死的,而日志上只看得见"模型没回话"。
+#   ① **当前消费点**。agent 的模型/端点要去 OpenCode provider 配置里问，chat 去引擎 env 问；
+#      旧 Claude 壳的 Anthropic header 配置只是休眠路径，不能再冒充当前认证断言。
 #   ② **只换这条腿**。同一份躯干(subagent/subchat)服务着 deepseek,
 #      "顺手统一"是本机记过账的老毛病(合并躯干那次我一度把 GLM 的轮次上限翻了倍)。
 #   ③ **key 不许进仓**。新 key 落在 ~/.config/opencode-go/auth.json,
@@ -2254,7 +2254,7 @@ PYEOF2
   check "V26: 聊天腿默认模型 glm-5.3-flash" $?
 
   # ── ② 默认 key 文件搬到 ~/.config/opencode-go/(旧的 zhipu/auth.json 是另一家的账)
-  #    用假 HOME 跑:没 key 时它必须**点名新路径**并且**在调 claude 之前就死**。
+  #    用假 HOME 跑:没 key 时它必须**点名新路径**并且**在调底座程序之前就死**。
   local fakehome="$d/home"; mkdir -p "$fakehome"
   rm -f "$d/h1.json"
   env -u ZHIPU_API_KEY -u ZHIPU_AUTH_FILE PATH="$b:$PATH" CAPTURE="$d/h1.json" HOME="$fakehome" \
@@ -2262,7 +2262,7 @@ PYEOF2
   check "V26: 底座腿没 key 时硬失败" $([[ $rc -ne 0 ]]; echo $?)
   grep -q "opencode-go/auth.json" "$d/h1.err"
   check "V26: 底座腿默认 key 文件 = ~/.config/opencode-go/auth.json" $?
-  if [[ -e "$d/h1.json" ]]; then bad "V26: 没 key 时 claude 压根没被调起"; else ok "V26: 没 key 时 claude 压根没被调起"; fi
+  if [[ -e "$d/h1.json" ]]; then bad "V26: 没 key 时底座程序压根没被调起"; else ok "V26: 没 key 时底座程序压根没被调起"; fi
   env -u ZHIPU_API_KEY -u ZHIPU_AUTH_FILE PATH="$b:$PATH" CAPTURE="$d/h2.json" HOME="$fakehome" \
     bash "$b/subglm" review "$d/t.md" "$d/h2.log" "$d/repo" >/dev/null 2>"$d/h2.err"; rc=$?
   check "V26: 聊天腿没 key 时硬失败" $([[ $rc -ne 0 ]]; echo $?)
@@ -2411,9 +2411,9 @@ EOF
   grep -qi "AUTH_ENV" "$d/c1.err"
   check "V27: 报错点名 AUTH_ENV(别让人对着 401 猜)" $?
 
-  # ── ② panel-explore 的 GLM 默认档必须和 panel-review 一致 = 聊天腿。
-  #    底座腿在 Go 上必 400(见 V26/design)⇒ 默认写 agent = 每轮先白撞一次再降级。
-  #    08-18 四审两条腿(kimi / deepseek)独立命中这一处,我自审漏了。
+  # ── ② panel-explore 的 GLM 默认档必须和 panel-review 一致 = opencode 底座腿。
+  #    08-18 白天借 Claude Code 当壳时带工具必 400，默认曾短暂改成 chat；当天晚间
+  #    换成 opencode CLI 原生底座后工具形状恢复，默认随事实翻回 agent。
   local pb="$d/pbin"; mkdir -p "$pb"
   cp "$BIN/panel-explore" "$pb/"
   local st

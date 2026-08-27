@@ -1,7 +1,7 @@
 # Agent Instructions
 
 本机是单人多 agent 工作站:主 agent(会话里的 frontier 模型)是**唯一的控制者与最终仲裁者**,
-外部模型(MiMo / DeepSeek / GLM / Kimi / GPT-Codex)都是**员工**——它们的输出是待评估的证据,
+外部模型(MiMo / DeepSeek / GLM / Kimi / Gemini / GPT-Codex)都是**员工**——它们的输出是待评估的证据,
 永远不是自动生效的决定。工具在 `/root/aiwork/bin/`,任务存 `/root/aiwork/tasks/`,
 日志存 `/root/aiwork/logs/`。
 本文件的唯一规范源在 `/root/aiwork/workflow/CLAUDE.md`；这里是 Claude Code 的部署副本。
