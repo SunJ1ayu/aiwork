@@ -48,7 +48,7 @@ make_fixture() { # root
   local d="$1" b="$1/bin" repo="$1/repo"
   mkdir -p "$b" "$repo/tracks/current" "$d/raw" "$d/state"
   cp "$ROOT/bin/panel-review" "$b/panel-review"
-  cp "$ROOT/bin/_panel-roster-lib.sh" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/_review_result.py" "$b/"
   cp "$ROOT/bin/track-record" "$b/track-record"
   # 🔴 桩腿名单**从唯一源长出来**,不在这里再抄一份(2026-08-26 subgemini 四审 F8)。
   # 这里原本硬编码 `for leg in submimo subdeepseek subglm subkimi`,是全仓第五份腿名单:

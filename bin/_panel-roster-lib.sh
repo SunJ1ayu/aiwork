@@ -79,24 +79,15 @@ panel_leg_agent()  { panel_leg_field "$1" agent; }
 panel_leg_chat()   { panel_leg_field "$1" chat; }
 panel_leg_switch() { panel_leg_field "$1" switch; }
 
-verdict_of() {  # verdict_of <log>; PASS/BLOCK/NEEDS_MORE_INFO/UNKNOWN
-  local found
-  # 只认独立裁决行。提示词和推理日志都可能原样出现
-  # "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"，子串匹配会把没交卷误记成 PASS。
-  #
-  # 🔴 但**装饰要认**(2026-08-26 实事故):第三轮四审三条腿全记成 UNKNOWN、
-  # 控制器据此多派了一条腿,而翻日志发现两条腿都下了结论 ——
-  # submimo 写 `**Conclusion: PASS**`、subdeepseek 写带反引号的同一句。
-  # 模型写 markdown 是常态,而那一行的内容仍然只有一个裁决值;
-  # 真正要挡的歧义是**那行例子里的竖线**(PASS | BLOCK | NEEDS_MORE_INFO),
-  # 它在任何写法下都过不了下面这条正则。契约钉在判据 R14(此前这个函数
-  # **没有任何判据钉过它的行为**,而花名册/健康池/升级/observation 四处都用它)。
-  # 允许的装饰:行首尾的 markdown 强调(**/__/*/_)和反引号,成对与否都不追究 ——
-  # 追究配对只会让下一种写法再掉一次链子,而多认几个符号不引入歧义。
-  found="$(grep -Eio '^[[:space:]]*[*_`]*[[:space:]]*(Conclusion|Verdict|结论)[[:space:]]*[：:][[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)[[:space:]]*[*_`]*[[:space:]]*$' "$1" 2>/dev/null \
-    | tail -n 1 | sed -E 's/[[:space:]*_`]+$//' \
-    | grep -Eio '(PASS|BLOCK|NEEDS_MORE_INFO)$' || true)"
-  [[ -n "$found" ]] && printf '%s\n' "${found^^}" || printf 'UNKNOWN\n'
+verdict_of() {  # verdict_of <log>; legacy/raw-log compatibility only
+  local helper="${PANEL_REVIEW_RESULT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_review_result.py}"
+  # ReviewLegResult v2 把 verdict normalizer 收敛到 Python kernel。这里保留函数名只为
+  # 旧日志/花名册兼容；缺 helper 或解析失败都只能 UNKNOWN，不许复活第二套 regex。
+  if [[ ! -f "$helper" ]]; then
+    printf 'UNKNOWN\n'
+    return 0
+  fi
+  python3 "$helper" normalize "$1" 2>/dev/null || printf 'UNKNOWN\n'
 }
 
 _plan_kv() {  # _plan_kv <planfile> <key>
