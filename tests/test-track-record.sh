@@ -393,5 +393,71 @@ check "R8: 非 panel controller 带 --leg 给结构化 BLOCK、不是 traceback"
   $([[ $rc -ne 0 && "$out" == *'rule=observation.leg_controller'* && "$out" != *Traceback* ]]; echo $?)
 rm -rf "$d"
 
+echo "[R9] ReviewLegResult v2 reader 先上线；writer 尚未切换"
+d="$(mktemp -d)"; mkdir -p "$d/tracks/v2/observations" "$d/logs"
+( cd "$d"; git init -q; git config user.email t@t; git config user.name t )
+low_decision "$d/tracks/v2" v2 null
+printf 'finding\nConclusion: PASS\n' > "$d/logs/leg.log"
+python3 - "$ROOT" "$d" <<'PY'
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1]); repo=pathlib.Path(sys.argv[2])
+sys.path.insert(0, str(root/'bin'))
+from _review_result import evidence_ref, sha256_bytes, sha256_file, subject_digest
+subject={
+  "manifest_version":1,
+  "task_sha256":sha256_bytes(b"task\n"),
+  "source":{"git_object_format":"sha1","head_oid":"1"*40,
+            "index_tree_oid":"2"*40,"worktree_tree_oid":"3"*40},
+  "digest":None,
+}
+subject["digest"]=subject_digest(subject)
+leg={
+  "schema_version":2,"review_contract_version":1,"run_id":"v2-panel","name":"subkimi",
+  "family":"moonshot","adapter":"subkimi","process":{"state":"exited","exit_code":0},
+  "model":{"requested":"kimi-code/k3","invoked":"kimi-code/k3","reported":None},
+  "subject":subject,"view":{"delivery_state":"complete","mode":"full_snapshot"},
+  "verdict":"PASS","degraded":False,
+  "evidence":{"completeness":"complete","ref":evidence_ref(repo/'logs/leg.log'),
+              "digest":sha256_file(repo/'logs/leg.log')},
+  "normalizer_version":1,"duration_ms":1,
+  "usage":{"input_tokens":None,"output_tokens":None,"total_tokens":None,
+           "api_cost":None,"billing_mode":None},"failure_kind":"none",
+}
+obs={
+  "schema_version":2,"track":"v2","run_id":"v2-panel","controller":"panel-review",
+  "event":"execution_finished","label":"v2-panel",
+  "started_at":"2026-08-21T01:00:00Z","finished_at":"2026-08-21T01:00:01Z",
+  "duration_ms":100,"exit_code":0,
+  "actual":{"adapter":"panel-review","model":None,"risk":"self","degraded":False,
+            "work_exit_code":0,"legs":[leg]},
+  "usage":{"input_tokens":None,"output_tokens":None,"total_tokens":None,
+           "api_cost":None,"billing_mode":None},
+}
+(repo/'tracks/v2/observations/v2-panel.json').write_text(json.dumps(obs), encoding='utf-8')
+PY
+ledger="$($RECORD ledger --repo "$d" --format json)"; rc=$?
+LEDGER="$ledger" python3 - <<'PY'
+import json,os
+p=json.loads(os.environ['LEDGER']); t=next(x for x in p['tracks'] if x['track']=='v2')
+assert t['coverage']['invalid_observations']==0
+assert t['quality']['panel_legs']==1 and t['quality']['failed_panel_legs']==0
+PY
+assert_rc=$?
+check "R9: ledger 严格读取 v2 leg，且旧 consumer 不因嵌套 process 形状崩溃" \
+  $([[ $rc -eq 0 && $assert_rc -eq 0 ]]; echo $?)
+python3 - "$d/tracks/v2/observations/v2-panel.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p['schema_version']=3
+json.dump(p, open(sys.argv[1],'w'))
+PY
+ledger="$($RECORD ledger --repo "$d" --format json)"
+LEDGER="$ledger" python3 - <<'PY'
+import json,os
+p=json.loads(os.environ['LEDGER']); t=next(x for x in p['tracks'] if x['track']=='v2')
+assert t['coverage']['invalid_observations']==1
+PY
+check "R9: 未知未来 observation schema fail closed，不猜成 v2" $?
+rm -rf "$d"
+
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

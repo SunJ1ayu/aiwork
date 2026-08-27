@@ -14,6 +14,8 @@ import subprocess
 import sys
 from typing import Any
 
+from _review_result import ReviewResultError, validate_result as validate_review_result
+
 
 MISSING = object()
 IMPACT_LEVELS = ("self", "standard", "high")
@@ -382,7 +384,7 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
                 leg["family"]
                 for item in panel_runs
                 for leg in (item["actual"].get("legs") or [])
-                if leg["exit_code"] == 0
+                if observation_leg_exit_code(leg) == 0
             }
         )
         successful_panel_runs = len(panel_runs)
@@ -843,8 +845,9 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
         ),
         redact_unknown=True,
     )
-    if type(root["schema_version"]) is not int or root["schema_version"] != 1:
-        raise DecisionError("schema.version", "observation.schema_version", root["schema_version"], 1)
+    if type(root["schema_version"]) is not int or root["schema_version"] not in (1, 2):
+        raise DecisionError("schema.version", "observation.schema_version", root["schema_version"], "1|2")
+    observation_version = root["schema_version"]
     if root["track"] != track:
         raise DecisionError("track.identity", "observation.track", root["track"], track)
     if not isinstance(root["run_id"], str):
@@ -865,6 +868,13 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
             "observation.event",
             root["event"],
             "|".join(allowed_events[root["controller"]]),
+        )
+    if observation_version == 2 and root["controller"] != "panel-review":
+        raise DecisionError(
+            "observation.v2_controller",
+            "observation.controller",
+            root["controller"],
+            "panel-review for observation schema v2",
         )
     if not isinstance(root["label"], str):
         raise DecisionError("field.type", "observation.label", root["label"], "safe identifier")
@@ -912,6 +922,24 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
         raise DecisionError("field.type", "observation.actual.legs", legs, "null outside panel-review")
     for index, value_leg in enumerate(legs or []):
         path = f"observation.actual.legs[{index}]"
+        if observation_version == 2:
+            try:
+                leg = validate_review_result(value_leg)
+            except ReviewResultError as exc:
+                raise DecisionError(
+                    f"review_result.{exc.rule}",
+                    f"{path}.{exc.path.removeprefix('result.')}",
+                    exc.actual,
+                    exc.expected,
+                ) from exc
+            if leg["run_id"] != root["run_id"]:
+                raise DecisionError(
+                    "observation.leg_run_id",
+                    f"{path}.run_id",
+                    leg["run_id"],
+                    root["run_id"],
+                )
+            continue
         leg = exact_object(
             value_leg,
             path,
@@ -951,6 +979,12 @@ def observation_payload(value: Any, track: str) -> dict[str, Any]:
         observation_usage(leg["usage"], f"{path}.usage")
     observation_usage(root["usage"], "observation.usage")
     return root
+
+
+def observation_leg_exit_code(leg: dict[str, Any]) -> int | None:
+    if leg.get("schema_version") == 2:
+        return leg["process"]["exit_code"]
+    return leg.get("exit_code")
 
 
 def observation_text(text: str, track: str, source: str) -> dict[str, Any]:
@@ -1134,7 +1168,7 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
             leg["family"]
             for item in panel_runs
             for leg in (item["actual"].get("legs") or [])
-            if leg["exit_code"] == 0
+            if observation_leg_exit_code(leg) == 0
         }
     )
     fallback_dispatches = sum(
@@ -1147,7 +1181,7 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
         len(item["actual"].get("legs") or []) if item["controller"] == "panel-review" else 1
         for item in executions
     ) + fallback_dispatches
-    failed_legs = sum(1 for leg in panel_legs if leg.get("exit_code") != 0)
+    failed_legs = sum(1 for leg in panel_legs if observation_leg_exit_code(leg) != 0)
     degraded = sum(1 for item in executions if item["actual"].get("degraded") is True)
     degraded += sum(1 for leg in panel_legs if leg.get("degraded") is True)
 
