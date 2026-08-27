@@ -27,6 +27,7 @@ runlog: oracle-red rc=1 commit=591d58f dirty=yes at=2026-08-26T23:13:53Z file=tr
 runlog: oracle-red-r2 rc=1 commit=591d58f dirty=yes at=2026-08-26T23:20:17Z file=tracks/glm-flash-single-source/evidence/20260826T232017Z-01-oracle-red-r2.txt
 runlog: green-implementation rc=0 commit=93dac40 dirty=yes at=2026-08-26T23:29:44Z file=tracks/glm-flash-single-source/evidence/20260826T232944Z-01-green-implementation.txt
 runlog: smoke-real-wrapper rc=0 commit=2b6bc08 dirty=no at=2026-08-26T23:35:24Z file=tracks/glm-flash-single-source/evidence/20260826T233524Z-01-smoke-real-wrapper.txt
+runlog: final-green rc=0 commit=522c6df dirty=no at=2026-08-27T02:06:35Z file=tracks/glm-flash-single-source/evidence/20260827T020635Z-01-final-green.txt
 ```
 
 - `oracle-red`:容器内无法创建判据要求的无外网 namespace，19 套均 `rc=78`；这是环境失败，
@@ -39,6 +40,8 @@ runlog: smoke-real-wrapper rc=0 commit=2b6bc08 dirty=no at=2026-08-26T23:35:24Z 
 - `smoke-real-wrapper`:真实 `subglm-agent` 经 OpenCode Go 调用
   `go/glm-5.3-flash`，模型完成 Read/Bash 工具调用并输出 `Conclusion: PASS`；
   生成配置的 agent model 与 provider model map 一致。
+- `final-green`:主裁提交后的干净提交态全量回归；19 套工具链判据全部通过，
+  review-tooling `529/0`、workflow-docs `32/0`。
 
 ## Review
 
