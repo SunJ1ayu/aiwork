@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "track": "glm-leg-doc-truth",
+  "impact": {
+    "level": "high",
+    "factors": ["judging_control"]
+  },
+  "design": {
+    "uncertainty": "low",
+    "premise_attack": {
+      "status": "not_required",
+      "evidence": []
+    }
+  },
+  "execution_plan": {
+    "adapter": "main",
+    "model": "gpt-5.6-sol"
+  },
+  "outcome": {
+    "verdict": null
+  }
+}
