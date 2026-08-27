@@ -29,6 +29,7 @@ runlog: green-docs-r2 rc=0 commit=1cdfb77 dirty=yes at=2026-08-27T03:02:03Z file
 runlog: green-docs-r3 rc=0 commit=1cdfb77 dirty=yes at=2026-08-27T03:03:44Z file=tracks/glm-leg-doc-truth/evidence/20260827T030344Z-01-green-docs-r3.txt
 runlog: full-green rc=0 commit=ec5e028 dirty=no at=2026-08-27T03:04:19Z file=tracks/glm-leg-doc-truth/evidence/20260827T030419Z-01-full-green.txt
 runlog: review-fixes-green rc=0 commit=016fd0d dirty=yes at=2026-08-27T03:33:19Z file=tracks/glm-leg-doc-truth/evidence/20260827T033319Z-01-review-fixes-green.txt
+runlog: final-green rc=0 commit=b520dfe dirty=no at=2026-08-27T03:35:34Z file=tracks/glm-leg-doc-truth/evidence/20260827T033534Z-01-final-green.txt
 ```
 
 - `oracle-red`:旧状态 32 项通过、4 项失败；失败精确覆盖 OpenCode agent/端点、旧默认腿
@@ -42,6 +43,8 @@ runlog: review-fixes-green rc=0 commit=016fd0d dirty=yes at=2026-08-27T03:33:19Z
   workflow-docs 36/0，其余 17 套也全部通过。
 - `review-fixes-green`:落实 Kimi 的低风险换行建议，并顺手修正它指出的两处既有帮助/注释
   失真后，定向文档契约仍为 36/0；最终干净全量收据在评审修正提交后补录。
+- `final-green`:评审修正提交 `b520dfe` 的干净态完整工具链全绿；review-tooling 529/0、
+  workflow-docs 36/0，其余 17 套全部通过。
 
 ## Review
 
@@ -82,8 +85,9 @@ runlog: review-fixes-green rc=0 commit=016fd0d dirty=yes at=2026-08-27T03:33:19Z
     干净全量证据为 529/0，且本次改动没有认证写路径，故不归因于产品差异。
   > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
   > 花名册在上一格,查工件不查自述。
-- arbitrated verdict (主裁):外部 panel 在 `016fd0d` 上取得两家独立 PASS，没有 blocking
-  finding；主 agent 接受全部低风险建议并做窄修复。待修复提交后的干净全量回归通过，即裁为 PASS。
+- arbitrated verdict (主裁):PASS。外部 panel 在 `016fd0d` 上取得两家独立 PASS，没有
+  blocking finding；主 agent 接受全部低风险建议并做窄修复。修复提交 `b520dfe` 的干净全量
+  回归 19 套全绿，改动边界仍限于帮助文本、注释和文档契约判据，运行路径没有变化。
   > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
   > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
 
