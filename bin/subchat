@@ -11,8 +11,8 @@ set -euo pipefail
 #   review -> chat-completions review (reuses the submimo-review engine).
 #   fix    -> NOT supported: editing repo files needs an agentic tool loop, and
 #             no installed agent base speaks chat-completions. Use `submimo fix`
-#             (mimo); for GLM a fix-capable base would be Claude Code via
-#             Zhipu's Anthropic-compatible endpoint (separate tool, not this).
+#             (mimo). DeepSeek and GLM remain review-only employees; neither has
+#             a separate supported fix path.
 
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。

@@ -91,7 +91,8 @@ grep -q 'AGENT_BASE="opencode"' "$ROOT/bin/subagent" \
   && grep -q 'GLM_LEG="${PANEL_GLM_LEG:-agent}"' "$ROOT/bin/panel-explore" \
   && grep -q '当前 agent =' "$SOURCE/skills/panel/references/legs.md" \
   && grep -q '`opencode.ai/zen/go/v1`(OpenAI-compatible provider base)' "$SOURCE/skills/panel/references/legs.md" \
-  && grep -q 'agent 腿(默认).*opencode CLI' "$SOURCE/skills/panel/references/legs.md"
+  && grep -q 'agent 腿(默认)' "$SOURCE/skills/panel/references/legs.md" \
+  && grep -q '底座是 opencode CLI' "$SOURCE/skills/panel/references/legs.md"
 check "W3: GLM 当前默认路径是 opencode agent，文档端点与实现一致" $?
 ! grep -Eq '就是 GLM 的默认腿|default=chat|默认档必须.*聊天腿|08-18 起不是了|GLM 跑在 Claude Code 壳上|底座腿那边的.*x-api-key' \
   "$ROOT/bin/subchat" "$ROOT/tests/test-review-tooling.sh" "$SOURCE/skills/panel/references/legs.md" \
@@ -99,7 +100,10 @@ check "W3: GLM 当前默认路径是 opencode agent，文档端点与实现一�
 check "W3: 活文档和承重注释不再把聊天腿或 Claude 壳写成当前默认" $?
 grep -q 'subdeepseek-agent' "$ROOT/README.md" \
   && grep -q 'subglm-agent' "$ROOT/README.md" \
-  && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'dormant for OpenCode GLM'
+  && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'dormant for OpenCode GLM' \
+  && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'DeepSeek ~/.config/deepseek/auth.json' \
+  && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'OpenCode GLM ~/.config/opencode-go/auth.json' \
+  && ! grep -q 'fix-capable base would be Claude Code' "$ROOT/bin/subchat"
 check "W3: README 列出默认 agent wrapper，帮助文本标清休眠变量" $?
 grep -q 'Gemini' "$SOURCE/CLAUDE.md"
 check "W3: 主工作流员工枚举包含 Gemini" $?
