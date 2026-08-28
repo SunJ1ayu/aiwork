@@ -332,7 +332,13 @@ recent_health() {  # recent_health <leg>; prints status if still cooling down
   # 几分钟内就能判死一条好腿。判据 V44l/m。
   status="$(printf '%s' "$row" | cut -f2)"
   at="$(printf '%s' "$row" | cut -f3)"
-  case "$status" in PASS|healthy) return 1 ;; esac
+  # `INELIGIBLE` 不进冷却:它说的是**这份结果不能计数**(subject 不明 / 视野不全 /
+  # model 未验证 / 证据摘要对不上),不是这个 provider 坏了。冷却窗口的用途是
+  # "别再花钱调一条正在坏的腿";把它套在 INELIGIBLE 上,就成了一次不合格
+  # 按住一条活腿六小时 —— 而误踢好腿是这套轮换里唯一不可接受的后果。
+  # 代价说清楚:配置真的坏掉时,这条腿每轮都会被再调一次(而且每轮还会补一条 spare)。
+  # 那份代价是可见的(花名册每轮把 INELIGIBLE 印出来),被踢掉的好腿是不可见的。
+  case "$status" in PASS|healthy|INELIGIBLE) return 1 ;; esac
   [[ "$at" =~ ^[0-9]+$ && "$HEALTH_COOLDOWN" =~ ^[0-9]+$ ]] || return 1
   now="$(date +%s)"
   (( now - at < HEALTH_COOLDOWN )) || return 1
