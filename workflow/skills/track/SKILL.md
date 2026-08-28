@@ -89,9 +89,11 @@ conversation history; reconstruct from the folder:
    arbitrates one outcome into `decision.json` (PASS / BLOCK / NEEDS_MORE_INFO or
    ARCHIVED-SUPERSEDED). A panel verdict never auto-advances anything — the main agent
    is sole arbiter. Never copy these enums into verify.md as a second machine source.
-6. **Archive.** On PASS, offer `track archive <name>`. Archive mechanically requires a
-   successful panel observation covering 0 / 1 / 2 successful distinct external model-family legs for
-   self / standard / high; dispatching a panel without binding the track cannot satisfy it.
+6. **Archive.** On PASS, offer `track archive <name>`. Archive mechanically requires
+   0 / 1 / 2 coverage-eligible distinct external model families for self / standard /
+   high, all from one successful panel run and one subject digest, with no eligible
+   PASS/BLOCK conflict. Legacy v1, UNKNOWN/NMI, timeout, degraded/incomplete evidence,
+   cross-run aggregation, and an unbound panel cannot satisfy the budget.
 
 ## Cost-quality ledger
 

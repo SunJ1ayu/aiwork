@@ -113,7 +113,9 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 (2026-08-23 读 `bin/panel-review` 选腿段确认;无机械判据守这句,是读代码读来的。)
 `--track` 绑定 typed track 时，显式 `--budget` 只能增加证据，不能低于 self/standard/high 的
 0/1/2 机械预算；要做无归属实验必须明确 `--no-track`，但无归属事件不能满足 typed track 的
-PASS 归档。归档会再核对成功 panel observation 中是否有 0/1/2 个成功的不同外部模型家族腿。
+PASS 归档。归档会再核对同一次成功 panel、同一 subject digest 下是否有 0/1/2 个由共享
+predicate 判定为 coverage-eligible 的不同外部模型家族腿；v1、UNKNOWN/NMI、timeout、降级、
+证据不完整、跨 run 拼接和 eligible PASS/BLOCK 冲突均不能补预算。
 仓里有 typed active track 时，派发前必须显式给 `--track NAME` 或 `--no-track`；前者会在
 任何腿启动前校验 decision 已满足 dispatch 且 `impact.level == --risk`。实际腿、回落降级、
 总耗时、rc 与真实可得 usage 在全部腿结束后写回主仓 track 的紧凑 observation；prompt 和

@@ -78,7 +78,10 @@ agent to verify, never a verdict to adopt.
   Writers and readers share the same strict
   schema, and staged machine facts remain guarded both before and after archive.
   Both CLI archive and staged manual archive validate execution plus the declared
-  self/standard/high review floor (0/1/2 successful distinct model-family legs) before any sweep/move.
+  self/standard/high review floor: 0/1/2 coverage-eligible distinct model families
+  from one successful panel run and one subject digest, with no eligible PASS/BLOCK
+  conflict. Legacy v1, incomplete/degraded results, and cross-run evidence never fill
+  that floor.
 - `bin/redcheck` — revert-the-implementation red check: puts the impl back to a
   baseline, rebuilds, reruns the oracle, and REQUIRES red (`--must-fail` pins
   where the red must land). Restores unconditionally and proves the tree is clean.
