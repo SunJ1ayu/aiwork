@@ -493,7 +493,13 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
     diagnostic_text = ""
     if args.diagnostic is not None and args.diagnostic.is_file():
         diagnostic_text = args.diagnostic.read_text(encoding="utf-8", errors="replace")
-    failure_text = evidence_text + "\n" + diagnostic_text
+    # 谁写的这行字,决定它算不算证据:`--diagnostic` 是**我们自己**的 stderr
+    # (wrapper 与 provider CLI),`--log` 是**模型写的评审正文**。正文里出现
+    # "auth" / "403" 通常只说明它在评审认证代码 —— 2026-08-28 这一单的最终
+    # panel 就是这样把一条活着的 DeepSeek 腿记成"凭证坏了"(真因是没交裁决行)。
+    # 所以先只读我们自己的诊断;只有我们一个字都没说时才回落到正文
+    # (agent 底座会把 401 打在 stdout 上,那种真报警不能漏)。
+    failure_text = diagnostic_text if diagnostic_text.strip() else evidence_text
     process_state = facts["process_state"] if facts is not None and facts["process_state"] is not None else args.process_state
     failure_kind = facts["failure_kind"] if facts is not None and facts["failure_kind"] is not None else args.failure_kind
     if failure_kind is None:
