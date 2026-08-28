@@ -316,8 +316,28 @@ protect_hash() {
 # Simple single-shot (review/explore/fix without oracle) — behavior unchanged.
 if [[ -z "$ORACLE_CMD" ]]; then
   : > "$LOG_FILE"
-  run_mimo_once
-  exit 0
+  mimo_rc=0; run_mimo_once || mimo_rc=$?
+  if [[ "$MODE" == "review" ]]; then
+    _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
+    [ -f "$_RR" ] || _RR=/root/aiwork/bin/_review_result.py
+    [ -f "$_RR" ] || die "typed verdict normalizer missing"
+    VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
+      || die "typed verdict normalization failed (log: $LOG_FILE)"
+    if [[ $mimo_rc -eq 124 ]]; then
+      review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+        timed_out partial timeout "$VERDICT" || exit 78
+    elif [[ $mimo_rc -ne 0 ]]; then
+      review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+        exited partial runtime "$VERDICT" || exit 78
+    elif [[ "$VERDICT" == "UNKNOWN" ]]; then
+      review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+        exited complete no_verdict "$VERDICT" || exit 78
+    else
+      review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+        exited complete "" "$VERDICT" || exit 78
+    fi
+  fi
+  exit "$mimo_rc"
 fi
 
 # --- Goal-based bounded loop (fix --oracle) ---------------------------------

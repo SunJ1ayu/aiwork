@@ -309,6 +309,29 @@ class ReviewResultTest(unittest.TestCase):
         self.assertFalse(coverage_eligible(result))
         self.assertIn("degraded", eligibility_reasons(result))
 
+    def test_describe_and_failure_kind_are_derived_by_the_terminal_producer(self) -> None:
+        self.log.write_text("partial output\n", encoding="utf-8")
+        diagnostic = self.root / "failed.err"
+        diagnostic.write_text("provider returned 429 rate limit\n", encoding="utf-8")
+        path = self.root / "failed.result.json"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "bin" / "_review_result.py"), "emit",
+             "--result", str(path), "--run-id", "panel-failure", "--name", "subkimi",
+             "--family", "moonshot", "--adapter", "subkimi", "--exit-code", "1",
+             "--task-sha256", self.result["subject"]["task_sha256"], "--log", str(self.log),
+             "--diagnostic", str(diagnostic)],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(result["failure_kind"], "rate_limit")
+        described = subprocess.run(
+            [sys.executable, str(ROOT / "bin" / "_review_result.py"), "describe", str(path)],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(described.returncode, 0, described.stderr)
+        self.assertEqual(described.stdout.strip(), "exited\t1\tUNKNOWN\tfalse\trate_limit\tfalse")
+
 
 if __name__ == "__main__":
     unittest.main()

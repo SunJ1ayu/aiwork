@@ -54,6 +54,9 @@ VERDICT_LINE_RE = re.compile(
     r"(PASS|BLOCK|NEEDS_MORE_INFO|NMI)[\t ]*[*_`]*[\t ]*$",
     re.IGNORECASE,
 )
+AUTH_FAILURE_RE = re.compile(r"unauthori[sz]ed|forbidden|invalid.{0,20}key|\bauth\b|\b401\b|\b403\b", re.I)
+RATE_LIMIT_RE = re.compile(r"rate.?limit|too many requests|\b429\b", re.I)
+QUOTA_FAILURE_RE = re.compile(r"quota|额度|balance|billing", re.I)
 
 TOP_KEYS = (
     "schema_version",
@@ -468,8 +471,10 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
         subject["digest"] = subject_digest(subject)
 
     evidence = {"completeness": "none", "ref": None, "digest": None}
+    evidence_text = ""
     verdict = facts["verdict"] if facts is not None and facts["verdict"] is not None else args.verdict
     if args.log is not None and args.log.is_file() and args.log.stat().st_size:
+        evidence_text = args.log.read_text(encoding="utf-8", errors="replace")
         facts_completeness = facts["evidence_completeness"] if facts is not None else None
         if facts_completeness is not None or args.evidence_completeness is not None:
             completeness = facts_completeness or args.evidence_completeness
@@ -481,17 +486,28 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
             "digest": sha256_file(args.log),
         }
         if verdict is None:
-            verdict = normalize_verdict(args.log.read_text(encoding="utf-8", errors="replace"))
+            verdict = normalize_verdict(evidence_text)
     if verdict is None:
         verdict = "UNKNOWN"
 
+    diagnostic_text = ""
+    if args.diagnostic is not None and args.diagnostic.is_file():
+        diagnostic_text = args.diagnostic.read_text(encoding="utf-8", errors="replace")
+    failure_text = evidence_text + "\n" + diagnostic_text
     process_state = facts["process_state"] if facts is not None and facts["process_state"] is not None else args.process_state
     failure_kind = facts["failure_kind"] if facts is not None and facts["failure_kind"] is not None else args.failure_kind
     if failure_kind is None:
         if process_state == "timed_out":
             failure_kind = "timeout"
         elif process_state != "exited" or args.exit_code != 0:
-            failure_kind = "runtime"
+            if AUTH_FAILURE_RE.search(failure_text):
+                failure_kind = "auth"
+            elif RATE_LIMIT_RE.search(failure_text):
+                failure_kind = "rate_limit"
+            elif QUOTA_FAILURE_RE.search(failure_text):
+                failure_kind = "quota"
+            else:
+                failure_kind = "runtime"
         elif verdict == "UNKNOWN":
             failure_kind = "no_verdict"
         else:
@@ -624,6 +640,9 @@ def parser() -> argparse.ArgumentParser:
     eligible = commands.add_parser("eligible", help="test the shared coverage predicate")
     eligible.add_argument("result", type=Path)
     eligible.add_argument("--no-verify-evidence", action="store_true")
+    describe = commands.add_parser("describe", help="print validated terminal fields as TSV")
+    describe.add_argument("result", type=Path)
+    describe.add_argument("--no-verify-evidence", action="store_true")
     emit = commands.add_parser("emit", help="atomically publish one ReviewLegResult v2")
     emit.add_argument("--result", type=Path, required=True)
     emit.add_argument("--facts", type=Path)
@@ -646,6 +665,7 @@ def parser() -> argparse.ArgumentParser:
     emit.add_argument("--verdict", choices=sorted(VERDICTS))
     emit.add_argument("--degraded", choices=("true", "false"), default="false")
     emit.add_argument("--log", type=Path)
+    emit.add_argument("--diagnostic", type=Path)
     emit.add_argument("--evidence-completeness", choices=sorted(EVIDENCE_COMPLETENESS))
     emit.add_argument("--duration-ms", type=int)
     emit.add_argument("--failure-kind", choices=sorted(FAILURE_KINDS))
@@ -686,6 +706,14 @@ def main() -> int:
                 print(json.dumps({"eligible": False, "reasons": reasons}, separators=(",", ":")))
                 return 1
             print('{"eligible":true,"reasons":[]}')
+            return 0
+        if args.command == "describe":
+            result = load_result(args.result)
+            reasons = eligibility_reasons(result, verify_evidence=not args.no_verify_evidence)
+            print("\t".join((
+                result["process"]["state"], str(result["process"]["exit_code"]), result["verdict"],
+                str(result["degraded"]).lower(), result["failure_kind"], str(not reasons).lower(),
+            )))
             return 0
         if args.command == "emit":
             result = _emit_result(args)

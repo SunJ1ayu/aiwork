@@ -601,7 +601,7 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   # 而且放在**参数末尾** —— 放开头会把各腿的位置参数整体顶偏一位,
   # 任何按 $3 取日志路径的调用方(判据里的假腿全是这么写的)当场就坏。08-06 实测。
   session_run "$base.state" "$base.result.json" "$failed_state" "$failed_result" \
-    "$log" "$failed_log" "$log" "$agent_facts" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$agent")" false \
+    "$log" "$failed_log" "$base.evidence.log" "$agent_facts" "$err" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$agent")" false \
     "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   if [[ $rc -eq 0 || "$agent" == "$chat" ]]; then return $rc; fi
   # agent leg died and a distinct chat leg exists -> keep the evidence, then retry
@@ -613,7 +613,7 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   echo "  NOTE: $label agent leg failed (rc=$agent_rc) -> fallback to chat leg;" \
        "agent output kept at ${log%.log}.agent.log(.err)"
   session_run "$base.state" "$base.result.json" "$base.state" "$base.result.json" \
-    "$log" "$log" "$base.evidence.log" "$base.facts.json" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$chat")" true \
+    "$log" "$log" "$base.evidence.log" "$base.facts.json" "$err" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$chat")" true \
     "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   # 横幅写进日志本身,不只印在 stdout:这份结论以后会被单独读到(归档、断线重连),
   # 那时终端上那行 NOTE 早就没了,而一份降级腿的结论长得和健康腿一模一样。
@@ -649,14 +649,16 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
 # `run_leg` 的后台子 shell 里 —— 那两处都跟控制器同进程组,一起被杀。
 # 08-23 的真实时间线证伪了"控制器增量写"那个看起来对的方案:
 # 控制器死在**第一条腿交卷之前**,增量写和一次性写落盘字节数都是 0。
-session_run() {  # success-state/result failure-state/result log failure-log evidence-log facts run/name/family/adapter degraded cmd...
+session_run() {  # success-state/result failure-state/result log failure-log evidence-log facts diagnostic run/name/family/adapter degraded cmd...
   local state="$1" result="$2" failed_state="$3" failed_result="$4" log="$5" failed_log="$6" evidence_log="$7"
-  local facts="$8" run_id="$9"; shift 9
+  local facts="$8" diagnostic="$9"; shift 9
+  local run_id="$1"; shift
   local name="$1"; shift
   local family="$1" adapter="$2" degraded="$3"; shift 3
   setsid --wait bash -c '
     st="$1"; result="$2"; failed_st="$3"; failed_result="$4"; log="$5"; failed_log="$6"; evidence_log="$7"
-    facts="$8"; helper="$9"; shift 9
+    facts="$8"; diagnostic="$9"; shift 9
+    helper="$1"; shift
     run_id="$1"; shift
     name="$1"; family="$2"; adapter="$3"; degraded="$4"; task_sha="$5"; shift 5
     started="$(date -u +%FT%TZ)"
@@ -676,7 +678,7 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
     facts_args=(); [[ ! -f "$facts" ]] || facts_args=(--facts "$facts")
     if python3 "$helper" emit --result "$result" "${facts_args[@]}" --run-id "$run_id" --name "$name" \
         --family "$family" --adapter "$adapter" --exit-code "$rc" --task-sha256 "$task_sha" \
-        --degraded "$degraded" --log "$evidence_log" --duration-ms "$duration_ms" >/dev/null; then
+        --degraded "$degraded" --log "$evidence_log" --diagnostic "$diagnostic" --duration-ms "$duration_ms" >/dev/null; then
       rm -f -- "$facts"
     else
       echo "panel-review: typed terminal write failed: $result" >&2
@@ -686,7 +688,14 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
     printf "rc=%s\nstarted=%s\nfinished=%s\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st.tmp" && mv -f "$st.tmp" "$st"
     exit $rc
   ' _ "$state" "$result" "$failed_state" "$failed_result" "$log" "$failed_log" "$evidence_log" \
-    "$facts" "$REVIEW_RESULT_BIN" "$run_id" "$name" "$family" "$adapter" "$degraded" "$PANEL_TASK_SHA256" "$@"
+    "$facts" "$diagnostic" "$REVIEW_RESULT_BIN" "$run_id" "$name" "$family" "$adapter" "$degraded" "$PANEL_TASK_SHA256" "$@"
+}
+
+# Every controller decision below consumes the validated terminal sidecar. Raw
+# logs remain human evidence only; they are no longer a second state machine.
+leg_result_fields() {  # leg -> process-state<TAB>exit<TAB>verdict<TAB>degraded<TAB>failure-kind<TAB>eligible
+  local base="${LEG_LOG[$1]%.log}"
+  python3 "$REVIEW_RESULT_BIN" describe "$base.result.json"
 }
 declare -A LEG_PID
 launch_leg() {  # launch_leg <name>
@@ -762,11 +771,10 @@ if [[ "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]
   _seen_verdict=""; _has_failure=0; _has_degraded=0; _has_incomplete=0; _has_need_more=0; _has_conflict=0
   for _leg in "${LEGS[@]}"; do
     [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
-    if [[ "${LEG_RC[$_leg]}" -ne 0 ]]; then _has_failure=1; continue; fi
-    if [[ -e "${LEG_LOG[$_leg]%.log}.agent.log" || -e "${LEG_LOG[$_leg]%.log}.agent.log.err" ]]; then
-      _has_degraded=1
-    fi
-    _verdict="$(verdict_of "${LEG_LOG[$_leg]}")"
+    _typed="$(leg_result_fields "$_leg" 2>/dev/null)" || { _has_failure=1; continue; }
+    IFS=$'\t' read -r _state _exit _verdict _degraded _failure _eligible <<<"$_typed"
+    if [[ "$_state" != exited || "$_exit" -ne 0 ]]; then _has_failure=1; continue; fi
+    [[ "$_degraded" == true ]] && _has_degraded=1
     case "$_verdict" in
       UNKNOWN) _has_incomplete=1 ;;
       NEEDS_MORE_INFO) _has_need_more=1 ;;
@@ -801,20 +809,21 @@ if [[ "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]
     fi
   fi
 fi
-unset _launched _leg _seen_verdict _has_failure _has_degraded _has_incomplete _has_need_more _has_conflict _verdict _spare _off _idx
+unset _launched _leg _seen_verdict _has_failure _has_degraded _has_incomplete _has_need_more _has_conflict _verdict _spare _off _idx _typed _state _exit _degraded _failure _eligible
 
 # Parent process records only actual review outcomes; no extra provider probe.
 record_health() {  # record_health <leg>
-  local name="$1" status tmp now rc="${LEG_RC[$1]}" log="${LEG_LOG[$1]}" err="${LEG_ERR[$1]}"
+  local name="$1" status tmp now rc="${LEG_RC[$1]}" log="${LEG_LOG[$1]}" typed state exit_code verdict degraded failure eligible
   now="$(date +%s)"; status="PASS"
-  if [[ "$rc" -ne 0 ]]; then
+  typed="$(leg_result_fields "$name" 2>/dev/null)" || typed=$'lost\t1\tUNKNOWN\tfalse\tunknown\tfalse'
+  IFS=$'\t' read -r state exit_code verdict degraded failure eligible <<<"$typed"
+  if [[ "$state" != exited || "$exit_code" -ne 0 ]]; then
     status="FAIL"
-    if grep -Eqi 'quota|额度|rate.?limit|too many requests|429|balance|billing' "$err" "$log" 2>/dev/null; then status="quota"; fi
-    if grep -Eqi 'unauthori[sz]ed|forbidden|invalid.*key|auth|401|403' "$err" "$log" 2>/dev/null; then status="auth"; fi
-  elif [[ -e "${log%.log}.agent.log" || -e "${log%.log}.agent.log.err" ]]; then
-    if [[ "$(verdict_of "$log")" == "UNKNOWN" ]]; then status="DEGRADED_INCOMPLETE"
+    case "$failure" in quota|rate_limit) status="quota" ;; auth) status="auth" ;; esac
+  elif [[ "$degraded" == true ]]; then
+    if [[ "$verdict" == "UNKNOWN" ]]; then status="DEGRADED_INCOMPLETE"
     else status="DEGRADED"; fi
-  elif [[ "$(verdict_of "$log")" == "UNKNOWN" ]]; then
+  elif [[ "$verdict" == "UNKNOWN" ]]; then
     status="INCOMPLETE"
   fi
   # 连续**硬**失败计数。判据 V44g/h 盯死的那一条:只有 rc≠0 才 +1。
@@ -833,7 +842,7 @@ record_health() {  # record_health <leg>
     fi
   fi
   local lastlog
-  if [[ "$rc" -ne 0 ]]; then
+  if [[ "$state" != exited || "$exit_code" -ne 0 ]]; then
     if [[ "$prior_first" =~ ^[0-9]+$ && "$prior_streak" -gt 0 ]]; then
       first="$prior_first"
       # 🔴 **一个冷却窗口里的连发失败只算一次**(2026-08-25 第二轮 subdeepseek F1)。

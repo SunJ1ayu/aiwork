@@ -4205,8 +4205,11 @@ case "$name" in
 esac
 printf '%s\n' "$name" >> "${STUB_CALLS:?}"
 printf 'Conclusion: %s\n' "$verdict" > "$3"
-# DEGRADED 的形状:rc=0,但留下 .agent.log 旁证(底座腿失败回落到聊天腿)。
-[[ -n "${STUB_DEGRADE:-}" && "$name" == "$STUB_DEGRADE" ]] && : > "${3%.log}.agent.log"
+# DEGRADED 是 typed adapter fact；旁路 .agent.log 不再是状态机。
+if [[ -n "${STUB_DEGRADE:-}" && "$name" == "$STUB_DEGRADE" ]]; then
+  python3 "${AIWORK_REVIEW_RESULT_BIN:?}" facts --output "${AIWORK_REVIEW_FACTS_PATH:?}" \
+    --degraded true --verdict "$verdict"
+fi
 exit "$rc"
 EOF
     chmod +x "$pb/$leg"
@@ -4388,7 +4391,7 @@ EOF
   grep -q 'subkimi' "$d/A1.out" && grep -qE '连续' "$d/A1.out"
   check "V44p: --all 照派,但那行「连续几轮」的提示照打" $?
 
-  # ── q) DEGRADED(rc=0 + .agent.log 旁证)同样不许计数 ───────────────
+  # ── q) DEGRADED(rc=0 + typed fact)同样不许计数 ───────────────────
   # subdeepseek F5:V44g/h 只钉了 INCOMPLETE 这一种 rc=0 状态;
   # 一个只特判 INCOMPLETE 的回归会从那两条底下溜过去。
   rm -rf "$state"; mkdir -p "$state"
