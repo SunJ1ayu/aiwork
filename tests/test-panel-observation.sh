@@ -40,6 +40,25 @@ if [[ -n "${PANEL_TEST_TASKS:-}" ]]; then
   printf '%s\t%s\n' "$2" "$(sha256sum "$2" | cut -d' ' -f1)" >> "$PANEL_TEST_TASKS"
 fi
 printf 'Conclusion: PASS\n' > "$3"
+# 健康桩要**像真腿**:五条 adapter 都已经产 typed facts,只给裁决不给 facts 的腿
+# 在新契约下是"决定性但不可计数",调度器会为它补一条腿 —— 那时这套判据数出来的
+# 腿数就不是它想问的东西了(2026-08-28:P2/P5 就是这样红的)。
+case "${AIWORK_REVIEW_ADAPTER:?}" in
+  submimo) model=xiaomi/mimo-v2-flash ;;
+  subdeepseek-agent|subdeepseek) model=deepseek-chat ;;
+  subglm-agent) model=go/glm-4.5 ;;
+  subglm) model=glm-4.5 ;;
+  subkimi) model=kimi-code/k2.5 ;;
+  subgemini) model=gemini-2.5-pro ;;
+esac
+object_format="$(git -C "$4" rev-parse --show-object-format)"
+head_oid="$(git -C "$4" rev-parse HEAD)"
+tree_oid="$(git -C "$4" write-tree)"
+python3 "${AIWORK_REVIEW_RESULT_BIN:?}" facts --output "${AIWORK_REVIEW_FACTS_PATH:?}" \
+  --requested-model "$model" --invoked-model "$model" --reported-model "$model" \
+  --git-object-format "$object_format" --head-oid "$head_oid" \
+  --index-tree-oid "$tree_oid" --worktree-tree-oid "$tree_oid" \
+  --view-delivery-state complete --view-mode full_snapshot --evidence-completeness complete
 exit 0
 EOF
       chmod +x "$b/$bin_name"

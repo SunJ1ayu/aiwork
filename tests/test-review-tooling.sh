@@ -4712,6 +4712,19 @@ EOF
   check "V43: INELIGIBLE 是 rc=0 状态、不累计硬失败" \
     $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
 
+  # ⑩b 不可计数 ≠ 供应商坏了。任何非 PASS 的健康状态都会让这条腿进冷却窗口
+  # (默认 6 小时)、下一轮直接不派 —— 于是一次结果不合格就把一条**活着的**腿
+  # 按在板凳上。这台机器为"误踢好腿"记过账:那是这套轮换里唯一不可接受的后果。
+  : > "$d/calls"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/EI2" >/dev/null 2>&1
+  if grep -q 'submimo=SKIP(health:' "$d/EI2.roster"; then
+    bad "V43: 上一轮 INELIGIBLE 不许把活着的腿按进冷却($(grep -o 'submimo=SKIP(health:[^ )]*)' "$d/EI2.roster"))"
+  else
+    ok "V43: 上一轮 INELIGIBLE 不许把活着的腿按进冷却"
+  fi
+
   # ⑪ NEEDS_MORE_INFO 是任务层的中间裁决,不是 provider 故障:健康池仍应把这条腿
   # 视为可用,也不应累计硬失败。
   # ⚠️ 这一格**问不出**"要不要补 spare":standard 的预算是 1,而升级逻辑只在
