@@ -116,6 +116,11 @@ wait_for "$pre.subglm.state" 30                # 等腿自己跑完(睡 6 秒)�
 
 check "R2: state 由**腿自己**写 —— 控制器死后它才出现" \
   $([[ "$state_before_kill" -eq 0 && -s "$pre.subglm.state" ]]; echo $?)
+python3 "$d/bin/_review_result.py" validate "$pre.subglm.result.json"
+check "R2b: 控制器死后 detached 腿仍留下合法 typed terminal result" $?
+out_result="$(python3 "$d/bin/_review_result.py" eligible "$pre.subglm.result.json" 2>/dev/null)"; result_rc=$?
+check "R2c: shadow result 缺对象事实时保守 ineligible，不从 rc=0 猜 coverage" \
+  $([[ "$result_rc" -ne 0 && "$out_result" == *subject_unknown* && "$out_result" == *view_incomplete* ]]; echo $?)
 check "R1: 控制器被砍之后,花名册仍然算得出来,且退出码是真的(rc=3)" \
   $(roster_cmd "$d/bin" "$pre" | grep -q 'subglm=FAIL(rc=3)'; echo $?)
 check "R1b: 走的确实是 run_leg 那条路(subglm 被选中,不是 submimo 顶包)" \
@@ -193,6 +198,9 @@ env "${common_env[@]}" "${only_glm[@]}" PANEL_STATE_DIR="$d6/state" \
 check "R6: 底座腿那次的 state 单独留档(.agent.state)" \
   $([[ -s "$pre6.subglm.agent.state" ]]; echo $?)
 check "R6: 回落后聊天腿的 state 也在" $([[ -s "$pre6.subglm.state" ]]; echo $?)
+python3 "$d6/bin/_review_result.py" validate "$pre6.subglm.agent.result.json" \
+  && python3 "$d6/bin/_review_result.py" validate "$pre6.subglm.result.json"
+check "R6: primary/fallback 两次 attempt 都留下合法 terminal result" $?
 check "R6: 花名册仍然标出降级(不许把降级腿说成健康腿)" \
   $(roster_cmd "$d6/bin" "$pre6" | grep -q '降级'; echo $?)
 

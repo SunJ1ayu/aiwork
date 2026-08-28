@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import sys
 from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
@@ -320,6 +321,114 @@ def load_result(path: Path) -> dict[str, Any]:
     return validate_result(value)
 
 
+def write_result_no_clobber(path: Path, value: dict[str, Any]) -> bool:
+    """Atomically publish one terminal result; an existing result always wins."""
+
+    result = validate_result(value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(result, handle, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            load_result(path)
+            return False
+        return True
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
+    source_values = (args.git_object_format, args.head_oid, args.index_tree_oid, args.worktree_tree_oid)
+    if any(value is not None for value in source_values) and not all(value is not None for value in source_values):
+        raise ReviewResultError("subject.source", "emit.source", source_values, "all source fields or none")
+    source = None
+    if all(value is not None for value in source_values):
+        source = {
+            "git_object_format": args.git_object_format,
+            "head_oid": args.head_oid,
+            "index_tree_oid": args.index_tree_oid,
+            "worktree_tree_oid": args.worktree_tree_oid,
+        }
+    subject = {
+        "manifest_version": SUBJECT_MANIFEST_VERSION,
+        "task_sha256": args.task_sha256,
+        "source": source,
+        "digest": None,
+    }
+    if source is not None:
+        subject["digest"] = subject_digest(subject)
+
+    evidence = {"completeness": "none", "ref": None, "digest": None}
+    verdict = args.verdict
+    if args.log is not None and args.log.is_file() and args.log.stat().st_size:
+        if args.evidence_completeness is not None:
+            completeness = args.evidence_completeness
+        else:
+            completeness = "complete" if args.process_state == "exited" and args.exit_code == 0 else "partial"
+        evidence = {
+            "completeness": completeness,
+            "ref": evidence_ref(args.log),
+            "digest": sha256_file(args.log),
+        }
+        if verdict is None:
+            verdict = normalize_verdict(args.log.read_text(encoding="utf-8", errors="replace"))
+    if verdict is None:
+        verdict = "UNKNOWN"
+
+    failure_kind = args.failure_kind
+    if failure_kind is None:
+        if args.process_state == "timed_out":
+            failure_kind = "timeout"
+        elif args.process_state != "exited" or args.exit_code != 0:
+            failure_kind = "runtime"
+        elif verdict == "UNKNOWN":
+            failure_kind = "no_verdict"
+        else:
+            failure_kind = "none"
+    view_mode = args.view_mode
+    if args.view_delivery_state == "none":
+        view_mode = None
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "review_contract_version": REVIEW_CONTRACT_VERSION,
+        "run_id": args.run_id,
+        "name": args.name,
+        "family": args.family,
+        "adapter": args.adapter,
+        "process": {"state": args.process_state, "exit_code": args.exit_code},
+        "model": {
+            "requested": args.requested_model,
+            "invoked": args.invoked_model,
+            "reported": args.reported_model,
+        },
+        "subject": subject,
+        "view": {"delivery_state": args.view_delivery_state, "mode": view_mode},
+        "verdict": verdict,
+        "degraded": args.degraded == "true",
+        "evidence": evidence,
+        "normalizer_version": NORMALIZER_VERSION,
+        "duration_ms": args.duration_ms,
+        "usage": {
+            "input_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+            "api_cost": None,
+            "billing_mode": args.billing_mode,
+        },
+        "failure_kind": failure_kind,
+    }
+
+
 def eligibility_reasons(value: dict[str, Any], *, verify_evidence: bool = True) -> list[str]:
     result = validate_result(value)
     reasons: list[str] = []
@@ -411,6 +520,31 @@ def parser() -> argparse.ArgumentParser:
     eligible = commands.add_parser("eligible", help="test the shared coverage predicate")
     eligible.add_argument("result", type=Path)
     eligible.add_argument("--no-verify-evidence", action="store_true")
+    emit = commands.add_parser("emit", help="atomically publish one ReviewLegResult v2")
+    emit.add_argument("--result", type=Path, required=True)
+    emit.add_argument("--run-id", required=True)
+    emit.add_argument("--name", required=True)
+    emit.add_argument("--family", required=True)
+    emit.add_argument("--adapter", required=True)
+    emit.add_argument("--process-state", choices=sorted(PROCESS_STATES), default="exited")
+    emit.add_argument("--exit-code", type=int, required=True)
+    emit.add_argument("--task-sha256", required=True)
+    emit.add_argument("--requested-model")
+    emit.add_argument("--invoked-model")
+    emit.add_argument("--reported-model")
+    emit.add_argument("--git-object-format")
+    emit.add_argument("--head-oid")
+    emit.add_argument("--index-tree-oid")
+    emit.add_argument("--worktree-tree-oid")
+    emit.add_argument("--view-delivery-state", choices=sorted(DELIVERY_STATES), default="none")
+    emit.add_argument("--view-mode", choices=sorted(VIEW_MODES))
+    emit.add_argument("--verdict", choices=sorted(VERDICTS))
+    emit.add_argument("--degraded", choices=("true", "false"), default="false")
+    emit.add_argument("--log", type=Path)
+    emit.add_argument("--evidence-completeness", choices=sorted(EVIDENCE_COMPLETENESS))
+    emit.add_argument("--duration-ms", type=int)
+    emit.add_argument("--failure-kind", choices=sorted(FAILURE_KINDS))
+    emit.add_argument("--billing-mode", choices=sorted(BILLING_MODES))
     return top
 
 
@@ -430,6 +564,11 @@ def main() -> int:
                 print(json.dumps({"eligible": False, "reasons": reasons}, separators=(",", ":")))
                 return 1
             print('{"eligible":true,"reasons":[]}')
+            return 0
+        if args.command == "emit":
+            result = _emit_result(args)
+            written = write_result_no_clobber(args.result, result)
+            print(json.dumps({"path": os.fspath(args.result), "written": written}, separators=(",", ":")))
             return 0
     except (OSError, ReviewResultError) as exc:
         if isinstance(exc, ReviewResultError):

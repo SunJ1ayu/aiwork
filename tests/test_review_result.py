@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from _review_result import (  # noqa: E402
     subject_digest,
     summarize_results,
     validate_result,
+    write_result_no_clobber,
 )
 
 
@@ -187,6 +189,53 @@ class ReviewResultTest(unittest.TestCase):
             ],
             1,
         )
+
+    def test_terminal_writer_is_atomic_and_never_clobbers(self) -> None:
+        path = self.root / "leg.result.json"
+        self.assertTrue(write_result_no_clobber(path, self.result))
+        changed = copy.deepcopy(self.result)
+        changed["verdict"] = "BLOCK"
+        self.assertFalse(write_result_no_clobber(path, changed))
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["verdict"], "PASS")
+
+    def test_emit_cli_can_leave_a_conservative_terminal_result(self) -> None:
+        task = self.root / "task.md"
+        task.write_bytes(b"task\n")
+        path = self.root / "shadow.result.json"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "bin" / "_review_result.py"),
+                "emit",
+                "--result",
+                str(path),
+                "--run-id",
+                "panel-shadow",
+                "--name",
+                "subkimi",
+                "--family",
+                "moonshot",
+                "--adapter",
+                "subkimi",
+                "--exit-code",
+                "0",
+                "--task-sha256",
+                sha256_file(task),
+                "--log",
+                str(self.log),
+                "--duration-ms",
+                "7",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["subject"]["source"], None)
+        self.assertEqual(result["view"], {"delivery_state": "none", "mode": None})
+        self.assertFalse(coverage_eligible(result))
 
 
 if __name__ == "__main__":
