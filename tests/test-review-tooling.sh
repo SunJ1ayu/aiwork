@@ -4530,6 +4530,24 @@ case "$name" in
 esac
 printf '%s\n' "$name" >> "${STUB_CALLS:?}"
 printf 'Conclusion: %s\n' "$verdict" > "$3"
+if [[ "${STUB_INELIGIBLE:-}" != "$name" ]]; then
+  case "${AIWORK_REVIEW_ADAPTER:?}" in
+    submimo) model=xiaomi/mimo-v2-flash ;;
+    subdeepseek-agent|subdeepseek) model=deepseek-chat ;;
+    subglm-agent) model=go/glm-4.5 ;;
+    subglm) model=glm-4.5 ;;
+    subkimi) model=kimi-code/k2.5 ;;
+    subgemini) model=gemini-2.5-pro ;;
+  esac
+  object_format="$(git -C "$4" rev-parse --show-object-format)"
+  head_oid="$(git -C "$4" rev-parse HEAD)"
+  tree_oid="$(git -C "$4" write-tree)"
+  python3 "${AIWORK_REVIEW_RESULT_BIN:?}" facts --output "${AIWORK_REVIEW_FACTS_PATH:?}" \
+    --requested-model "$model" --invoked-model "$model" --reported-model "$model" \
+    --git-object-format "$object_format" --head-oid "$head_oid" \
+    --index-tree-oid "$tree_oid" --worktree-tree-oid "$tree_oid" \
+    --view-delivery-state complete --view-mode full_snapshot --evidence-completeness complete
+fi
 exit "$rc"
 EOF
     chmod +x "$pb/$leg"
@@ -4655,6 +4673,35 @@ EOF
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/DI1" >/dev/null 2>&1
   grep -q $'^subdeepseek\tDEGRADED_INCOMPLETE\t' "$state/health.tsv"
   check "V43: 回落且无裁决的腿保留 degraded+incomplete" $?
+
+  # ⑩ 共享覆盖谓词已经判定不可计数时,调度器必须补一条腿；否则归档才发现
+  # 配额不足,这一轮剩余的健康 reviewer 已经白白没派。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_INELIGIBLE=submimo \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/EI1" >/dev/null 2>&1
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: typed eligible=false 触发第三审" $([[ $count -eq 3 ]]; echo $?)
+  grep -q 'escalation=ineligible' "$d/EI1.roster"
+  check "V43: roster 记录 ineligible 升级原因" $?
+  row="$(awk -F '\t' '$1=="submimo"{print}' "$state/health.tsv")"
+  check "V43: 决定性裁决但覆盖不合格时健康状态不是 PASS" \
+    $([[ "$(printf '%s' "$row" | cut -f2)" == "INELIGIBLE" ]]; echo $?)
+  check "V43: INELIGIBLE 是 rc=0 状态、不累计硬失败" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
+
+  # ⑪ NEEDS_MORE_INFO 是有效的中间裁决,但不是健康 PASS，也不应累计硬失败。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=standard PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_MIMO_VERDICT=NEEDS_MORE_INFO \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/NMI1" >/dev/null 2>&1
+  row="$(awk -F '\t' '$1=="submimo"{print}' "$state/health.tsv")"
+  check "V43: NEEDS_MORE_INFO 不冒充健康 PASS" \
+    $([[ "$(printf '%s' "$row" | cut -f2)" == "NEEDS_MORE_INFO" ]]; echo $?)
+  check "V43: NEEDS_MORE_INFO 不累计硬失败" \
+    $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
 
   rm -rf "$d"
 }
