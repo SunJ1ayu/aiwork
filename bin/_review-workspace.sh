@@ -77,7 +77,7 @@ review_workspace__scan_view() { # path-prefix
 
 review_workspace_prepare() { # source-repo leg-name
   local source="${1:-}" leg="${2:-review}" top base base_preflight safe_leg scan1 scan2
-  local head tree1 tree2 index_tree1 index_tree2 snapshot_commit marker source_index
+  local head object_format tree1 tree2 index_tree1 index_tree2 snapshot_commit marker source_index
   local source_index1 source_index2 tree_entries tree_to_check
 
   [[ -n "$source" && -d "$source" ]] \
@@ -95,6 +95,12 @@ review_workspace_prepare() { # source-repo leg-name
     || { review_workspace__say "源仓真路径解析失败:$top"; return 78; }
   head="$(git -C "$REVIEW_SOURCE_REPO" rev-parse --verify HEAD 2>/dev/null)" \
     || { review_workspace__say '源仓没有可派发的 HEAD；拒绝猜基线'; return 78; }
+  object_format="$(git -C "$REVIEW_SOURCE_REPO" rev-parse --show-object-format 2>/dev/null)" \
+    || { review_workspace__say '读不到 Git object format；拒绝猜 OID 语义'; return 78; }
+  case "$object_format" in
+    sha1|sha256) ;;
+    *) review_workspace__say "不支持的 Git object format:$object_format"; return 78 ;;
+  esac
   source_index="$(git -C "$REVIEW_SOURCE_REPO" ls-files --stage)" || {
     review_workspace__say '读取源 index 失败；拒绝派发'
     return 78
@@ -129,6 +135,8 @@ review_workspace_prepare() { # source-repo leg-name
   REVIEW_WORKSPACE_DIR="$(mktemp -d "$REVIEW_WORKSPACE_BASE_REAL/${safe_leg}.XXXXXXXX")" \
     || { review_workspace__say "mktemp 失败:$REVIEW_WORKSPACE_BASE_REAL"; return 78; }
   REVIEW_WORK_REPO="$REVIEW_WORKSPACE_DIR/repo"
+  REVIEW_SNAPSHOT_HEAD=""
+  REVIEW_SNAPSHOT_OBJECT_FORMAT=""
   REVIEW_SNAPSHOT_TREE=""
   REVIEW_SNAPSHOT_INDEX_TREE=""
   marker="$REVIEW_WORKSPACE_DIR/.aiwork-review-workspace"
@@ -234,10 +242,13 @@ review_workspace_prepare() { # source-repo leg-name
     return 78
   }
 
+  REVIEW_SNAPSHOT_HEAD="$head"
+  REVIEW_SNAPSHOT_OBJECT_FORMAT="$object_format"
   REVIEW_SNAPSHOT_TREE="$tree1"
   REVIEW_SNAPSHOT_INDEX_TREE="$index_tree1"
   export REVIEW_SOURCE_REPO REVIEW_WORKSPACE_BASE_REAL REVIEW_WORKSPACE_DIR
-  export REVIEW_WORK_REPO REVIEW_SNAPSHOT_TREE REVIEW_SNAPSHOT_INDEX_TREE
+  export REVIEW_WORK_REPO REVIEW_SNAPSHOT_HEAD REVIEW_SNAPSHOT_OBJECT_FORMAT
+  export REVIEW_SNAPSHOT_TREE REVIEW_SNAPSHOT_INDEX_TREE
   return 0
 }
 
@@ -282,6 +293,8 @@ review_workspace_cleanup() {
   }
   REVIEW_WORKSPACE_DIR=""
   REVIEW_WORK_REPO=""
+  REVIEW_SNAPSHOT_HEAD=""
+  REVIEW_SNAPSHOT_OBJECT_FORMAT=""
   REVIEW_SNAPSHOT_TREE=""
   REVIEW_SNAPSHOT_INDEX_TREE=""
   return 0

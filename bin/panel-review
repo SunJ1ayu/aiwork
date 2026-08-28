@@ -219,6 +219,33 @@ TASKNAME="$(basename "${TASK_FILE%.*}")"
 LOG_PREFIX="${3:-$TOOL_ROOT/logs/panel-${TASKNAME}-${TS}}"
 mkdir -p "$(dirname "$LOG_PREFIX")"
 
+# Freeze the exact task bytes before any leg starts.  A mutable task path cannot be
+# part of a durable subject identity: two legs launched seconds apart could otherwise
+# review different instructions while sharing one run_id.
+TASK_SOURCE_FILE="$(realpath "$TASK_FILE")"
+TASK_SNAPSHOT="${LOG_PREFIX}.task.md"
+TASK_SNAPSHOT_TMP="${TASK_SNAPSHOT}.tmp.$$"
+[[ ! -e "$TASK_SNAPSHOT" ]] || {
+  echo "panel-review: task snapshot already exists, refusing to overwrite: $TASK_SNAPSHOT" >&2
+  exit 73
+}
+_task_before="$(sha256sum "$TASK_SOURCE_FILE" | cut -d' ' -f1)" || exit 73
+cp -- "$TASK_SOURCE_FILE" "$TASK_SNAPSHOT_TMP" || {
+  echo "panel-review: cannot freeze task at $TASK_SNAPSHOT" >&2; exit 73;
+}
+_task_copy="$(sha256sum "$TASK_SNAPSHOT_TMP" | cut -d' ' -f1)" || exit 73
+_task_after="$(sha256sum "$TASK_SOURCE_FILE" | cut -d' ' -f1)" || exit 73
+if [[ "$_task_before" != "$_task_copy" || "$_task_before" != "$_task_after" ]]; then
+  rm -f -- "$TASK_SNAPSHOT_TMP"
+  echo "panel-review: task changed while being frozen; no leg was started" >&2
+  exit 73
+fi
+mv -f -- "$TASK_SNAPSHOT_TMP" "$TASK_SNAPSHOT"
+TASK_FILE="$TASK_SNAPSHOT"
+PANEL_TASK_SHA256="sha256:$_task_copy"
+export TASK_SOURCE_FILE TASK_SNAPSHOT PANEL_TASK_SHA256
+unset _task_before _task_copy _task_after TASK_SNAPSHOT_TMP
+
 # ── 各腿:表 → 本轮实际用哪个二进制 ───────────────────────────────────────
 # 🔴 腿的身份(家族/底座腿/聊天腿/开关)**只写在 `_panel-roster-lib.sh` 的
 # `PANEL_LEG_SPECS` 里**,连同各腿开关的历史与理由。这里只做解析,不再按腿名分支。

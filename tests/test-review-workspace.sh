@@ -78,10 +78,13 @@ test_snapshot_view() {
   check 'RW1: worktree plus staged-only index match; all source ignore channels stay absent' $?
   [[ -d "$clone/.git" && ! -f "$clone/.git" ]]
   check 'RW1: clone owns a real, independent .git directory' $?
-  [[ -n "${REVIEW_SNAPSHOT_TREE:-}" \
+  [[ "$REVIEW_SNAPSHOT_HEAD" == "$head" \
+     && "$REVIEW_SNAPSHOT_OBJECT_FORMAT" == "$(git -C "$repo" rev-parse --show-object-format)" \
+     && -n "${REVIEW_SNAPSHOT_TREE:-}" \
+     && -n "${REVIEW_SNAPSHOT_INDEX_TREE:-}" \
      && -z "$(git -C "$clone" remote 2>/dev/null)" \
      && "$(git -C "$clone" config --get gc.auto 2>/dev/null)" == 0 ]]
-  check 'RW1: snapshot tree is recorded; origin removed; auto-gc disabled' $?
+  check 'RW1: full HEAD/object-format/index/worktree identity is exported; origin removed' $?
   status_after="$(git -C "$repo" status --short)"
   [[ "$status_after" == "$before" ]]
   check 'RW1: preparing the view does not change source status' $?

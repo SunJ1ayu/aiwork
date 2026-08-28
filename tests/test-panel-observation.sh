@@ -36,6 +36,9 @@ make_leg_stubs() { # bindir —— 每条腿铺一个健康桩(两种命名都�
       cat > "$b/$bin_name" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$(basename "$0")" >> "$PANEL_TEST_CALLS"
+if [[ -n "${PANEL_TEST_TASKS:-}" ]]; then
+  printf '%s\t%s\n' "$2" "$(sha256sum "$2" | cut -d' ' -f1)" >> "$PANEL_TEST_TASKS"
+fi
 printf 'Conclusion: PASS\n' > "$3"
 exit 0
 EOF
@@ -113,13 +116,23 @@ check "P1: --no-track 不伪造归属 observation" $([[ "$(obs_count "$d")" -eq 
 
 echo "[P2] 匹配 track 的 panel 在全部腿结束后写实际腿/降级/耗时/null usage"
 : > "$calls"
-PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 PANEL_SELECTION_START=0 \
+task_uses="$d/task-uses"; task_hash="$(sha256sum "$d/task.md" | cut -d' ' -f1)"
+PANEL_TEST_TASKS="$task_uses" PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 PANEL_SELECTION_START=0 \
   bash "$d/bin/panel-review" --track current --risk high --budget 2 \
   "${common[@]}" "$d/raw/matched" >/dev/null 2>&1; rc=$?
 check "P2: 匹配的 typed panel 正常成功" $([[ $rc -eq 0 ]]; echo $?)
 f="$(latest_obs "$d")"
 check "P2: 主仓 track 下恰有一份 observation" \
   $([[ -n "$f" && "$(obs_count "$d")" -eq 1 ]]; echo $?)
+awk -F '\t' -v source="$d/task.md" -v digest="$task_hash" '
+  $1 == source || $2 != digest {exit 1}
+  NR == 1 {path=$1}
+  $1 != path {exit 1}
+  END {exit NR == 2 ? 0 : 1}
+' "$task_uses"
+check "P2: 所有腿读取同一份冻结 task，且字节 digest 与源文件一致" $?
+[[ -f "$d/raw/matched.task.md" ]] && cmp -s "$d/task.md" "$d/raw/matched.task.md"
+check "P2: 冻结 task 与 panel artifacts 同位置持久落盘" $?
 python3 - "$f" <<'PY'
 import json, sys
 p=json.load(open(sys.argv[1], encoding="utf-8"))
