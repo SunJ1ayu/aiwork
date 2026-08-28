@@ -4691,15 +4691,16 @@ EOF
   check "V43: INELIGIBLE 是 rc=0 状态、不累计硬失败" \
     $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
 
-  # ⑪ NEEDS_MORE_INFO 是有效的中间裁决,但不是健康 PASS，也不应累计硬失败。
+  # ⑪ NEEDS_MORE_INFO 是任务层的中间裁决,不是 provider 故障：本轮会补 spare，
+  # 但健康池仍应把这条腿视为可用，也不应累计硬失败。
   : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
   env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=standard PANEL_SELECTION_START=0 \
     PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
     STUB_MIMO_VERDICT=NEEDS_MORE_INFO \
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/NMI1" >/dev/null 2>&1
   row="$(awk -F '\t' '$1=="submimo"{print}' "$state/health.tsv")"
-  check "V43: NEEDS_MORE_INFO 不冒充健康 PASS" \
-    $([[ "$(printf '%s' "$row" | cut -f2)" == "NEEDS_MORE_INFO" ]]; echo $?)
+  check "V43: NEEDS_MORE_INFO 不误伤 provider 健康状态" \
+    $([[ "$(printf '%s' "$row" | cut -f2)" == "PASS" ]]; echo $?)
   check "V43: NEEDS_MORE_INFO 不累计硬失败" \
     $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
 
