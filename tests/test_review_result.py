@@ -344,6 +344,53 @@ class ReviewResultTest(unittest.TestCase):
         self.assertEqual(described.returncode, 0, described.stderr)
         self.assertEqual(described.stdout.strip(), "exited\t1\tUNKNOWN\tfalse\trate_limit\tfalse")
 
+    def test_provider_failure_is_classified_from_our_diagnostic_not_the_review_prose(self) -> None:
+        # 2026-08-28 真事故:DeepSeek 腿评审的正是认证相关代码,正文里 "auth" 出现 13 次;
+        # 它真正的死法是"没交裁决行"(.err 原话),而 failure_kind 拿正则扫**模型写的正文**,
+        # 判成了 auth ⇒ 花名册和健康池都说这条腿凭证坏了。这台机器为一次假的"凭证坏了"
+        # 追过六天(08-25 kimi)。报警器指错方向比不响还贵。
+        self.log.write_text(
+            "The auth adapter reads the auth token; auth failures return 401 here.\n",
+            encoding="utf-8",
+        )
+        diagnostic = self.root / "noverdict.err"
+        diagnostic.write_text(
+            "subdeepseek-review: review output contains no standalone verdict\n",
+            encoding="utf-8",
+        )
+        path = self.root / "noverdict.result.json"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "bin" / "_review_result.py"), "emit",
+             "--result", str(path), "--run-id", "panel-noverdict", "--name", "subdeepseek",
+             "--family", "deepseek", "--adapter", "subdeepseek", "--exit-code", "1",
+             "--task-sha256", self.result["subject"]["task_sha256"], "--log", str(self.log),
+             "--diagnostic", str(diagnostic)],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(path.read_text(encoding="utf-8"))
+        self.assertNotEqual(result["failure_kind"], "auth")
+        self.assertEqual(result["failure_kind"], "runtime")
+
+    def test_provider_failure_in_the_leg_log_is_still_classified_when_we_said_nothing(self) -> None:
+        # 反向对照:agent 底座把 401 打在 stdout 上、我们自己的 .err 是空的 ⇒
+        # 仍然要认出来,否则这个修法就是把真报警一起关掉了。
+        self.log.write_text("Error: 401 unauthorized - invalid api key\n", encoding="utf-8")
+        diagnostic = self.root / "silent.err"
+        diagnostic.write_text("", encoding="utf-8")
+        path = self.root / "silent.result.json"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "bin" / "_review_result.py"), "emit",
+             "--result", str(path), "--run-id", "panel-silent", "--name", "subkimi",
+             "--family", "moonshot", "--adapter", "subkimi", "--exit-code", "1",
+             "--task-sha256", self.result["subject"]["task_sha256"], "--log", str(self.log),
+             "--diagnostic", str(diagnostic)],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(result["failure_kind"], "auth")
+
 
 if __name__ == "__main__":
     unittest.main()
