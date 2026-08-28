@@ -28,9 +28,9 @@ Usage:
   panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
 
 Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
-Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO or conflict adds
-one healthy spare. `--all` requests the entire current reviewer pool: every
-enabled leg whose configured executable is available.
+Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO, an ineligible
+typed result, or conflict adds one healthy spare. `--all` requests the entire
+current reviewer pool: every enabled leg whose configured executable is available.
 
 Reviewer pool (from _panel-roster-lib.sh):
 EOF
@@ -768,17 +768,18 @@ done
 # not turn a single provider failure into a mandatory all-four wait.
 ESCALATION_REASON="none"
 if [[ "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]; then
-  _seen_verdict=""; _has_failure=0; _has_degraded=0; _has_incomplete=0; _has_need_more=0; _has_conflict=0
+  _seen_verdict=""; _has_failure=0; _has_degraded=0; _has_incomplete=0; _has_need_more=0; _has_ineligible=0; _has_conflict=0
   for _leg in "${LEGS[@]}"; do
     [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
     _typed="$(leg_result_fields "$_leg" 2>/dev/null)" || { _has_failure=1; continue; }
     IFS=$'\t' read -r _state _exit _verdict _degraded _failure _eligible <<<"$_typed"
     if [[ "$_state" != exited || "$_exit" -ne 0 ]]; then _has_failure=1; continue; fi
-    [[ "$_degraded" == true ]] && _has_degraded=1
+    if [[ "$_degraded" == true ]]; then _has_degraded=1; continue; fi
     case "$_verdict" in
-      UNKNOWN) _has_incomplete=1 ;;
-      NEEDS_MORE_INFO) _has_need_more=1 ;;
+      UNKNOWN) _has_incomplete=1; continue ;;
+      NEEDS_MORE_INFO) _has_need_more=1; continue ;;
       *)
+        if [[ "$_eligible" != true ]]; then _has_ineligible=1; continue; fi
         if [[ -n "$_seen_verdict" && "$_seen_verdict" != "$_verdict" ]]; then _has_conflict=1; fi
         _seen_verdict="$_verdict"
         ;;
@@ -788,6 +789,7 @@ if [[ "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]
   elif [[ "$_has_degraded" -eq 1 ]]; then ESCALATION_REASON="degraded"
   elif [[ "$_has_incomplete" -eq 1 ]]; then ESCALATION_REASON="incomplete"
   elif [[ "$_has_need_more" -eq 1 ]]; then ESCALATION_REASON="needs-more-info"
+  elif [[ "$_has_ineligible" -eq 1 ]]; then ESCALATION_REASON="ineligible"
   elif [[ "$_has_conflict" -eq 1 ]]; then ESCALATION_REASON="conflict"
   fi
 
@@ -809,7 +811,7 @@ if [[ "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]
     fi
   fi
 fi
-unset _launched _leg _seen_verdict _has_failure _has_degraded _has_incomplete _has_need_more _has_conflict _verdict _spare _off _idx _typed _state _exit _degraded _failure _eligible
+unset _launched _leg _seen_verdict _has_failure _has_degraded _has_incomplete _has_need_more _has_ineligible _has_conflict _verdict _spare _off _idx _typed _state _exit _degraded _failure _eligible
 
 # Parent process records only actual review outcomes; no extra provider probe.
 record_health() {  # record_health <leg>
@@ -825,6 +827,8 @@ record_health() {  # record_health <leg>
     else status="DEGRADED"; fi
   elif [[ "$verdict" == "UNKNOWN" ]]; then
     status="INCOMPLETE"
+  elif [[ "$verdict" == "PASS" || "$verdict" == "BLOCK" ]] && [[ "$eligible" != true ]]; then
+    status="INELIGIBLE"
   fi
   # 连续**硬**失败计数。判据 V44g/h 盯死的那一条:只有 rc≠0 才 +1。
   # `INCOMPLETE` / `DEGRADED` 都是 **rc=0** —— 腿产出了东西,只是裁决行没匹配上。
