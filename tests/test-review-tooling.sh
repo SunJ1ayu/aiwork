@@ -3225,7 +3225,8 @@ PWN
   #    于是只测了一条腿就收工。**"共用躯干"不等于"共用路径"** —— 见 ①b。
   rm -f "$d/o1" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1" CAPTURE="$d/c1.json" \
-    DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
+    DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 AIWORK_REVIEW_FACTS_PATH="$d/deepseek.facts.json" \
+    AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l1.log" "$repo" >/dev/null 2>&1; rc=$?
   grep -q '^work=WROTE$' "$d/o1" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o1" 2>/dev/null \
@@ -3239,6 +3240,13 @@ PWN
   check "V36: subdeepseek-agent 副本可写、原仓只读(假模型双向试写:$seen1)" $r1
   [[ $rc -eq 0 ]]
   check "V36: 腿在只读下仍然正常出结论(防线没把腿弄死 —— 08-18 就是死在这)" $?
+  python3 - "$d/deepseek.facts.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['model']['requested'] == p['model']['invoked'] == 'deepseek-v4-flash'
+assert p['source'] and p['view']['mode'] == 'full_snapshot'
+PY
+  check "V36: subdeepseek-agent 交出实际模型与完整 snapshot facts" $?
 
   # ── ①b **opencode 底座**(subglm-agent)——— 和 ① 是**两条不同的路径**。
   # `bin/subagent` 内部按 `AGENT_BASE` 分岔:deepseek 走 claude 壳,
@@ -3251,6 +3259,7 @@ PWN
   rm -f "$d/o1b" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1b" \
     OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk REVIEW_NO_MY_REVIEW=1 \
+    AIWORK_REVIEW_FACTS_PATH="$d/glm.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/subglm-agent" review "$d/t.md" "$repo/logs/l1b.log" "$repo" >/dev/null 2>&1; rc=$?
   grep -q '^work=WROTE$' "$d/o1b" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o1b" 2>/dev/null \
@@ -3260,6 +3269,13 @@ PWN
   check "V36: subglm-agent(opencode)副本可写、原仓只读(双向试写:$seen1b)" $r1b
   [[ $rc -eq 0 ]]
   check "V36: opencode 底座的腿在只读下仍然正常出结论" $?
+  python3 - "$d/glm.facts.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['model']['requested'] == p['model']['invoked'] == 'go/glm-5.3-flash'
+assert p['source'] and p['view']['mode'] == 'full_snapshot'
+PY
+  check "V36: subglm-agent 记录真实 go/ 模型 id 与完整 snapshot facts" $?
 
   # ── ② submimo review
   rm -f "$d/o2" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"

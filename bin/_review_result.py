@@ -89,7 +89,7 @@ ADAPTER_IDENTITIES = {
     "submimo": ("xiaomi", "xiaomi/"),
     "subdeepseek-agent": ("deepseek", "deepseek-"),
     "subdeepseek": ("deepseek", "deepseek-"),
-    "subglm-agent": ("zhipu", "glm-"),
+    "subglm-agent": ("zhipu", "go/glm-"),
     "subglm": ("zhipu", "glm-"),
     "subkimi": ("moonshot", "kimi-code/"),
     "subgemini": ("google", "gemini-"),
