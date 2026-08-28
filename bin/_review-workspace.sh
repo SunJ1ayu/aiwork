@@ -260,9 +260,10 @@ review_workspace_repo() {
   printf '%s\n' "$REVIEW_WORK_REPO"
 }
 
-review_workspace_write_facts() { # requested-model invoked-model [billing-mode [process-state [evidence [failure-kind [verdict]]]]]
+review_workspace_write_facts() { # requested-model invoked-model [billing-mode [process-state [evidence [failure-kind [verdict [degraded]]]]]]
   local requested="${1:-}" invoked="${2:-}" billing="${3:-subscription}"
   local process_state="${4:-}" completeness="${5:-}" failure_kind="${6:-}" verdict="${7:-}"
+  local degraded="${8:-}"
   local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper="${AIWORK_REVIEW_RESULT_BIN:-}"
   local -a outcome=()
   [[ -n "$output" ]] || return 0
@@ -272,6 +273,7 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
   [[ -z "$completeness" ]] || outcome+=(--evidence-completeness "$completeness")
   [[ -z "$failure_kind" ]] || outcome+=(--failure-kind "$failure_kind")
   [[ -z "$verdict" ]] || outcome+=(--verdict "$verdict")
+  [[ -z "$degraded" ]] || outcome+=(--degraded "$degraded")
   python3 "$helper" facts --output "$output" \
     --requested-model "$requested" --invoked-model "$invoked" \
     --git-object-format "$REVIEW_SNAPSHOT_OBJECT_FORMAT" \

@@ -83,6 +83,7 @@ FACT_KEYS = (
     "evidence_completeness",
     "failure_kind",
     "billing_mode",
+    "degraded",
 )
 
 ADAPTER_IDENTITIES = {
@@ -382,6 +383,8 @@ def _validate_facts(value: Any) -> dict[str, Any]:
         raise ReviewResultError("field.enum", "facts.failure_kind", facts["failure_kind"], sorted(FAILURE_KINDS))
     if facts["billing_mode"] is not None and facts["billing_mode"] not in BILLING_MODES:
         raise ReviewResultError("field.enum", "facts.billing_mode", facts["billing_mode"], sorted(BILLING_MODES))
+    if facts["degraded"] is not None and not isinstance(facts["degraded"], bool):
+        raise ReviewResultError("field.type", "facts.degraded", facts["degraded"], "boolean or null")
     return facts
 
 
@@ -431,6 +434,7 @@ def _facts_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "evidence_completeness": args.evidence_completeness,
         "failure_kind": args.failure_kind,
         "billing_mode": args.billing_mode,
+        "degraded": None if args.degraded is None else args.degraded == "true",
     }
 
 
@@ -514,7 +518,7 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
         "subject": subject,
         "view": {"delivery_state": view_delivery_state, "mode": view_mode},
         "verdict": verdict,
-        "degraded": args.degraded == "true",
+        "degraded": facts["degraded"] if facts is not None and facts["degraded"] is not None else args.degraded == "true",
         "evidence": evidence,
         "normalizer_version": NORMALIZER_VERSION,
         "duration_ms": args.duration_ms,
@@ -662,6 +666,7 @@ def parser() -> argparse.ArgumentParser:
     facts.add_argument("--evidence-completeness", choices=sorted(EVIDENCE_COMPLETENESS))
     facts.add_argument("--failure-kind", choices=sorted(FAILURE_KINDS))
     facts.add_argument("--billing-mode", choices=sorted(BILLING_MODES))
+    facts.add_argument("--degraded", choices=("true", "false"))
     return top
 
 

@@ -208,6 +208,7 @@ review_workspace_prepare "$SOURCE_REPO" subgemini || die 'review workspace 准�
 REVIEW_WORKSPACE_ACTIVE=1
 SOURCE_REPO="$REVIEW_SOURCE_REPO"
 REPO_DIR="$(review_workspace_repo)" || exit 78
+review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
 # 🔴 原仓**物理只读**:和 subkimi / submimo / subagent 一样,把模型命令放进
 # ro-repo-exec 的 mount namespace 里跑。2026-08-26 之前这条腿只在注释里写着
@@ -301,17 +302,19 @@ set +e
 RC=$?
 set -e
 
-# 🔴 裁决判定**复用花名册的唯一源** `verdict_of`,不在这里另写一条正则。
-# 理由:花名册那条是**严格**的(裁决必须独立成行) —— 因为提示词里就原样含有
+# 🔴 裁决判定复用 typed result 的唯一 normalizer,不在这里另写一条正则。
+# 它是严格的(裁决必须独立成行) —— 因为提示词里就原样含有
 # "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO",宽松匹配会把"没交卷"记成 PASS。
-# 腿自己用宽松正则、花名册用严格正则 = 腿自认成功而花名册记 UNKNOWN,
+# 腿自己用宽松正则、terminal producer 用严格正则 = 腿自认成功而结果记 UNKNOWN,
 # 「同一个事实存两处、只更新其中一个」正是本机反复记账的老毛病。
-_RL="$BIN_DIR/_panel-roster-lib.sh"
-[ -f "$_RL" ] || die '找不到 _panel-roster-lib.sh ⇒ 拒绝派发(fail-closed:裁决判定没有唯一源)'
-# shellcheck source=_panel-roster-lib.sh
-. "$_RL"
+_RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
+[ -f "$_RR" ] || _RR=/root/aiwork/bin/_review_result.py
+[ -f "$_RR" ] || die '找不到 _review_result.py ⇒ 拒绝派发(fail-closed:裁决判定没有唯一源)'
+VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
+  || die "typed verdict normalization failed (log: $LOG_FILE)"
 HAS_VERDICT=0
-[[ "$(verdict_of "$LOG_FILE")" != "UNKNOWN" ]] && HAS_VERDICT=1
+[[ "$VERDICT" != "UNKNOWN" ]] && HAS_VERDICT=1
+DEGRADED=false
 
 # 🔴 stdout 零产出时,把副本里的报告捞出来(2026-08-26 真链实测立的这道)。
 # agy 的行为:**一次 soft-deny 就把整轮扔掉**,哪怕它已经干了 43 步的活。
@@ -338,26 +341,46 @@ elif [[ $HAS_VERDICT -eq 0 && -s "$SALVAGE_FILE" ]]; then
     cat "$SALVAGE_FILE"
     echo "---- 捞出来的内容结束 ----"
   } >> "$LOG_FILE"
-  [[ "$(verdict_of "$LOG_FILE")" != "UNKNOWN" ]] && HAS_VERDICT=1
+  VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
+    || die "typed verdict normalization failed after salvage (log: $LOG_FILE)"
+  if [[ "$VERDICT" != "UNKNOWN" ]]; then
+    HAS_VERDICT=1
+    DEGRADED=true
+  fi
 fi
 
-# 超时但裁决已经落盘 = 完整的评审,不是丢失的
+# 超时可以保留已落盘裁决，但它始终是 partial + degraded，且 rc=124。
 if [[ $RC -eq 124 ]]; then
-  [[ $HAS_VERDICT -eq 1 ]] || die "agy timed out after ${TIMEOUT_SECONDS}s with no verdict (log: $LOG_FILE)"
   # 横幅**写进日志本身**,不只印在 stderr:这份结论以后会被单独读到(归档、断线
   # 重连),那时终端上那行早就没了,而一份"写完裁决就被砍"的报告长得和完整评审
   # 一模一样。同 V19 降级横幅的理由。(判据 V46⑯)
   { echo
-    echo "⚠️  超时被砍(${TIMEOUT_SECONDS}s)—— 裁决行在超时前已经写下,所以这份报告收下了,"
-    echo "    但它是**部分运行**:裁决之后本该继续展开的理由没写完。给权重时按此折扣。"
+    echo "⚠️  超时被砍(${TIMEOUT_SECONDS}s)—— 这是**部分运行**；已写裁决仅作证据，不计覆盖。"
   } >> "$LOG_FILE"
-  echo "subgemini: timed out after ${TIMEOUT_SECONDS}s, but a verdict was already written — accepting." >&2
-  exit 0
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    timed_out partial timeout "$VERDICT" true || exit 78
+  if [[ $HAS_VERDICT -eq 1 ]]; then
+    echo "subgemini: timed out after ${TIMEOUT_SECONDS}s; preserving verdict=$VERDICT as partial evidence, not coverage." >&2
+  else
+    echo "subgemini: timed out after ${TIMEOUT_SECONDS}s with no verdict (log: $LOG_FILE)" >&2
+  fi
+  exit 124
 fi
 
 # 🔴 这两行的顺序是有意的:**先看裁决行,再看 rc**。
 # agy 未登录/软拒绝都会 rc=0,rc 在这条腿上不是死活的证据。
 [[ $HAS_VERDICT -eq 1 ]] \
   || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; rc=$RC; log: $LOG_FILE)"
-[[ $RC -eq 0 ]] || die "agy exited rc=$RC (log: $LOG_FILE)"
+if [[ $RC -ne 0 ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    exited partial runtime "$VERDICT" "$DEGRADED" || exit 78
+  die "agy exited rc=$RC (log: $LOG_FILE)"
+fi
+if [[ "$DEGRADED" == true ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    exited partial runtime "$VERDICT" true || exit 78
+else
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    exited complete "" "$VERDICT" false || exit 78
+fi
 exit 0

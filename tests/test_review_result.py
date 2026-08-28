@@ -269,6 +269,8 @@ class ReviewResultTest(unittest.TestCase):
                 "full_snapshot",
                 "--billing-mode",
                 "subscription",
+                "--degraded",
+                "true",
             ],
             check=True,
         )
@@ -303,7 +305,9 @@ class ReviewResultTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         result = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertEqual(result["subject"]["digest"], self.result["subject"]["digest"])
-        self.assertTrue(coverage_eligible(result))
+        self.assertTrue(result["degraded"])
+        self.assertFalse(coverage_eligible(result))
+        self.assertIn("degraded", eligibility_reasons(result))
 
 
 if __name__ == "__main__":

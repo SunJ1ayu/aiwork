@@ -4757,8 +4757,17 @@ STUB
 
   # ①b 合法 gemini 档要放行
   out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" AGY_MODEL=gemini-3.6-flash-high \
+         AIWORK_REVIEW_FACTS_PATH="$W/gemini.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
          "$BIN/subgemini" review "$W/task.md" "$W/o2.log" "$W/repo" 2>&1)"; rc=$?
   check "V46①b: 合法 gemini-* 档放行(rc=$rc)" "$([[ $rc -eq 0 ]] && echo 0 || echo 1)"
+  python3 - "$W/gemini.facts.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['model']['requested'] == p['model']['invoked'] == 'gemini-3.6-flash-high'
+assert p['source'] and p['view'] == {'delivery_state':'complete','mode':'full_snapshot'}
+assert p['process_state'] == 'exited' and p['verdict'] == 'PASS' and p['degraded'] is False
+PY
+  check "V46①c: Gemini 正常路径交出模型、完整 snapshot 与裁决 facts" $?
 
   # ② 默认模型必须是 gemini-3.7-flash-high(业主拍板,两轮实测支持)
   # 🔴 必须**单独跑一次不设 AGY_MODEL 的调用**再看。第一版直接翻前面两次调用的日志,
@@ -5067,17 +5076,26 @@ STUB
     "$([[ $mrc -eq 0 ]] && echo 0 || echo 1)"
   rm -rf "$mdir"
 
-  # ⑯ 超时但裁决已落盘 ⇒ 接受,但**必须在报告里说它是超时的部分运行**。
-  # 取舍本身合理(裁决写完才挂死,那份评审不算丢),但一份"完整评审"和一份
+  # ⑯ 超时但裁决已落盘 ⇒ 留证据但不算覆盖，并在报告里说明是部分运行。
+  # 裁决写完才挂死时那份判断不是丢失，但一份"完整评审"和一份
   # "写完裁决就被砍"的报告长得一模一样 —— 而这份结论以后会被单独读到(归档、
   # 断线重连),那时终端上那句 stderr 早没了。同 V19 降级横幅的理由。
   out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_HANG=1 AGY_TIMEOUT=2 \
+         AIWORK_REVIEW_FACTS_PATH="$W/o9.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
          "$BIN/subgemini" review "$W/task.md" "$W/o9.log" "$W/repo" 2>&1)"; rc=$?
-  if [[ $rc -eq 0 ]] && grep -qE '超时|timed out' "$W/o9.log" 2>/dev/null; then
-    ok "V46⑯: 超时但有裁决 ⇒ 接受,且横幅写进报告本身(不只印在终端上)"
+  if [[ $rc -eq 124 ]] && grep -qE '超时|timed out' "$W/o9.log" 2>/dev/null; then
+    ok "V46⑯: 超时但有裁决 ⇒ rc=124 留证据,且横幅写进报告本身"
   else
-    bad "V46⑯: 超时接受了(rc=$rc)却没在报告里留下横幅 —— 事后读到它的人分不出这是部分运行"
+    bad "V46⑯: 超时结果 rc=$rc 或报告没横幅 —— 事后会把部分运行误当完整评审"
   fi
+  python3 - "$W/o9.facts.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['process_state'] == 'timed_out' and p['verdict'] == 'PASS'
+assert p['evidence_completeness'] == 'partial' and p['failure_kind'] == 'timeout'
+assert p['degraded'] is True
+PY
+  check "V46⑯b: Gemini 超时被类型化为 timed_out + partial + degraded" $?
 
   # ⑱ 🔴 锁不许被**孤儿**举着(这是我自己 08-26 引入的真 bug,探针实证)。
   # `exec 9>` 开的 fd 不是 close-on-exec ⇒ 模型进程连同它留下的任何后台进程都继承它,
@@ -5109,6 +5127,7 @@ STUB
   # 报告还在盘上,wrapper 捞出来即可。捞出来的必须**标明出处**,不许伪装成正常产出。
   rm -f "$W/o12.log"
   out="$(PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_WRITE_ONLY=1 \
+         AIWORK_REVIEW_FACTS_PATH="$W/o12.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
          "$BIN/subgemini" review "$W/task.md" "$W/o12.log" "$W/repo" 2>&1)"; rc=$?
   if [[ $rc -eq 0 ]] && grep -q '^Conclusion: BLOCK$' "$W/o12.log" 2>/dev/null; then
     ok "V46⑲: stdout 零产出但副本里有报告 ⇒ wrapper 捞得出来(整轮不再白跑)"
@@ -5120,6 +5139,13 @@ STUB
   else
     bad "V46⑲b: 捞出来的报告没标出处 —— 读的人分不出这是被丢弃那轮的残骸"
   fi
+  python3 - "$W/o12.facts.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['process_state'] == 'exited' and p['verdict'] == 'BLOCK'
+assert p['evidence_completeness'] == 'partial' and p['degraded'] is True
+PY
+  check "V46⑲c: 捞回残骸被类型化为 partial + degraded，不冒充覆盖" $?
 
   # ⑳ 提示词必须**点名管道/重定向/&&**。这不是泛泛的"别跑命令":实测那次死在管道上,
   # 而白名单里的 git 明明是放行的 —— 模型以为自己在用允许的命令。
