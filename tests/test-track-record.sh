@@ -57,27 +57,62 @@ EOF
 }
 
 write_panel_observation() { # track-dir track run-id family1 family2
-  mkdir -p "$1/observations"
-  cat > "$1/observations/$3-panel.json" <<EOF
-{
-  "schema_version": 1, "track": "$2", "run_id": "$3",
-  "controller": "panel-review", "event": "execution_finished", "label": "$3",
-  "started_at": "2026-08-21T01:00:00.000Z",
-  "finished_at": "2026-08-21T01:00:01.000Z",
-  "duration_ms": 100, "exit_code": 0,
-  "actual": {"adapter": "panel-review", "model": null, "risk": "high",
-    "degraded": false, "work_exit_code": 0, "legs": [
-      {"name":"leg1","family":"$4","adapter":"agent","model":null,"state":"completed",
-       "exit_code":0,"verdict":"PASS","degraded":false,"duration_ms":null,
-       "usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}},
-      {"name":"leg2","family":"$5","adapter":"agent","model":null,"state":"completed",
-       "exit_code":0,"verdict":"PASS","degraded":false,"duration_ms":null,
-       "usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"api_cost":null,"billing_mode":null}}
-    ]},
-  "usage": {"input_tokens": null, "output_tokens": null, "total_tokens": null,
-    "api_cost": null, "billing_mode": null}
+  python3 - "$ROOT" "$1" "$2" "$3" "$4" "$5" <<'PY'
+import json, pathlib, sys
+root, track_dir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+track, run_id, family1, family2 = sys.argv[3:]
+sys.path.insert(0, str(root / "bin"))
+from _review_result import evidence_ref, sha256_bytes, sha256_file, subject_digest
+
+identities = {
+    "xiaomi": ("submimo", "xiaomi/mimo-v2.5-pro"),
+    "deepseek": ("subdeepseek-agent", "deepseek-v4-flash"),
+    "zhipu": ("subglm-agent", "go/glm-5.3-flash"),
+    "moonshot": ("subkimi", "kimi-code/k3"),
+    "google": ("subgemini", "gemini-3.7-flash-high"),
 }
-EOF
+subject = {
+    "manifest_version": 1,
+    "task_sha256": sha256_bytes(b"task\n"),
+    "source": {"git_object_format": "sha1", "head_oid": "1" * 40,
+               "index_tree_oid": "2" * 40, "worktree_tree_oid": "3" * 40},
+    "digest": None,
+}
+subject["digest"] = subject_digest(subject)
+evidence_dir = track_dir / "review-evidence"
+observation_dir = track_dir / "observations"
+evidence_dir.mkdir(parents=True, exist_ok=True)
+observation_dir.mkdir(parents=True, exist_ok=True)
+legs = []
+for index, family in enumerate((family1, family2), 1):
+    adapter, model = identities[family]
+    log = evidence_dir / f"{run_id}-leg{index}.log"
+    log.write_text("Conclusion: PASS\n", encoding="utf-8")
+    legs.append({
+        "schema_version": 2, "review_contract_version": 1, "run_id": run_id,
+        "name": f"leg{index}", "family": family, "adapter": adapter,
+        "process": {"state": "exited", "exit_code": 0},
+        "model": {"requested": model, "invoked": model, "reported": None},
+        "subject": subject, "view": {"delivery_state": "complete", "mode": "full_snapshot"},
+        "verdict": "PASS", "degraded": False,
+        "evidence": {"completeness": "complete", "ref": evidence_ref(log), "digest": sha256_file(log)},
+        "normalizer_version": 1, "duration_ms": 1,
+        "usage": {"input_tokens": None, "output_tokens": None, "total_tokens": None,
+                  "api_cost": None, "billing_mode": None},
+        "failure_kind": "none",
+    })
+observation = {
+    "schema_version": 2, "track": track, "run_id": run_id,
+    "controller": "panel-review", "event": "execution_finished", "label": run_id,
+    "started_at": "2026-08-21T01:00:00.000Z", "finished_at": "2026-08-21T01:00:01.000Z",
+    "duration_ms": 100, "exit_code": 0,
+    "actual": {"adapter": "panel-review", "model": None, "risk": "high",
+               "degraded": False, "work_exit_code": 0, "legs": legs},
+    "usage": {"input_tokens": None, "output_tokens": None, "total_tokens": None,
+              "api_cost": None, "billing_mode": None},
+}
+(observation_dir / f"{run_id}-panel.json").write_text(json.dumps(observation), encoding="utf-8")
+PY
 }
 
 echo "=== typed track record oracle ==="
@@ -302,7 +337,8 @@ import json,sys
 p=json.load(open(sys.argv[1])); p["run_id"]="panel-2"; p["label"]="panel-2"
 p["exit_code"]=1; p["actual"]["work_exit_code"]=1
 p["actual"]["legs"]=p["actual"]["legs"][:1]
-p["actual"]["legs"][0].update(family="deepseek", state="failed", exit_code=1, verdict="BLOCK")
+leg=p["actual"]["legs"][0]; leg["run_id"]="panel-2"; leg["family"]="deepseek"
+leg["process"]={"state":"exited","exit_code":1}; leg["verdict"]="BLOCK"; leg["failure_kind"]="runtime"
 json.dump(p, open(sys.argv[1], "w"), indent=2)
 PY
 out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
@@ -311,7 +347,8 @@ rm "$d/t/observations/panel-2-failed.json"
 python3 - "$d/t/observations/panel-1-panel.json" <<'PY'
 import json,sys
 p=json.load(open(sys.argv[1])); leg=p["actual"]["legs"][1]
-leg.update(family="deepseek", state="failed", exit_code=1, verdict="BLOCK")
+leg["family"]="deepseek"; leg["process"]={"state":"exited","exit_code":1}
+leg["verdict"]="BLOCK"; leg["failure_kind"]="runtime"
 json.dump(p, open(sys.argv[1], "w"), indent=2)
 PY
 out="$($RECORD validate --phase archive "$d/t" 2>&1)"; rc=$?
@@ -467,6 +504,128 @@ p=json.loads(os.environ['LEDGER']); t=next(x for x in p['tracks'] if x['track']=
 assert t['coverage']['invalid_observations']==1
 PY
 check "R9: 未知未来 observation schema fail closed，不猜成 v2" $?
+rm -rf "$d"
+
+echo "[R10] archive/ledger 共用 v2 coverage predicate；跨对象/跨 run/v1 都不拼放行"
+d="$(mktemp -d)"; cases="$d/tracks"; mkdir -p "$cases"
+coverage_case() { # name
+  write_decision "$cases/$1" "$1" '"high"' '["judging_control"]' '"low"' '"not_required"' '[]' '"main"' null '"PASS"'
+  write_observation "$cases/$1" "$1" runlog-1 runlog execution_finished 0
+  write_panel_observation "$cases/$1" "$1" panel-1 xiaomi deepseek
+}
+
+coverage_case unknown
+python3 - "$cases/unknown/observations/panel-1-panel.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["actual"]["legs"][0]["verdict"]="UNKNOWN"
+p["actual"]["legs"][0]["failure_kind"]="no_verdict"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$cases/unknown" 2>&1)"; rc=$?
+check "R10: rc=0 + UNKNOWN 不是 coverage" $([[ $rc -ne 0 ]]; echo $?)
+
+coverage_case degraded
+python3 - "$cases/degraded/observations/panel-1-panel.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["actual"]["legs"][0]["degraded"]=True
+p["actual"]["degraded"]=True
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$cases/degraded" 2>&1)"; rc=$?
+check "R10: degraded 的明确结论仍不算 coverage" $([[ $rc -ne 0 ]]; echo $?)
+
+coverage_case timeout
+python3 - "$cases/timeout/observations/panel-1-panel.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); leg=p["actual"]["legs"][0]
+leg["process"]={"state":"timed_out","exit_code":124}; leg["failure_kind"]="timeout"
+leg["evidence"]["completeness"]="partial"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$cases/timeout" 2>&1)"; rc=$?
+check "R10: timeout 保留 PASS 也不能提升成 coverage" $([[ $rc -ne 0 ]]; echo $?)
+
+coverage_case different-subject
+python3 - "$ROOT" "$cases/different-subject/observations/panel-1-panel.json" <<'PY'
+import json,pathlib,sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "bin"))
+from _review_result import subject_digest
+p=json.load(open(sys.argv[2])); subject=p["actual"]["legs"][1]["subject"]
+subject["source"]["worktree_tree_oid"]="4"*40; subject["digest"]=subject_digest(subject)
+json.dump(p, open(sys.argv[2], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$cases/different-subject" 2>&1)"; rc=$?
+check "R10: 同一 run 的不同 subject 不能拼双家族" $([[ $rc -ne 0 ]]; echo $?)
+
+coverage_case cross-run
+write_panel_observation "$cases/cross-run" cross-run panel-2 xiaomi deepseek
+python3 - "$cases/cross-run/observations/panel-1-panel.json" "$cases/cross-run/observations/panel-2-panel.json" <<'PY'
+import json,sys
+first=json.load(open(sys.argv[1])); first["actual"]["legs"]=first["actual"]["legs"][:1]
+json.dump(first, open(sys.argv[1], "w"), indent=2)
+second=json.load(open(sys.argv[2])); second["actual"]["legs"]=second["actual"]["legs"][1:]
+json.dump(second, open(sys.argv[2], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$cases/cross-run" 2>&1)"; rc=$?
+check "R10: 同 subject 跨 run 双家族只能 shadow、不能 archive" $([[ $rc -ne 0 ]]; echo $?)
+
+write_decision "$cases/same-family" same-family '"high"' '["judging_control"]' '"low"' '"not_required"' '[]' '"main"' null '"PASS"'
+write_observation "$cases/same-family" same-family runlog-1 runlog execution_finished 0
+write_panel_observation "$cases/same-family" same-family panel-1 xiaomi xiaomi
+out="$($RECORD validate --phase archive "$cases/same-family" 2>&1)"; rc=$?
+check "R10: 同 family 的重试次数不冒充家族数" $([[ $rc -ne 0 ]]; echo $?)
+
+coverage_case conflict
+python3 - "$cases/conflict/observations/panel-1-panel.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["actual"]["legs"][1]["verdict"]="BLOCK"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$cases/conflict" 2>&1)"; rc=$?
+check "R10: 同 run 同 subject 的 PASS/BLOCK 冲突阻断资格" $([[ $rc -ne 0 ]]; echo $?)
+
+write_decision "$cases/v1-history" v1-history '"high"' '["judging_control"]' '"low"' '"not_required"' '[]' '"main"' null '"PASS"'
+write_observation "$cases/v1-history" v1-history runlog-1 runlog execution_finished 0
+write_observation "$cases/v1-history" v1-history panel-1 panel-review execution_finished 0
+python3 - "$cases/v1-history/observations/panel-1-execution_finished.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["actual"]["legs"]=[
+  {"name":name,"family":family,"adapter":"agent","model":None,"state":"completed",
+   "exit_code":0,"verdict":"PASS","degraded":False,"duration_ms":None,
+   "usage":{"input_tokens":None,"output_tokens":None,"total_tokens":None,
+            "api_cost":None,"billing_mode":None}}
+  for name,family in (("old-1","xiaomi"),("old-2","deepseek"))]
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+out="$($RECORD validate --phase archive "$cases/v1-history" 2>&1)"; rc=$?
+check "R10: v1 observation 可读但不再产生 authoritative coverage" $([[ $rc -ne 0 ]]; echo $?)
+
+ledger="$($RECORD ledger --repo "$d" --format json)"; rc=$?
+LEDGER="$ledger" python3 - <<'PY'
+import json,os
+tracks={item["track"]:item for item in json.loads(os.environ["LEDGER"])["tracks"]}
+assert tracks["unknown"]["quality"]["process_successful_panel_legs"] == 2
+assert tracks["unknown"]["quality"]["substantive_panel_legs"] == 1
+assert tracks["unknown"]["quality"]["coverage_eligible_panel_legs"] == 1
+assert tracks["timeout"]["quality"]["process_successful_panel_legs"] == 1
+assert tracks["timeout"]["quality"]["substantive_panel_legs"] == 2
+assert tracks["timeout"]["quality"]["coverage_eligible_panel_legs"] == 1
+assert tracks["different-subject"]["quality"]["coverage_eligible_panel_legs"] == 2
+assert tracks["different-subject"]["quality"]["authoritative_family_count"] == 1
+assert tracks["cross-run"]["quality"]["authoritative_family_count"] == 1
+assert tracks["cross-run"]["quality"]["same_subject_shadow_family_count"] == 2
+assert tracks["same-family"]["quality"]["authoritative_family_count"] == 1
+assert tracks["conflict"]["quality"]["coverage_eligible_panel_legs"] == 2
+assert tracks["conflict"]["quality"]["authoritative_family_count"] == 0
+assert tracks["conflict"]["quality"]["authoritative_conflicting_groups"] == 1
+assert tracks["v1-history"]["quality"]["process_successful_panel_legs"] == 2
+assert tracks["v1-history"]["quality"]["substantive_panel_legs"] == 2
+assert tracks["v1-history"]["quality"]["coverage_eligible_panel_legs"] == 0
+assert tracks["v1-history"]["quality"]["authoritative_family_count"] == 0
+PY
+assert_rc=$?
+check "R10: ledger 分列 process/substantive/eligible，并把跨 run 家族只报 shadow" \
+  $([[ $rc -eq 0 && $assert_rc -eq 0 ]]; echo $?)
 rm -rf "$d"
 
 echo "=== total: $PASS passed, $FAIL failed ==="

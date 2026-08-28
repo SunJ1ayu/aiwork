@@ -43,13 +43,27 @@ observe() { # repo track run event adapter model duration rc billing [tokens]
 }
 
 panel_observe() { # repo track run family rc
-  local repo="$1" track="$2" run="$3" family="$4" rc="$5" verdict=PASS
+  local repo="$1" track="$2" run="$3" family="$4" rc="$5" verdict=PASS adapter model log result
   [[ "$rc" -eq 0 ]] || verdict=BLOCK
+  case "$family" in
+    xiaomi) adapter=submimo; model=xiaomi/mimo-v2.5-pro ;;
+    deepseek) adapter=subdeepseek-agent; model=deepseek-v4-flash ;;
+    *) return 64 ;;
+  esac
+  log="$repo/logs/$track-$run.log"; result="$repo/logs/$track-$run.result.json"
+  printf 'Conclusion: %s\n' "$verdict" > "$log"
+  "$ROOT/bin/_review_result.py" emit --result "$result" --run-id "$run" \
+    --name "leg-$run" --family "$family" --adapter "$adapter" --exit-code "$rc" \
+    --task-sha256 "sha256:$(printf 'task\n' | sha256sum | cut -d' ' -f1)" \
+    --requested-model "$model" --invoked-model "$model" \
+    --git-object-format sha1 --head-oid "$(printf '1%.0s' {1..40})" \
+    --index-tree-oid "$(printf '2%.0s' {1..40})" --worktree-tree-oid "$(printf '3%.0s' {1..40})" \
+    --view-delivery-state complete --view-mode full_snapshot --verdict "$verdict" --log "$log" >/dev/null
   "$RECORD" observe --repo "$repo" --track "$track" --run-id "$run" \
     --controller panel-review --event execution_finished --label "$run" \
     --started-at 2026-08-21T01:00:00.000Z --finished-at 2026-08-21T01:00:01.000Z \
     --duration-ms 100 --exit-code "$rc" --adapter panel-review --work-exit-code "$rc" \
-    --risk high --degraded false --leg "leg-$run,$family,agent,$rc,$verdict,false" >/dev/null
+    --risk high --degraded false --leg-result "$result" >/dev/null
 }
 
 echo "=== read-only cost/quality ledger oracle ==="
