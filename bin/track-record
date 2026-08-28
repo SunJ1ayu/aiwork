@@ -14,7 +14,12 @@ import subprocess
 import sys
 from typing import Any
 
-from _review_result import ReviewResultError, validate_result as validate_review_result
+from _review_result import (
+    ReviewResultError,
+    coverage_eligible,
+    summarize_results,
+    validate_result as validate_review_result,
+)
 
 
 MISSING = object()
@@ -379,26 +384,20 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
             for item in executions
             if item["controller"] == "panel-review" and item["exit_code"] == 0
         ]
-        panel_families = sorted(
-            {
-                leg["family"]
-                for item in panel_runs
-                for leg in (item["actual"].get("legs") or [])
-                if observation_leg_exit_code(leg) == 0
-            }
-        )
-        successful_panel_runs = len(panel_runs)
-        if successful_panel_runs == 0 or len(panel_families) < required_reviews:
+        review_coverage = panel_review_coverage(panel_runs)
+        qualifying = qualifying_review_groups(review_coverage, required_reviews)
+        if not qualifying:
             raise DecisionError(
                 "observation.review_budget",
                 "observations[].actual.legs[].family",
                 {
                     "impact": data["impact"]["level"],
                     "required": required_reviews,
-                    "distinct_families": panel_families,
-                    "successful_panel_runs": successful_panel_runs,
+                    "successful_panel_runs": len(panel_runs),
+                    "authoritative_groups": review_coverage["authoritative_groups"],
+                    "same_subject_shadow": review_coverage["same_subject_shadow"],
                 },
-                f">= {required_reviews} distinct external review families in a successful panel-review run",
+                f">= {required_reviews} coverage-eligible families in one successful panel run for one subject, without verdict conflict",
             )
     if data["execution_plan"]["adapter"] == "main" and not any(
         item["controller"] == "runlog" and item["exit_code"] == 0 for item in executions
@@ -982,6 +981,86 @@ def observation_leg_exit_code(leg: dict[str, Any]) -> int | None:
     return leg.get("exit_code")
 
 
+def panel_review_coverage(successful_panel_runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize release coverage without ever promoting cross-run evidence.
+
+    v1 legs remain readable quality history, but only ReviewLegResult v2 values
+    enter the shared predicate. An authoritative group is exactly one panel run
+    and one frozen subject digest. Same-subject results from multiple runs are
+    exposed only as a shadow diagnostic.
+    """
+
+    results = [
+        leg
+        for item in successful_panel_runs
+        for leg in (item["actual"].get("legs") or [])
+        if leg.get("schema_version") == 2
+    ]
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for result in results:
+        subject = result["subject"]["digest"]
+        if subject is None:
+            continue
+        grouped.setdefault((result["run_id"], subject), []).append(result)
+
+    authoritative_groups: list[dict[str, Any]] = []
+    for (run_id, subject), values in sorted(grouped.items()):
+        summary = summarize_results(values, run_id=run_id, subject=subject)
+        authoritative_groups.append({"run_id": run_id, "subject_digest": subject, **summary})
+
+    nonconflicting = [item for item in authoritative_groups if not item["conflict"]]
+    best_authoritative = max(
+        nonconflicting,
+        key=lambda item: (
+            item["eligible_family_count"],
+            item["eligible_count"],
+            item["run_id"],
+            item["subject_digest"],
+        ),
+        default=None,
+    )
+
+    by_subject: dict[str, list[dict[str, Any]]] = {}
+    subject_runs: dict[str, set[str]] = {}
+    for result in results:
+        subject = result["subject"]["digest"]
+        if subject is None:
+            continue
+        by_subject.setdefault(subject, []).append(result)
+        subject_runs.setdefault(subject, set()).add(result["run_id"])
+    shadow_candidates: list[dict[str, Any]] = []
+    for subject, values in sorted(by_subject.items()):
+        runs = sorted(subject_runs[subject])
+        if len(runs) < 2:
+            continue
+        shadow_candidates.append(
+            {"subject_digest": subject, "run_ids": runs, **summarize_results(values, subject=subject)}
+        )
+    same_subject_shadow = max(
+        shadow_candidates,
+        key=lambda item: (
+            item["eligible_family_count"],
+            item["eligible_count"],
+            item["subject_digest"],
+        ),
+        default=None,
+    )
+    return {
+        "authoritative_groups": authoritative_groups,
+        "best_authoritative": best_authoritative,
+        "same_subject_shadow": same_subject_shadow,
+        "conflicting_groups": sum(1 for item in authoritative_groups if item["conflict"]),
+    }
+
+
+def qualifying_review_groups(coverage: dict[str, Any], required_families: int) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in coverage["authoritative_groups"]
+        if not item["conflict"] and item["eligible_family_count"] >= required_families
+    ]
+
+
 def observation_text(text: str, track: str, source: str) -> dict[str, Any]:
     size = len(text.encode("utf-8"))
     if size > MAX_OBSERVATION_BYTES:
@@ -1158,13 +1237,20 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
         for item in executions
         if item["controller"] == "panel-review" and item["exit_code"] == 0
     ]
-    panel_families = sorted(
-        {
-            leg["family"]
-            for item in panel_runs
-            for leg in (item["actual"].get("legs") or [])
-            if observation_leg_exit_code(leg) == 0
-        }
+    review_coverage = panel_review_coverage(panel_runs)
+    authoritative = review_coverage["best_authoritative"]
+    shadow = review_coverage["same_subject_shadow"]
+    panel_families = authoritative["eligible_families"] if authoritative is not None else []
+    process_successful_legs = sum(1 for leg in panel_legs if observation_leg_exit_code(leg) == 0)
+    substantive_legs = sum(
+        1
+        for leg in panel_legs
+        if leg.get("verdict") in ("PASS", "BLOCK") and leg.get("degraded") is False
+    )
+    coverage_eligible_legs = sum(
+        1
+        for leg in panel_legs
+        if leg.get("schema_version") == 2 and coverage_eligible(leg)
     )
     fallback_dispatches = sum(
         1
@@ -1224,9 +1310,7 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
         if planned["adapter"] in ("submimo", "claude-worktree"):
             missing.append(f"planned_adapter_observation:{planned['adapter']}")
         required_reviews = REVIEW_BUDGETS[impact]
-        if required_reviews and (
-            not panel_runs or len(panel_families) < required_reviews
-        ):
+        if required_reviews and not qualifying_review_groups(review_coverage, required_reviews):
             missing.append(f"review_budget:{required_reviews}")
         received_ok = {
             item["run_id"]
@@ -1258,6 +1342,15 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
             "failed_controller_runs": sum(1 for item in executions if item["exit_code"] != 0),
             "panel_legs": len(panel_legs),
             "panel_families": panel_families,
+            "process_successful_panel_legs": process_successful_legs,
+            "substantive_panel_legs": substantive_legs,
+            "coverage_eligible_panel_legs": coverage_eligible_legs,
+            "authoritative_run_id": authoritative["run_id"] if authoritative is not None else None,
+            "authoritative_subject_digest": authoritative["subject_digest"] if authoritative is not None else None,
+            "authoritative_family_count": authoritative["eligible_family_count"] if authoritative is not None else 0,
+            "authoritative_conflicting_groups": review_coverage["conflicting_groups"],
+            "same_subject_shadow_families": shadow["eligible_families"] if shadow is not None else [],
+            "same_subject_shadow_family_count": shadow["eligible_family_count"] if shadow is not None else 0,
             "fallback_dispatches": fallback_dispatches,
             "failed_panel_legs": failed_legs,
             "degraded_runs_or_legs": degraded,
