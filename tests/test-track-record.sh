@@ -381,19 +381,29 @@ out="$($RECORD "${common_obs[@]}" --controller runlog --adapter foo 2>&1)"; rc=$
 check "R8: controller/adapter mismatch 在写盘前拒绝" $([[ $rc -ne 0 ]]; echo $?)
 check "R8: adapter mismatch 不留下 observation" $([[ ! -d "$d/tracks/t/observations" ]]; echo $?)
 legs=()
-for name in "${pool_legs[@]}"; do legs+=(--leg "$name,${name#sub},agent,0,PASS,false"); done
+for name in "${pool_legs[@]}"; do
+  printf 'Conclusion: PASS\n' > "$d/$name.log"
+  "$ROOT/bin/_review_result.py" emit --result "$d/$name.result.json" --run-id r1 \
+    --name "$name" --family "${name#sub}" --adapter "$name" --exit-code 0 \
+    --task-sha256 "sha256:$(printf task | sha256sum | cut -d' ' -f1)" --log "$d/$name.log" >/dev/null
+  legs+=(--leg-result "$d/$name.result.json")
+done
 out="$($RECORD "${common_obs[@]}" --controller panel-review --adapter panel-review "${legs[@]}" 2>&1)"; rc=$?
 check "R8: writer 接受运行时花名册全池，不另设固定腿数上限" $([[ $rc -eq 0 ]]; echo $?)
 check "R8: 全池 observation 已真实落盘" \
   $(find "$d/tracks/t/observations" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; echo $?)
 rm -rf "$d/tracks/t/observations"
 out="$($RECORD "${common_obs[@]}" --controller runlog --adapter runlog \
-  --leg x,family,agent,0,PASS,false 2>&1)"; rc=$?
-check "R8: 非 panel controller 带 --leg 给结构化 BLOCK、不是 traceback" \
+  --leg-result "$d/${pool_legs[0]}.result.json" 2>&1)"; rc=$?
+check "R8: 非 panel controller 带 --leg-result 给结构化 BLOCK、不是 traceback" \
   $([[ $rc -ne 0 && "$out" == *'rule=observation.leg_controller'* && "$out" != *Traceback* ]]; echo $?)
+out="$($RECORD "${common_obs[@]}" --controller panel-review --adapter panel-review \
+  --leg x,family,agent,0,PASS,false 2>&1)"; rc=$?
+check "R8: v1 --leg writer 已关闭，旧 observation 只读" \
+  $([[ $rc -ne 0 && "$out" == *'rule=observation.v1_writer_disabled'* ]]; echo $?)
 rm -rf "$d"
 
-echo "[R9] ReviewLegResult v2 reader 先上线；writer 尚未切换"
+echo "[R9] ReviewLegResult v2 reader 保持严格兼容"
 d="$(mktemp -d)"; mkdir -p "$d/tracks/v2/observations" "$d/logs"
 ( cd "$d"; git init -q; git config user.email t@t; git config user.name t )
 low_decision "$d/tracks/v2" v2 null

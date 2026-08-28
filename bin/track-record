@@ -587,62 +587,57 @@ def observe(args: argparse.Namespace) -> int:
         nullable_nonnegative(args.exit_code, "exit_code")
         nullable_nonnegative(args.work_exit_code, "actual.work_exit_code")
         legs: list[dict[str, Any]] | None = [] if args.controller == "panel-review" else None
-        if args.controller != "panel-review" and args.leg:
+        if args.leg:
+            raise DecisionError(
+                "observation.v1_writer_disabled",
+                "actual.legs",
+                len(args.leg),
+                "--leg-result ReviewLegResult v2 (v1 remains read-only)",
+            )
+        if args.controller != "panel-review" and args.leg_result:
             raise DecisionError(
                 "observation.leg_controller",
                 "actual.legs",
-                len(args.leg),
-                "--leg is valid only for controller=panel-review",
+                len(args.leg_result),
+                "--leg-result is valid only for controller=panel-review",
             )
-        for spec in args.leg or []:
-            parts = spec.split(",")
-            if len(parts) != 6:
+        seen_leg_names: set[str] = set()
+        for result_path in args.leg_result or []:
+            if result_path.is_symlink() or not result_path.is_file():
                 raise DecisionError(
-                    "observation.leg",
+                    "observation.leg_result",
                     "actual.legs[]",
-                    spec,
-                    "name,family,adapter,exit_code,verdict|null,degraded(true|false)",
+                    os.fspath(result_path),
+                    "non-symlink ReviewLegResult v2 JSON file",
                 )
-            name, family, leg_adapter, leg_rc_text, verdict, leg_degraded = parts
-            safe_identifier(name, "actual.legs[].name", LABEL_RE)
-            safe_identifier(family, "actual.legs[].family", LABEL_RE)
-            safe_identifier(leg_adapter, "actual.legs[].adapter", TOKEN_RE)
             try:
-                leg_rc = int(leg_rc_text)
-            except ValueError as exc:
-                raise DecisionError("observation.leg", "actual.legs[].exit_code", leg_rc_text, "integer") from exc
-            nullable_nonnegative(leg_rc, "actual.legs[].exit_code")
-            if verdict == "null":
-                leg_verdict = None
-            elif verdict in ("PASS", "BLOCK", "NEEDS_MORE_INFO"):
-                leg_verdict = verdict
-            else:
-                raise DecisionError("field.enum", "actual.legs[].verdict", verdict, "null|PASS|BLOCK|NEEDS_MORE_INFO")
-            if leg_degraded not in ("true", "false"):
-                raise DecisionError("field.enum", "actual.legs[].degraded", leg_degraded, "true|false")
+                raw_leg = json.loads(result_path.read_text(encoding="utf-8"))
+                leg = validate_review_result(raw_leg)
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise DecisionError(
+                    "observation.leg_result",
+                    "actual.legs[]",
+                    str(exc),
+                    "readable UTF-8 ReviewLegResult v2 JSON",
+                ) from exc
+            except ReviewResultError as exc:
+                raise DecisionError(
+                    f"review_result.{exc.rule}",
+                    f"actual.legs[].{exc.path.removeprefix('result.')}",
+                    exc.actual,
+                    exc.expected,
+                ) from exc
+            if leg["run_id"] != run_id:
+                raise DecisionError("observation.leg_run_id", "actual.legs[].run_id", leg["run_id"], run_id)
+            if leg["name"] in seen_leg_names:
+                raise DecisionError("observation.leg_duplicate", "actual.legs[].name", leg["name"], "unique leg name")
+            seen_leg_names.add(leg["name"])
             assert legs is not None
-            legs.append(
-                {
-                    "name": name,
-                    "family": family,
-                    "adapter": leg_adapter,
-                    "model": None,
-                    "state": "completed" if leg_rc == 0 else "failed",
-                    "exit_code": leg_rc,
-                    "verdict": leg_verdict,
-                    "degraded": leg_degraded == "true",
-                    "duration_ms": None,
-                    "usage": {
-                        "input_tokens": None,
-                        "output_tokens": None,
-                        "total_tokens": None,
-                        "api_cost": None,
-                        "billing_mode": None,
-                    },
-                }
-            )
+            legs.append(leg)
+        if args.controller == "panel-review":
+            degraded = any(leg["degraded"] for leg in legs or [])
         payload = {
-            "schema_version": 1,
+            "schema_version": 2 if args.controller == "panel-review" else 1,
             "track": args.track,
             "run_id": run_id,
             "controller": args.controller,
@@ -1436,8 +1431,9 @@ def parser() -> argparse.ArgumentParser:
     event.add_argument(
         "--leg",
         action="append",
-        help="panel leg: name,family,adapter,exit_code,verdict|null,degraded(true|false)",
+        help="deprecated v1 writer input; always rejected (v1 is read-only)",
     )
+    event.add_argument("--leg-result", action="append", type=Path, help="validated ReviewLegResult v2 file")
     delegated = commands.add_parser("import-delegate", help="import compact fields from a delegate receipt")
     delegated.add_argument("--receipt", required=True, type=Path)
     delegated.add_argument("--event", required=True, choices=EVENTS)

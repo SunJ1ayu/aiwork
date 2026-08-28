@@ -964,22 +964,10 @@ fi
 # Controller-side compact observation. The roster/raw logs stay outside the repo;
 # only whitelisted actual facts enter the main track. Missing model/usage remain null.
 if [[ -n "$TRACK_NAME" ]]; then
-  _obs_legs=(); _obs_degraded=false
+  _obs_legs=()
   for _leg in "${LEGS[@]}"; do
     [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
-    # 归档闸数的"覆盖了 N 个不同模型家族"就是数这个字段。取不到 ⇒ 拒跑,
-    # 不许写一条 family 为空的腿进去(它会静默不算数,而报告读起来完全正常)。
-    _family="$(panel_leg_family "$_leg")" || { echo "panel-review: 腿 $_leg 没有模型家族 ⇒ 拒绝写 observation" >&2; exit 70; }
-    _adapter="$(basename "${LEG_CMD[$_leg]}")"
-    _degraded=false
-    if [[ -e "${LEG_LOG[$_leg]%.log}.agent.log" || -e "${LEG_LOG[$_leg]%.log}.agent.log.err" ]]; then
-      _degraded=true; _obs_degraded=true
-      # 降级 = 底座腿死了、聊天腿顶上来的 ⇒ 落盘的适配器要是**聊天腿**那个。
-      [[ -n "${LEG_CHAT[$_leg]}" ]] && _adapter="$(basename "${LEG_CHAT[$_leg]}")"
-    fi
-    _verdict="$(verdict_of "${LEG_LOG[$_leg]}")"
-    [[ "$_verdict" == UNKNOWN ]] && _verdict=null
-    _obs_legs+=(--leg "$_leg,$_family,$_adapter,${LEG_RC[$_leg]},$_verdict,$_degraded")
+    _obs_legs+=(--leg-result "${LEG_LOG[$_leg]%.log}.result.json")
   done
   PANEL_FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   PANEL_END_NS="$(date +%s%N)"
@@ -992,7 +980,7 @@ if [[ -n "$TRACK_NAME" ]]; then
       --run-id "$_run_id" --controller panel-review --event execution_finished \
       --label "$_obs_label" --started-at "$PANEL_STARTED_AT" --finished-at "$PANEL_FINISHED_AT" \
       --duration-ms "$PANEL_DURATION_MS" --exit-code "$PANEL_RC" --adapter panel-review \
-      --work-exit-code "$PANEL_RC" --risk "$IMPACT_RISK" --degraded "$_obs_degraded" \
+      --work-exit-code "$PANEL_RC" --risk "$IMPACT_RISK" \
       "${_obs_legs[@]}" >/dev/null; then
     echo "panel-review: OBSERVATION_WRITE_FAILED track=$TRACK_NAME run_id=$_run_id (controller rc 保持 $PANEL_RC)" >&2
   fi

@@ -136,6 +136,7 @@ check "P2: 冻结 task 与 panel artifacts 同位置持久落盘" $?
 python3 - "$f" <<'PY'
 import json, sys
 p=json.load(open(sys.argv[1], encoding="utf-8"))
+assert p["schema_version"] == 2
 assert p["track"] == "current" and p["controller"] == "panel-review"
 assert p["event"] == "execution_finished" and p["exit_code"] == 0
 assert p["label"] == "task" and isinstance(p["duration_ms"], int) and p["duration_ms"] >= 0
@@ -144,14 +145,13 @@ assert a["adapter"] == "panel-review" and a["risk"] == "high" and a["degraded"] 
 assert a["model"] is None and a["work_exit_code"] == 0
 assert len(a["legs"]) == 2 and {x["name"] for x in a["legs"]} == {"submimo","subdeepseek"}
 for leg in a["legs"]:
-    assert set(leg) == {"name","family","adapter","model","state","exit_code","verdict",
-                        "degraded","duration_ms","usage"}
-    assert leg["state"] == "completed" and leg["exit_code"] == 0 and leg["verdict"] == "PASS"
-    assert leg["model"] is None and leg["degraded"] is False and leg["duration_ms"] is None
-    assert all(v is None for v in leg["usage"].values())
+    assert leg["schema_version"] == 2 and leg["process"] == {"state":"exited","exit_code":0}
+    assert leg["verdict"] == "PASS" and leg["degraded"] is False
+    assert leg["evidence"]["ref"].startswith("file://") and leg["evidence"]["digest"].startswith("sha256:")
+    assert leg["normalizer_version"] == 1
 assert all(v is None for v in p["usage"].values())
 raw=open(sys.argv[1], encoding="utf-8").read()
-for forbidden in ("PANEL_PROMPT_SENTINEL", "Conclusion: PASS", "/raw/", "transcript"):
+for forbidden in ("PANEL_PROMPT_SENTINEL", "Conclusion: PASS", "transcript"):
     assert forbidden not in raw, forbidden
 PY
 check "P2: schema 只含 compact actual facts，不复制 prompt/log" $?
@@ -180,7 +180,8 @@ p=json.load(open(sys.argv[1], encoding="utf-8")); a=p["actual"]
 assert a["degraded"] is True and len(a["legs"]) == 1
 leg=a["legs"][0]
 assert leg["name"] == "subdeepseek" and leg["adapter"] == "subdeepseek"
-assert leg["degraded"] is True and leg["state"] == "completed" and leg["verdict"] == "PASS"
+assert leg["degraded"] is True and leg["process"] == {"state":"exited","exit_code":0}
+assert leg["verdict"] == "PASS"
 PY
 check "P3: actual adapter/降级资格跟着结论落盘" $?
 
