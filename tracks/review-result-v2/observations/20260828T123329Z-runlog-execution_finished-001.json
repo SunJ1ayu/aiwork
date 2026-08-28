@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "review-result-v2",
+  "run_id": "20260828T122932Z-01-red-v43-eligibility",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "red-v43-eligibility",
+  "started_at": "2026-08-28T12:29:32Z",
+  "finished_at": "2026-08-28T12:33:29Z",
+  "duration_ms": 237081,
+  "exit_code": 1,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 1,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

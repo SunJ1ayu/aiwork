@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "review-result-v2",
+  "run_id": "20260828T131437Z-01-red-failure-kind",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "red-failure-kind",
+  "started_at": "2026-08-28T13:14:37Z",
+  "finished_at": "2026-08-28T13:14:37Z",
+  "duration_ms": 534,
+  "exit_code": 1,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 1,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
