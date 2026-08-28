@@ -4571,9 +4571,20 @@ EOF
     PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/D1" >/dev/null 2>&1; rc=$?
   count="$(wc -l < "$d/calls" | tr -d ' ')"
-  check "V43: high 默认只派两条腿" $([[ $rc -eq 0 && $count -eq 2 ]]; echo $?)
+  # 红的时候要说得出**实际是什么**:2026-08-28 总跑里这一格红过一次、重跑与 6 次
+  # 并发单跑都绿,而当时屏幕上只有"期望 2"这一句 —— 一个查不下去的谜。
+  # 升级原因和花名册末行一起印出来,下次它自己就说得清。
+  if [[ $rc -eq 0 && $count -eq 2 ]]; then
+    ok "V43: high 默认只派两条腿"
+  else
+    bad "V43: high 默认只派两条腿(rc=$rc 实际派了 $count 条;$(grep -h 'escalation=' "$d/D1.roster" 2>/dev/null | tr -d '#' | tr -s ' '))"
+  fi
   grep -q 'requested-budget=2' "$d/D1.roster"; check "V43: roster 记录请求预算=2" $?
-  grep -q 'subglm=SKIP(rotation)' "$d/D1.roster"; check "V43: 未选中的健康腿明确记 rotation skip" $?
+  if grep -q 'subglm=SKIP(rotation)' "$d/D1.roster"; then
+    ok "V43: 未选中的健康腿明确记 rotation skip"
+  else
+    bad "V43: 未选中的健康腿明确记 rotation skip(实际末行:$(tail -1 "$d/D1.roster" 2>/dev/null))"
+  fi
 
   # ② 同一健康池下一轮移动起点，不固定烧同一对额度。
   : > "$d/calls"
