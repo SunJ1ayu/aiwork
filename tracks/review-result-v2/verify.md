@@ -28,6 +28,7 @@ runlog: red-failure-kind rc=1 commit=5b7f6d9 dirty=yes at=2026-08-28T13:14:37Z f
 runlog: full-regression-final rc=1 commit=aa6cb98 dirty=no final=yes at=2026-08-28T13:27:03Z file=tracks/review-result-v2/evidence/20260828T132703Z-01-full-regression-final.txt
 runlog: red-ineligible-cooldown rc=1 commit=aa6cb98 dirty=yes at=2026-08-28T13:39:56Z file=tracks/review-result-v2/evidence/20260828T133956Z-01-red-ineligible-cooldown.txt
 runlog: full-regression-final-r2 rc=0 commit=dd745e4 dirty=no final=yes at=2026-08-28T13:40:59Z file=tracks/review-result-v2/evidence/20260828T134059Z-01-full-regression-final-r2.txt
+runlog: full-regression-final-r3 rc=0 commit=72caea4 dirty=no final=yes at=2026-08-28T15:48:38Z file=tracks/review-result-v2/evidence/20260828T154838Z-01-full-regression-final-r3.txt
 ```
 
 红收据逐份是什么红的(不许四舍五入成散文):
@@ -61,9 +62,19 @@ runlog: full-regression-final-r2 rc=0 commit=dd745e4 dirty=no final=yes at=2026-
   false-coverage 矩阵再从反面验证 UNKNOWN、NMI、timeout、degraded、v1、不同 subject、
   跨 run 和冲突都不能补归档预算。若这些边界任一在 archive 与 ledger 输出不一致，
   consumer parity 判据会直接暴露，而不是靠 panel 一致 PASS 猜规格正确。
-- 腿的花名册: 待第二轮 panel-review 收尾后粘贴机器生成行。
+- 腿的花名册（第二轮，机器生成，逐字节）:
   > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
   > **控制器没活到收尾时它压根不存在** —— 那时跑 `panel-roster <日志前缀>` 从盘上重建。
+  ```
+  # impact-risk=high requested-budget=5 selected-count=5
+  # selected=submimo(xiaomi/submimo),subdeepseek(deepseek/subdeepseek-agent),subglm(zhipu/subglm-agent),subkimi(moonshot/subkimi),subgemini(google/subgemini)
+  # escalation=none
+  submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=PASS) subglm=FAIL(rc=1,降级:回落聊天腿也没成) subkimi=FAIL(rc=124) subgemini=PASS(verdict=PASS)
+  ```
+  **第二轮有 Xiaomi / DeepSeek / Google 三个 coverage-eligible 家族且裁决均为 PASS；**
+  Kimi 的 timeout PASS 只作 partial evidence，GLM 失败不计 coverage。完整 typed 事实已落在
+  `observations/20260828T143903Z-panel-review-execution_finished-001.json`。
+
   第一轮(20260828,head cf4f212)的花名册,逐字节:
   ```
   # impact-risk=high requested-budget=5 selected-count=5
@@ -97,6 +108,16 @@ runlog: full-regression-final-r2 rc=0 commit=dd745e4 dirty=no final=yes at=2026-
   - Kimi/Gemini 的 timeout verdict 和 Gemini salvage 仍保留为 partial evidence，
     但 timeout/degraded 不能计 coverage；provider-specific auth/home/lock/sandbox 与 raw log
     按原计划保留，不做 adapter 大重构。
+  - **第二轮 DeepSeek 的中等 finding 已收口**:roster 过去只从 raw log 重算
+    `PASS(verdict=PASS)`，会把 typed `INELIGIBLE` 伪装成普通 PASS。现在有 v2 sidecar 时
+    roster 从唯一 `describe` 入口读取 verdict/eligibility，并显式打印
+    `coverage=INELIGIBLE`；只有 legacy 轮次才回落 raw log。
+  - **外层 oracle 递归污染已收口**:`test-panel-observation.sh` 入口现在清理
+    `PANEL_ORACLE_CMD`。红检为 68/1（唯一红是入口变量非空），修后定向 69/0。
+  - **V43 偶发红已定案并收口**:并发健康桩对同一个 fixture repo 跑 `git write-tree`，
+    争用 `.git/index.lock`；失败腿因空 `index_tree_oid` 被 v2 正确判成
+    `model_invocation_unverified/subject_unknown/view_incomplete`，调度器于是正确补 spare。
+    静态 clean fixture 已改为只读 `HEAD^{tree}`，并加“不许调用 write-tree”守卫。
   - 规范源、README、track/panel skill 与 Claude 部署副本已统一改成 coverage-eligible 语义。
 - 敞着的账(**不写成结论**):
   - **腿在自己沙箱里跑我们的 shell 判据会看到大批失败,真因未知。** 第一轮 GLM 腿留下
@@ -104,13 +125,15 @@ runlog: full-regression-final-r2 rc=0 commit=dd745e4 dirty=no final=yes at=2026-
     **量了一遍推翻了自己**:在同一个只读挂载里跑是 545 passed / 1 failed。
     腿的日志只留了汇总和 FAIL 行、没留 wrapper 的 stderr,所以真因**还没量到**。
     可见后果是实的:三条腿的整个预算烧在"这些红是不是真的"上,然后超时被砍。
-  - **V43 ① 在总跑里红过一次、再没复现。** 同一 commit 重跑 546/0,单跑+6 并发共 7 遍全绿。
-    该失败路径在没有本轮修复时同样存在(腿的 describe 一失败就会补腿),所以它不是这次
-    改动引入的;但**原因未定案**。已把那格改成红时打印 rc / 实际派发数 / 升级原因 / 花名册末行,
-    下次它自己说得清。
-  - **subgemini 腿要业主重登**:`~/.gemini/antigravity-cli/antigravity-oauth-token`
-    自 08-26 起只有 10 字节,`agy models` 说 "Please sign in"。腿是**响亮拒跑**的(不静默挂死)。
-- arbitrated verdict (主裁): 待第二轮 panel 证据到齐后裁决。
+  - **provider 错误只出现在 stdout 时仍可能被归成 `runtime`。** 第二轮多腿命中，但当前
+    wrapper 把 provider stdout 与模型评审正文混在同一日志；直接回扫会复活“正文谈 auth 就
+    判凭证坏”的假阳性。它影响 health 原因标签，不会放宽 coverage 或阻止 fallback；留待
+    adapter 能提供独立 provider diagnostic stream 后再修，不在本轮猜信号。
+  - **subgemini 登录敞账已由业主重登关闭**:凭证恢复为权限 600 的正常文件，
+    `agy models` 成功，`gemini-3.7-flash-high` 真调用返回 `GEMINI_LEG_OK`，第二轮腿随后 PASS。
+- arbitrated verdict (主裁): **PASS**。理由不是“多数模型同意”，而是三个不同家族在
+  同一 run、同一 subject、同一 review contract 下交出 eligible PASS，第二轮可执行 finding
+  已修，最终干净提交上的 `runlog --final` 全绿；timeout/失败腿未被拿来补 coverage。
 
 ## Accepted deviations
 

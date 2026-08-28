@@ -10,4 +10,4 @@
 - [x] C6–C9：迁移 MiMo、DeepSeek/GLM、Kimi、Gemini。
 - [x] C10：原子迁移 timeout 与 health。
 - [x] C11–C12：v2 writer 与所有 coverage consumers cutover。
-- [ ] C13：删除重复旧语义，完整回归并归档。
+- [x] C13：删除重复旧语义，完整回归并归档。
