@@ -1,0 +1,45 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    red-ineligible-cooldown
+cmd:     bash -c N=\$\(grep\ -n\ \"\^v0_parent_panel_env_is_scrubbed\$\"\ tests/test-review-tooling.sh\ \|\ cut\ -d:\ -f1\)\;\ head\ -n\ \$\(\(N-1\)\)\ tests/test-review-tooling.sh\ \>\ tests/.v43-probe.sh\;\ printf\ \"v43_health_aware_rotating_budget\\necho\ \\\"===\ total:\ \\\$PASS\ passed\,\ \\\$FAIL\ failed\ ===\\\"\\n\[\[\ \\\$FAIL\ -eq\ 0\ \]\]\\n\"\ \>\>\ tests/.v43-probe.sh\;\ bash\ tests/.v43-probe.sh\;\ rc=\$\?\;\ rm\ -f\ tests/.v43-probe.sh\;\ exit\ \$rc
+cwd:     /root/aiwork(仓根)
+commit:  aa6cb98
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-28T13:39:56Z
+---------------- 输出开始 ----------------
+=== review-tooling regression oracle ===
+[V43] panel-review:健康池预算评审 + 条件升级 + 显式全池评审
+  PASS: V43: --help 的评审池从花名册派生、成员一个不少
+  PASS: V43: high 默认只派两条腿
+  PASS: V43: roster 记录请求预算=2
+  PASS: V43: 未选中的健康腿明确记 rotation skip
+  PASS: V43: 下一轮轮到新的腿
+  PASS: V43: 轮换不能永远固定同一对
+  PASS: V43: quota 腿不会被派发
+  PASS: V43: roster 如实记 quota skip
+  PASS: V43: 少一条额度腿不阻断有证据的本轮
+  PASS: V43: 冲突时只追加一条 spare，不直接全池派发
+  PASS: V43: roster 记下冲突升级原因
+  PASS: V43: 失败腿触发第三审
+  PASS: V43: 仍有有效评审时 panel 本身不因单腿失败 BLOCK
+  PASS: V43: standard 默认一条外腿
+  PASS: V43: self 不调用外腿
+  PASS: V43: --all 派出花名册中的整个当前池
+  PASS: V43: 格式示例不冒充裁决，触发 incomplete 第三审
+  PASS: V43: roster 如实记录无独立裁决行
+  PASS: V43: 进程 rc=0 仍可供主审读局部报告
+  PASS: V43: 无有效裁决的腿进入 incomplete 冷却
+  PASS: V43: 尾随空白不会把独立裁决行变成 UNKNOWN
+  PASS: V43: 回落且无裁决的腿保留 degraded+incomplete
+  PASS: V43: typed eligible=false 触发第三审
+  PASS: V43: roster 记录 ineligible 升级原因
+  PASS: V43: 决定性裁决但覆盖不合格时健康状态不是 PASS
+  PASS: V43: INELIGIBLE 是 rc=0 状态、不累计硬失败
+  FAIL: V43: 上一轮 INELIGIBLE 不许把活着的腿按进冷却(submimo=SKIP(health:cooldown:INELIGIBLE))
+  PASS: V43: NEEDS_MORE_INFO 不误伤 provider 健康状态
+  PASS: V43: NEEDS_MORE_INFO 不累计硬失败
+  PASS: V43: NEEDS_MORE_INFO 在 high 上触发第三审
+  PASS: V43: roster 记录 needs-more-info 升级原因
+  PASS: V43: 补了 spare 也不改 NEEDS_MORE_INFO 腿的健康状态
+=== total: 31 passed, 1 failed ===
+---------------- 输出结束 ----------------
+runlog: red-ineligible-cooldown rc=1 commit=aa6cb98 dirty=yes at=2026-08-28T13:39:56Z file=tracks/review-result-v2/evidence/20260828T133956Z-01-red-ineligible-cooldown.txt
