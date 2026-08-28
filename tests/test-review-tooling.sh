@@ -1465,7 +1465,7 @@ EOF
   grep -q 'Conclusion: PASS | BLOCK | NEEDS_MORE_INFO' "$d/prompt.txt"
   check "V16: 裁决行格式仍逐字给出" $?
 
-  # 超时本身必须不再作废整份评审:裁决行已经写出来了就算数(否则「先写裁决」白做)
+  # 超时不丢证据，但不能再冒充完整成功:裁决保留为 partial，覆盖判据拒收。
   # ⚠️ 必须先撤掉上面那个 stub timeout(它忽略秒数直接 exec),否则这两条根本没真超时
   #    —— 首版判据就栽在这:两条假绿,还各白等 30 秒。
   rm -f "$pb/timeout"
@@ -1475,10 +1475,20 @@ echo "findings: 一条真发现"; echo "Conclusion: BLOCK"; sleep 30
 EOF
   chmod +x "$pb/kimi"
   env PATH="$pb:$PATH" KIMI_REVIEW_HOME="$rh" KIMI_TIMEOUT=2 \
+      AIWORK_REVIEW_FACTS_PATH="$d/kt.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
       bash "$pb/subkimi" review "$d/t.md" "$d/kt.log" "$d/repo" >/dev/null 2>"$d/kt.err"; rc=$?
-  check "V16: 超时但裁决已写出 → rc=0(评审算数)" $([[ $rc -eq 0 ]]; echo $?)
+  check "V16: 超时但裁决已写出 → rc=124(留证据、不算覆盖)" $([[ $rc -eq 124 ]]; echo $?)
   grep -qiE 'timed out|超时' "$d/kt.err" "$d/kt.log"
   check "V16: 超时仍要留痕(不静默当成正常完卷)" $?
+  python3 - "$d/kt.facts.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['process_state'] == 'timed_out'
+assert p['verdict'] == 'BLOCK'
+assert p['evidence_completeness'] == 'partial'
+assert p['failure_kind'] == 'timeout'
+PY
+  check "V16: 超时裁决被类型化为 timed_out + partial evidence" $?
   # 超时且没有裁决 → 仍然是失败(原语义不变)
   cat > "$pb/kimi" <<'EOF'
 #!/usr/bin/env bash
@@ -3312,6 +3322,7 @@ PY
   echo '{}' > "$rh/credentials/kimi-code.json"
   rm -f "$d/o3" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" KIMI_REVIEW_HOME="$rh" REVIEW_NO_MY_REVIEW=1 \
+    AIWORK_REVIEW_FACTS_PATH="$d/kimi.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/subkimi" review "$d/t.md" "$repo/logs/l3.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o3" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o3" 2>/dev/null \
@@ -3319,6 +3330,14 @@ PY
     && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r3=$?
   local seen3; seen3="$(cat "$d/o3" 2>/dev/null || echo 没跑)"
   check "V36: subkimi 副本可写、原仓只读(双向试写:$seen3)" $r3
+  python3 - "$d/kimi.facts.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['model']['requested'] == p['model']['invoked'] == 'kimi-code/k3'
+assert p['source'] and p['view'] == {'delivery_state':'complete','mode':'full_snapshot'}
+assert p['process_state'] == 'exited' and p['verdict'] == 'PASS'
+PY
+  check "V36: subkimi 交出实际模型、完整 snapshot 与裁决 facts" $?
 
   # ── ④ **对照组:fix 一个字都不许被连累**。submimo fix 是执行腿,写代码是它的本职;
   #    "加一道防线顺手拆掉另一道"是本仓记过的账(V33 里有同款对照)。

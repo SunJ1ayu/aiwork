@@ -197,6 +197,7 @@ REVIEW_WORKSPACE_ACTIVE=1
 SOURCE_REPO="$REVIEW_SOURCE_REPO"
 RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 REPO_DIR="$(review_workspace_repo)" || exit 78
+review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
 _subkimi_cleanup() {
   local rc=$?
@@ -238,7 +239,8 @@ your findings — do not save it for the end. You may keep analysing afterwards
 and restate the line at the end if your judgement changes; the last one counts.
 (This harness kills long reviews on a timeout. 2026-07-27: a run was cut off
 with its best finding already written out but no verdict line, so the whole
-review was discarded. Verdict first means a timeout still costs you nothing.)
+review was discarded. Verdict first preserves that judgement as partial
+evidence; a timed-out review is still not eligible for coverage.)
 
 The verdict line must be exactly this form:
 Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
@@ -266,29 +268,32 @@ RC=0
     "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" kimi -m "$MODEL" -p "$PROMPT"
 ) >> "$LOG_FILE" 2>&1 || RC=$?
 
-# Verdict gate (same semantics as the other legs): a review that never
-# concludes is a failed review, but the log is kept for forensics. Accepts
-# 「结论: PASS」/full-width colon (Chinese backends drift to it); ： via
-# ANSI-C quoting per the 07-17 full-width-punctuation lesson.
-VERDICT_RE=$'(Conclusion|结论)(:|\uFF1A)[[:space:]]*(PASS|BLOCK|NEEDS_MORE_INFO)'
-HAS_VERDICT=0
-grep -qE "$VERDICT_RE" "$LOG_FILE" && HAS_VERDICT=1
+# Verdict gate shares the contract normalizer with the terminal producer.  The
+# adapter publishes what it actually observed; it does not decide coverage.
+_RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
+[ -f "$_RR" ] || _RR=/root/aiwork/bin/_review_result.py
+[ -f "$_RR" ] || die "typed verdict normalizer missing"
+VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
+  || die "typed verdict normalization failed (log: $LOG_FILE)"
 
-# A timeout with the verdict already written is a COMPLETE review, not a lost one
-# (2026-07-27: kimi was cut off at 900s with its best finding already in the log,
-# and the whole thing got discarded for want of a last line). Paired with the
-# verdict-first instruction in the prompt: judgement lands early, extra thinking
-# is a bonus. Still loud on stderr — a truncated review must never look like a
-# clean one to the arbiter.
+# Timeout may preserve an early verdict as partial evidence, but it is never a
+# successful/coverage-eligible review.  Keep rc=124 and publish the atomic facts
+# before returning so the detached terminal producer cannot promote it later.
 if [[ $RC -eq 124 ]]; then
-  [[ $HAS_VERDICT -eq 1 ]] || die "kimi timed out after ${TIMEOUT_SECONDS}s with no verdict (log: $LOG_FILE)"
-  echo "subkimi: timed out after ${TIMEOUT_SECONDS}s, but a verdict was already written —" \
-       "accepting it; the analysis may be cut off mid-flow (log: $LOG_FILE)" >&2
-  exit 0
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    timed_out partial timeout "$VERDICT" || exit 78
+  if [[ "$VERDICT" == "UNKNOWN" ]]; then
+    echo "subkimi: timed out after ${TIMEOUT_SECONDS}s with no verdict (log: $LOG_FILE)" >&2
+  else
+    echo "subkimi: timed out after ${TIMEOUT_SECONDS}s; preserving verdict=$VERDICT as partial evidence, not coverage (log: $LOG_FILE)" >&2
+  fi
+  exit 124
 fi
 [[ $RC -eq 0 ]] || die "kimi exited rc=$RC (log: $LOG_FILE)"
 
-[[ $HAS_VERDICT -eq 1 ]] \
+[[ "$VERDICT" != "UNKNOWN" ]] \
   || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+  exited complete "" "$VERDICT" || exit 78
 
 exit 0
