@@ -95,6 +95,12 @@ class ReviewResultTest(unittest.TestCase):
         unknown = copy.deepcopy(self.result)
         unknown["verdict"] = "UNKNOWN"
         cases.append((unknown, "verdict_not_decisive"))
+        # NEEDS_MORE_INFO 是一次真做完的审查,但它不是裁决 —— 归档预算里没有它。
+        # 08-28:面板侧只测到"NMI 不误伤 provider 健康",而"NMI 不算覆盖"这句话
+        # 在这里才问得出,原先整条矩阵里没人问过。
+        needs_more = copy.deepcopy(self.result)
+        needs_more["verdict"] = "NEEDS_MORE_INFO"
+        cases.append((needs_more, "verdict_not_decisive"))
         timed_out = copy.deepcopy(self.result)
         timed_out["process"] = {"state": "timed_out", "exit_code": 124}
         timed_out["evidence"]["completeness"] = "partial"

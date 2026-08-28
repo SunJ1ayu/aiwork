@@ -4683,16 +4683,22 @@ EOF
     bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/EI1" >/dev/null 2>&1
   count="$(wc -l < "$d/calls" | tr -d ' ')"
   check "V43: typed eligible=false 触发第三审" $([[ $count -eq 3 ]]; echo $?)
-  grep -q 'escalation=ineligible' "$d/EI1.roster"
-  check "V43: roster 记录 ineligible 升级原因" $?
+  if grep -q 'escalation=ineligible' "$d/EI1.roster"; then
+    ok "V43: roster 记录 ineligible 升级原因"
+  else
+    bad "V43: roster 记录 ineligible 升级原因($(grep 'escalation=' "$d/EI1.roster" || printf 'missing'))"
+  fi
   row="$(awk -F '\t' '$1=="submimo"{print}' "$state/health.tsv")"
   check "V43: 决定性裁决但覆盖不合格时健康状态不是 PASS" \
     $([[ "$(printf '%s' "$row" | cut -f2)" == "INELIGIBLE" ]]; echo $?)
   check "V43: INELIGIBLE 是 rc=0 状态、不累计硬失败" \
     $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
 
-  # ⑪ NEEDS_MORE_INFO 是任务层的中间裁决,不是 provider 故障：本轮会补 spare，
-  # 但健康池仍应把这条腿视为可用，也不应累计硬失败。
+  # ⑪ NEEDS_MORE_INFO 是任务层的中间裁决,不是 provider 故障:健康池仍应把这条腿
+  # 视为可用,也不应累计硬失败。
+  # ⚠️ 这一格**问不出**"要不要补 spare":standard 的预算是 1,而升级逻辑只在
+  # 预算=2 时才跑 —— 08-28 我一度把"本轮会补 spare"写进这里的注释,而代码在这个
+  # 配置下根本不会补。补 spare 的问题搬到 ⑫ 去问(那里预算=2,问得出)。
   : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
   env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=standard PANEL_SELECTION_START=0 \
     PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
@@ -4704,7 +4710,25 @@ EOF
   check "V43: NEEDS_MORE_INFO 不累计硬失败" \
     $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
 
-  rm -rf "$d"
+  # ⑫ 同一个 NEEDS_MORE_INFO,在预算=2 的 high 上必须补一条腿:它不是可计数的覆盖,
+  # 归档闸要的两个 eligible 家族里没有它。这一条就是 ⑪ 那句注释被搬过来的地方。
+  : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
+  env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
+    PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
+    STUB_MIMO_VERDICT=NEEDS_MORE_INFO \
+    bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/NMI2" >/dev/null 2>&1
+  count="$(wc -l < "$d/calls" | tr -d ' ')"
+  check "V43: NEEDS_MORE_INFO 在 high 上触发第三审" $([[ $count -eq 3 ]]; echo $?)
+  if grep -q 'escalation=needs-more-info' "$d/NMI2.roster"; then
+    ok "V43: roster 记录 needs-more-info 升级原因"
+  else
+    bad "V43: roster 记录 needs-more-info 升级原因($(grep 'escalation=' "$d/NMI2.roster" || printf 'missing'))"
+  fi
+  row="$(awk -F '\t' '$1=="submimo"{print}' "$state/health.tsv")"
+  check "V43: 补了 spare 也不改 NEEDS_MORE_INFO 腿的健康状态" \
+    $([[ "$(printf '%s' "$row" | cut -f2)" == "PASS" ]]; echo $?)
+
+  if [[ "${KEEP_V43_TMP:-0}" == 1 ]]; then printf 'V43_TMP=%s\n' "$d"; else rm -rf "$d"; fi
 }
 
 echo "=== review-tooling regression oracle ==="
