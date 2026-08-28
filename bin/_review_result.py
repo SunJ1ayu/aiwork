@@ -74,6 +74,16 @@ TOP_KEYS = (
     "usage",
     "failure_kind",
 )
+FACT_KEYS = (
+    "model",
+    "source",
+    "view",
+    "process_state",
+    "verdict",
+    "evidence_completeness",
+    "failure_kind",
+    "billing_mode",
+)
 
 ADAPTER_IDENTITIES = {
     "submimo": ("xiaomi", "xiaomi/"),
@@ -347,7 +357,90 @@ def write_result_no_clobber(path: Path, value: dict[str, Any]) -> bool:
             pass
 
 
+def _validate_facts(value: Any) -> dict[str, Any]:
+    facts = _exact_object(value, "facts", FACT_KEYS)
+    model = _exact_object(facts["model"], "facts.model", ("requested", "invoked", "reported"))
+    for key in ("requested", "invoked", "reported"):
+        _nullable_token(model[key], f"facts.model.{key}")
+    _validate_source(facts["source"], "facts.source")
+    view = _exact_object(facts["view"], "facts.view", ("delivery_state", "mode"))
+    if view["delivery_state"] not in DELIVERY_STATES:
+        raise ReviewResultError("field.enum", "facts.view.delivery_state", view["delivery_state"], sorted(DELIVERY_STATES))
+    if view["mode"] is not None and view["mode"] not in VIEW_MODES:
+        raise ReviewResultError("field.enum", "facts.view.mode", view["mode"], [None, *sorted(VIEW_MODES)])
+    if view["delivery_state"] == "none" and view["mode"] is not None:
+        raise ReviewResultError("view.mode", "facts.view.mode", view["mode"], "null when delivery_state=none")
+    if facts["process_state"] is not None and facts["process_state"] not in PROCESS_STATES:
+        raise ReviewResultError("field.enum", "facts.process_state", facts["process_state"], sorted(PROCESS_STATES))
+    if facts["verdict"] is not None and facts["verdict"] not in VERDICTS:
+        raise ReviewResultError("field.enum", "facts.verdict", facts["verdict"], sorted(VERDICTS))
+    if facts["evidence_completeness"] is not None and facts["evidence_completeness"] not in EVIDENCE_COMPLETENESS:
+        raise ReviewResultError(
+            "field.enum", "facts.evidence_completeness", facts["evidence_completeness"], sorted(EVIDENCE_COMPLETENESS)
+        )
+    if facts["failure_kind"] is not None and facts["failure_kind"] not in FAILURE_KINDS:
+        raise ReviewResultError("field.enum", "facts.failure_kind", facts["failure_kind"], sorted(FAILURE_KINDS))
+    if facts["billing_mode"] is not None and facts["billing_mode"] not in BILLING_MODES:
+        raise ReviewResultError("field.enum", "facts.billing_mode", facts["billing_mode"], sorted(BILLING_MODES))
+    return facts
+
+
+def write_facts(path: Path, value: dict[str, Any]) -> None:
+    facts = _validate_facts(value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}")
+    try:
+        with tmp.open("x", encoding="utf-8") as handle:
+            json.dump(facts, handle, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _facts_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    source_values = (args.git_object_format, args.head_oid, args.index_tree_oid, args.worktree_tree_oid)
+    if any(value is not None for value in source_values) and not all(value is not None for value in source_values):
+        raise ReviewResultError("subject.source", "facts.source", source_values, "all source fields or none")
+    source = None
+    if all(value is not None for value in source_values):
+        source = {
+            "git_object_format": args.git_object_format,
+            "head_oid": args.head_oid,
+            "index_tree_oid": args.index_tree_oid,
+            "worktree_tree_oid": args.worktree_tree_oid,
+        }
+    view_mode = args.view_mode
+    if args.view_delivery_state == "none":
+        view_mode = None
+    return {
+        "model": {
+            "requested": args.requested_model,
+            "invoked": args.invoked_model,
+            "reported": args.reported_model,
+        },
+        "source": source,
+        "view": {"delivery_state": args.view_delivery_state, "mode": view_mode},
+        "process_state": args.process_state,
+        "verdict": args.verdict,
+        "evidence_completeness": args.evidence_completeness,
+        "failure_kind": args.failure_kind,
+        "billing_mode": args.billing_mode,
+    }
+
+
 def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
+    facts = None
+    if args.facts is not None:
+        try:
+            facts = _validate_facts(json.loads(args.facts.read_text(encoding="utf-8")))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ReviewResultError("facts.read", os.fspath(args.facts), str(exc), "readable UTF-8 facts JSON") from exc
     source_values = (args.git_object_format, args.head_oid, args.index_tree_oid, args.worktree_tree_oid)
     if any(value is not None for value in source_values) and not all(value is not None for value in source_values):
         raise ReviewResultError("subject.source", "emit.source", source_values, "all source fields or none")
@@ -359,6 +452,8 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
             "index_tree_oid": args.index_tree_oid,
             "worktree_tree_oid": args.worktree_tree_oid,
         }
+    if facts is not None:
+        source = facts["source"]
     subject = {
         "manifest_version": SUBJECT_MANIFEST_VERSION,
         "task_sha256": args.task_sha256,
@@ -369,10 +464,11 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
         subject["digest"] = subject_digest(subject)
 
     evidence = {"completeness": "none", "ref": None, "digest": None}
-    verdict = args.verdict
+    verdict = facts["verdict"] if facts is not None and facts["verdict"] is not None else args.verdict
     if args.log is not None and args.log.is_file() and args.log.stat().st_size:
-        if args.evidence_completeness is not None:
-            completeness = args.evidence_completeness
+        facts_completeness = facts["evidence_completeness"] if facts is not None else None
+        if facts_completeness is not None or args.evidence_completeness is not None:
+            completeness = facts_completeness or args.evidence_completeness
         else:
             completeness = "complete" if args.process_state == "exited" and args.exit_code == 0 else "partial"
         evidence = {
@@ -385,19 +481,27 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
     if verdict is None:
         verdict = "UNKNOWN"
 
-    failure_kind = args.failure_kind
+    process_state = facts["process_state"] if facts is not None and facts["process_state"] is not None else args.process_state
+    failure_kind = facts["failure_kind"] if facts is not None and facts["failure_kind"] is not None else args.failure_kind
     if failure_kind is None:
-        if args.process_state == "timed_out":
+        if process_state == "timed_out":
             failure_kind = "timeout"
-        elif args.process_state != "exited" or args.exit_code != 0:
+        elif process_state != "exited" or args.exit_code != 0:
             failure_kind = "runtime"
         elif verdict == "UNKNOWN":
             failure_kind = "no_verdict"
         else:
             failure_kind = "none"
-    view_mode = args.view_mode
-    if args.view_delivery_state == "none":
+    view_delivery_state = facts["view"]["delivery_state"] if facts is not None else args.view_delivery_state
+    view_mode = facts["view"]["mode"] if facts is not None else args.view_mode
+    if view_delivery_state == "none":
         view_mode = None
+    model = facts["model"] if facts is not None else {
+        "requested": args.requested_model,
+        "invoked": args.invoked_model,
+        "reported": args.reported_model,
+    }
+    billing_mode = facts["billing_mode"] if facts is not None else args.billing_mode
     return {
         "schema_version": SCHEMA_VERSION,
         "review_contract_version": REVIEW_CONTRACT_VERSION,
@@ -405,14 +509,10 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
         "name": args.name,
         "family": args.family,
         "adapter": args.adapter,
-        "process": {"state": args.process_state, "exit_code": args.exit_code},
-        "model": {
-            "requested": args.requested_model,
-            "invoked": args.invoked_model,
-            "reported": args.reported_model,
-        },
+        "process": {"state": process_state, "exit_code": args.exit_code},
+        "model": model,
         "subject": subject,
-        "view": {"delivery_state": args.view_delivery_state, "mode": view_mode},
+        "view": {"delivery_state": view_delivery_state, "mode": view_mode},
         "verdict": verdict,
         "degraded": args.degraded == "true",
         "evidence": evidence,
@@ -423,7 +523,7 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
             "output_tokens": None,
             "total_tokens": None,
             "api_cost": None,
-            "billing_mode": args.billing_mode,
+            "billing_mode": billing_mode,
         },
         "failure_kind": failure_kind,
     }
@@ -522,6 +622,7 @@ def parser() -> argparse.ArgumentParser:
     eligible.add_argument("--no-verify-evidence", action="store_true")
     emit = commands.add_parser("emit", help="atomically publish one ReviewLegResult v2")
     emit.add_argument("--result", type=Path, required=True)
+    emit.add_argument("--facts", type=Path)
     emit.add_argument("--run-id", required=True)
     emit.add_argument("--name", required=True)
     emit.add_argument("--family", required=True)
@@ -545,6 +646,22 @@ def parser() -> argparse.ArgumentParser:
     emit.add_argument("--duration-ms", type=int)
     emit.add_argument("--failure-kind", choices=sorted(FAILURE_KINDS))
     emit.add_argument("--billing-mode", choices=sorted(BILLING_MODES))
+    facts = commands.add_parser("facts", help="atomically publish adapter facts for the terminal producer")
+    facts.add_argument("--output", type=Path, required=True)
+    facts.add_argument("--requested-model")
+    facts.add_argument("--invoked-model")
+    facts.add_argument("--reported-model")
+    facts.add_argument("--git-object-format")
+    facts.add_argument("--head-oid")
+    facts.add_argument("--index-tree-oid")
+    facts.add_argument("--worktree-tree-oid")
+    facts.add_argument("--view-delivery-state", choices=sorted(DELIVERY_STATES), default="none")
+    facts.add_argument("--view-mode", choices=sorted(VIEW_MODES))
+    facts.add_argument("--process-state", choices=sorted(PROCESS_STATES))
+    facts.add_argument("--verdict", choices=sorted(VERDICTS))
+    facts.add_argument("--evidence-completeness", choices=sorted(EVIDENCE_COMPLETENESS))
+    facts.add_argument("--failure-kind", choices=sorted(FAILURE_KINDS))
+    facts.add_argument("--billing-mode", choices=sorted(BILLING_MODES))
     return top
 
 
@@ -569,6 +686,9 @@ def main() -> int:
             result = _emit_result(args)
             written = write_result_no_clobber(args.result, result)
             print(json.dumps({"path": os.fspath(args.result), "written": written}, separators=(",", ":")))
+            return 0
+        if args.command == "facts":
+            write_facts(args.output, _facts_from_args(args))
             return 0
     except (OSError, ReviewResultError) as exc:
         if isinstance(exc, ReviewResultError):

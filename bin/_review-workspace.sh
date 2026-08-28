@@ -260,6 +260,20 @@ review_workspace_repo() {
   printf '%s\n' "$REVIEW_WORK_REPO"
 }
 
+review_workspace_write_facts() { # requested-model invoked-model [billing-mode]
+  local requested="${1:-}" invoked="${2:-}" billing="${3:-subscription}"
+  local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper="${AIWORK_REVIEW_RESULT_BIN:-}"
+  [[ -n "$output" ]] || return 0
+  [[ -n "$helper" && -f "$helper" ]] \
+    || { review_workspace__say 'typed facts producer 缺件'; return 78; }
+  python3 "$helper" facts --output "$output" \
+    --requested-model "$requested" --invoked-model "$invoked" \
+    --git-object-format "$REVIEW_SNAPSHOT_OBJECT_FORMAT" \
+    --head-oid "$REVIEW_SNAPSHOT_HEAD" --index-tree-oid "$REVIEW_SNAPSHOT_INDEX_TREE" \
+    --worktree-tree-oid "$REVIEW_SNAPSHOT_TREE" \
+    --view-delivery-state complete --view-mode full_snapshot --billing-mode "$billing"
+}
+
 review_workspace_cleanup() {
   local target="${REVIEW_WORKSPACE_DIR:-}" base="${REVIEW_WORKSPACE_BASE_REAL:-}"
   local marker

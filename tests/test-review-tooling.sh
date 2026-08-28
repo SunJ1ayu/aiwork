@@ -493,7 +493,7 @@ v4_output_validation() {
 
   # GLM-family reasoning models: content null but the review lives in
   # reasoning_content -> that leg must be recovered, not reported empty
-  start_stub_api "$d" '{"choices":[{"message":{"content":null,"reasoning_content":"Conclusion: PASS (reasoning fallback)"}}]}'
+  start_stub_api "$d" '{"choices":[{"message":{"content":null,"reasoning_content":"Conclusion: PASS\nreasoning fallback"}}]}'
   run_engine_against "$STUB_URL" "$d/t.md" "$d/reasoning.log" --repo "$d" >/dev/null; rc=$?
   check "reasoning_content fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
   grep -q "reasoning fallback" "$d/reasoning.log"; check "reasoning_content text lands in log" $?
@@ -3267,7 +3267,8 @@ PWN
   #    **业主真实的** ~/.cache/aiwork/mimo-review-home(判据每跑一次重写一次它的配置)。
   #    同族第三处,2026-08-25 panel 抓到、V45 当场红过。
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" REVIEW_NO_MY_REVIEW=1 \
-    MIMO_REVIEW_HOME="$d/mimo-home-v36" \
+    MIMO_REVIEW_HOME="$d/mimo-home-v36" AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" \
+    AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o2" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o2" 2>/dev/null \
@@ -3276,6 +3277,14 @@ PWN
     && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r2=$?
   local seen2; seen2="$(cat "$d/o2" 2>/dev/null || echo 没跑)"
   check "V36: submimo review 副本可写、原仓只读(双向试写:$seen2)" $r2
+  python3 - "$d/mimo.facts.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['model']['requested'] == p['model']['invoked'] == 'xiaomi/mimo-v2.5-pro'
+assert p['source']['git_object_format'] in ('sha1','sha256')
+assert p['view'] == {'delivery_state':'complete','mode':'full_snapshot'}
+PY
+  check "V36: submimo 把实际模型与完整 snapshot 事实交给唯一 terminal producer" $?
 
   # ── ③ subkimi
   # subkimi 要一份 review home 才肯派发(config.toml + 守卫 + 凭证),照 V13 的建法。

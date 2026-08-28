@@ -237,6 +237,74 @@ class ReviewResultTest(unittest.TestCase):
         self.assertEqual(result["view"], {"delivery_state": "none", "mode": None})
         self.assertFalse(coverage_eligible(result))
 
+    def test_adapter_facts_upgrade_the_supervisor_result_without_a_second_writer(self) -> None:
+        facts = self.root / "attempt.facts.json"
+        result_path = self.root / "attempt.result.json"
+        helper = str(ROOT / "bin" / "_review_result.py")
+        common_source = [
+            "--git-object-format",
+            "sha1",
+            "--head-oid",
+            "1" * 40,
+            "--index-tree-oid",
+            "2" * 40,
+            "--worktree-tree-oid",
+            "3" * 40,
+        ]
+        subprocess.run(
+            [
+                sys.executable,
+                helper,
+                "facts",
+                "--output",
+                str(facts),
+                "--requested-model",
+                "kimi-code/k3",
+                "--invoked-model",
+                "kimi-code/k3",
+                *common_source,
+                "--view-delivery-state",
+                "complete",
+                "--view-mode",
+                "full_snapshot",
+                "--billing-mode",
+                "subscription",
+            ],
+            check=True,
+        )
+        proc = subprocess.run(
+            [
+                sys.executable,
+                helper,
+                "emit",
+                "--result",
+                str(result_path),
+                "--facts",
+                str(facts),
+                "--run-id",
+                "panel-facts",
+                "--name",
+                "subkimi",
+                "--family",
+                "moonshot",
+                "--adapter",
+                "subkimi",
+                "--exit-code",
+                "0",
+                "--task-sha256",
+                self.result["subject"]["task_sha256"],
+                "--log",
+                str(self.log),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        self.assertEqual(result["subject"]["digest"], self.result["subject"]["digest"])
+        self.assertTrue(coverage_eligible(result))
+
 
 if __name__ == "__main__":
     unittest.main()

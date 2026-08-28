@@ -587,19 +587,21 @@ stagger() {
 #   会话一死,run_leg 这层壳会跟着没(于是回落逻辑不再跑),但**腿自己活着写完日志** ——
 #   要保的正是那份日志。
 run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
-  local agent="$1" chat="$2" log="$3" err="$4" label="$5" rc family base failed_state failed_result failed_log
+  local agent="$1" chat="$2" log="$3" err="$4" label="$5" rc family base failed_state failed_result failed_log agent_facts
   base="${log%.log}"
   family="$(panel_leg_family "$label")" || return 70
   if [[ "$agent" == "$chat" ]]; then
     failed_state="$base.state"; failed_result="$base.result.json"; failed_log="$log"
+    agent_facts="$base.facts.json"
   else
     failed_state="$base.agent.state"; failed_result="$base.agent.result.json"; failed_log="$base.agent.log"
+    agent_facts="$base.agent.facts.json"
   fi
   # --panel-dispatch 走**命令行**,不用环境变量(后者会被 shell 继承 = 随手可按的后门);
   # 而且放在**参数末尾** —— 放开头会把各腿的位置参数整体顶偏一位,
   # 任何按 $3 取日志路径的调用方(判据里的假腿全是这么写的)当场就坏。08-06 实测。
   session_run "$base.state" "$base.result.json" "$failed_state" "$failed_result" \
-    "$log" "$failed_log" "$log" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$agent")" false \
+    "$log" "$failed_log" "$log" "$agent_facts" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$agent")" false \
     "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   if [[ $rc -eq 0 || "$agent" == "$chat" ]]; then return $rc; fi
   # agent leg died and a distinct chat leg exists -> keep the evidence, then retry
@@ -611,7 +613,7 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   echo "  NOTE: $label agent leg failed (rc=$agent_rc) -> fallback to chat leg;" \
        "agent output kept at ${log%.log}.agent.log(.err)"
   session_run "$base.state" "$base.result.json" "$base.state" "$base.result.json" \
-    "$log" "$log" "$base.evidence.log" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$chat")" true \
+    "$log" "$log" "$base.evidence.log" "$base.facts.json" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$chat")" true \
     "$chat" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   # 横幅写进日志本身,不只印在 stdout:这份结论以后会被单独读到(归档、断线重连),
   # 那时终端上那行 NOTE 早就没了,而一份降级腿的结论长得和健康腿一模一样。
@@ -647,16 +649,21 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
 # `run_leg` 的后台子 shell 里 —— 那两处都跟控制器同进程组,一起被杀。
 # 08-23 的真实时间线证伪了"控制器增量写"那个看起来对的方案:
 # 控制器死在**第一条腿交卷之前**,增量写和一次性写落盘字节数都是 0。
-session_run() {  # success-state/result failure-state/result log failure-log evidence-log run/name/family/adapter degraded cmd...
+session_run() {  # success-state/result failure-state/result log failure-log evidence-log facts run/name/family/adapter degraded cmd...
   local state="$1" result="$2" failed_state="$3" failed_result="$4" log="$5" failed_log="$6" evidence_log="$7"
-  local run_id="$8" name="$9"; shift 9
+  local facts="$8" run_id="$9"; shift 9
+  local name="$1"; shift
   local family="$1" adapter="$2" degraded="$3"; shift 3
   setsid --wait bash -c '
     st="$1"; result="$2"; failed_st="$3"; failed_result="$4"; log="$5"; failed_log="$6"; evidence_log="$7"
-    helper="$8"; run_id="$9"; shift 9
+    facts="$8"; helper="$9"; shift 9
+    run_id="$1"; shift
     name="$1"; family="$2"; adapter="$3"; degraded="$4"; task_sha="$5"; shift 5
     started="$(date -u +%FT%TZ)"
     started_ns="$(date +%s%N)"
+    export AIWORK_REVIEW_FACTS_PATH="$facts" AIWORK_REVIEW_RESULT_BIN="$helper"
+    export AIWORK_REVIEW_RUN_ID="$run_id" AIWORK_REVIEW_NAME="$name" AIWORK_REVIEW_FAMILY="$family"
+    export AIWORK_REVIEW_ADAPTER="$adapter" AIWORK_REVIEW_TASK_SHA256="$task_sha" AIWORK_REVIEW_DEGRADED="$degraded"
     "$@"; rc=$?
     if [[ "$rc" -ne 0 && "$failed_st" != "$st" ]]; then
       [[ ! -e "$log" ]] || cp -f -- "$log" "$failed_log"
@@ -666,19 +673,20 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
     fi
     finished_ns="$(date +%s%N)"
     duration_ms=$(( (finished_ns - started_ns) / 1000000 ))
-    AIWORK_REVIEW_RESULT_PATH="$result" AIWORK_REVIEW_RUN_ID="$run_id" \
-      AIWORK_REVIEW_NAME="$name" AIWORK_REVIEW_FAMILY="$family" AIWORK_REVIEW_ADAPTER="$adapter" \
-      AIWORK_REVIEW_TASK_SHA256="$task_sha" AIWORK_REVIEW_DEGRADED="$degraded" \
-      python3 "$helper" emit --result "$result" --run-id "$run_id" --name "$name" \
+    facts_args=(); [[ ! -f "$facts" ]] || facts_args=(--facts "$facts")
+    if python3 "$helper" emit --result "$result" "${facts_args[@]}" --run-id "$run_id" --name "$name" \
         --family "$family" --adapter "$adapter" --exit-code "$rc" --task-sha256 "$task_sha" \
-        --degraded "$degraded" --log "$evidence_log" --duration-ms "$duration_ms" >/dev/null || \
+        --degraded "$degraded" --log "$evidence_log" --duration-ms "$duration_ms" >/dev/null; then
+      rm -f -- "$facts"
+    else
       echo "panel-review: typed terminal write failed: $result" >&2
+    fi
     # 原子落盘:先写临时文件再 mv。直接 `> "$st"` 的话,腿在写到一半被砍会留下
     # 半截 state,读不到 rc= ⇒ 花名册印出 FAIL(rc=)(空 rc)这种没设计过的第三种形态。
     printf "rc=%s\nstarted=%s\nfinished=%s\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st.tmp" && mv -f "$st.tmp" "$st"
     exit $rc
   ' _ "$state" "$result" "$failed_state" "$failed_result" "$log" "$failed_log" "$evidence_log" \
-    "$REVIEW_RESULT_BIN" "$run_id" "$name" "$family" "$adapter" "$degraded" "$PANEL_TASK_SHA256" "$@"
+    "$facts" "$REVIEW_RESULT_BIN" "$run_id" "$name" "$family" "$adapter" "$degraded" "$PANEL_TASK_SHA256" "$@"
 }
 declare -A LEG_PID
 launch_leg() {  # launch_leg <name>

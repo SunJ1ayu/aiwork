@@ -396,10 +396,38 @@ def build_prompt(args: argparse.Namespace) -> tuple[str, list[str]]:
     return "\n\n".join(parts), warnings
 
 
-VERDICT_RE = re.compile(r"PASS|BLOCK|NEEDS_MORE_INFO")
+def review_result_helper() -> Path:
+    return Path(os.environ.get("AIWORK_REVIEW_RESULT_BIN", Path(__file__).with_name("_review_result.py")))
 
 
-def validate_result(result: str, mode: str) -> str | None:
+def write_adapter_facts() -> None:
+    output = os.environ.get("AIWORK_REVIEW_FACTS_PATH")
+    if not output:
+        return
+    model = os.environ.get("MIMO_MODEL", "mimo-2.5")
+    subprocess.run(
+        [
+            sys.executable,
+            str(review_result_helper()),
+            "facts",
+            "--output",
+            output,
+            "--requested-model",
+            model,
+            "--invoked-model",
+            model,
+            "--view-delivery-state",
+            "complete",
+            "--view-mode",
+            "diff_bundle",
+            "--billing-mode",
+            "api",
+        ],
+        check=True,
+    )
+
+
+def validate_result(result: str, mode: str, log_path: Path) -> str | None:
     """Reject model output that would masquerade as a successful review.
 
     Empty output (provider hiccup, over-long prompt) used to exit 0 with a
@@ -411,8 +439,17 @@ def validate_result(result: str, mode: str) -> str | None:
     function exists to stop."""
     if not result.strip():
         return "model returned empty output"
-    if mode == "review" and not VERDICT_RE.search(result):
-        return "review output contains no PASS/BLOCK/NEEDS_MORE_INFO verdict"
+    if mode == "review":
+        normalized = subprocess.run(
+            [sys.executable, str(review_result_helper()), "normalize", str(log_path)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if normalized.returncode != 0:
+            return "shared verdict normalizer failed"
+        if normalized.stdout.strip() == "UNKNOWN":
+            return "review output contains no standalone PASS/BLOCK/NEEDS_MORE_INFO verdict"
     return None
 
 
@@ -461,6 +498,7 @@ def main() -> None:
         fail(f"invalid REVIEW_MODE '{args.mode}' (want review or explore)")
 
     prompt, warnings = build_prompt(args)
+    write_adapter_facts()
     for w in warnings:
         print(f"{LABEL}: WARNING: {w}", file=sys.stderr)
     if args.dry_run:
@@ -475,7 +513,7 @@ def main() -> None:
         return
     # Validate AFTER writing the log: evidence is kept either way, the reason
     # lands on stderr (panel-review's .err sidecar), and rc=1 trips its WARNING.
-    problem = validate_result(result, args.mode)
+    problem = validate_result(result, args.mode, log_path)
     if problem:
         fail(f"{problem}; raw output kept in {log_path}")
     print(result)

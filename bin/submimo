@@ -251,6 +251,7 @@ if [[ "$MODE" == "review" ]]; then
   SOURCE_REPO="$REVIEW_SOURCE_REPO"
   RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
   REPO_DIR="$(review_workspace_repo)" || exit 78
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 fi
 
 _submimo_cleanup() {
