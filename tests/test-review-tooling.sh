@@ -4514,9 +4514,11 @@ v43_health_aware_rotating_budget() {
   local -a pool_legs
   mapfile -t pool_legs < <( . "$pb/_panel-roster-lib.sh" 2>/dev/null; printf '%s\n' ${PANEL_LEGS_ORDER[@]+"${PANEL_LEGS_ORDER[@]}"} )
   pool_count="${#pool_legs[@]}"
-  for leg in "${pool_legs[@]}"; do
-    for leg in "$leg" "$leg-agent"; do
-    cat > "$pb/$leg" <<'EOF'
+  # 桩的生成抽成函数:⑨ 把 subdeepseek-agent 换成必败桩之后,⑩⑫ 问的是**别的**问题,
+  # 得先把它换回健康桩 —— 否则那条腿一降级,escalation=degraded 会盖住要问的原因,
+  # 判据就红在别处(08-28 第一版正是这样:打印出来的实际值是 degraded)。
+  _v43_write_stub() {  # _v43_write_stub <路径>
+    cat > "$1" <<'EOF'
 #!/usr/bin/env bash
 name="$(basename "$0")"
 name="${name%-agent}"
@@ -4550,7 +4552,11 @@ if [[ "${STUB_INELIGIBLE:-}" != "$name" ]]; then
 fi
 exit "$rc"
 EOF
-    chmod +x "$pb/$leg"
+    chmod +x "$1"
+  }
+  for leg in "${pool_legs[@]}"; do
+    for leg in "$leg" "$leg-agent"; do
+      _v43_write_stub "$pb/$leg"
     done
   done
 
@@ -4676,6 +4682,7 @@ EOF
 
   # ⑩ 共享覆盖谓词已经判定不可计数时,调度器必须补一条腿；否则归档才发现
   # 配额不足,这一轮剩余的健康 reviewer 已经白白没派。
+  _v43_write_stub "$pb/subdeepseek-agent"   # 收掉 ⑨ 的必败桩:这里问的不是降级
   : > "$d/calls"; rm -rf "$state"; mkdir -p "$state"
   env -u PANEL_REVIEW_BUDGET PANEL_IMPACT_RISK=high PANEL_SELECTION_START=0 \
     PANEL_STATE_DIR="$state" PANEL_STAGGER_MAX=0 STUB_CALLS="$d/calls" \
