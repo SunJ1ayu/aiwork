@@ -18,7 +18,7 @@ if [[ "${PANEL_OBS_ENV_SCRUBBED:-}" != "1" ]]; then
     -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG \
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
-    -u PANEL_DIFF_BASE -u PANEL_INCLUDE \
+    -u PANEL_DIFF_BASE -u PANEL_INCLUDE -u PANEL_ORACLE_CMD \
     PANEL_OBS_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
 # 腿名单的**唯一源**。判据自己也不许抄第二份 —— 抄了就会像 08-26 那样:
@@ -28,6 +28,13 @@ PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
+
+# P0:这套判据会在外层 panel 的 PANEL_ORACLE_CMD 里被调用。若入口不清掉它,
+# 下面每个桩 panel 又会递归启动整套总闸,最终把 P2/P5 的腿数与 observation 污染掉。
+# 2026-08-28 第二轮真派发前的 oracle 实证为 V43 两红 + P2/P5 三红；脱离外层
+# PANEL_ORACLE_CMD 单跑则 68/0。这里直接问入口环境,不靠那五条远端症状猜根因。
+check "P0: 套件入口清理外层 PANEL_ORACLE_CMD，桩 panel 不递归跑总闸" \
+  $([[ -z "${PANEL_ORACLE_CMD:-}" ]]; echo $?)
 
 make_leg_stubs() { # bindir —— 每条腿铺一个健康桩(两种命名都铺)
   local b="$1" leg bin_name
@@ -53,7 +60,8 @@ case "${AIWORK_REVIEW_ADAPTER:?}" in
 esac
 object_format="$(git -C "$4" rev-parse --show-object-format)"
 head_oid="$(git -C "$4" rev-parse HEAD)"
-tree_oid="$(git -C "$4" write-tree)"
+# fixture 仓是 clean/static；并发桩只读 HEAD tree，不能用 write-tree 争 index.lock。
+tree_oid="$(git -C "$4" rev-parse 'HEAD^{tree}')"
 python3 "${AIWORK_REVIEW_RESULT_BIN:?}" facts --output "${AIWORK_REVIEW_FACTS_PATH:?}" \
   --requested-model "$model" --invoked-model "$model" --reported-model "$model" \
   --git-object-format "$object_format" --head-oid "$head_oid" \

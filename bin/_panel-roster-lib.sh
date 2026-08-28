@@ -7,11 +7,12 @@
 # 「同一个事实存两处,只更新其中一个」,本机记过账的老毛病。
 #
 # 设计要点(track panel-roster-from-disk):
-#   花名册 = f(<prefix>.plan, <prefix>.<leg>.state, <prefix>.final?)
+#   花名册 = f(<prefix>.plan, <prefix>.<leg>.state/result.json, <prefix>.final?)
 #   —— **读盘算出来**,不依赖任何进程还活着。
 #      (抬头那个渲染时间戳除外:它答的是"什么时候打印的",不是盘上状态的函数。)
 #   · .plan  控制器在**派发之前**写(那时选腿结果已全部已知)
 #   · .state **腿自己在 setsid 出去的那个会话里**写(控制器死了它照样写得成)
+#   · .result.json 是 v2 typed terminal truth；只有 legacy 轮次才回落读 raw log
 #   · .final 控制器正常收尾才写;缺了不是错,只说明它没活到最后
 
 # ── 腿的身份表:**一条腿的全部身份只写在这一行里** ────────────────────────
@@ -79,8 +80,13 @@ panel_leg_agent()  { panel_leg_field "$1" agent; }
 panel_leg_chat()   { panel_leg_field "$1" chat; }
 panel_leg_switch() { panel_leg_field "$1" switch; }
 
+review_result_helper() {
+  printf '%s\n' "${PANEL_REVIEW_RESULT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_review_result.py}"
+}
+
 verdict_of() {  # verdict_of <log>; legacy/raw-log compatibility only
-  local helper="${PANEL_REVIEW_RESULT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_review_result.py}"
+  local helper
+  helper="$(review_result_helper)"
   # ReviewLegResult v2 把 verdict normalizer 收敛到 Python kernel。这里保留函数名只为
   # 旧日志/花名册兼容；缺 helper 或解析失败都只能 UNKNOWN，不许复活第二套 regex。
   if [[ ! -f "$helper" ]]; then
@@ -99,8 +105,8 @@ _plan_leg_field() {  # _plan_leg_field <planfile> <leg> <2=selected|3=health>
 
 # 一条腿的状态,全部读盘算出来
 roster_entry_from_disk() {  # roster_entry_from_disk <prefix> <leg>
-  local prefix="$1" name="$2" plan="$1.plan" state="$1.$2.state" log="$1.$2.log"
-  local selected health rc state_txt verdict
+  local prefix="$1" name="$2" plan="$1.plan" state="$1.$2.state" log="$1.$2.log" result="$1.$2.result.json"
+  local selected health rc state_txt verdict helper typed typed_state typed_exit typed_verdict typed_degraded typed_failure typed_eligible
   selected="$(_plan_leg_field "$plan" "$name" 2)"
   health="$(_plan_leg_field "$plan" "$name" 3)"
   # **盘上有 state ⇒ 它真的跑过**,不管 plan 当初说没说要派它。
@@ -132,6 +138,20 @@ roster_entry_from_disk() {  # roster_entry_from_disk <prefix> <leg>
   if [[ "$rc" == "0" ]]; then
     verdict="$(verdict_of "$log")"
     state_txt="PASS(verdict=$verdict)"
+    # v2 sidecar 是 typed terminal truth；raw log 只给没有 sidecar 的 legacy 轮次兜底。
+    # coverage 不合格必须在人会粘进 verify.md 的 roster 里可见，不能只藏在 health.tsv。
+    helper="$(review_result_helper)"
+    if [[ -s "$result" && -f "$helper" ]]; then
+      typed="$(python3 "$helper" describe "$result" 2>/dev/null)" || typed=""
+      if [[ -n "$typed" ]]; then
+        IFS=$'\t' read -r typed_state typed_exit typed_verdict typed_degraded typed_failure typed_eligible <<<"$typed"
+        verdict="$typed_verdict"
+        state_txt="PASS(verdict=$verdict)"
+        if [[ "$verdict" == "PASS" || "$verdict" == "BLOCK" ]] && [[ "$typed_eligible" != true ]]; then
+          state_txt="PASS(verdict=$verdict,coverage=INELIGIBLE)"
+        fi
+      fi
+    fi
   else
     state_txt="FAIL(rc=$rc)"
   fi

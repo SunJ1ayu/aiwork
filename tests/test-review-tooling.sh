@@ -4543,7 +4543,9 @@ if [[ "${STUB_INELIGIBLE:-}" != "$name" ]]; then
   esac
   object_format="$(git -C "$4" rev-parse --show-object-format)"
   head_oid="$(git -C "$4" rev-parse HEAD)"
-  tree_oid="$(git -C "$4" write-tree)"
+  # fixture 仓在整段 V43 里保持 clean/static。并发桩若用 write-tree 会争同一个
+  # .git/index.lock，把健康腿随机变成 subject_unknown；这里只读已提交的冻结树。
+  tree_oid="$(git -C "$4" rev-parse 'HEAD^{tree}')"
   python3 "${AIWORK_REVIEW_RESULT_BIN:?}" facts --output "${AIWORK_REVIEW_FACTS_PATH:?}" \
     --requested-model "$model" --invoked-model "$model" --reported-model "$model" \
     --git-object-format "$object_format" --head-oid "$head_oid" \
@@ -4559,6 +4561,11 @@ EOF
       _v43_write_stub "$pb/$leg"
     done
   done
+  if grep -q 'tree_oid=.*write-tree' "$pb/submimo"; then
+    bad "V43: 并发健康桩不许争用共享 git index"
+  else
+    ok "V43: 并发健康桩只读冻结 tree，不争用共享 git index"
+  fi
 
   help="$(bash "$pb/panel-review" --help 2>&1)"
   local missing_help=0
@@ -4711,6 +4718,8 @@ EOF
     $([[ "$(printf '%s' "$row" | cut -f2)" == "INELIGIBLE" ]]; echo $?)
   check "V43: INELIGIBLE 是 rc=0 状态、不累计硬失败" \
     $([[ "$(printf '%s' "$row" | cut -f4)" == "0" ]]; echo $?)
+  grep -q 'submimo=PASS(verdict=PASS,coverage=INELIGIBLE)' "$d/EI1.roster"
+  check "V43: roster 不能把 typed INELIGIBLE 伪装成普通 PASS" $?
 
   # ⑩b 不可计数 ≠ 供应商坏了。任何非 PASS 的健康状态都会让这条腿进冷却窗口
   # (默认 6 小时)、下一轮直接不派 —— 于是一次结果不合格就把一条**活着的**腿

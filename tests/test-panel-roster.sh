@@ -40,6 +40,25 @@ make_leg() { # make_leg <path> <sleep> <rc>
 #!/usr/bin/env bash
 sleep $2
 printf 'Conclusion: PASS\n' > "\$3"
+if [[ "$3" -eq 0 ]]; then
+  case "\${AIWORK_REVIEW_ADAPTER:?}" in
+    submimo) model=xiaomi/mimo-v2-flash ;;
+    subdeepseek-agent|subdeepseek) model=deepseek-chat ;;
+    subglm-agent) model=go/glm-4.5 ;;
+    subglm) model=glm-4.5 ;;
+    subkimi) model=kimi-code/k2.5 ;;
+    subgemini) model=gemini-2.5-pro ;;
+  esac
+  object_format="\$(git -C "\$4" rev-parse --show-object-format)"
+  head_oid="\$(git -C "\$4" rev-parse HEAD)"
+  # fixture 仓保持 clean/static；只读冻结 tree，不用 write-tree 争共享 index.lock。
+  tree_oid="\$(git -C "\$4" rev-parse 'HEAD^{tree}')"
+  python3 "\${AIWORK_REVIEW_RESULT_BIN:?}" facts --output "\${AIWORK_REVIEW_FACTS_PATH:?}" \
+    --requested-model "\$model" --invoked-model "\$model" --reported-model "\$model" \
+    --git-object-format "\$object_format" --head-oid "\$head_oid" \
+    --index-tree-oid "\$tree_oid" --worktree-tree-oid "\$tree_oid" \
+    --view-delivery-state complete --view-mode full_snapshot --evidence-completeness complete
+fi
 exit $3
 EOF
   chmod +x "$1"
