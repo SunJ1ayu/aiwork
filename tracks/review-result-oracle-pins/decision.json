@@ -3,7 +3,9 @@
   "track": "review-result-oracle-pins",
   "impact": {
     "level": "high",
-    "factors": ["judging_control"]
+    "factors": [
+      "judging_control"
+    ]
   },
   "design": {
     "uncertainty": "low",
@@ -17,6 +19,6 @@
     "model": null
   },
   "outcome": {
-    "verdict": null
+    "verdict": "PASS"
   }
 }

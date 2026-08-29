@@ -140,3 +140,28 @@ runlog: full-regression-final-r3 rc=0 commit=72caea4 dirty=no final=yes at=2026-
 - consumer oracle 是从额度中断留下的 dirty worktree 恢复的；提交图仍保持
   `eb0c01f`（测试矩阵）先于 `1adda64`（实现），因此 checkout 测试提交本身会红，
   但本窗口没有重新制造一遍人工红跑收据。影响仅限开发过程证据，不影响最终行为判据。
+
+## 复核与署名(2026-08-30,主 agent 补记)
+
+- 上面那句 `arbitrated verdict (主裁): PASS` 是**执行腿(GPT)在我额度用尽期间写的**,
+  当时它不是主裁下的话。2026-08-30 我(Claude,主 agent)按业主要求做了独立复核,
+  **裁决:ACCEPT** —— 这一单的 PASS 从这一刻起才是主裁下的。
+- 复核不看自述,做了四件事:
+  1. 在干净树 `7257520` 上亲跑全量回归 rc=0,逐项数字与 `full-regression-final-r3` 一致;
+  2. 拿本单真实归档的第二轮 observation 自己跑一遍谓词:3 个 coverage-eligible 家族
+     (xiaomi / deepseek / google)全 PASS、无冲突;kimi 的 timeout PASS 与 GLM 的降级
+     被正确排除;
+  3. 造 18 条对抗探针(NMI / UNKNOWN / timeout / degraded / rc≠0 / 篡改证据摘要 /
+     证据文件丢失 / model 不符 / 视野不全 / 换 subject / 跨 run 拼接 / eligible PASS-BLOCK
+     冲突 / v1 / 失败的 panel run)全部 BLOCK,而且核的是规则名
+     `observation.review_budget`,不是只看 rc —— 防"红在别处";
+  4. 变异 10 条打共享谓词,8 条被判据咬住。
+- **咬不住的那 2 条已单独开单收口**:track `review-result-oracle-pins`
+  (`subject_unknown` / `evidence_incomplete` 在判据里是搭便车的;实现里两条检查都在,
+  所以不是活 bug,是钉不住)。
+- 仍敞着、留给 P1 判断的结构性缺口:coverage 绑的是 panel 冻结的 `subject_digest`,
+  但**没有任何地方拿它和真正被归档的那棵树比一遍**。本单自己就有一个代码提交
+  (`8909f07`)落在 panel subject(`ea50e38`)之后 —— 我逐行读过,小且失败时会回落老路径,
+  不改变本单裁决;但这条路是敞着的。
+- 本 track 已归档,不再往它里面加收据:这次复核的机器证据在 track
+  `review-result-oracle-pins` 的 evidence/ 下。
