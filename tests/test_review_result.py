@@ -117,6 +117,28 @@ class ReviewResultTest(unittest.TestCase):
                 self.assertFalse(coverage_eligible(result))
                 self.assertIn(reason, eligibility_reasons(result))
 
+    def test_a_review_of_an_unknown_object_is_never_coverage(self) -> None:
+        # 2026-08-30 复核补钉:整条矩阵里没人单独问过「subject 不明」这一条。
+        # 实测:把 `subject_unknown` 从谓词里删掉,整套判据仍然全绿 ——
+        # 因为现实里它总和 view_incomplete 结伴出现,而结伴出现 = 谁都没被钉住。
+        # 这里必须是**唯一**理由,否则它又变成搭别人便车的断言。
+        result = copy.deepcopy(self.result)
+        result["subject"]["source"] = None
+        result["subject"]["digest"] = None
+        self.assertIs(validate_result(result), result)
+        self.assertFalse(coverage_eligible(result))
+        self.assertEqual(eligibility_reasons(result), ["subject_unknown"])
+
+    def test_a_verdict_with_no_preserved_evidence_is_never_coverage(self) -> None:
+        # 同上:删掉 `evidence_incomplete` 那一条,判据也照样全绿。
+        # 这条钉的是最难看的一种假覆盖 —— adapter 交了 facts 说「我 PASS 了」,
+        # 但盘上一个字的评审正文都没留下,事后谁也复核不了它到底审没审。
+        result = copy.deepcopy(self.result)
+        result["evidence"] = {"completeness": "none", "ref": None, "digest": None}
+        self.assertIs(validate_result(result), result)
+        self.assertFalse(coverage_eligible(result))
+        self.assertEqual(eligibility_reasons(result), ["evidence_incomplete"])
+
     def test_review_contract_is_recorded_but_not_subject_identity(self) -> None:
         other = copy.deepcopy(self.result)
         other["review_contract_version"] = 2
