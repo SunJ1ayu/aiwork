@@ -14,4 +14,4 @@ SWITCH_MODEL_SH=tests/fixtures/switch-model.sh.pre-atomic \
 "证明闸咬得动的靶子"待在一起。**本目录只剩这份说明,靶子已不在这里。**
 预期 **4 红**(⑤两条 + ⑥两条),而 ①②③④ 全绿 —— 这正是这次收紧的意义:
 "写完之后内容对不对"那几条**看不见** truncate-then-write,只有 ⑤⑥ 看得见。
-靶子放仓里而不是 scratchpad,是因为 scratchpad 会随会话消失,那样红检就没法复现。
+靶子放仓里而不是 scratchpad,是因为 scratchpad 会随会话消失,那样红检就没法复现。 [仓外不承重]

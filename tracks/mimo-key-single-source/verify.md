@@ -51,7 +51,7 @@ runlog: full-suite-with-new-entry rc=1 commit=5b32c32 dirty=yes at=2026-09-01T04
 - `mutation-after-io` 15/1 —— m15 "红了但红错地方":我第一版只删了 bash 那道守卫,
   而原语有两道(python 里还有一道)。**不是断言咬不动,是我的变异只拆了一半防线。**
 - 两份 `redcheck-switch-model-control-old-version` **各 9 绿 4 红**(同一件事跑了两遍:
-  第一遍靶子在会话 scratchpad 里,第二遍换成仓内 `fixtures/switch-model.sh.pre-atomic`
+  第一遍靶子在会话 scratchpad 里,第二遍换成仓内 `fixtures/switch-model.sh.pre-atomic` [仓外不承重]
   —— 靶子放仓外的话,下次就复现不出来了)。这是全单最有说服力的一份:拿**修复之前**
   那一版 `switch-model.sh` 跑新检查,①②③④(内容对不对、fail-closed、不留临时文件)
   **全绿**,只有新加的 ⑤⑥ 四条红,其中一条就是
@@ -120,7 +120,7 @@ submimo=SKIP(rotation) subdeepseek=SKIP(rotation) subglm=未收尾(无 state:被
     写值改走环境变量,curl 的 Authorization 改走 `-K -` 的 stdin 配置。
   - **F 判据手抄了第二份取值路径** —— 保留手抄(判据不该依赖被测实现的 helper),
     但把它钉在清单上(m14),漂了红在它自己身上。
-  - **G 变异夹具的 `MUT` 写死了一个已死会话的 scratchpad id** —— 换 `mktemp -d`。
+  - **G 变异夹具的 `MUT` 写死了一个已死会话的 scratchpad id** —— 换 `mktemp -d`。 [仓外不承重]
 
   *subkimi(moonshot)提的,逐条核过*
   - **F1 ②b 占位符绿 + switch-model.sh 非原子写(Medium)—— 成立,已修。**
