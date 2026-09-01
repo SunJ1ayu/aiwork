@@ -10,6 +10,11 @@
 #   ③ 读不到源头 key 时**拒绝写**,原文件一字未动(fail-closed)
 #   ④ 不留 settings.json.XXXXXX 临时文件
 set -uo pipefail
+
+# 判卷面的不变量:跑判据的进程不许有外网出口。
+# (09-01 搬进 tests/ 时才被 no-egress 判据抓到缺这行 —— 它住在 track 目录里的时候,
+#  没有任何东西要求它满足判卷面的规矩,一直带着网在跑。)
+. "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78   # source 失败=裸跑,必须硬退
 # 靶子可换,好让红检拿改动**之前**那一版跑一遍对照组(证明这道闸咬得动,不是恒真)。
 SW="${SWITCH_MODEL_SH:-/root/.claude/switch-model.sh}"
 PASS=0; FAIL=0
