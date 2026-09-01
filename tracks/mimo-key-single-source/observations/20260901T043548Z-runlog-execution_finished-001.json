@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "mimo-key-single-source",
+  "run_id": "20260901T043006Z-01-full-suite-with-new-entry",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "full-suite-with-new-entry",
+  "started_at": "2026-09-01T04:30:06Z",
+  "finished_at": "2026-09-01T04:35:48Z",
+  "duration_ms": 341601,
+  "exit_code": 1,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 1,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
