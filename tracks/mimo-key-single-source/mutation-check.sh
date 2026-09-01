@@ -14,7 +14,10 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MUT="${MUT_DIR:-/tmp/claude-0/-root/54dc85e2-a141-47df-b226-9e40554f26c7/scratchpad/mut}"
+# 夹具目录用 mktemp,不写死路径:第一版写死了**某一次会话的 scratchpad id**,
+# 那个 id 随会话消失,留下的只是一条会误导下一个人的死路径。
+MUT="${MUT_DIR:-$(mktemp -d)}"
+trap 'rm -rf "$MUT"' EXIT
 PASS=0; FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -27,6 +30,7 @@ build_fixture() {
   cp "$REPO/tests/test-mimo-key-single-source.sh" "$MUT/tests/"
   cp "$REPO/tests/_no-egress.sh"                  "$MUT/tests/"
   cp "$REPO/bin/rotate-mimo-key"                  "$MUT/bin/"
+  cp "$REPO/bin/_mimo-key-io.sh"                  "$MUT/bin/" 2>/dev/null || true
 
   printf '{"xiaomi":{"type":"api","key":"%s"}}\n' "$KEY_GOOD" > "$MUT/fx/source.json"
   printf '{"models":{"providers":{"x":{"apiKey":"%s"}}}}\n'  "$KEY_GOOD" > "$MUT/fx/copy1.json"
@@ -34,6 +38,7 @@ build_fixture() {
   printf '{"env":{"ANTHROPIC_AUTH_TOKEN":"%s"}}\n'           "$KEY_GOOD" > "$MUT/fx/settings.json"
   printf 'export FOO=1\n'                                                > "$MUT/fx/bashrc"
   printf 'echo hi\n'                                                     > "$MUT/fx/scan/plain.sh"
+  mkdir -p "$MUT/fx/scan2"; printf 'echo hi2\n'                          > "$MUT/fx/scan2/plain.sh"
 
   # 空的 cron 库(没有任何 LLM_API_KEY= 的任务)
   python3 - "$MUT/fx/cron.sqlite" <<'PY'
@@ -53,7 +58,7 @@ MIMO_KEY_COPIES=(
 )
 MIMO_KEY_CONDITIONAL_COPIES=( "$MUT/fx/settings.json" )
 MIMO_KEY_FORBIDDEN=( "$MUT/fx/bashrc" )
-MIMO_KEY_SCAN_DIRS=( "$MUT/fx" )
+MIMO_KEY_SCAN_DIRS=( "$MUT/fx" "$MUT/fx/scan2" )
 MIMO_KEY_SCAN_EXCLUDES=( "*.log" )
 MIMO_KEY_SCAN_EXCLUDE_DIRS=( ".git" )
 mimo_key_shape_ok() { [[ "\${1:-}" =~ ^tp-[a-z0-9]{40,60}\$ ]]; }
@@ -140,6 +145,37 @@ if [[ $rc -ne 0 ]] && grep -q "扫描\*\*超时\*\*" <<< "$out"; then
 else
   bad "m10 扫描超时:**没红或红错地方**(rc=$rc)—— fail-open 还在"
 fi
+
+# ── 断线后补的五条(m11~m15):对应 09-01 自审新抓到的四个洞 ────────────────
+# 它们防的都是**同一种病的另一半**:前十条问的是"坏事发生了会不会红",
+# 这五条问的是"这道闸自己缩水/自己被别的失败凑出绿,会不会有人知道"。
+
+# m11 扫描面**缩水**:清单里列了、盘上没有 ⇒ 覆盖面无声变小,而结论那句话照印
+run_case "m11 扫描面缩水" red "扫描面缩水" \
+  bash -c "rm -rf \"$MUT/fx/scan2\""
+
+# m12 工具因**别的毛病**非零退出。老断言只问 `rc != 0`,这种情况会被记成
+# "它拒绝了坏 key" —— 恒真断言的经典形状。
+run_case "m12 工具因别的原因非零" red "不是形状拒绝的 rc=2" \
+  bash -c "sed -i '0,/^DRY=/s|^DRY=|exit 64\n&|' \"$MUT/bin/rotate-mimo-key\""
+
+# m13 cron 库里躺着**字面 key**(不是 LLM_API_KEY= 那种形状)。
+# 第 10 处就是在这个库里发现的,而这个库不在⑤的扫描面里。
+run_case "m13 cron 库里躺着字面 key" red "躺着字面 key" \
+  bash -c "python3 -c \"
+import sqlite3
+c=sqlite3.connect('$MUT/fx/cron.sqlite')
+c.execute(\\\"insert into cron_jobs values('j3','python3 watch.py --key $KEY_GOOD')\\\")
+c.commit()\""
+
+# m14 清单的取值路径漂了,而判据手抄的是另一份 ⇒ 必须红在**它自己**身上
+run_case "m14 清单取值路径漂了" red "取值路径漂了" \
+  bash -c "sed -i 's|MIMO_KEY_SOURCE_SELECTOR=\"xiaomi.key\"|MIMO_KEY_SOURCE_SELECTOR=\"xiaomi.apikey\"|' \"$MUT/bin/_mimo-key-locations.sh\""
+
+# m15 恢复原语接受**空快照**:那会把一份好文件截成 0 字节,还一声不吭。
+# 这是这一轮里唯一一条"改坏实现"的变异 —— 因为回滚路径此前根本没有任何自动覆盖。
+run_case "m15 恢复原语接受空快照" red "空快照居然被接受" \
+  bash -c "sed -i '/拒绝恢复/d' \"$MUT/bin/_mimo-key-io.sh\""
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

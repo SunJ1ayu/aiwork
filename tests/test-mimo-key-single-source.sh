@@ -62,6 +62,16 @@ done
 # ── 取源头的值 ────────────────────────────────────────────────────────────
 key_shape() { [[ "$1" =~ ^tp-[a-z0-9]{40,60}$ ]]; }
 
+# 判据**刻意不调**清单里的 mimo_key_read_source():判据依赖被测实现的 helper,
+# helper 自己坏了就没人看得见。代价是取值路径在这里手抄了第二份 ——
+# 所以把这份手抄**钉在清单上**,漂了红在它自己身上,而不是红在"副本不一致"那种
+# 指错方向的地方(本单要治的病就是"抄了第二份没人对账")。
+if [[ "${MIMO_KEY_SOURCE_SELECTOR:-}" == "xiaomi.key" ]]; then
+  ok "清单的取值路径和判据手抄的那份一致(xiaomi.key)"
+else
+  bad "清单取值路径漂了:清单写 ${MIMO_KEY_SOURCE_SELECTOR:-<空>},判据手抄的是 xiaomi.key"
+fi
+
 SRC_KEY=""
 if [[ -n "${MIMO_KEY_SOURCE:-}" && -f "${MIMO_KEY_SOURCE}" ]]; then
   ok "源头文件存在:$MIMO_KEY_SOURCE"
@@ -170,6 +180,30 @@ else
   bad "cron 任务库不存在:$CRON_DB(读不出就不许当通过)"
 fi
 
+# ── ④b cron 库里也不许躺着**字面 key** ────────────────────────────────────
+# ④ 只问了"有没有人往提示词里塞 LLM_API_KEY=",那是 09-01 那次的具体形状。
+# 但第 10 处正是在这个 sqlite 里发现的,而这个库**不在⑤的扫描面里**(它是二进制库,
+# 不是配置文件)⇒ 今天谁把一把真 `tp-…` 粘进任何一条 cron 提示词,④不红、⑤也不红。
+# 这条补的就是那个夹缝。
+if [[ -f "$CRON_DB" ]]; then
+  khits="$(python3 -c '
+import sqlite3,sys,re
+try:
+    c=sqlite3.connect("file:%s?mode=ro"%sys.argv[1],uri=True)
+    n=0
+    for r in c.execute("select * from cron_jobs"):
+        s=" ".join(str(x) for x in r)
+        if re.search(r"tp-[a-z0-9]{40,60}", s): n+=1
+    print(n)
+except Exception:
+    print("ERR")' "$CRON_DB" 2>/dev/null)"
+  case "$khits" in
+    0)   ok "没有 cron 任务的提示词里躺着字面 key" ;;
+    ERR) bad "读不出 cron 任务表($CRON_DB)—— 读不出就不许当通过" ;;
+    *)   bad "**有 $khits 条 cron 任务的提示词里躺着字面 key**(库不在扫描面里,只有这条查得到)" ;;
+  esac
+fi
+
 # ── ⑤ 不许有游离副本 ─────────────────────────────────────────────────────
 # 名单是手列的 ⇒ 新冒出一处就漏,而且漏的时候没人知道(规矩4 那条老账)。
 # 这段就是把"还有没有别处藏着 key"从**我的记性**换成**机器扫一遍**。
@@ -182,8 +216,19 @@ done
 # 条件式副本是**已知**位置,不是游离副本(上面 ②b 已经单独查过它对不对)
 for path in "${MIMO_KEY_CONDITIONAL_COPIES[@]}"; do known+=("$path"); done
 
-scan_args=()
-for d in "${MIMO_KEY_SCAN_DIRS[@]}"; do [[ -e "$d" ]] && scan_args+=("$d"); done
+scan_args=(); scan_missing=()
+for d in "${MIMO_KEY_SCAN_DIRS[@]}"; do
+  if [[ -e "$d" ]]; then scan_args+=("$d"); else scan_missing+=("$d"); fi
+done
+
+# 🔴 **扫描面缩水必须响。** 逐项丢弃"盘上没有"的位置,等于覆盖面无声变小,
+# 而下面那句结论还大大方方印着"扫了 N 个位置" —— 11 变 10 没有任何人会去比那个数。
+# 我在⑤里防了清单**漏列**,却没防清单**指空**:同一种病的另一半。
+if [[ ${#scan_missing[@]} -eq 0 ]]; then
+  ok "扫描面完整:清单里 ${#MIMO_KEY_SCAN_DIRS[@]} 个位置都在盘上"
+else
+  bad "**扫描面缩水了 ${#scan_missing[@]} 处**(清单里有、盘上没有):${scan_missing[*]}"
+fi
 
 if [[ ${#scan_args[@]} -eq 0 ]]; then
   bad "扫描面是空的 —— 这段判据什么都没扫,不许算通过"
@@ -244,9 +289,77 @@ if [[ -f "$ROTATE" ]]; then
     before="$(md5sum "${MIMO_KEY_SOURCE:-/dev/null}" 2>/dev/null | cut -d' ' -f1)"
     out="$(MIMO_KEY_DRY_RUN=1 "$ROTATE" "not-a-key" 2>&1)"; rc=$?
     after="$(md5sum "${MIMO_KEY_SOURCE:-/dev/null}" 2>/dev/null | cut -d' ' -f1)"
-    if [[ $rc -ne 0 ]]; then ok "工具拒绝形状不对的 key(rc=$rc)"; else bad "工具**接受**了形状不对的 key(rc=0)"; fi
+    # 🔴 钉死 **rc=2**(工具给"形状不对"留的专用码),不许只问"非零"。
+    # 「非零就算拒绝成功」近似恒真:清单读不到(rc=64)、脚本语法错、工具被换成
+    # `exit 1` 的空壳 —— 统统会被记成"它拒绝了坏 key"。那是"匹配到别处"换了个马甲。
+    # 再钉一条理由:输出里得说得出"形状",否则它可能是因为**别的毛病**才非零的。
+    if [[ $rc -eq 2 ]] && grep -q '形状不对' <<< "$out"; then
+      ok "工具用专用码拒绝形状不对的 key(rc=2,且理由是形状)"
+    elif [[ $rc -eq 0 ]]; then
+      bad "工具**接受**了形状不对的 key(rc=0)"
+    elif [[ $rc -eq 2 ]]; then
+      bad "rc=2 对,但输出里没说「形状不对」—— 可能是拿别的失败凑出的 2"
+    else
+      bad "工具非零退出,但**不是形状拒绝的 rc=2**(拿到 rc=$rc)—— 更像它自己坏了"
+    fi
     if [[ "$before" == "$after" ]]; then ok "被拒时源头文件没被动过"; else bad "被拒时源头文件**被改了** —— 不是 fail-closed"; fi
   fi
+fi
+
+# ── ⑦ 写/恢复的原语必须单独成文件,并且**恢复路径也得是原子的** ──────────
+# 由来(自审抓到的):前进路径专门做了临时文件+fsync+replace,理由白纸黑字写着
+# 「断线是常态,截断的 JSON 比垃圾备份坏得多」;而**回滚**当时用的是
+# `printf … | base64 -d > "$f"` —— 正是它要避免的 truncate-then-write。
+# 回滚是**恢复**路径,断在这里比断在前进路径更难看。
+# 而且这条路径当时**没有任何自动覆盖**:dry-run 跳过写、真跑要联网+网关+cron,
+# 判卷面又不许有外网出口 ⇒ 它永远测不到。把原语拆出来,就能在 /tmp 上单独跑一遍。
+IO="$REPO/bin/_mimo-key-io.sh"
+if [[ ! -f "$IO" ]]; then
+  bad "写/恢复原语没有单独成文件:$IO(回滚路径就没法在不联网的情况下被测)"
+else
+  ok "写/恢复原语单独成文件:bin/_mimo-key-io.sh"
+  iodir="$(mktemp -d)"
+  (
+    set +e
+    # shellcheck source=/dev/null
+    . "$IO" || exit 90
+    f="$iodir/t.json"
+    printf '{"a":{"b":"OLD"},"keep":"是"}\n' > "$f"
+    chmod 600 "$f"
+    before="$(md5sum "$f" | cut -d' ' -f1)"
+
+    mimo_key_write_json "$f" "a.b" "NEW" || exit 91
+    [[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["a"]["b"])' "$f")" == "NEW" ]] || exit 92
+    [[ "$(stat -c %a "$f")" == "600" ]] || exit 93
+    [[ -z "$(find "$iodir" -name '.rotate-*' -print -quit)" ]] || exit 94
+
+    # 快照 → 改坏 → 恢复,必须逐字节回到原样
+    snap="$(mimo_key_snapshot "$f")" || exit 95
+    printf 'garbage' > "$f"
+    mimo_key_restore "$f" "$snap" || exit 96
+    [[ "$(md5sum "$f" | cut -d' ' -f1)" == "$(printf '{"a":{"b":"NEW"},"keep":"是"}\n' | md5sum | cut -d' ' -f1)" ]] || exit 97
+
+    # 🔴 空快照必须**拒绝恢复**:snapshot 读失败时给空串,而
+    # `> "$f"` 会先截断 —— 那会把一份好文件写成 0 字节,还一声不吭。
+    keepmd5="$(md5sum "$f" | cut -d' ' -f1)"
+    mimo_key_restore "$f" "" && exit 98
+    [[ "$(md5sum "$f" | cut -d' ' -f1)" == "$keepmd5" ]] || exit 99
+    exit 0
+  )
+  iorc=$?
+  rm -rf "$iodir"
+  case "$iorc" in
+    0)  ok "写/恢复原语:原子写 + 权限保留 + 恢复逐字节 + 空快照拒绝恢复(全过)" ;;
+    90) bad "写/恢复原语 source 失败:$IO" ;;
+    91|92) bad "写/恢复原语:写进去的值不对(rc=$iorc)" ;;
+    93) bad "写/恢复原语:**权限位没保留**(600 的凭证被写成别的)" ;;
+    94) bad "写/恢复原语:留下了 .rotate-* 临时文件" ;;
+    95|96) bad "写/恢复原语:快照/恢复自己失败(rc=$iorc)" ;;
+    97) bad "写/恢复原语:**恢复出来的内容和原样不一致**" ;;
+    98) bad "写/恢复原语:**空快照居然被接受**了 —— 那会把好文件截成 0 字节" ;;
+    99) bad "写/恢复原语:拒绝了空快照,但**文件已经被动过**(不是 fail-closed)" ;;
+    *)  bad "写/恢复原语:未预期的 rc=$iorc" ;;
+  esac
 fi
 
 echo "=== total: $PASS passed, $FAIL failed ==="
