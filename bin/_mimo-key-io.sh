@@ -14,6 +14,15 @@
 mimo_key_write_json() {   # 路径 取值路径 新值
   MIMO_KEY_IO_VALUE="$3" python3 -c '
 import json,os,sys,tempfile
+def _fsync_dir(d):
+    # os.replace 是原子的,但"新名字"这条目录项要 fsync 过才熬得过掉电
+    # (第三轮评审 kimi F3)。目录 fsync 在有些文件系统上不支持,失败就算了,别拖垮换 key。
+    try:
+        fd=os.open(d, os.O_RDONLY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    except OSError:
+        pass
 path,sel=sys.argv[1],sys.argv[2]
 val=os.environ["MIMO_KEY_IO_VALUE"]
 d=json.load(open(path))
@@ -32,6 +41,7 @@ try:
         f.flush(); os.fsync(f.fileno())
     os.chmod(tmp, st.st_mode & 0o7777)   # 别把 600 的凭证写成 644
     os.replace(tmp, path)
+    _fsync_dir(dirn)                     # rename 本身原子,但目录项要 fsync 才耐得住掉电
 except BaseException:
     try: os.unlink(tmp)
     except OSError: pass
@@ -55,6 +65,15 @@ mimo_key_restore() {      # 路径 base64
   [[ -n "$snap" ]] || { echo "mimo_key_restore: 空快照,拒绝恢复(那会把好文件截成 0 字节)" >&2; return 1; }
   printf '%s' "$snap" | python3 -c '
 import base64,os,sys,tempfile
+def _fsync_dir(d):
+    # os.replace 是原子的,但"新名字"这条目录项要 fsync 过才熬得过掉电
+    # (第三轮评审 kimi F3)。目录 fsync 在有些文件系统上不支持,失败就算了,别拖垮换 key。
+    try:
+        fd=os.open(d, os.O_RDONLY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    except OSError:
+        pass
 path=sys.argv[1]
 data=base64.b64decode(sys.stdin.read())
 if not data:
@@ -71,6 +90,7 @@ try:
         f.flush(); os.fsync(f.fileno())
     os.chmod(tmp, mode)
     os.replace(tmp, path)
+    _fsync_dir(dirn)
 except BaseException:
     try: os.unlink(tmp)
     except OSError: pass

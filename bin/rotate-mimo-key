@@ -147,7 +147,13 @@ done
 # 只是免得盘上躺着一份过期凭证让人误判。路径是 glob 出来的,不是手抄的第二份清单。
 for f in /root/aiwork/mimo-home/*/data/mimocode/auth.json; do
   [[ -f "$f" ]] || continue
-  write_json "$f" "xiaomi.key" "$NEW_KEY" >/dev/null 2>&1 && say "   ✓ (顺手)$f"
+  # 失败不阻断(它下次派活会自愈),但**不许一声不吭** ——
+  # "盘上躺着一份过期凭证让人误判"正是上面那段注释自己说要避免的。
+  if write_json "$f" "xiaomi.key" "$NEW_KEY" >/dev/null 2>&1; then
+    say "   ✓ (顺手)$f"
+  else
+    say "   ⚠️ (顺手)刷新失败,盘上这份仍是旧的(下次派活会自愈):$f"
+  fi
 done
 
 if [[ "$NO_DEPLOY" == "1" ]]; then
@@ -158,14 +164,24 @@ fi
 # ── ⑥ 让运行中的目标自己回话 ─────────────────────────────────────────────
 say "⑤ 重启 gateway…"
 systemctl --user restart openclaw-gateway || die "gateway 重启失败" 8
+gw_ok=0
 for _ in $(seq 1 15); do
-  out="$("$HERE/check-gateway-version" 2>&1)" && break
+  out="$("$HERE/check-gateway-version" 2>&1)" && { gw_ok=1; break; }
   sleep 4
 done
 say "   $out"
+# 15 次都没起来还往下走,等于把"运行中的目标没回话"降级成一行日志。
+# 这单的规矩正相反:**盘上和运行时对不上 = BLOCK,不是警告。**
+[[ $gw_ok -eq 1 ]] || die "gateway 等了 60s 没回话 —— key 已经写进盘,但运行时没换过来" 8
 
 say "⑥ 真跑一条 cron 看它 ok(不是看文件躺在盘上)…"
 JOB="${MIMO_KEY_SMOKE_JOB:-gmail-check-30m}"
+# 任务名是写死的(已知缺口)。先问它在不在 —— 否则任务被改名之后,
+# 这里会以"运行时没回绿"的名义 BLOCK,而真相是**冒烟任务本身找不到**,
+# 两件事得说成两句话,不然下一个人会去查错的方向。
+if ! openclaw cron list 2>/dev/null | grep -q -- "$JOB"; then
+  die "冒烟任务 '$JOB' 不在 cron 列表里 —— key 已写进盘,但这一步没验成。用 MIMO_KEY_SMOKE_JOB=<别的任务> 重跑验证。" 10
+fi
 res="$(timeout 300 openclaw cron run "$JOB" --wait --wait-timeout 240s 2>&1 | tr -d '\n')"
 if grep -q '"status": *"ok"' <<< "$res"; then
   say "   ✓ $JOB → status ok"
