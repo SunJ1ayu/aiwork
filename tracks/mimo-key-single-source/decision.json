@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "track": "mimo-key-single-source",
+  "impact": {
+    "level": "high",
+    "factors": [
+      "auth",
+      "sensitive_data",
+      "new_write_surface"
+    ]
+  },
+  "design": {
+    "uncertainty": "low",
+    "premise_attack": {
+      "status": "not_required",
+      "evidence": []
+    }
+  },
+  "execution_plan": {
+    "adapter": "main",
+    "model": "claude-opus-5"
+  },
+  "outcome": {
+    "verdict": null
+  }
+}
