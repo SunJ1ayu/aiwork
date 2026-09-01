@@ -1,0 +1,28 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    mutation-after-io
+cmd:     bash tracks/mimo-key-single-source/mutation-check.sh
+cwd:     /root/aiwork(仓根)
+commit:  5d9de92
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-01T03:32:38Z
+---------------- 输出开始 ----------------
+=== mimo-key 判据 变异测试 ===
+  PASS: m0 对照组:未变异/合法状态 → 绿(没有误报)
+  PASS: m1 副本与源头不一致:红了,且红在该红的地方(副本与源头.*不一致)
+  PASS: m2 禁止内嵌处出现 key:红了,且红在该红的地方(不该内嵌 key 的文件里有 key)
+  PASS: m3 冒出清单外的游离副本:红了,且红在该红的地方(清单外的 key)
+  PASS: m4 cron 提示词内嵌 LLM_API_KEY:红了,且红在该红的地方(内嵌 LLM_API_KEY)
+  PASS: m5 settings 里的 key 与源头不同:红了,且红在该红的地方(条件式副本与源头.*不一致)
+  PASS: m6 对照组:settings 无 key:未变异/合法状态 → 绿(没有误报)
+  PASS: m7 源头 key 形状不对:红了,且红在该红的地方(形状)
+  PASS: m8 工具不 source 共享清单:红了,且红在该红的地方(没有 source 共享清单)
+  PASS: m9 工具接受坏 key:红了,且红在该红的地方(接受.*形状不对)
+  PASS: m10 扫描超时:红了,且红在该红的地方(不是把空结果当干净)
+  PASS: m11 扫描面缩水:红了,且红在该红的地方(扫描面缩水)
+  PASS: m12 工具因别的原因非零:红了,且红在该红的地方(不是形状拒绝的 rc=2)
+  PASS: m13 cron 库里躺着字面 key:红了,且红在该红的地方(躺着字面 key)
+  PASS: m14 清单取值路径漂了:红了,且红在该红的地方(取值路径漂了)
+  FAIL: m15 恢复原语接受空快照:变异后判据**仍然绿** —— 这条断言咬不动
+=== total: 15 passed, 1 failed ===
+---------------- 输出结束 ----------------
+runlog: mutation-after-io rc=1 commit=5d9de92 dirty=yes at=2026-09-01T03:32:38Z file=tracks/mimo-key-single-source/evidence/20260901T033238Z-02-mutation-after-io.txt

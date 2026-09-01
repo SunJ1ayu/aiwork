@@ -41,6 +41,18 @@ MIMO_KEY_CONDITIONAL_COPIES=(
   "/root/.claude/settings.json"
 )
 
+# ── 决定"这把 key 打到哪去"的字段 ─────────────────────────────────────────
+# 光钉住 key 一致是不够的:`watch.py` 的取值顺序是「环境变量优先,空了才读配置文件」,
+# 而**回落只在 api_key 为空时发生** —— 配置文件里 api_base/model 一旦缺席,
+# 它会**静默**用回 OpenAI 的默认端点和 gpt-4o-mini,拿着小米的 key 去打 OpenAI ⇒ 401,
+# 而 `except Exception: return ""` 把这一切吞掉。
+# 那正是本单起因(GitHub-Watch 的 AI 摘要坏了不知道多久)的同一个形状:
+# **一个 key 对了,但它被送错了地方,而且没有任何东西会红。**
+# 格式:路径|字段1|字段2…(都必须非空,且不许在带小米 key 时指向 OpenAI)
+MIMO_KEY_ENDPOINT_FIELDS=(
+  "/root/.github-watch-config.json|api_base|model"
+)
+
 # ── 明令禁止内嵌 key 的位置 ───────────────────────────────────────────────
 # 这些地方**做得到运行时去源头读**,所以存字面量没有任何正当理由。
 #   ~/.bashrc                  09-01 全盘搜过:`LLM_API_KEY` 没有任何消费者,已删

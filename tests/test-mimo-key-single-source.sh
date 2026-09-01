@@ -55,7 +55,7 @@ else
   exit 1
 fi
 
-for var in MIMO_KEY_SOURCE MIMO_KEY_COPIES MIMO_KEY_CONDITIONAL_COPIES MIMO_KEY_FORBIDDEN MIMO_KEY_SCAN_DIRS; do
+for var in MIMO_KEY_SOURCE MIMO_KEY_COPIES MIMO_KEY_CONDITIONAL_COPIES MIMO_KEY_ENDPOINT_FIELDS MIMO_KEY_FORBIDDEN MIMO_KEY_SCAN_DIRS; do
   if declare -p "$var" >/dev/null 2>&1; then ok "清单定义了 $var"; else bad "清单没定义 $var"; fi
 done
 
@@ -128,6 +128,14 @@ for path in "${MIMO_KEY_CONDITIONAL_COPIES[@]}"; do
     ok "条件式副本不存在(合法):$path"
     continue
   fi
+  # 🔴 "没有 key"和"key 还没被写进去"长得一样,但只有前者合法。
+  # `switch-model.sh` 先 heredoc 写占位符、再 sed 换成真 key ——
+  # 砍在这两步中间,盘上就躺着字面 `__MIMO_KEY__`:grep 找不到 tp-…,
+  # 老断言判"没有 key(合法)"⇒ **绿**,而 mimo 档的认证必败。
+  if grep -q '__MIMO_KEY__' "$path" 2>/dev/null; then
+    bad "条件式副本里躺着**没被替换的占位符**:$path(写到一半被砍的样子,不是「没有 key」)"
+    continue
+  fi
   found="$(grep -oE 'tp-[a-z0-9]{40,60}' "$path" 2>/dev/null | sort -u)"
   if [[ -z "$found" ]]; then
     ok "条件式副本里没有 key(合法,例如切在 claude 档):$path"
@@ -172,9 +180,9 @@ try:
 except Exception:
     print("ERR")' "$CRON_DB" 2>/dev/null)"
   case "$hits" in
-    0)   ok "没有 cron 任务在提示词里内嵌 LLM_API_KEY=" ;;
+    0)   ok "cron 任务表里没有 LLM_API_KEY=" ;;
     ERR) bad "读不出 cron 任务表($CRON_DB)—— 读不出就不许当通过" ;;
-    *)   bad "**有 $hits 条 cron 任务的提示词里内嵌 LLM_API_KEY=**(会盖掉配置文件回落路径)" ;;
+    *)   bad "**cron 任务表里有 $hits 行出现 LLM_API_KEY=**(扫的是整张表,含 last_error/job_json 等历史列;先去看是哪一行再下结论)" ;;
   esac
 else
   bad "cron 任务库不存在:$CRON_DB(读不出就不许当通过)"
@@ -198,11 +206,37 @@ try:
 except Exception:
     print("ERR")' "$CRON_DB" 2>/dev/null)"
   case "$khits" in
-    0)   ok "没有 cron 任务的提示词里躺着字面 key" ;;
+    0)   ok "cron 任务表里没有字面 key" ;;
     ERR) bad "读不出 cron 任务表($CRON_DB)—— 读不出就不许当通过" ;;
-    *)   bad "**有 $khits 条 cron 任务的提示词里躺着字面 key**(库不在扫描面里,只有这条查得到)" ;;
+    *)   bad "**cron 任务表里有 $khits 行躺着字面 key**(库不在扫描面里,只有这条查得到;扫的是整张表)" ;;
   esac
 fi
+
+# ── ④c 决定"这把 key 打到哪去"的字段不许缺席 ──────────────────────────────
+# 见清单里 MIMO_KEY_ENDPOINT_FIELDS 那段的理由:key 对了但被送错地方,
+# 和 key 错了一样是 401,区别只在于**没有任何东西会红**。
+for entry in "${MIMO_KEY_ENDPOINT_FIELDS[@]:-}"; do
+  [[ -n "$entry" ]] || continue
+  IFS='|' read -r epath f1 f2 <<< "$entry"
+  if [[ ! -f "$epath" ]]; then
+    bad "端点配置文件不存在:$epath"
+    continue
+  fi
+  vals="$(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+print("\t".join(str(d.get(k,"")) for k in sys.argv[2:]))
+print(str(d.get("api_key","")))' "$epath" "$f1" "$f2" 2>/dev/null)"
+  IFS=$'\t' read -r v1 v2 <<< "$(printf '%s' "$vals" | head -1)"
+  akey="$(printf '%s' "$vals" | sed -n '2p')"
+  if [[ -z "$v1" || -z "$v2" ]]; then
+    bad "**端点字段缺席**:$epath 的 $f1/$f2 至少有一个空 —— 它会**静默**回落到别家默认端点"
+  elif [[ "$akey" == tp-* && "$v1" == *api.openai.com* ]]; then
+    bad "**key 和端点对不上**:$epath 带的是小米的 key,却指向 $v1 —— 那是必定 401 的组合"
+  else
+    ok "端点字段齐备且和 key 对得上:$epath [$f1=$v1 $f2=$v2]"
+  fi
+done
 
 # ── ⑤ 不许有游离副本 ─────────────────────────────────────────────────────
 # 名单是手列的 ⇒ 新冒出一处就漏,而且漏的时候没人知道(规矩4 那条老账)。

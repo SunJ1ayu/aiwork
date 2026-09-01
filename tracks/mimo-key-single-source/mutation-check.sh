@@ -34,7 +34,7 @@ build_fixture() {
 
   printf '{"xiaomi":{"type":"api","key":"%s"}}\n' "$KEY_GOOD" > "$MUT/fx/source.json"
   printf '{"models":{"providers":{"x":{"apiKey":"%s"}}}}\n'  "$KEY_GOOD" > "$MUT/fx/copy1.json"
-  printf '{"api_key":"%s"}\n'                                "$KEY_GOOD" > "$MUT/fx/copy2.json"
+  printf '{"api_key":"%s","api_base":"https://token-plan-cn.xiaomimimo.com/v1","model":"mimo-v2.5"}\n' "$KEY_GOOD" > "$MUT/fx/copy2.json"
   printf '{"env":{"ANTHROPIC_AUTH_TOKEN":"%s"}}\n'           "$KEY_GOOD" > "$MUT/fx/settings.json"
   printf 'export FOO=1\n'                                                > "$MUT/fx/bashrc"
   printf 'echo hi\n'                                                     > "$MUT/fx/scan/plain.sh"
@@ -57,6 +57,7 @@ MIMO_KEY_COPIES=(
   "json|$MUT/fx/copy2.json|api_key"
 )
 MIMO_KEY_CONDITIONAL_COPIES=( "$MUT/fx/settings.json" )
+MIMO_KEY_ENDPOINT_FIELDS=( "$MUT/fx/copy2.json|api_base|model" )
 MIMO_KEY_FORBIDDEN=( "$MUT/fx/bashrc" )
 MIMO_KEY_SCAN_DIRS=( "$MUT/fx" "$MUT/fx/scan2" )
 MIMO_KEY_SCAN_EXCLUDES=( "*.log" )
@@ -107,7 +108,9 @@ run_case "m3 冒出清单外的游离副本" red "清单外的 key" \
   bash -c "printf 'k=$KEY_GOOD\n' > \"$MUT/fx/scan/newthing.conf\""
 
 # m4 cron 提示词里内嵌 LLM_API_KEY=
-run_case "m4 cron 提示词内嵌 LLM_API_KEY" red "内嵌 LLM_API_KEY" \
+# ⚠️ 断言的措辞改了(从"提示词里"改成"任务表里",因为扫的确实是整张表),
+# 这里的靶子跟着改 —— **措辞和行号一样,都不是断言的身份**,改一处就得对一次账。
+run_case "m4 cron 任务表里出现 LLM_API_KEY=" red "cron 任务表里有.*LLM_API_KEY" \
   bash -c "python3 -c \"
 import sqlite3,sys
 c=sqlite3.connect('$MUT/fx/cron.sqlite')
@@ -179,6 +182,22 @@ run_case "m14 清单取值路径漂了" red "取值路径漂了" \
 # 变异要证明"防线没了会不会被发现",就得把防线**整个**拿掉;只删一半等于没变异。
 run_case "m15 恢复原语接受空快照" red "空快照居然被接受" \
   bash -c "sed -i -e '/拒绝恢复/d' -e '/if not data:/,+1d' \"$MUT/bin/_mimo-key-io.sh\""
+
+# ── 第三轮补的三条(m16~m18):panel 两条腿各自命中的两处 ──────────────────
+
+# m16 条件式副本里躺着**没被替换的占位符**。老断言 grep 不到 tp-… 就判"没有 key(合法)",
+# 而那正是 switch-model.sh 写到一半被砍的样子 —— 绿着,但 mimo 档认证必败。
+run_case "m16 占位符没被替换" red "没被替换的占位符" \
+  bash -c "printf '{\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"__MIMO_KEY__\"}}\n' > \"$MUT/fx/settings.json\""
+
+# m17 端点字段缺席 ⇒ watch.py 会**静默**回落到别家默认端点。
+# 这是本单起因(silent-401)的同一个形状,而此前没有任何断言守着它。
+run_case "m17 端点字段缺席" red "端点字段缺席" \
+  bash -c "printf '{\"api_key\":\"$KEY_GOOD\"}\n' > \"$MUT/fx/copy2.json\""
+
+# m18 key 和端点对不上:带着小米的 key 指向 OpenAI = 必定 401 的组合
+run_case "m18 key 和端点对不上" red "key 和端点对不上" \
+  bash -c "printf '{\"api_key\":\"$KEY_GOOD\",\"api_base\":\"https://api.openai.com/v1\",\"model\":\"gpt-4o-mini\"}\n' > \"$MUT/fx/copy2.json\""
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
