@@ -1,0 +1,47 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    final-oracle
+cmd:     bash tests/test-mimo-key-single-source.sh
+cwd:     /root/aiwork(仓根)
+commit:  51354f1
+dirty:   yes(跑之前采的;含未跟踪文件)
+head-before: 51354f156914f027a489d396331690079ce6edd0
+source-view-before: sha256:5a7b1b6a070259812bae4008b6a77ee7c7fe9b66676e28edccca86a712e60315
+started: 2026-09-01T03:54:27Z
+---------------- 输出开始 ----------------
+=== mimo key single-source oracle ===
+  PASS: 清单文件存在:bin/_mimo-key-locations.sh
+  PASS: 清单文件可 source
+  PASS: 清单定义了 MIMO_KEY_SOURCE
+  PASS: 清单定义了 MIMO_KEY_COPIES
+  PASS: 清单定义了 MIMO_KEY_CONDITIONAL_COPIES
+  PASS: 清单定义了 MIMO_KEY_ENDPOINT_FIELDS
+  PASS: 清单定义了 MIMO_KEY_FORBIDDEN
+  PASS: 清单定义了 MIMO_KEY_SCAN_DIRS
+  PASS: 清单的取值路径和判据手抄的那份一致(xiaomi.key)
+  PASS: 源头文件存在:/root/.local/share/mimocode/auth.json
+  PASS: 源头里的 key 形状对(tp- + 40~60 位)
+  PASS: 副本与源头一致:/root/.openclaw/secrets.json [models.providers.xiaomi-coding.apiKey]
+  PASS: 副本与源头一致:/root/.openclaw/secrets.json [models.providers.xiaomi-token.apiKey]
+  PASS: 副本与源头一致:/root/.openclaw/secrets.json [messages.tts.providers.xiaomi.apiKey]
+  PASS: 副本与源头一致:/root/.github-watch-config.json [api_key]
+  PASS: 条件式副本里没有 key(合法,例如切在 claude 档):/root/.claude/settings.json
+  PASS: 没有内嵌 key:/root/.bashrc
+  PASS: 没有内嵌 key:/root/.claude/switch-model.sh
+  PASS: cron 任务表里没有 LLM_API_KEY=
+  PASS: cron 任务表里没有字面 key
+  PASS: 端点字段齐备且和 key 对得上:/root/.github-watch-config.json [api_base=https://token-plan-cn.xiaomimimo.com/v1 model=mimo-v2.5]
+  PASS: 扫描面完整:清单里 11 个位置都在盘上
+  PASS: 扫描面里没有清单外的 key 副本(扫了 11 个位置)
+  PASS: 换 key 工具存在且可执行:bin/rotate-mimo-key
+  PASS: 工具 source 了共享清单(位置只有一份)
+  PASS: 工具用专用码拒绝形状不对的 key(rc=2,且理由是形状)
+  PASS: 被拒时源头文件没被动过
+  PASS: 写/恢复原语单独成文件:bin/_mimo-key-io.sh
+  PASS: 写/恢复原语:原子写 + 权限保留 + 恢复逐字节 + 空快照拒绝恢复(全过)
+=== total: 29 passed, 0 failed ===
+command-rc: 0
+head-after: 51354f156914f027a489d396331690079ce6edd0
+source-view-after:  sha256:5a7b1b6a070259812bae4008b6a77ee7c7fe9b66676e28edccca86a712e60315
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: final-oracle rc=0 commit=51354f1 dirty=yes final=yes at=2026-09-01T03:54:27Z file=tracks/mimo-key-single-source/evidence/20260901T035427Z-01-final-oracle.txt
