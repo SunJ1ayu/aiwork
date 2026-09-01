@@ -33,6 +33,7 @@ SUITES=(
   "evidence-lifetime|bash|/root/aiwork/tests/test-evidence-lifetime.sh"
   "review-workspace|bash|/root/aiwork/tests/test-review-workspace.sh"
   "workflow-docs|bash|/root/aiwork/tests/test-workflow-docs.sh"
+  "mimo-key|bash|/root/aiwork/tests/test-mimo-key-single-source.sh"
 )
 
 # ── 名单漏网报告(2026-08-06)────────────────────────────────────────────

@@ -55,7 +55,7 @@ else
   exit 1
 fi
 
-for var in MIMO_KEY_SOURCE MIMO_KEY_COPIES MIMO_KEY_FORBIDDEN MIMO_KEY_SCAN_DIRS; do
+for var in MIMO_KEY_SOURCE MIMO_KEY_COPIES MIMO_KEY_CONDITIONAL_COPIES MIMO_KEY_FORBIDDEN MIMO_KEY_SCAN_DIRS; do
   if declare -p "$var" >/dev/null 2>&1; then ok "清单定义了 $var"; else bad "清单没定义 $var"; fi
 done
 
@@ -110,6 +110,28 @@ if [[ $copies_checked -eq 0 ]]; then
   bad "一份副本都没查到 —— 这段判据什么都没问,不许算通过"
 fi
 
+# ── ②b 条件式副本:**有 key 的时候**必须与源头一致 ────────────────────────
+# `~/.claude/settings.json` 切到 claude 档时根本没有这个字段 —— 那是合法状态,
+# 不许当红。问的是"它带的那把是不是源头那把",不是"它带没带"。
+for path in "${MIMO_KEY_CONDITIONAL_COPIES[@]}"; do
+  if [[ ! -f "$path" ]]; then
+    ok "条件式副本不存在(合法):$path"
+    continue
+  fi
+  found="$(grep -oE 'tp-[a-z0-9]{40,60}' "$path" 2>/dev/null | sort -u)"
+  if [[ -z "$found" ]]; then
+    ok "条件式副本里没有 key(合法,例如切在 claude 档):$path"
+  elif [[ -z "$SRC_KEY" ]]; then
+    bad "条件式副本里有 key,但源头读不出来,无法比对:$path"
+  elif [[ "$(printf '%s\n' "$found" | wc -l)" -ne 1 ]]; then
+    bad "条件式副本里有**多把不同的 key**:$path"
+  elif [[ "$found" == "$SRC_KEY" ]]; then
+    ok "条件式副本与源头一致:$path"
+  else
+    bad "条件式副本与源头**不一致**:$path(${found:0:9}… vs ${SRC_KEY:0:9}…)"
+  fi
+done
+
 # ── ③ 明令禁止内嵌 key 的文件 ─────────────────────────────────────────────
 # 这些位置的正确做法是**运行时去源头读**,不是存一份字面量。
 for path in "${MIMO_KEY_FORBIDDEN[@]}"; do
@@ -157,6 +179,8 @@ for entry in "${MIMO_KEY_COPIES[@]}"; do
   IFS='|' read -r _ path _ <<< "$entry"
   known+=("$path")
 done
+# 条件式副本是**已知**位置,不是游离副本(上面 ②b 已经单独查过它对不对)
+for path in "${MIMO_KEY_CONDITIONAL_COPIES[@]}"; do known+=("$path"); done
 
 scan_args=()
 for d in "${MIMO_KEY_SCAN_DIRS[@]}"; do [[ -e "$d" ]] && scan_args+=("$d"); done
@@ -169,18 +193,35 @@ else
   exd=()
   for pat in "${MIMO_KEY_SCAN_EXCLUDE_DIRS[@]:-}"; do [[ -n "$pat" ]] && exd+=(--exclude-dir="$pat"); done
 
+  # 🔴 扫描**必须知道自己有没有跑完**:超时的 grep 输出为空,而空输出长得和
+  # 「一处游离副本都没有」一模一样 —— 那就是 fail-open,是这道闸最不该有的形态。
+  # 所以先把结果落到文件、单独取 grep 的 rc:124=超时 ⇒ 硬红,不许当通过。
+  scan_out="$(mktemp)"
+  timeout "${MIMO_KEY_SCAN_TIMEOUT:-120}" grep -rIlE 'tp-[a-z0-9]{40,60}' "${ex[@]}" "${exd[@]}" "${scan_args[@]}" > "$scan_out" 2>/dev/null
+  scan_rc=$?
+  if [[ $scan_rc -eq 124 ]]; then
+    bad "游离副本扫描**超时**(${MIMO_KEY_SCAN_TIMEOUT:-120}s)—— 空结果和「干净」分不出来,不许当通过"
+    rm -f "$scan_out"; scan_out=""
+  elif [[ $scan_rc -gt 1 ]]; then
+    bad "游离副本扫描异常退出(grep rc=$scan_rc)—— 不许当通过"
+    rm -f "$scan_out"; scan_out=""
+  fi
+
   strays=()
+  if [[ -n "$scan_out" ]]; then
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
     hit=0
     for k in "${known[@]}"; do [[ "$f" == "$k" ]] && { hit=1; break; }; done
     [[ $hit -eq 0 ]] && strays+=("$f")
-  done < <(timeout 120 grep -rIlE 'tp-[a-z0-9]{40,60}' "${ex[@]}" "${exd[@]}" "${scan_args[@]}" 2>/dev/null)
+  done < "$scan_out"
+  rm -f "$scan_out"
 
   if [[ ${#strays[@]} -eq 0 ]]; then
     ok "扫描面里没有清单外的 key 副本(扫了 ${#scan_args[@]} 个位置)"
   else
     bad "**扫描面里有 ${#strays[@]} 处清单外的 key**:${strays[*]}"
+  fi
   fi
 fi
 
