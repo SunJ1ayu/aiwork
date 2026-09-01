@@ -174,8 +174,11 @@ run_case "m14 清单取值路径漂了" red "取值路径漂了" \
 
 # m15 恢复原语接受**空快照**:那会把一份好文件截成 0 字节,还一声不吭。
 # 这是这一轮里唯一一条"改坏实现"的变异 —— 因为回滚路径此前根本没有任何自动覆盖。
+# ⚠️ 第一版只删 bash 那道守卫,判据**仍然绿** —— 不是断言咬不动,是**原语有两道**:
+# bash 的 `[[ -n "$snap" ]]` 和 python 的 `if not data`,删一道另一道照样挡住。
+# 变异要证明"防线没了会不会被发现",就得把防线**整个**拿掉;只删一半等于没变异。
 run_case "m15 恢复原语接受空快照" red "空快照居然被接受" \
-  bash -c "sed -i '/拒绝恢复/d' \"$MUT/bin/_mimo-key-io.sh\""
+  bash -c "sed -i -e '/拒绝恢复/d' -e '/if not data:/,+1d' \"$MUT/bin/_mimo-key-io.sh\""
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
