@@ -28,6 +28,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "$HERE/_mimo-key-locations.sh" || { echo "rotate-mimo-key: 读不到位置清单" >&2; exit 64; }
+# shellcheck source=/dev/null
+. "$HERE/_mimo-key-io.sh"        || { echo "rotate-mimo-key: 读不到写/恢复原语" >&2; exit 64; }
 
 DRY="${MIMO_KEY_DRY_RUN:-0}"
 NO_DEPLOY="${MIMO_KEY_NO_DEPLOY:-0}"
@@ -69,7 +71,9 @@ if [[ "$DRY" == "1" ]]; then
   say "[dry-run] 跳过联网校验"
 else
   say "① 验这把 key 小米认不认($BASE_URL/models)…"
-  code="$(curl -s -m 30 -o /dev/null -w '%{http_code}' "$BASE_URL/models" -H "Authorization: Bearer $NEW_KEY" 2>/dev/null)"
+  # key 走 curl 的 stdin 配置,不走 argv:`-H "Authorization: Bearer $NEW_KEY"` 会把
+  # 凭证摊在 /proc/<pid>/cmdline 上,那是全局可读的。
+  code="$(printf 'url = "%s/models"\nheader = "Authorization: Bearer %s"\nsilent\nmax-time = 30\noutput = "/dev/null"\nwrite-out = "%%{http_code}"\n' "$BASE_URL" "$NEW_KEY" | curl -K - 2>/dev/null)"
   if [[ "$code" != "200" ]]; then
     die "小米拒绝了这把 key(HTTP $code)—— **一个文件都没动**。先去后台确认套餐/余额,别装。" 4
   fi
@@ -78,19 +82,27 @@ fi
 
 # ── ③ 读现值(为回滚)──────────────────────────────────────────────────────
 say "② 读现值备内存(不落盘,免得留下装着死 key 的垃圾备份)…"
-declare -a TOUCHED=()
-snapshot_of() { cat "$1" 2>/dev/null | base64 -w0; }
 declare -A SNAP=()
-for f in "$MIMO_KEY_SOURCE" $(printf '%s\n' "${MIMO_KEY_COPIES[@]}" | cut -d'|' -f2 | sort -u); do
+# 路径逐条读进数组再遍历,不靠 `for f in $(...)` 的词分割 —— 清单里哪天出现带空格的
+# 路径,词分割会把它拆成两个"不存在的文件"。
+declare -a WRITE_PATHS=("$MIMO_KEY_SOURCE")
+while IFS= read -r f; do [[ -n "$f" ]] && WRITE_PATHS+=("$f"); done < <(
+  printf '%s\n' "${MIMO_KEY_COPIES[@]}" | cut -d'|' -f2 | sort -u
+)
+for f in "${WRITE_PATHS[@]}"; do
   [[ -f "$f" ]] || die "要写的文件不存在:$f" 5
-  SNAP["$f"]="$(snapshot_of "$f")"
+  # 🔴 快照读不出来 = **现在就停**,不是拿个空串往下走。老版本用 `cat 2>/dev/null`,
+  # 读失败得到空串,而回滚 `> "$f"` 会先截断 ⇒ 一份好文件被写成 0 字节,还一声不吭。
+  SNAP["$f"]="$(mimo_key_snapshot "$f")" || die "读不出现值,拒绝开工(没有快照就没有回滚):$f" 5
 done
 
 rollback() {
   say "‼️  写入校验失败 —— 回滚到改之前的内容"
+  local f rc=0
   for f in "${!SNAP[@]}"; do
-    printf '%s' "${SNAP[$f]}" | base64 -d > "$f"
+    mimo_key_restore "$f" "${SNAP[$f]}" || { say "   ‼️ 回滚失败:$f"; rc=1; }
   done
+  [[ $rc -eq 0 ]] || say "   ‼️ **有文件没能回滚**,别当无事发生 —— 上面点名的那几处要人去看。"
 }
 
 if [[ "$DRY" == "1" ]]; then
@@ -102,35 +114,10 @@ fi
 
 # ── ④ 写 ─────────────────────────────────────────────────────────────────
 say "③ 写源头 + ${#MIMO_KEY_COPIES[@]} 处副本…"
-# 🔴 **原子写**(自审抓到的缺陷):本机断线是常态,而本工具刻意不留 .bak。
-# `open(path,"w")` 先截断再写 ⇒ 写到一半被砍 = 一份**截断的 JSON**,
-# 那比"留下一个装着死 key 的备份"坏得多 —— 配置直接解析不了。
-# 所以写临时文件 + fsync + os.replace(同目录内是原子的):要么旧的完整,要么新的完整。
-write_json() {   # 路径 取值路径 新值
-  python3 -c '
-import json,os,sys,tempfile
-path,sel,val=sys.argv[1],sys.argv[2],sys.argv[3]
-d=json.load(open(path))
-node=d
-keys=sel.split(".")
-for k in keys[:-1]:
-    node=node[k]
-node[keys[-1]]=val
-st=os.stat(path)
-dirn=os.path.dirname(path) or "."
-fd,tmp=tempfile.mkstemp(dir=dirn, prefix=".rotate-", suffix=".tmp")
-try:
-    with os.fdopen(fd,"w") as f:
-        json.dump(d,f,ensure_ascii=False,indent=2)
-        f.write("\n")
-        f.flush(); os.fsync(f.fileno())
-    os.chmod(tmp, st.st_mode & 0o7777)   # 别把 600 的凭证写成 644
-    os.replace(tmp, path)
-except BaseException:
-    try: os.unlink(tmp)
-    except OSError: pass
-    raise' "$1" "$2" "$3"
-}
+# 原子写(临时文件 + fsync + os.replace)的实现在 bin/_mimo-key-io.sh —— 拆出去是为了
+# 让**回滚路径**能被判据 ⑦ 单独跑一遍;本机断线是常态,而本工具刻意不留 .bak,
+# 写到一半被砍留下一份截断的 JSON,比"留个装着死 key 的备份"坏得多。
+write_json() { mimo_key_write_json "$@"; }
 
 write_json "$MIMO_KEY_SOURCE" "$MIMO_KEY_SOURCE_SELECTOR" "$NEW_KEY" || { rollback; die "写源头失败" 6; }
 for e in "${MIMO_KEY_COPIES[@]}"; do
