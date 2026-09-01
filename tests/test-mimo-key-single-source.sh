@@ -330,19 +330,23 @@ else
 
     mimo_key_write_json "$f" "a.b" "NEW" || exit 91
     [[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["a"]["b"])' "$f")" == "NEW" ]] || exit 92
+    after="$(md5sum "$f" | cut -d' ' -f1)"
+    [[ "$after" != "$before" ]] || exit 92      # 写了却一字没变 = 没写
     [[ "$(stat -c %a "$f")" == "600" ]] || exit 93
     [[ -z "$(find "$iodir" -name '.rotate-*' -print -quit)" ]] || exit 94
 
-    # 快照 → 改坏 → 恢复,必须逐字节回到原样
+    # 快照 → 改坏 → 恢复,必须**逐字节回到快照那一刻**。
+    # ⚠️ 第一版我把期望写成了紧凑 JSON 字面量,而写出来的是 indent=2 的多行 —— 红的是
+    # **我的期望值**,不是实现。先查量具再改实现,这次量具坏在我手里。
     snap="$(mimo_key_snapshot "$f")" || exit 95
     printf 'garbage' > "$f"
     mimo_key_restore "$f" "$snap" || exit 96
-    [[ "$(md5sum "$f" | cut -d' ' -f1)" == "$(printf '{"a":{"b":"NEW"},"keep":"是"}\n' | md5sum | cut -d' ' -f1)" ]] || exit 97
+    [[ "$(md5sum "$f" | cut -d' ' -f1)" == "$after" ]] || exit 97
 
     # 🔴 空快照必须**拒绝恢复**:snapshot 读失败时给空串,而
     # `> "$f"` 会先截断 —— 那会把一份好文件写成 0 字节,还一声不吭。
     keepmd5="$(md5sum "$f" | cut -d' ' -f1)"
-    mimo_key_restore "$f" "" && exit 98
+    mimo_key_restore "$f" "" 2>/dev/null && exit 98   # 它拒绝时的抱怨不必印进收据
     [[ "$(md5sum "$f" | cut -d' ' -f1)" == "$keepmd5" ]] || exit 99
     exit 0
   )
