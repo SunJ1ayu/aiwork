@@ -287,3 +287,36 @@ failure_kind=runtime),日志里只有一句:
 2. `panel-review` 派发前**机械扫一遍任务书**:出现被审仓绝对路径、或 `/root/aiwork/`
    路径,就打一行响亮的警告(甚至拒发)—— 这一条同时收口 D5 和这里的 ②;
 3. 题面模板里加一句"你的工作副本就在 $PWD;凡是要你核的仓外内容,都已摘录在下面"。
+
+### D11 —— 🔴 **submimo 的 review 提示词没有裁决行契约,而机器只认那一行**
+
+09-02 第五轮:submimo rc=0、报告完整(66 KB,逐条核树 + 六条重点攻 + 硬事实核查)、
+结尾自己写着"**本轮 PASS**",而机器判 `verdict=UNKNOWN` / `failure_kind=no_verdict`
+⇒ **整份报告不进预算**,这一轮 coverage-eligible 从 1 掉到 0。
+
+根因不在模型:`bin/submimo` 的 review 档提示词(`MESSAGE`,agent 底座那支)只说
+"Output the complete report now as plain text",**没有
+`Conclusion: PASS | BLOCK | NEEDS_MORE_INFO` 这一行**;
+`bin/subkimi`、`bin/subagent`、`bin/subgemini` 的对应提示词里**都有**。
+
+量出来的相关(不是推的)—— 盘上全部 6 份 `*.submimo.result.json` 对着各自题面数:
+
+| 题面里出现过 `Conclusion` | 份数 | verdict |
+|---|---|---|
+| 是 | 2 | PASS、PASS |
+| 否 | 4 | UNKNOWN ×4 |
+
+**6/6**。四份 UNKNOWN 里有两份就是 `opendesign-slow-lock-scan` 的第一轮和第五轮 ——
+**同一条腿在同一单上白跑两次**,每次都花掉一轮 20 分钟的墙钟和一次外部额度。
+
+要命的地方和 D8 同形:**屏幕上一切正常**。driver.log 印 `submimo rc=0`,
+花名册印 `submimo=PASS(verdict=UNKNOWN)` —— 后半句是真话,但读起来像"通过了"。
+
+候选修法(**未拍板**,按偏好排序):
+1. **`bin/submimo` 的 review `MESSAGE` 补上契约行**,和另外三条腿对齐。最小、最直接;
+   属判卷面改动 ⇒ 要挂 track、要跑 `tests/test-review-tooling.sh`。
+2. 契约行不放在各腿各自的提示词里,而是 `panel-review` 派发前**统一追加到题面副本**——
+   根治"新增一条腿又忘了写"这个形状,但改动面大。
+3. `panel-review` 收尾时,对 `verdict=UNKNOWN` 且 `evidence.completeness=complete` 的腿
+   **响亮打印一行**"这条腿交了完整报告但没给裁决行 ⇒ 不进预算",别让它混在 rc=0 里。
+   (这条不修根因,只是让它不再静默 —— 但正是它静默才吃掉了两轮。)
