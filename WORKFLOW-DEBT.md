@@ -149,6 +149,38 @@ CLAUDE.md 对**硬规矩**写着"总量不许只进不出"且真退过场(08-08 
 `KILLED?(有日志无 state)` 而不是 `SKIP(rotation)`;要有判据 + 对照组
 (对照组必须钉死"真的没派"仍然印 SKIP,别把两种状态糊成一种)。
 
+**2026-09-02 第三轮:同一笔账的第二个实例,而且这次信息就在盘上没人读。**
+`panel-slowlock-r3` 的 `driver.log` 里白纸黑字写着 `escalation: degraded -> add subkimi`,
+盘上有 `.subkimi.facts.json`/`.log`(15.7KB)/`.log.err`(`Terminated`)—— 它被派了、
+跑了五分钟、被砍。`panel-roster` 仍然印 `subkimi=SKIP(rotation)`,
+抬头仍然写"不含升级追加的腿"。
+⇒ 上一条写的"盘上分辨不出它是不是升级追加的腿"**这次不成立**:
+`driver.log` 的 escalation 行就是第二个独立信源,只是花名册不读它。
+候选修法因此更便宜:除了"有日志无 state ⇒ `KILLED?`",还可以直接读 `driver.log`
+的 escalation 行补进花名册,连带把抬头那句免责改成有条件的。
+
+### D7 —— 🔴 **瞎审的腿照样 rc=0、照样给裁决,而裁决会进预算**
+
+同一轮 subglm 回落聊天腿之后,`git diff` 是**空的**(工作树 == HEAD,而
+`PANEL_DIFF_BASE` 默认不设),`PANEL_INCLUDE` 也没给 ⇒ 它拿到的是
+**零个文件、零行 diff**。工具确实打了一行 `WARNING: ... will review BLIND`,
+然后**照常跑完、rc=0、给出裁决**。这次它诚实地判了 `NEEDS_MORE_INFO`
+(报告开头就写"本轮提供的上下文里没有任何可审的树状态"),
+**但那是模型自己讲道德换来的,不是机制保证的**。
+
+危险形状:同样这条路径上,一条瞎着的腿完全可以吐出 `PASS` —— 它没看见任何东西,
+所以也没看见任何问题。而 `PASS` 是要**进 coverage 预算**的。
+降级腿目前不算 eligible,挡住了这一次;但**主腿本身就是 chat 腿**的场合
+(某些腿默认就是聊天档)没有这层保护:空 diff + 空 include + PASS = 白拿一格预算。
+⇒ 这是**判卷防线的洞**,不是体验问题。
+
+候选修法(**未拍板**):① chat 腿在"零 diff 且零 include"时**拒跑**(rc≠0),
+让它显式失败而不是产出一份没有依据的裁决 —— fail-closed;
+② 或者仍然跑,但把裁决**机械降级**成 `NO_CONTEXT`,永远不 eligible;
+③ 顺带:`panel-review` 在检测到零上下文时应该自己去设 `PANEL_DIFF_BASE`
+(至少回落到 `merge-base(默认分支, HEAD)`),而不是只打一行 WARNING 就往下走。
+要判据 + 对照组(对照组钉死"真有 diff 的 chat 腿不受影响")。
+
 ### D5 —— 题面里写被审仓的**绝对路径**,会把底座腿从快照引到活仓
 
 09-02 第三轮:subglm 的 agent 腿 rc=1、没给裁决,死因是它去
