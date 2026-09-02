@@ -200,3 +200,55 @@ CLAUDE.md 对**硬规矩**写着"总量不许只进不出"且真退过场(08-08 
 `runlog --final` 有"跑的时候谁都不许写仓"的硬规矩,**panel 期间没有对应的一条**。
 候选修法(**未拍板**):panel 跑着时对被审仓的写入至少要**响亮提示**;
 或者约定"派完就别动树,有发现先攒着"。
+
+### D8 —— 🔴 **控制器一死,整轮证据就作废 —— 哪怕腿的结论完整躺在盘上**
+
+09-02 连着两轮实证(**代价是两轮外部评审白花**):
+
+- 第三轮:断线在 09:14。三条腿是 `setsid` 出去的,**活过了断线**并各自跑完
+  (subdeepseek 09:10、subglm 09:29、subkimi 09:34 被砍);控制器没活过,
+  ⇒ 没写 compact observation。
+- 第四轮:断线在 10:08。subkimi **10:08:17 rc=0、证据完整、判 PASS、跑了 803 秒**,
+  `result.json` 好端端躺在 `/root/aiwork/logs/` 里;控制器同样没活过 ⇒ 同样没有 observation。
+
+机器侧的后果不是"少一条记录",是**这一轮等于没发生**:`track-record` 的
+`panel_review_coverage` 把 authoritative group 的 key 取成
+`(result["run_id"], subject_digest)`,同 subject 跨 run 只作 `same_subject_shadow`
+诊断、**不进预算** ⇒ 第三轮的 subdeepseek(PASS)和第四轮的 subkimi(PASS)
+拼不起来,high 的 2 条预算一条都不算。**只能重跑第五轮。**
+
+要命的地方在于**这条洞是静默的**:腿的日志、`result.json`、`.state` 全都在,
+`panel-roster` 也能从盘上把花名册印出来 —— 屏幕上一切正常,唯独机器看不见。
+(它和记忆里那条"observation 不能从盘上重建"是同一件事,但那条记的是限制,
+ 这里记的是**它已经吃掉两轮**。)
+
+**这一轮的临时绕法(已用,有效)**:控制器自己 `setsid nohup` 出去,
+派完当场 `ps -o sess` 核它 `sess` 是不是自己的号(实测 2142603/ppid=1,断线够不着)。
+**绕法不是修法**:它靠我每次记得加,而"靠记得"正是这台机器不信的东西。
+
+候选修法(**未拍板**,按我现在的偏好排序):
+1. **panel-review 自己 `setsid` 重入** —— 控制器一启动就把自己挪进新会话,
+   谁调它都杀不掉。最省事、且不需要任何人记得。
+2. **observation 增量写** —— 每条腿收尾就更新一次,而不是全轮结束才写一次。
+   这样"控制器中途死"最多丢掉还没跑完的腿,已经站住的腿不作废。
+3. `panel-review --collect <prefix>`:事后从 `.plan` + 各腿 `.result.json` 补写。
+   ⚠️ **这条要小心**:它等于允许"没有控制器活到收尾"的一轮照样进预算,
+   而 observation 之所以由控制器写,就是因为它是"这一轮真的按预算派出去了"的
+   唯一见证。真要做,必须在 observation 里机械标注 `reconstructed=true` 并
+   **默认不 eligible**,否则是在给自己开一条把死轮洗成活轮的后门。
+
+### D9 —— 每轮 panel 都会印一句"反锚定闸被跳过而自审不存在",而它是假的
+
+`_my-review-gate.sh` 在 `--panel-dispatch` 分支里按**腿收到的那份任务文件名**
+去推自审路径:`/root/aiwork/tasks/$(basename "${task%.*}")-my-review.md`。
+但 panel-review 派发时给腿的是**它复制到 logs/ 的那份**
+(`logs/panel-slowlock-r4-<ts>.task.md`),于是推出来的路径永远是
+`/root/aiwork/tasks/panel-slowlock-r4-<ts>.task-my-review.md` —— **结构上不可能存在**。
+所以每条腿的 `.err` 顶部都躺着一句"注意 —— 跳过了反锚定闸,而 XXX 并不存在",
+而控制器那一层其实**照真名查过、也确实拦得住**(09-02 两轮自审都按约定名写在
+`tasks/slow-lock-scan-r4-my-review.md`)。
+
+这不是功能 bug,是**机器打印的一句假话**:接手的人(包括我自己)读 `.err` 时,
+第一眼看到的是"反锚定没做" —— 而事实相反。同一条老账的又一个形态。
+候选修法(**未拍板**):腿这一层拿到原始任务名(派发时多传一个变量),
+或者干脆在 `--panel-dispatch` 分支里**只说"由控制器代查"**,不去推路径、不报不存在。
