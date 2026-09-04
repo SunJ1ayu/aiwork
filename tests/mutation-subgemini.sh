@@ -107,12 +107,20 @@ if s.count(old)!=1: sys.exit(1)
 open(p,'w',encoding='utf-8').write(s.replace(old,new))
 PY
 
+# 🔴 2026-09-04 换靶:旧版把默认档改成 `gemini-3.1-pro-high`,靠 V46② 钉死
+# "必须正好是 3.7" 来打红 —— 那个钉法本身已被判为过强(见 V46② 的注释),
+# 改掉之后旧变异是**合法的 gemini 档**,V46② 不该红也不会红。
+# 新靶子问的是 V46② 现在真正该防的事:**`--model` 有没有被传给 agy**。
+# 不传的话 agy 用它自己的默认档,而 agy 同时供应 claude-*/gpt-oss-* ⇒
+# "谷歌家族腿"可能整轮跑成别家,归档闸那句家族覆盖当场变假话,且**一声不响**。
+# 变异体不含版本号,不会再随上游换档过期。
 mutate M2 "V46②" <<'PY'
 import os,sys
 p=os.environ['ROOT']+'/bin/subgemini'; s=open(p,encoding='utf-8').read()
-old='DEFAULT_MODEL="gemini-3.7-flash-high"'
+old='"$AGY_BIN" -p "$PROMPT" --model "$MODEL" --add-dir "$REPO_DIR"'
+new='"$AGY_BIN" -p "$PROMPT" --add-dir "$REPO_DIR"'
 if s.count(old)!=1: sys.exit(1)
-open(p,'w',encoding='utf-8').write(s.replace(old,'DEFAULT_MODEL="gemini-3.1-pro-high"'))
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
 PY
 
 mutate M3 "V46③" <<'PY'

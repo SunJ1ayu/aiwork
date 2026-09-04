@@ -4807,8 +4807,13 @@ v46_subgemini_leg() {
   cat > "$W/bin/agy" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$stub_log"
+# 🔴 单独写一行 MODEL_ARG=<值>(2026-09-04,track gemini-leg-38,GLM 抓到的):
+# 上面那行记的是**整条命令行**,里面含 \`-p "\$PROMPT"\` —— 提示词正文也在里面。
+# V46② 原来直接在整条命令行里 grep '--model gemini-',**提示词里出现这串字就算通过**。
+# 放松成家族匹配之后这个误通过面比钉版本号时更宽。改成认唯一标记行,不认位置。
+prev=""; for a in "\$@"; do [[ "\$prev" == "--model" ]] && printf 'MODEL_ARG=%s\n' "\$a" >> "$stub_log"; prev="\$a"; done
 case " \$* " in
-  *" models "*) echo "gemini-3.7-flash-high	Gemini 3.7 Flash (High)"; exit 0 ;;
+  *" models "*) printf '%s\n' "gemini-3.8-flash-high	Gemini 3.8 Flash (High)" "gemini-3.7-flash-high	Gemini 3.7 Flash (High)"; exit 0 ;;
 esac
 if [[ -n "\${STUB_TOKEN_PROBE:-}" ]]; then
   t="\$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
@@ -4884,17 +4889,27 @@ assert p['process_state'] == 'exited' and p['verdict'] == 'PASS' and p['degraded
 PY
   check "V46①c: Gemini 正常路径交出模型、完整 snapshot 与裁决 facts" $?
 
-  # ② 默认模型必须是 gemini-3.7-flash-high(业主拍板,两轮实测支持)
+  # ② 不设 AGY_MODEL 时,默认档必须**真的被传给 agy**,且必须是 gemini-* 家族。
   # 🔴 必须**单独跑一次不设 AGY_MODEL 的调用**再看。第一版直接翻前面两次调用的日志,
   #    而那两次一个是 claude-*(被拒、根本没调 agy)、一个显式设了 3.6 ——
   #    **默认档从来没被跑过**,这条断言在检查一件它自己没测过的事。
+  #
+  # 🔴 2026-09-04:这条**曾经把版本号也钉死**(`--model gemini-3.7-flash-high`)。
+  #    钉版本比它要防的事强得多:V46 存在的理由写在 bin/subgemini 的注释里 ——
+  #    agy 同时供应 claude-* / gpt-oss-*,这条腿跑成 Claude 会让归档闸那句
+  #    「覆盖 N 个不同模型家族」变成假话。**防这件事不需要版本号。**
+  #    代价是真实的:上游出 3.8 那天,业主一句"换成 3.8 吧"要惊动一道安全闸、
+  #    还得挂一个 track —— 而这道闸对"3.7 还是 3.8"根本没有意见。
+  #    版本号是**另一处的事实的拷贝**(bin/subgemini 说了算),抄过来就会过期;
+  #    本机为「锚点/条数是别处事实的拷贝」记过 5 次账,这是第 6 次,同一族。
+  #    现在只问两件它真有意见的事:**传了没有** + **是不是 gemini 家族**。
   : > "$stub_log"
   PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_TOKEN_PROBE="$W/token-probe.txt" \
     "$BIN/subgemini" review "$W/task.md" "$W/o2b.log" "$W/repo" >/dev/null 2>&1 || true
-  if grep -q -- '--model gemini-3.7-flash-high' "$stub_log" 2>/dev/null; then
-    ok "V46②: 默认档确为 gemini-3.7-flash-high"
+  if grep -qE '^MODEL_ARG=gemini-' "$stub_log" 2>/dev/null; then
+    ok "V46②: 默认档真的传给了 agy 且属 gemini 家族($(grep -E '^MODEL_ARG=' "$stub_log" | tail -1))"
   else
-    bad "V46②: 默认档不是 gemini-3.7-flash-high —— 实际传给 agy 的是:$(grep -o -- '--model [^ ]*' "$stub_log" | tail -1)"
+    bad "V46②: 默认档没传给 agy 或不是 gemini-* —— 实际:$(grep -E '^MODEL_ARG=' "$stub_log" | tail -1 | grep . || echo '(一个 --model 都没有)')"
   fi
 
   # ③ 凭证是普通文件、不是符号链接、权限 600 —— **问的是它存在的那段时间**。
