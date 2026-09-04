@@ -7,13 +7,13 @@
 - [x] T3 `bin/subgemini` 默认档 3.7 → 3.8(含 usage 与 die 提示里的示例档同步)
 - [x] T4 V46② 从"钉版本"改成"钉家族 + 真的传了"
 - [x] T5 mutation M2 换靶:删掉 `--model "$MODEL"`(不含版本号,不会过期)
-- [ ] T6 🔴 变异红检:证明放松之后闸**仍然咬得住**
+- [x] T6 🔴 变异红检:证明放松之后闸**仍然咬得住**
       —— 这一条是本单唯一的立身之本,没有它这单就是放水。
       ⚠️ 必须等 panel 的 gemini 腿跑完再跑:红检会改 `bin/subgemini` 本体,
       而改一个正在被执行的 bash 脚本会让它读到半截新半截旧。
-- [ ] T7 完整 `tests/test-review-tooling.sh` 全绿
-- [ ] T8 外部评审 2 腿(high)
-- [ ] T9 verify.md 收尾 + 归档
+- [x] T7 完整 `tests/test-review-tooling.sh` 全绿
+- [x] T8 外部评审 2 腿(high)
+- [x] T9 verify.md 收尾 + 归档
 
 ## 敞着
 
