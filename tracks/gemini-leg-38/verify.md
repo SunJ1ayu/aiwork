@@ -120,6 +120,14 @@ runlog: redcheck-inherited-agy-model rc=0 commit=8e4b456 dirty=yes at=2026-09-04
 
 **「它绿了」和「它测的是对的东西」是两件事。**
 
+### 第二轮最终收据(最后一次编辑之后那一遍)
+
+runlog: T7-FINAL-R2 rc=0 commit=0a827c1 dirty=no final=yes at=2026-09-04T08:09:37Z file=tracks/gemini-leg-38/evidence/20260904T080937Z-01-T7-FINAL-R2.txt
+
+内容:`tests/test-review-tooling.sh` 549 passed / 0 failed、
+`tests/test-workflow-docs.sh` 37 passed / 0 failed、文档同步一致。
+**`dirty=no`** —— 这一遍跑在干净树上。
+
 ### 主裁(第二轮)
 
 **PASS。** 两腿均 PASS 且各自独立复核了我的判定;第一轮打穿的三处 + 第二轮的四处全部落地。
