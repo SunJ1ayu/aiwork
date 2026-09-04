@@ -20,5 +20,5 @@
 - `tests/test-track-record.sh:72` 的 `"google": ("subgemini", "gemini-3.7-flash-high")`
   **不改**:那是构造假 observation 的夹具数据,不是对真实默认档的钉子,
   换档不会让它过期。(查过才这么说的,不是推的。)
-- `tests/test-review-tooling.sh:4811` 假 agy 的 models 输出仍只列 3.7:
-  预检只 `grep -q '^gemini-'`,列什么不影响判定。留着,不制造无意义 churn。
+- ~~假 agy 的 models 输出仍只列 3.7~~ —— **已过期**:第一轮 DeepSeek F3 指出
+  同一个文件里留着 3.7 字面量会让下个人误读成断言,已改成同时列 3.8 与 3.7。

@@ -23,9 +23,18 @@ V46② 属于后者。它要防的性质是「这条腿必须是 Google 家族�
 ### 1. V46②:钉家族 + 钉"真的传了"
 
 ```
-旧: grep -q -- '--model gemini-3.7-flash-high' "$stub_log"
-新: grep -q -- '--model gemini-'              "$stub_log"
+旧:   grep -q --  '--model gemini-3.7-flash-high' "$stub_log"
+中途: grep -q --  '--model gemini-'               "$stub_log"
+终:   grep -qE    '^MODEL_ARG=gemini-'            "$stub_log"
 ```
+
+🔴 **"中途"那一版是错的,它就是本单修掉的那个 bug 本身** ——
+`stub_log` 记的是含 `-p "$PROMPT"` 的**整条命令行**,提示词正文里出现 `--model gemini-`
+就算通过(GLM 第一轮抓到,红检 `20260904T072811Z-01` 里旧断言当场误通过)。
+终版让假 agy 单独写一行 `MODEL_ARG=<值>`,断言认那一行 ——
+**认字段用唯一标记,别用位置**。
+(留着"中途"那一版不删:DeepSeek 第二轮指出 design.md 若只写终版,
+就看不出这一单在这里摔过一跤,而摔的那一跤正是它要治的病。)
 
 保留原有的**跑法**不变(单独跑一次不设 `AGY_MODEL` 的调用再看)——
 那一条是 V46② 更早的一次教训:第一版翻的是前面两次调用的日志,

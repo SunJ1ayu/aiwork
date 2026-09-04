@@ -79,3 +79,49 @@ runlog: T7-FINAL rc=0 commit=0e56cd4 dirty=yes final=yes at=2026-09-04T07:38:09Z
 **本单我自己犯的**:① 派发失败了没回头看,白等 15 分钟;② 管道吃 rc(第八次);
 ③ **我对 M24 给了一个错误解释,并照着那个解释改了测试数据 —— 改完照样漏网、解释被证伪,
 那个改动已撤回**。一个改动做的事和它注释写的理由对不上,就是屎山,哪怕看着无害。
+
+---
+
+## 第二轮(修完第一轮的三处之后,subject 变了,重审)
+
+第一轮 **只有 1 个有效裁决**(deepseek),GLM 底座腿挂了、降级聊天腿写完了报告但裁决行
+没独立成行 ⇒ 机器判 no verdict ⇒ **归档闸以"high 需要 2 个不同家族"拒绝归档,拦得对**。
+
+```
+impact-risk=high requested-budget=2 selected=2
+submimo(xiaomi)=PASS(verdict=PASS)  subdeepseek(deepseek)=PASS(verdict=PASS)
+subglm=off(第一轮已降级,本轮关掉)  subkimi/subgemini=skipped(cooldown)
+```
+
+⇒ 两个不同家族、均 PASS、无冲突,high 的 2/2 满足。
+
+### 第二轮逐条对账
+
+| 来源 | 发现 | 判定 |
+|---|---|---|
+| **DeepSeek LOW-1** | V46② 号称测"不设 `AGY_MODEL` 的默认路径",但**只不设、不清继承值**。旧钉法遇继承值会红(假阳性),**新钉法只认家族前缀 ⇒ 静默通过(假阴性)** | **成立,已修**(`env -u AGY_MODEL`)。**这是本次放松直接造成的退化**,不修就是留坑。对照红检见下。 |
+| **DeepSeek LOW-2** | design.md 把"新断言"记成了中途那一版 `grep -q -- '--model gemini-'`,而那**正是本单修掉的 bug** ⇒ 归档后工件里会留一份与实现矛盾的方案 | **成立,已修**:三版并列(旧/中途/终),并写明中途那版错在哪、为什么不删它 |
+| **DeepSeek LOW-3** | tasks.md 里"假 agy 仍只列 3.7"的备注已过期 | **成立,已更正** |
+| **DeepSeek INFO** | `bin/subgemini` die 提示里仍写着版本号字面量当例子,而 W3 只钉了文档的"默认模型"行 ⇒ 下次换档它会再次静默过期 | **成立,已修**:改成"跑 `agy models` 查",不写具体版本号 |
+| DeepSeek INFO / mimo 第 4 点 | `tests/test-track-record.sh:72` 的 3.7 是夹具数据、非活钉 | **两腿独立确认我的判定正确**,不改 |
+| DeepSeek INFO | 放松的最终依据是业主签字,仓内无外部佐证 | **接受并标明边界**:签字发生在 2026-09-04 本次会话,记录在 `legs.md` 与 `design.md` 两处;**除此之外没有第三方工件佐证**,这里如实说明 |
+| mimo 全部五问 | 逐条回答:不恒真、M1/M2 不重叠、夹具判定正确、代价站得住 | 无阻塞项 |
+
+### 第二轮收据
+
+runlog: redcheck-inherited-agy-model rc=0 commit=8e4b456 dirty=yes at=2026-09-04T08:08:05Z file=tracks/gemini-leg-38/evidence/20260904T080805Z-01-redcheck-inherited-agy-model.txt
+
+**那份收据里两行并排,是这一单最该记住的一幕 —— 两边都印 PASS:**
+
+```
+修复后(env -u):  MODEL_ARG=gemini-3.8-flash-high   ← 真的在测默认档
+修复前:          MODEL_ARG=gemini-3.6-flash-low    ← 测的是外面继承来的弱档,照样绿
+```
+
+**「它绿了」和「它测的是对的东西」是两件事。**
+
+### 主裁(第二轮)
+
+**PASS。** 两腿均 PASS 且各自独立复核了我的判定;第一轮打穿的三处 + 第二轮的四处全部落地。
+不再审第三轮:本轮改的全是判据卫生与工件文案,符合本机停止规则
+(改钱的代码⇒必须再审;只加判据/改文案⇒不用)。

@@ -1,0 +1,126 @@
+{
+  "schema_version": 2,
+  "track": "gemini-leg-38",
+  "run_id": "20260904-154521-117659-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "gemini-leg-38-review",
+  "started_at": "2026-09-04T07:45:21Z",
+  "finished_at": "2026-09-04T07:58:52Z",
+  "duration_ms": 811382,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "high",
+    "degraded": false,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "adapter": "submimo",
+        "degraded": false,
+        "duration_ms": 810002,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:3772c2e175146fff71a454413a7de9a46c875b61ab928433cc5de2a9f55090b5",
+          "ref": "file:///root/aiwork/logs/panel-gem38r2-1788507921.submimo.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xiaomi",
+        "model": {
+          "invoked": "xiaomi/mimo-v2.5-pro",
+          "reported": null,
+          "requested": "xiaomi/mimo-v2.5-pro"
+        },
+        "name": "submimo",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260904-154521-117659-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "digest": "sha256:3e0bef176befba5aa01351da434847f8435a584496ab6163143afb371b7435c6",
+          "manifest_version": 1,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "8e4b4567648b2926c6a138c160c6c7ff30ddcde5",
+            "index_tree_oid": "e43861dd19eabd2e7d041bb4ea81cb341fa6bd96",
+            "worktree_tree_oid": "55c1643bc84e8867cd8e1469acebb96260b50e76"
+          },
+          "task_sha256": "sha256:f3e00b0d6b32311fefdae037982b60cad90a502c8506d1ed8c416839ab3ddda8"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subdeepseek-agent",
+        "degraded": false,
+        "duration_ms": 354907,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:bbcebb8e61f03b35274e7e995871a380c940d4e0e8754e5a6a40d6b81776ea5f",
+          "ref": "file:///root/aiwork/logs/panel-gem38r2-1788507921.subdeepseek.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "deepseek",
+        "model": {
+          "invoked": "deepseek-v4-flash",
+          "reported": null,
+          "requested": "deepseek-v4-flash"
+        },
+        "name": "subdeepseek",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260904-154521-117659-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "digest": "sha256:3e0bef176befba5aa01351da434847f8435a584496ab6163143afb371b7435c6",
+          "manifest_version": 1,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "8e4b4567648b2926c6a138c160c6c7ff30ddcde5",
+            "index_tree_oid": "e43861dd19eabd2e7d041bb4ea81cb341fa6bd96",
+            "worktree_tree_oid": "55c1643bc84e8867cd8e1469acebb96260b50e76"
+          },
+          "task_sha256": "sha256:f3e00b0d6b32311fefdae037982b60cad90a502c8506d1ed8c416839ab3ddda8"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "api",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

@@ -92,7 +92,8 @@ case "$MODEL" in
   *) die "AGY_MODEL='$MODEL' 不是 gemini-* ⇒ 拒跑。
   这条腿在 panel 花名册里代表 Google 模型家族;跑成 claude-*/gpt-* 会让
   归档闸的「覆盖 N 个不同模型家族」变成一句假话(那道闸查腿名,查不出模型)。
-  要换档请在 gemini-* 里选,例如 gemini-3.7-flash-high / gemini-3.1-pro-high。" ;;
+  要换档请在 gemini-* 里选;当前可用档位跑 `agy models` 查(这里不写具体版本号 ——
+  版本号是别处事实的拷贝,写在这儿一定会过期,本单治的就是这个病)。" ;;
 esac
 
 review_home_guard subgemini "$REVIEW_HOME" "$SOURCE_REPO" AGY_REVIEW_HOME || exit 1

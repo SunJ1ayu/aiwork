@@ -1,0 +1,21 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    redcheck-inherited-agy-model
+cmd:     bash -c $'\nset +e\nrun_v46() {\n  { echo "PASS=0; FAIL=0"\n    echo "ok(){ echo \\"  PASS: \\$1\\"; PASS=\\$((PASS+1)); }"\n    echo "bad(){ echo \\"  FAIL: \\$1\\"; FAIL=\\$((FAIL+1)); }"\n    echo "check(){ if [[ \\"\\$2\\" -eq 0 ]]; then ok \\"\\$1\\"; else bad \\"\\$1\\"; fi; }"\n    awk "/^v46_subgemini_leg\\(\\) \\{/,/^\\}/" tests/test-review-tooling.sh\n    echo "REVIEW_NO_MY_REVIEW=1 v46_subgemini_leg"\n  } | bash 2>&1 | grep -E "V46②"\n}\necho "场景:调用者环境里继承着 AGY_MODEL=gemini-3.6-flash-low(一个弱档)"\necho "问题:V46② 号称在测『不设 AGY_MODEL 时的默认档』,它到底测的是哪个?"\necho\necho "── 修复后(env -u AGY_MODEL)──"\nexport AGY_MODEL=gemini-3.6-flash-low\nrun_v46\necho\necho "── 对照:把 env -u 拿掉(即修复前的样子)──"\ncp tests/test-review-tooling.sh /tmp/v46.bak\nsed -i "s/^  env -u AGY_MODEL PATH=/  PATH=/" tests/test-review-tooling.sh\nrun_v46\ncp /tmp/v46.bak tests/test-review-tooling.sh; rm -f /tmp/v46.bak\necho\necho "(还原后 git 应无差异:)"\ngit diff --stat tests/test-review-tooling.sh | tail -1\n'
+cwd:     /root/aiwork(仓根)
+commit:  8e4b456
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-04T08:08:05Z
+---------------- 输出开始 ----------------
+场景:调用者环境里继承着 AGY_MODEL=gemini-3.6-flash-low(一个弱档)
+问题:V46② 号称在测『不设 AGY_MODEL 时的默认档』,它到底测的是哪个?
+
+── 修复后(env -u AGY_MODEL)──
+  PASS: V46②: 默认档真的传给了 agy 且属 gemini 家族(MODEL_ARG=gemini-3.8-flash-high)
+
+── 对照:把 env -u 拿掉(即修复前的样子)──
+  PASS: V46②: 默认档真的传给了 agy 且属 gemini 家族(MODEL_ARG=gemini-3.6-flash-low)
+
+(还原后 git 应无差异:)
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+---------------- 输出结束 ----------------
+runlog: redcheck-inherited-agy-model rc=0 commit=8e4b456 dirty=yes at=2026-09-04T08:08:05Z file=tracks/gemini-leg-38/evidence/20260904T080805Z-01-redcheck-inherited-agy-model.txt

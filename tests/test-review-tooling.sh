@@ -4903,8 +4903,14 @@ PY
   #    版本号是**另一处的事实的拷贝**(bin/subgemini 说了算),抄过来就会过期;
   #    本机为「锚点/条数是别处事实的拷贝」记过 5 次账,这是第 6 次,同一族。
   #    现在只问两件它真有意见的事:**传了没有** + **是不是 gemini 家族**。
+  # 🔴 `env -u AGY_MODEL`(2026-09-04 第二轮,DeepSeek 抓到,**是这次放松直接造成的**):
+  #    这一跑要测的是"**不设** AGY_MODEL 时走默认档",而"不设"≠"没有" ——
+  #    调用者环境里若继承着 AGY_MODEL,这里测的就不是默认档。
+  #    旧钉法(必须正好是 3.7)遇到继承值会**红**(假阳性,吵但看得见);
+  #    新钉法只认 `gemini-*` 前缀 ⇒ 继承一个 gemini 档会**静默通过**(假阴性,看不见)。
+  #    放松把一个吵闹的错变成了一个安静的错 —— 必须显式清零。
   : > "$stub_log"
-  PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_TOKEN_PROBE="$W/token-probe.txt" \
+  env -u AGY_MODEL PATH="$W/bin:$PATH" AGY_REVIEW_HOME="$W/home" STUB_TOKEN_PROBE="$W/token-probe.txt" \
     "$BIN/subgemini" review "$W/task.md" "$W/o2b.log" "$W/repo" >/dev/null 2>&1 || true
   if grep -qE '^MODEL_ARG=gemini-' "$stub_log" 2>/dev/null; then
     ok "V46②: 默认档真的传给了 agy 且属 gemini 家族($(grep -E '^MODEL_ARG=' "$stub_log" | tail -1))"
