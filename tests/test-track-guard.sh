@@ -1082,7 +1082,7 @@ g14_exemption_cannot_shield_archive_tampering() {
     printf '# Design\n\n归档后发现要改正文\n' > tracks/archive/t/design.md
     git mv tracks/archive/t/decision.json tracks/t/decision.json >/dev/null 2>&1
     git add -A >/dev/null )
-  local out advice
+  local out advice broken crc
   out="$( cd "$d" && "$GUARD" 2>&1 )"; rc=$?
   check 'G14④前置: 半截取回(只搬走 decision)⇒ 拦' $([[ $rc -ne 0 ]]; echo $?)
   # 药方按**整行**抓、按整行执行 —— 上一版拿 `grep -oE 'git mv [^ ]+ [^ ]+'` 抠片段,
@@ -1109,6 +1109,78 @@ g14_exemption_cannot_shield_archive_tampering() {
     fi
   fi
   rm -rf "$d"
+
+  # ⑤ 药方对**带空格 / 非 ASCII 的文件名**也必须照抄就能跑。
+  #    这不是理论边角:本仓的正文全是中文,`设计文档.md` 这种名字完全现实,
+  #    而 `git ls-files` 默认会把非 ASCII 路径 C-quote 成 "\346\224\266...",
+  #    空格则原样输出 —— 两种都会让不加引号的药方当场断在 word-split 上。
+  #    (2026-09-09 第四轮 subdeepseek 提出并实测,主裁逐条复现。)
+  d="$(newrepo)"; aged_archive "$d"
+  ( cd "$d"; mkdir -p tracks/t "tracks/archive/t/evidence"
+    printf 'x\n' > "tracks/archive/t/evidence/我的 设计文档.md"
+    git add -A >/dev/null
+    GIT_AUTHOR_DATE="2026-01-05T11:00:00" GIT_COMMITTER_DATE="2026-01-05T11:00:00" \
+      git commit -qm 'archived with a chinese filename' >/dev/null
+    printf '# Design\n\n归档后发现要改正文\n' > tracks/archive/t/design.md
+    git mv tracks/archive/t/decision.json tracks/t/decision.json >/dev/null 2>&1
+    git add -A >/dev/null )
+  out="$( cd "$d" && "$GUARD" 2>&1 )"
+  advice="$(printf '%s\n' "$out" | sed -nE 's/^track-guard: +((mkdir -p|git mv|git checkout) .*)$/\1/p')"
+  broken=0
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    ( cd "$d" && bash -c "$cmd" >/dev/null 2>&1 ); crc=$?
+    [[ $crc -eq 0 ]] || { broken=$((broken+1)); echo "      (药方这一句 rc=$crc:$cmd)"; }
+  done <<< "$advice"
+  check 'G14⑤: 文件名带空格/非 ASCII 时,药方每一句照样跑得通' $([[ $broken -eq 0 && -n "$advice" ]]; echo $?)
+  ( cd "$d" && git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check 'G14⑤: 执行完之后闸放行(中文文件名也真的搬过去了)' $?
+  rm -rf "$d"
+
+  # ⑥ 残件**在 index 里、工作树里已经没有**时,`git mv` 是 rc=128 "bad source"。
+  #    闸列残件用的是 index 视图(条件② 同一把尺),所以它列得出、却搬不动 ——
+  #    又一句走不通的药方,和本单开单理由同型。
+  d="$(newrepo)"; aged_archive "$d"
+  ( cd "$d"; mkdir -p tracks/t
+    printf '# Design\n\n归档后发现要改正文\n' > tracks/archive/t/design.md
+    git mv tracks/archive/t/decision.json tracks/t/decision.json >/dev/null 2>&1
+    git add -A >/dev/null
+    rm -f tracks/archive/t/verify.md )   # 工作树没了,index 里还在
+  out="$( cd "$d" && "$GUARD" 2>&1 )"
+  advice="$(printf '%s\n' "$out" | sed -nE 's/^track-guard: +((mkdir -p|git mv|git checkout) .*)$/\1/p')"
+  broken=0
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    ( cd "$d" && bash -c "$cmd" >/dev/null 2>&1 ); crc=$?
+    [[ $crc -eq 0 ]] || { broken=$((broken+1)); echo "      (药方这一句 rc=$crc:$cmd)"; }
+  done <<< "$advice"
+  check 'G14⑥: 残件只在 index、工作树已删时,药方仍然走得通' $([[ $broken -eq 0 && -n "$advice" ]]; echo $?)
+  rm -rf "$d"
+}
+
+# --------------------------------------------------------------- G15
+# 为什么加这一组(2026-09-09 第四轮,subdeepseek 提出,主裁在真实路径上复现):
+#   `bin/track archive` 那一步是裸 `mv "$src" "tracks/archive/$name"`。POSIX mv 在
+#   **目标目录已存在**时不是失败,而是把整个目录**塞进去** —— 落成
+#   `tracks/archive/<n>/<n>/` 并且 rc=0。这和本单第 4 句坏药方是同一个陷阱,
+#   只是触发者换成了"上一次取回留下的未跟踪残留"(git mv 只搬跟踪文件,
+#   未跟踪的会留在原地 ⇒ 归档目录物理上还在,而 index 视图里它是空的)。
+g15_archive_refuses_when_destination_exists() {
+  echo '[G15] track archive 目标目录已存在时必须拒绝,不许静默嵌套'
+  local d
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" '```' "$L2" '```' > tracks/t/verify.md
+    mkdir -p tracks/archive/t; printf 'stale\n' > tracks/archive/t/leftover.txt )  # 未跟踪残留
+  "$TRACK" archive t "$d" >/dev/null 2>&1
+  check 'G15: 目标目录已存在 ⇒ archive 命令拒绝' $([[ $? -ne 0 ]]; echo $?)
+  [[ ! -e "$d/tracks/archive/t/t" ]]
+  check 'G15: 没有静默嵌套出 tracks/archive/t/t/' $?
+  [[ -d "$d/tracks/t" ]]
+  check 'G15: 被挡下时目录留在原地' $?
+  rm -rf "$d"
 }
 
 echo "=== track-guard oracle ==="
@@ -1133,5 +1205,6 @@ g11_archived_machine_facts_stay_typed
 g12_archived_prose_edits_get_revalidated
 g13_unarchiving_is_not_a_deletion
 g14_exemption_cannot_shield_archive_tampering
+g15_archive_refuses_when_destination_exists
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

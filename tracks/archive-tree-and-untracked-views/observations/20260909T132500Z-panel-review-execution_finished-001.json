@@ -1,0 +1,136 @@
+{
+  "schema_version": 2,
+  "track": "archive-tree-and-untracked-views",
+  "run_id": "20260909-211118-2375377-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "archive-tree-and-untracked-views-review",
+  "started_at": "2026-09-09T13:11:18Z",
+  "finished_at": "2026-09-09T13:25:00Z",
+  "duration_ms": 821446,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "high",
+    "degraded": false,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "adapter": "submimo",
+        "degraded": false,
+        "duration_ms": 423018,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:8917ff57e0489217f23f034cc573a1f64fa82985a13be8c504062c977c24030a",
+          "ref": "file:///root/aiwork/logs/panel-archive-tree-and-untracked-views-review-20260909-211118.submimo.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xiaomi",
+        "model": {
+          "invoked": "xiaomi/mimo-v2.5-pro",
+          "reported": null,
+          "requested": "xiaomi/mimo-v2.5-pro"
+        },
+        "name": "submimo",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260909-211118-2375377-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:497c1d2e2513370fd03718e16c169f3a2943017d96323682deb6783cb15d511a",
+            "policy_version": 1,
+            "track": "archive-tree-and-untracked-views"
+          },
+          "digest": "sha256:ee2bf91037fdad41995e97b9f18c30361c3ee1cd1c0ce4601a719c0926147003",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "37f956a4ad566e3f64f885d83591697a7118d1b8",
+            "index_tree_oid": "2a1ebe60e7a01e17d393d6925c3b45a2ba050118",
+            "worktree_tree_oid": "2a1ebe60e7a01e17d393d6925c3b45a2ba050118"
+          },
+          "task_sha256": "sha256:7f7d59108344f34cfac7754e804815f95e0976b913f94a56a46803c4eef05b12"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subdeepseek-agent",
+        "degraded": false,
+        "duration_ms": 819297,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:6c46cb9d095ecbb4ec23b66bda0e90cc89ff87b7ba126d8544cd07b6dc30c99b",
+          "ref": "file:///root/aiwork/logs/panel-archive-tree-and-untracked-views-review-20260909-211118.subdeepseek.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "deepseek",
+        "model": {
+          "invoked": "deepseek-v4-flash",
+          "reported": null,
+          "requested": "deepseek-v4-flash"
+        },
+        "name": "subdeepseek",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260909-211118-2375377-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:497c1d2e2513370fd03718e16c169f3a2943017d96323682deb6783cb15d511a",
+            "policy_version": 1,
+            "track": "archive-tree-and-untracked-views"
+          },
+          "digest": "sha256:ee2bf91037fdad41995e97b9f18c30361c3ee1cd1c0ce4601a719c0926147003",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "37f956a4ad566e3f64f885d83591697a7118d1b8",
+            "index_tree_oid": "2a1ebe60e7a01e17d393d6925c3b45a2ba050118",
+            "worktree_tree_oid": "2a1ebe60e7a01e17d393d6925c3b45a2ba050118"
+          },
+          "task_sha256": "sha256:7f7d59108344f34cfac7754e804815f95e0976b913f94a56a46803c4eef05b12"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "api",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
