@@ -275,9 +275,17 @@ for dir in $(archive_typed_validation_dirs); do
       say "   (正文留在原地、decision.json 却搬走了 ⇒ 这份档案再没人复验得了):"
       printf '%s\n' "$archive_left" | sed 's#^#   - #' >&2
       say "   出路:取回要**整份**搬出 —— 把上面这些也搬进 tracks/$name/:"
+      # 目标子目录不存在时 `git mv` 是 **rc=128 fatal**,不是自己建 —— 而真实 track
+      # 全都带 evidence/ observations/(主裁 2026-09-09 第四轮派发前亲跑探针复现;
+      # 本单第 5 句坏药方,G14④a 逐句断言 rc 钉住)。所以嵌套路径要连 mkdir 一起给。
       while IFS= read -r left; do
         [ -n "$left" ] || continue
-        say "     git mv $left tracks/$name/${left#$dir/}"
+        rel="${left#$dir/}"
+        if [[ "$rel" == */* ]]; then
+          say "     mkdir -p tracks/$name/${rel%/*} && git mv $left tracks/$name/$rel"
+        else
+          say "     git mv $left tracks/$name/$rel"
+        fi
       done <<< "$archive_left"
       say "   (目标已存在时 git mv 会拒绝,先决定留哪一份;确实要作废整份档案就连正文一起删。)"
     else

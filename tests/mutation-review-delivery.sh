@@ -214,12 +214,30 @@ mutate_guard "豁免退回只查 active decision(不管 archive 搬空没有)" \
 
 # 药方退回"整目录 mv"那一版:目标已存在时 git 会静默嵌套成 tracks/<n>/<n>/ 且 rc=0。
 # 文案断言看不出来,只有**真执行一遍**的 G14④ 照得出。
+# (锚点 2026-09-09 第四轮随实现更新过一次 —— 变异锚点跟着实现漂是本机的老病,
+#  好在锚点没命中时 mutate_guard 会自己喊,不会静默变成"这条红检什么都没证明"。)
 mutate_guard "药方退回整目录 mv(目标已存在时静默嵌套)" \
   "G14④: 照抄闸打印的药方执行一遍 ⇒ 闸放行(药方真走得通)" \
   '      while IFS= read -r left; do
         [ -n "$left" ] || continue
-        say "     git mv $left tracks/$name/${left#$dir/}"
+        rel="${left#$dir/}"
+        if [[ "$rel" == */* ]]; then
+          say "     mkdir -p tracks/$name/${rel%/*} && git mv $left tracks/$name/$rel"
+        else
+          say "     git mv $left tracks/$name/$rel"
+        fi
       done <<< "$archive_left"=>      say "     git mv $dir tracks/$name"'
+
+# 2026-09-09 第四轮:药方退回"不带 mkdir"那一版。目标子目录不存在时 git mv 是
+# rc=128 fatal —— 而真实 track 全带 evidence/ observations/。只有逐句断言 rc 的
+# G14④a 照得出;"执行完再跑一次闸"那条也会跟着红,但它说不出是哪一句坏了。
+mutate_guard "药方退回不带 mkdir(嵌套路径 git mv 直接 fatal)" \
+  "G14④a: 药方每一句都真的执行得下去(rc=0,不是靠判据替它补齐)" \
+  '        if [[ "$rel" == */* ]]; then
+          say "     mkdir -p tracks/$name/${rel%/*} && git mv $left tracks/$name/$rel"
+        else
+          say "     git mv $left tracks/$name/$rel"
+        fi=>        say "     git mv $left tracks/$name/$rel"'
 
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
