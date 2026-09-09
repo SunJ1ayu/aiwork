@@ -225,6 +225,19 @@ class DeliveryTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("review_delivery", result.stdout + result.stderr)
 
+    def test_new_track_scaffold_requires_binding(self):
+        # 模板决定"以后每一个新 track 有没有这道闸"。它停在 v1 时，闸对新交付
+        # 永远是 legacy-unbound —— 实现全绿、机制却一次都不会生效。
+        project = Path(self.temp.name) / "project"
+        project.mkdir()
+        created = subprocess.run([str(ROOT / "bin/track"), "new", "scaffolded", str(project)],
+                                 capture_output=True, text=True)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        result = subprocess.run([str(ROOT / "bin/track-record"), "validate", "--phase", "shape",
+                                 str(project / "tracks/scaffolded")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("delivery=required", result.stdout)
+
     def test_delivery_cannot_be_downgraded(self):
         self.decision["schema_version"] = 1
         self.write_decision()

@@ -46,6 +46,9 @@ printf '%s\n' "$(basename "$0")" >> "$PANEL_TEST_CALLS"
 if [[ -n "${PANEL_TEST_TASKS:-}" ]]; then
   printf '%s\t%s\n' "$2" "$(sha256sum "$2" | cut -d' ' -f1)" >> "$PANEL_TEST_TASKS"
 fi
+if [[ -n "${PANEL_TEST_ENV:-}" ]]; then
+  printf '%s\t%s\n' "$(basename "$0")" "${AIWORK_REVIEW_TRACK-<unset>}" >> "$PANEL_TEST_ENV"
+fi
 printf 'Conclusion: PASS\n' > "$3"
 # 健康桩要**像真腿**:五条 adapter 都已经产 typed facts,只给裁决不给 facts 的腿
 # 在新契约下是"决定性但不可计数",调度器会为它补一条腿 —— 那时这套判据数出来的
@@ -379,6 +382,25 @@ p = json.load(open(sys.argv[1], encoding="utf-8"))
 assert {leg["name"] for leg in p["actual"]["legs"]} == set(sys.argv[2:])
 PY
 check "P8: observation 腿名单等于运行时花名册，不抄固定数量" $?
+
+echo "[P9] 交付绑定的喂料端:归属 track 必须进腿的环境"
+# 为什么在这里问:交付指纹由 _review-workspace.sh 在腿的进程里算(RW8 钉了那一段),
+# 而它只在 AIWORK_REVIEW_TRACK 有值时才算。派发端不把归属传进去 ⇒ 每条腿都产 v1
+# subject ⇒ 归档闸的 delivery 比较**永远走不到**,而 11 条单元判据照样全绿。
+# 这正是"闸建好了没接线"的形状,只有行为级判据问得出来。
+envfile="$d/leg-env"
+: > "$calls"; : > "$envfile"
+PANEL_TEST_ENV="$envfile" PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-p9" PANEL_STAGGER_MAX=0 \
+  bash "$d/bin/panel-review" --track current --risk standard --budget 1 \
+  "${common[@]}" "$d/raw/p9-bound" >/dev/null 2>&1
+awk -F '\t' '{n++} $2 != "current" {bad=1} END {exit (n > 0 && !bad) ? 0 : 1}' "$envfile"
+check "P9a: --track 派出的腿在环境里拿到 AIWORK_REVIEW_TRACK" $?
+: > "$calls"; : > "$envfile"
+PANEL_TEST_ENV="$envfile" PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-p9b" PANEL_STAGGER_MAX=0 \
+  bash "$d/bin/panel-review" --no-track --risk standard --budget 1 \
+  "${common[@]}" "$d/raw/p9-unbound" >/dev/null 2>&1
+awk -F '\t' '{n++} $2 != "<unset>" {bad=1} END {exit (n > 0 && !bad) ? 0 : 1}' "$envfile"
+check "P9b: --no-track 不给腿伪造归属" $?
 
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="
