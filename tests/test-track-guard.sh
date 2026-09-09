@@ -1181,6 +1181,37 @@ g15_archive_refuses_when_destination_exists() {
   [[ -d "$d/tracks/t" ]]
   check 'G15: 被挡下时目录留在原地' $?
   rm -rf "$d"
+
+  # ② 拒绝必须发生在 worktree sweep **之前**(2026-09-09 主裁接手断线后自审)。
+  #    sweep 走通时会真的 `git worktree remove` —— **不可逆**。拒绝要是排在它后面,
+  #    那句"目录留在原地,没有半归档状态"就是半句假话:目录留着,树没了,
+  #    而这一趟归档最终还是失败的。本文件上面几行早写着这条原则(证据寿命那一段:
+  #    "放在 worktree sweep 前……避免后续动作掩盖真正的拒绝理由")。
+  local wtroot out
+  # 对照组先跑:同样的夹具、目标目录**不存在**时,sweep 确实会把这棵树删掉。
+  # 没有这一组,下面那条"树还在"可能只是因为 sweep 在这个夹具里压根不删树(假绿)。
+  d="$(newrepo)"; wtroot="$(mktemp -d)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" '```' "$L2" '```' > tracks/t/verify.md
+    git worktree add -q "$wtroot/t/w1" >/dev/null 2>&1 )
+  ( cd "$d" && DELEGATE_WORKTREE_ROOT="$wtroot" "$TRACK" archive t "$d" >/dev/null 2>&1 )
+  [[ ! -e "$wtroot/t/w1" ]]
+  check 'G15② 对照组: 目标不存在时归档成功,sweep 真的删掉了那棵树' $?
+  rm -rf "$d" "$wtroot"
+
+  d="$(newrepo)"; wtroot="$(mktemp -d)"
+  ( cd "$d"; mkdir -p tracks/t
+    mk_receipt "$d" tracks/t 20260808T020000Z-suite.txt "$L2"
+    verify_ev "**PASS**" '```' "$L2" '```' > tracks/t/verify.md
+    mkdir -p tracks/archive/t; printf 'stale\n' > tracks/archive/t/leftover.txt
+    git worktree add -q "$wtroot/t/w1" >/dev/null 2>&1 )
+  out="$( cd "$d" && DELEGATE_WORKTREE_ROOT="$wtroot" "$TRACK" archive t "$d" 2>&1 )"
+  [[ -d "$wtroot/t/w1" ]]
+  check 'G15②: 目标已存在 ⇒ 拒绝发生在 sweep 之前,worktree 没被删' $?
+  printf '%s\n' "$out" | grep -q 'worktree-sweep:'
+  check 'G15②: 被拒绝的那一趟压根没跑 sweep' $([[ $? -ne 0 ]]; echo $?)
+  rm -rf "$d" "$wtroot"
 }
 
 echo "=== track-guard oracle ==="
