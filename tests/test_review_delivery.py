@@ -379,6 +379,38 @@ class DeliveryTest(unittest.TestCase):
         self.assertNotEqual(self.fingerprint(), self.fingerprint("staged"), "未暂存改动同样只进 working")
 
 
+    def test_t10_archive_drift_names_the_changed_file_not_the_exempt_ones(self):
+        # 真实史料:归档后往档案里补 runlog 收据 + 改 design.md 的提交,本仓有过一次
+        # (5c3b4d8 动了 panel-roster-from-disk)。收据/observations/verify.md 是豁免的,
+        # 被拦的只该是 design.md —— 拒绝必须点名它,否则操作者分不清自己踩的是哪一条。
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        (self.archived() / "evidence/20260909T000000Z-01-late.txt").write_text(
+            "# runlog receipt —— 机器写的\nrunlog: late rc=0\n")
+        (self.archived() / "verify.md").write_text("# Verify\n\n归档后追记。\n")
+        (self.archived() / "design.md").write_text("# Design\n\n后来发现这句话不准,改了。\n")
+        self.commit_all("file late receipts and rewrite the archived design")
+        result = self.validate_path(self.archived())
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("archive_drift", output)
+        # 只断言"被点名的那份清单"里有什么:药方句子里本来就会出现 verify.md,
+        # 拿整段输出做 assertNotIn 是我第一版写错的靶子(它红在药方上,不是红在清单上)。
+        payload = json.loads(output.split("actual=", 1)[1].split(" expected=", 1)[0])
+        self.assertEqual(payload["changed_paths"], ["tracks/example/design.md"])
+        self.assertEqual(payload["changed_total"], 1)
+
+    def test_t9_unrelated_repo_changes_after_archiving_stay_green(self):
+        # 归档之后仓库继续往前走是常态。归档后的窄比较只问"这个 track 自己的档案变没变",
+        # 不许扩成"拿今天的全仓和归档那天比" —— 那会让每一份历史档案随时间自己变红。
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        (self.repo / "source.py").write_text("answer = 3\n")
+        self.commit_all("unrelated repo work after archiving")
+        result = self.validate_path(self.archived())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 if __name__ == "__main__":
     unittest.main()

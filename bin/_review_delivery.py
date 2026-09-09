@@ -35,7 +35,10 @@ def _git(repo: Path, *args: str, env=None, data=None) -> bytes:
     return proc.stdout
 
 
-def _project(repo: Path, track: str, tree: str, env=None) -> str:
+def _rows(repo: Path, track: str, tree: str, env=None, scope: str = "repo") -> list:
+    """Sorted delivery rows of one tree. scope="track" keeps only this track's own
+    files — used to ask "did the archived track itself change after it was archived",
+    a question the repository-wide view cannot answer once the tree is pinned."""
     entries = _git(repo, "ls-tree", "-rz", "--full-tree", tree, env=env)
     prefixes = (f"tracks/{track}/".encode(), f"tracks/archive/{track}/".encode())
     rows = []
@@ -84,19 +87,33 @@ def _project(repo: Path, track: str, tree: str, env=None) -> str:
                         line.startswith(b"runlog: ") for line in blob.splitlines()):
                     continue
                 content_id = b"sha256:" + hashlib.sha256(blob).hexdigest().encode()
+        if scope == "track" and suffix is None:
+            continue
         rows.append(path + b"\0" + mode + b"\0" + content_id + b"\0")
+    return sorted(rows)
+
+
+def _digest(repo: Path, track: str, rows, env=None, scope: str = "repo") -> str:
     object_format = _git(repo, "rev-parse", "--show-object-format", env=env).strip()
+    # The repository-wide domain string is frozen: changing it would invalidate every
+    # delivery digest already bound by a past review. Track scope gets its own domain
+    # so the two can never be mistaken for each other.
+    domain = b"aiwork-delivery-v1\0" if scope == "repo" else b"aiwork-delivery-track-v1\0"
     return "sha256:" + hashlib.sha256(
-        b"aiwork-delivery-v1\0" + track.encode() + b"\0" + object_format + b"\0" + b"".join(sorted(rows))
+        domain + track.encode() + b"\0" + object_format + b"\0" + b"".join(rows)
     ).hexdigest()
 
 
-def delivery_fingerprint(repo: Path, track: str, *, source="working", tree=None) -> str:
+def _project(repo: Path, track: str, tree: str, env=None, scope: str = "repo") -> str:
+    return _digest(repo, track, _rows(repo, track, tree, env, scope), env, scope)
+
+
+def _check_track(track: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", track) or track == "archive":
         raise DeliveryError("invalid delivery track")
-    repo = Path(repo)
-    if tree is not None:
-        return _project(repo, track, tree)
+
+
+def _scan_rows(repo: Path, track: str, *, source: str, scope: str = "repo") -> list:
     if source not in ("working", "staged"):
         raise DeliveryError("unknown delivery view")
     # A private index AND private object store keep hashing from writing to the
@@ -113,14 +130,66 @@ def delivery_fingerprint(repo: Path, track: str, *, source="working", tree=None)
             _git(repo, "read-tree", "--empty", env=env)
             _git(repo, "update-index", "-z", "--index-info", env=env, data=entries)
             if source == "working":
+                # The working view is index + worktree changes + UNTRACKED files;
+                # the staged view is the index alone. They agree only on a worktree
+                # that is clean of delivery-relevant content — that is this gate's
+                # precondition, and view_difference() is how a caller names it.
                 _git(repo, "add", "-A", "--", ":/", env=env)
             oid = _git(repo, "write-tree", env=env).decode().strip()
-            return _project(repo, track, oid, env)
+            return _rows(repo, track, oid, env, scope)
         first = scan()
         second = scan()
         if entries != _git(repo, "ls-files", "--stage", "-z") or first != second:
             raise DeliveryError("delivery view changed during capture")
         return first
+
+
+def delivery_fingerprint(repo: Path, track: str, *, source="working", tree=None, scope="repo") -> str:
+    _check_track(track)
+    repo = Path(repo)
+    if tree is not None:
+        return _project(repo, track, tree, scope=scope)
+    return _digest(repo, track, _scan_rows(repo, track, source=source, scope=scope), scope=scope)
+
+
+def _rows_of(repo: Path, track: str, *, source=None, tree=None, scope="repo") -> list:
+    if tree is not None:
+        return _rows(repo, track, tree, None, scope)
+    return _scan_rows(repo, track, source=source, scope=scope)
+
+
+def _differing_paths(left: list, right: list) -> list:
+    """Paths that are not identical on both sides. A refusal that can name the files
+    is the difference between an actionable stop and the loop this track was opened
+    to remove, so every comparison in this module reports through here."""
+    def table(rows):
+        out = {}
+        for row in rows:
+            path, mode, content_id, _ = row.split(b"\0")
+            out[path] = (mode, content_id)
+        return out
+
+    a, b = table(left), table(right)
+    return sorted(path.decode("utf-8", "surrogateescape")
+                  for path in set(a) | set(b) if a.get(path) != b.get(path))
+
+
+def view_difference(repo: Path, track: str, *, scope="repo") -> list:
+    """Paths whose delivery content differs between the working and the staged view.
+    Empty means the two views deliver the same thing."""
+    _check_track(track)
+    repo = Path(repo)
+    return _differing_paths(_rows_of(repo, track, source="working", scope=scope),
+                            _rows_of(repo, track, source="staged", scope=scope))
+
+
+def tree_difference(repo: Path, track: str, tree: str, *, source="staged", scope="track") -> list:
+    """Paths where a view no longer matches a pinned tree — used to say WHICH file
+    inside an archived track changed after it was archived."""
+    _check_track(track)
+    repo = Path(repo)
+    return _differing_paths(_rows_of(repo, track, tree=tree, scope=scope),
+                            _rows_of(repo, track, source=source, scope=scope))
 
 
 def main():
@@ -129,9 +198,17 @@ def main():
     parser.add_argument("--track", required=True)
     parser.add_argument("--tree")
     parser.add_argument("--source", choices=("working", "staged"), default="working")
+    parser.add_argument("--scope", choices=("repo", "track"), default="repo")
+    parser.add_argument("--explain-views", action="store_true",
+                        help="print the paths that make the working and staged views differ")
     args = parser.parse_args()
     try:
-        print(delivery_fingerprint(args.repo, args.track, source=args.source, tree=args.tree))
+        if args.explain_views:
+            for path in view_difference(args.repo, args.track, scope=args.scope):
+                print(path)
+        else:
+            print(delivery_fingerprint(args.repo, args.track, source=args.source,
+                                       tree=args.tree, scope=args.scope))
     except (OSError, DeliveryError) as exc:
         parser.exit(1, f"review-delivery: {exc}\n")
 

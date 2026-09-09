@@ -451,37 +451,85 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
 def validate_review_delivery(data, track_dir, source, panel_runs, qualifying):
     if data["schema_version"] == 1:
         return "legacy-unbound"
-    from _review_delivery import DeliveryError, delivery_fingerprint
+    from _review_delivery import (DeliveryError, delivery_fingerprint, tree_difference,
+                                  view_difference)
     repo = git_root(track_dir)
     if repo is None:
         raise DecisionError("observation.review_delivery", "delivery.repository", None, "Git repository")
     tree = None
-    # Re-check historical machine facts against the original archive commit,
-    # never against today's unrelated source. New staged archives use the index.
+    # Re-check historical machine facts against **this** archive commit, never against
+    # today's unrelated source. The newest add of decision.json under the archive path
+    # is the archive commit of record: a track that was manually unarchived and archived
+    # again has two of them, and pinning the older one let the first review keep
+    # authorizing whatever the second archive delivered (WORKFLOW-DEBT D15).
     rel = track_dir.relative_to(repo).as_posix()
     if rel == f"tracks/archive/{data['track']}":
         exists = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"HEAD:{rel}/decision.json"],
                                 capture_output=True, check=False)
         if exists.returncode == 0:
-            history = subprocess.run(["git", "-C", str(repo), "log", "--no-renames", "--reverse",
+            history = subprocess.run(["git", "-C", str(repo), "log", "--no-renames",
                                       "--diff-filter=A", "--format=%H", "--", f"{rel}/decision.json"],
                                      capture_output=True, text=True, check=False)
             if history.returncode or not history.stdout.strip():
-                raise DecisionError("observation.review_delivery", "delivery.archive", None, "original archive commit")
+                raise DecisionError("observation.review_delivery", "delivery.archive", None, "archive commit of record")
             tree = history.stdout.splitlines()[0] + "^{tree}"
     try:
         target = delivery_fingerprint(repo, data["track"], source=source, tree=tree)
+        # Pinning the tree freezes the repository-wide view at the archive commit, so
+        # edits made to the archived track afterwards are invisible to it. The track's
+        # own subtree is comparable across that boundary, so ask it separately.
+        archived_then = archived_now = None
+        if tree is not None:
+            archived_then = delivery_fingerprint(repo, data["track"], tree=tree, scope="track")
+            archived_now = delivery_fingerprint(repo, data["track"], source=source, scope="track")
     except (OSError, DeliveryError) as exc:
         raise DecisionError("observation.review_delivery", "delivery.capture", str(exc), "stable readable delivery view") from exc
+    if archived_then is not None and archived_then != archived_now:
+        try:
+            changed = tree_difference(repo, data["track"], tree, source=source)
+        except (OSError, DeliveryError):
+            changed = []
+        raise DecisionError("observation.review_delivery.archive_drift", f"{rel}/",
+                            {"changed_paths": changed[:10], "changed_total": len(changed),
+                             "at_archive_commit": archived_then, "now": archived_now, "view": source},
+                            "archived track content unchanged since its archive commit; "
+                            "write later corrections into verify.md, which stays editable "
+                            "together with observations/ and runlog receipts")
     groups = {(group["run_id"], group["subject_digest"]) for group in qualifying}
-    for run in panel_runs:
-        for leg in run["actual"]["legs"]:
-            subject = leg.get("subject", {})
-            if (leg.get("run_id"), subject.get("digest")) not in groups:
-                continue
-            delivery = subject.get("delivery")
-            if delivery == {"policy_version": 1, "track": data["track"], "digest": target}:
-                return "bound"
+
+    def bound(digest):
+        for run in panel_runs:
+            for leg in run["actual"]["legs"]:
+                subject = leg.get("subject", {})
+                if (leg.get("run_id"), subject.get("digest")) not in groups:
+                    continue
+                if subject.get("delivery") == {"policy_version": 1, "track": data["track"], "digest": digest}:
+                    return True
+        return False
+
+    if bound(target):
+        return "bound"
+    # Before blaming content drift, ask whether the review simply looked at the OTHER
+    # view. The working view is index + worktree + untracked files, the staged view is
+    # the index alone; a review taken while untracked files sat in the repo can only be
+    # satisfied by the working view, while the archive commit hook checks staged. Telling
+    # that operator to rerun the panel is a loop that costs one panel round per turn
+    # (measured, WORKFLOW-DEBT D16) — so name the files instead.
+    if tree is None:
+        other = "staged" if source == "working" else "working"
+        try:
+            alternative = delivery_fingerprint(repo, data["track"], source=other)
+            differing = view_difference(repo, data["track"])
+        except (OSError, DeliveryError):
+            alternative, differing = None, []
+        if alternative is not None and bound(alternative):
+            raise DecisionError("observation.review_delivery.view_mismatch", "delivery.view",
+                                {"reviewed_view": other, "checked_view": source,
+                                 "differing_paths": differing[:10],
+                                 "differing_total": len(differing)},
+                                "one and the same content in the reviewed and the checked view; "
+                                "git add (or delete/ignore) the listed paths — a fresh review round "
+                                "cannot close this gap")
     raise DecisionError("observation.review_delivery", "observations[].actual.legs[].subject.delivery",
                         {"target": target, "view": source},
                         "qualifying same-run review bound to this delivery; rerun panel-review after content changes")

@@ -23,7 +23,8 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/tests"
 # 静默 cp 会把"少抄了一个文件"变成"守卫没生效但 judge 照跑" ⇒ 一律不吞错。
 cp "$ROOT/bin/_review_delivery.py" "$ROOT/bin/_review_result.py" \
-   "$ROOT/bin/track-record" "$ROOT/bin/track" "$work/bin/"
+   "$ROOT/bin/track-record" "$ROOT/bin/track" \
+   "$ROOT/bin/_evidence.sh" "$ROOT/bin/_ephemeral-refs.sh" "$work/bin/"
 cp "$ORACLE" "$ROOT/tests/_no_egress.py" "$work/tests/"
 
 if python3 "$work/tests/test_review_delivery.py" >"$work/base.log" 2>&1; then
@@ -63,7 +64,7 @@ PY
 
 mutate "归档比较恒真(任何评审都算绑定)" track-record \
   "test_archive_rejects_stale_review_and_accepts_closeout" \
-  '            if delivery == {"policy_version": 1, "track": data["track"], "digest": target}:=>            if True:'
+  '                if subject.get("delivery") == {"policy_version": 1, "track": data["track"], "digest": digest}:=>                if True:'
 
 mutate "v2 也当 legacy 早退(整道闸静默关掉)" track-record \
   "test_unbound_historical_review_does_not_authorize_v2" \
@@ -87,6 +88,60 @@ mutate "收据只看名字不看内容(塞什么都能豁免)" _review_delivery.
 mutate "收口豁免不看文件模式(可执行/符号链接也免检)" _review_delivery.py \
   "test_closeout_symlink_or_executable_does_not_get_excluded" \
   '        if suffix is not None and mode == b"100644":=>        if suffix is not None and mode in (b"100644", b"100755", b"120000"):'
+
+# ---- track archive-tree-and-untracked-views(D15/D16)新增的四道行为 ----
+
+mutate "归档复验退回锁第一次归档那棵树(D15 原样)" track-record \
+  "test_t1_second_archive_is_not_authorized_by_the_first_archive_tree" \
+  '            history = subprocess.run(["git", "-C", str(repo), "log", "--no-renames",
+                                      "--diff-filter=A"=>            history = subprocess.run(["git", "-C", str(repo), "log", "--no-renames", "--reverse",
+                                      "--diff-filter=A"'
+
+mutate "已归档 track 干脆不钉树(拿今天的源复验历史)" track-record \
+  "test_t9_unrelated_repo_changes_after_archiving_stay_green" \
+  '            tree = history.stdout.splitlines()[0] + "^{tree}"=>            tree = None'
+
+mutate "归档后漂移比较恒真(单次生命周期也被拦)" track-record \
+  "test_t2_single_lifecycle_archive_still_validates" \
+  'if archived_then is not None and archived_then != archived_now:=>if archived_then is not None:'
+
+mutate "归档后漂移比较恒假(档案随便改)" track-record \
+  "test_t3_delivered_content_edited_after_archiving_is_visible" \
+  'if archived_then is not None and archived_then != archived_now:=>if archived_then is not None and archived_then != archived_then:'
+
+mutate "归档后漂移比较扩成全仓(历史档案会自己变红)" _review_delivery.py \
+  "test_t9_unrelated_repo_changes_after_archiving_stay_green" \
+  '        if scope == "track" and suffix is None:=>        if False and suffix is None:'
+
+mutate "归档漂移不再点名是哪份文件(只剩两个哈希)" track-record \
+  "test_t10_archive_drift_names_the_changed_file_not_the_exempt_ones" \
+  '            changed = tree_difference(repo, data["track"], tree, source=source)=>            changed = []'
+
+mutate "视图不等的诊断关掉(退回那句错药方)" track-record \
+  "test_t5_view_mismatch_names_the_real_cause" \
+  '        if alternative is not None and bound(alternative):=>        if alternative is not None and False:'
+
+mutate "诊断照样把那句无效药方粘上" track-record \
+  "test_t5_view_mismatch_names_the_real_cause" \
+  '                                "cannot close this gap")=>                                "cannot close this gap; rerun panel-review after content changes")'
+
+mutate "track archive 不再拦视图不等(照旧先搬再炸)" track \
+  "test_t6_cli_archive_refuses_before_moving_when_views_disagree" \
+  '        if [ -n "$views" ]; then=>        if [ -n "" ]; then'
+
+mutate "track archive 见谁拦谁(干净仓也归不了档)" track \
+  "test_t7_cli_archive_still_works_on_a_clean_repo" \
+  '        if [ -n "$views" ]; then=>        if [ -z "$views" ]; then'
+
+mutate "working 视图不再收未跟踪文件(两视图假装永远一致)" _review_delivery.py \
+  "test_t8_two_views_differ_exactly_on_the_dirty_worktree" \
+  '            if source == "working":=>            if False:'
+
+mutate "收口记录 verify.md 也算交付内容(归档后补写就被拦)" _review_delivery.py \
+  "test_t4_closeout_records_stay_editable_after_archiving" \
+  '            if suffix == b"verify.md":
+                continue=>            if False:
+                continue'
 
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

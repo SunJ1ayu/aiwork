@@ -274,6 +274,30 @@ case "$cmd" in
       exit 1
     fi
     typed=0; [ -f "$src/decision.json" ] && typed=1
+    # 上面那条用 **working** 视图判(index + 工作树 + 未跟踪文件),而归档那次 commit 的
+    # hook 校验的是 **staged**(只有 index)。两者只在"交付内容上工作树是干净的"时相等。
+    # 这个前置条件以前从没被说出来过:2026-09-09 归档 review-delivery-binding 时,
+    # 仓里 26 份未跟踪任务书让它必然不等,于是 working 这关放行、目录搬走、炸在 commit 上,
+    # 而那条 BLOCK 让人去重跑 panel(实测无效,每圈烧一轮 panel)。挡在 mv 之前,并点名文件。
+    if [[ "$typed" -eq 1 ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("schema_version")==2 else 1)' "$src/decision.json" 2>/dev/null; then
+      repo_root="$(git -C "$proj" rev-parse --show-toplevel 2>/dev/null)" || repo_root=""
+      if [ -n "$repo_root" ]; then
+        if ! views="$(python3 "$(dirname "$0")/_review_delivery.py" --repo "$repo_root" --track "$name" --explain-views 2>&1)"; then
+          echo "🔴 拒绝归档:算不出两个交付视图($views)。目录留在原地。" >&2
+          exit 1
+        fi
+        if [ -n "$views" ]; then
+          echo "🔴 拒绝归档:评审看的 working 视图和归档 commit 校验的 staged 视图不是同一份内容。" >&2
+          echo "   下面这些文件只在其中一个视图里(未跟踪 / 已改未暂存):" >&2
+          printf '%s\n' "$views" | head -20 | sed 's/^/     /' >&2
+          [ "$(printf '%s\n' "$views" | wc -l)" -gt 20 ] && echo "     …(还有 $(( $(printf '%s\n' "$views" | wc -l) - 20 )) 个)" >&2
+          echo "   处理办法:git add 它们、删掉、或写进 .gitignore,然后重跑 track archive。" >&2
+          echo "   ⚠️ 重跑 panel-review 解决不了这件事(实测:药方无效,每圈烧掉一整轮 panel)。" >&2
+          echo "   目录留在原地,一个文件都没动。" >&2
+          exit 1
+        fi
+      fi
+    fi
     # 归档 = 宣布做完了。没有主裁结论就没做完 —— 在**动目录之前**挡,
     # 别留下「已归档但没结论」的半截状态(pre-commit 的规矩3 只挡痕迹被提交那一步,
     # 目录那时早就搬走了)。现存 51 个已归档 track 实测无一缺 verify.md、
