@@ -871,6 +871,44 @@ g7_archive_command_checks_evidence_too() {
   rm -rf "$d"
 }
 
+# --------------------------------------------------------------- G12
+# 为什么加这一组(2026-09-09,track archive-tree-and-untracked-views):
+#   本单新加了"归档之后档案里的交付内容不许再改"这道比较,但它只在 track-record 被
+#   叫起来时才生效。而 guard 挑要复验的归档目录时,只认 decision.json 和 observations/ ——
+#   于是一个**只改 design.md / evidence 正文**的提交,压根不会触发复验,新比较等于没上线。
+#   这一条钉的是"闸有没有被叫起来",不是"闸判得对不对"(后者在 test_review_delivery.py)。
+g12_archived_prose_edits_get_revalidated() {
+  echo '[G12] 只改归档件的正文(不碰 decision/observations)也必须触发归档复验'
+  local d rc
+
+  # ① typed 归档件、结论栏空着 ⇒ 复验必失败。只 stage design.md:
+  #    复验被叫起来 = 红;没被叫起来 = 绿(那就是漏)。
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/archive/t/verify.md
+    typed_decision '"self"' > tracks/archive/t/decision.json
+    printf '# Design\n' > tracks/archive/t/design.md
+    git add -A >/dev/null; git commit -qm archived >/dev/null
+    printf '# Design\n\n归档之后又改了一句\n' > tracks/archive/t/design.md
+    git add tracks/archive/t/design.md >/dev/null )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G12: 只改归档件 design.md ⇒ 归档复验被叫起来(拒绝)' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  # ② **反误报**:同样只改正文,但改的是**进行中**的 track ⇒ 归档复验不该介入
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/t
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    typed_decision '"self"' > tracks/t/decision.json
+    printf '# Design\n' > tracks/t/design.md
+    git add -A >/dev/null; git commit -qm active >/dev/null
+    printf '# Design\n\n还在写\n' > tracks/t/design.md
+    git add tracks/t/design.md >/dev/null )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1)
+  check 'G12: 进行中 track 改 design.md ⇒ 不误报' $?
+  rm -rf "$d"
+}
+
 echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
@@ -890,5 +928,6 @@ g8_track_new_rejects_path_names
 g9_typed_shape_uses_staged_decision
 g10_manual_typed_archive_uses_staged_facts
 g11_archived_machine_facts_stay_typed
+g12_archived_prose_edits_get_revalidated
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

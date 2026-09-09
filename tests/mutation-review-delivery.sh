@@ -129,6 +129,10 @@ mutate "track archive 不再拦视图不等(照旧先搬再炸)" track \
   "test_t6_cli_archive_refuses_before_moving_when_views_disagree" \
   '        if [ -n "$views" ]; then=>        if [ -n "" ]; then'
 
+mutate "track archive 只看本 track 的子树(和另一处的答案对不上)" track \
+  "test_t11_both_stations_name_the_same_files" \
+  '--track "$name" --explain-views=>--track "$name" --scope track --explain-views'
+
 mutate "track archive 见谁拦谁(干净仓也归不了档)" track \
   "test_t7_cli_archive_still_works_on_a_clean_repo" \
   '        if [ -n "$views" ]; then=>        if [ -z "$views" ]; then'

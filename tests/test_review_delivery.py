@@ -401,6 +401,29 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(payload["changed_paths"], ["tracks/example/design.md"])
         self.assertEqual(payload["changed_total"], 1)
 
+    def test_t11_both_stations_name_the_same_files(self):
+        # C-1(bash,bin/track archive)和 C-2(python,track-record)是两套代码在问
+        # 同一件事:"两视图等不等"。今天它们靠同一个 --explain-views 出口保持一致,
+        # 但没有任何东西钉住这份一致 —— 一处改了另一处没跟,操作者会收到两份互相矛盾的
+        # 说法,而这单的全部意义就是"闸说的话可信"。主裁自审里把这处标成结构最弱的一点。
+        (self.repo / "brief.md").write_text("untracked task brief\n")
+        (self.repo / "notes.txt").write_text("second untracked file\n")
+        self.install_review()
+        self.archivable_closeout()
+        self.git("add", "tracks")
+        self.commit_hookless("closeout, both briefs stay untracked")
+
+        cli = self.cli_archive()
+        cli_output = cli.stdout + cli.stderr
+        self.assertNotEqual(cli.returncode, 0, cli_output)
+
+        gate = self.validate_path(self.track, "staged")
+        output = gate.stdout + gate.stderr
+        payload = json.loads(output.split("actual=", 1)[1].split(" expected=", 1)[0])
+        self.assertEqual(payload["differing_paths"], ["brief.md", "notes.txt"])
+        for path in payload["differing_paths"]:
+            self.assertIn(path, cli_output, "两处必须点同一批文件")
+
     def test_t9_unrelated_repo_changes_after_archiving_stay_green(self):
         # 归档之后仓库继续往前走是常态。归档后的窄比较只问"这个 track 自己的档案变没变",
         # 不许扩成"拿今天的全仓和归档那天比" —— 那会让每一份历史档案随时间自己变红。
