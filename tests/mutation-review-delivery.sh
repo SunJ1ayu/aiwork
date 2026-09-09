@@ -269,5 +269,13 @@ mutate_bin track "track archive 退回裸 mv(目标已存在时静默嵌套)" \
   "G15: 目标目录已存在 ⇒ archive 命令拒绝" \
   '    if [ -e "$proj/tracks/archive/$name" ]; then=>    if false; then'
 
+# 2026-09-09 主裁自审:拒绝的**位置**也是判卷面的一部分 —— 排在 worktree sweep 之后,
+# 就会先不可逆地删树、再宣布"目录留在原地"。这条变异把 sweep 插到检查之前(单次
+# old=>new 只能插不能搬;插进去 = 那条路径上 sweep 先跑了一遍,与旧顺序同效)。
+mutate_bin track "拒绝挪到 sweep 之后(先删树再拒绝)" \
+  "G15②: 目标已存在 ⇒ 拒绝发生在 sweep 之前,worktree 没被删" \
+  '    if [ -e "$proj/tracks/archive/$name" ]; then=>    _track_archive_sweep_worktrees "$name" "$keep_trees" "$discard_ignored" "$proj"
+    if [ -e "$proj/tracks/archive/$name" ]; then'
+
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
