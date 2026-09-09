@@ -159,3 +159,29 @@ runlog: final-regression rc=0 commit=98d7e30 dirty=yes final=yes at=2026-09-09T0
 `bin/rust-check-review-tooling` 全绿:review-tooling 549/0、panel-observation 71/0、
 review-workspace 31/0(含 RW9)、track-record 82/0、track-guard 85/0、evidence-lifetime 41/0、
 workflow-docs 37/0(文档无漂移)、其余各套件 0 failed。
+
+### Finding 2:归档前自检抓到的真阻断(**主裁孤发现,两条腿都没走到这一步**)
+归档前我按本单交付的闸自检,working 视图 rc=0、**staged 视图 BLOCK**
+(target=`ddda7a7b…` ≠ 腿绑定的 `9dd0fb98…`)。
+
+**根因**:`delivery_fingerprint` 的两个视图对未跟踪文件的处理不同 ——
+`source="working"` 会跑 `git add -A -- :/`(**含未跟踪文件**),`source="staged"` 只用
+index(`bin/_review_delivery.py:110-115`)。而腿算指纹用的是工作副本快照(等价 working),
+**归档那次 commit 的 hook 校验的却是 staged** ⇒ 只要仓里有未跟踪文件,两者必然不等
+⇒ **v2 track 归不了档**。本仓当时有 26 个未跟踪的 panel 任务书。
+
+**为什么判据没问出来**:`test_views_equal_and_scan_does_not_change_source_index` 在
+**干净夹具**上是平凡满足的 —— r7 的 subdeepseek 恰好点到了这句("个别判据在干净仓上
+结构上是平凡满足的"),但它和我都没往下走一步:真实仓库不干净。
+这是本单第二次出现"判据在场、却问不出它守的那件事"(第一次是 P9b,靠注入 ghost 修好)。
+
+**本单的处置**:把那 26 个任务书 `git add` 入库。实测(不是推理):
+working 指纹**一字未变**仍是 `9dd0fb98…`(它本来就把未跟踪文件算进去了),staged 追平到
+同一值,两个视图的 `validate --phase archive` 双双 rc=0。`.gitignore` 开头的注释本就写着
+"bin/ 里的安全闸门工具、track 模板、**任务书**有历史可回滚" —— 它们没入库只是一直没人 add。
+
+**留给后续单(与 Finding 1 合并成一单)**:
+- 两视图对未跟踪文件的语义差,要么归档前显式要求"无未跟踪文件"(响亮拒绝,别静默 BLOCK),
+  要么把差异文档化并让 `test_views_equal…` 在**脏夹具**上跑(现在那条判据问不出它守的事)。
+- Finding 1:归档复验取 first-add 的树而非本次归档那次。
+- 顺带:`tasks/*-my-review.md` 在被审仓内 —— 反锚定的正本应在仓外,仓内那份是泄漏源。
