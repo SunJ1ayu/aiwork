@@ -415,6 +415,27 @@ assert subject["delivery"] == {"policy_version": 1, "track": "example",
 RW8PY
   check 'RW8: 指纹一路带到 subject 上(评审证据真绑住了交付内容)' $?
 
+  # RW9:交付指纹必须**跨进程**可见,不能只在 sourced shell 里恰好看得见。
+  # 现在 prepare 与 write_facts 由同一个 sourced shell 先后调用,所以
+  # REVIEW_DELIVERY_DIGEST 即使没进 export 清单也照常工作 —— 那是"恰好可见",
+  # 不是不变量(同族 6 个 REVIEW_SNAPSHOT_*/REVIEW_WORK_REPO 全都导出了,就它没有)。
+  # 哪天某个 wrapper 把写 facts 挪进子进程,这条链会**静默**产出 v1 subject
+  # (带 source、照样计入 coverage),归档端要等到比较时才响,而观测侧那时已经是
+  # "看起来健康、其实没绑定" —— 正是本单要消灭的那一类失败。
+  # 🔴 必须用**新 bash 进程**问它:subshell 不行 —— fork 会把非导出变量一起带过去,
+  # 那样这条判据永远绿 = 白写。2026-09-09 由一条评审腿指出,主裁复核后钉住。
+  local xfacts="$d/facts-xproc.json"
+  env AIWORK_REVIEW_FACTS_PATH="$xfacts" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
+    bash -c '. "$1"; review_workspace_write_facts m m subscription' _ "$HELPER" >/dev/null 2>&1
+  check 'RW9: 跨进程也写得出 facts(先钉住红不在别处)' $?
+  python3 - "$xfacts" "$digest" <<'RW9PY'
+import json, sys
+facts = json.load(open(sys.argv[1], encoding="utf-8"))
+assert facts.get("delivery") == {"policy_version": 1, "track": "example",
+                                 "digest": sys.argv[2]}, facts.get("delivery")
+RW9PY
+  check 'RW9: 交付指纹跨进程可见(不许只靠 sourced shell 的全局变量)' $?
+
   unset AIWORK_REVIEW_TRACK
   review_workspace_cleanup >/dev/null 2>&1
   rm -rf "$d"
