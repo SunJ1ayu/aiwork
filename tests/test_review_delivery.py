@@ -206,7 +206,14 @@ class DeliveryTest(unittest.TestCase):
         (self.repo / "source.py").write_text("answer = 2\n")
         result = self.validate()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("review_delivery", result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        self.assertIn("review_delivery", output)
+        # 2026-09-09 第二轮 panel:这条判据红的**理由**已被本单新加的 view_mismatch
+        # 分支悄悄换掉,而断言只查共享前缀 `review_delivery`(三条分支都带它)⇒ 看不见。
+        # 这里的真病是"内容在评审之后变了",解药就是重新评审;落进 view_mismatch
+        # 会得到一句反的药方。钉住理由,不只是钉住红。
+        self.assertNotIn("view_mismatch", output,
+                         "stale review 红在了视图分支上,药方会反着说:" + output)
 
     def test_staged_and_working_cannot_answer_for_each_other(self):
         self.install_review()
@@ -489,6 +496,42 @@ class DeliveryTest(unittest.TestCase):
         self.assertNotEqual(cli.returncode, 0, output)
         self.assertIn("tracks/other-track/proposal.md", output, output)
         self.assertTrue(self.track.is_dir(), "拒绝归档时目录必须留在原地")
+
+    def test_t15_unarchiving_from_a_drifted_archive_is_a_supported_path(self):
+        # F3(第二轮 subdeepseek):T13 只断言文案里有 "unarchive" 这个词,不验证那条路
+        # 走得通 —— 判的是字,不是路。真实形状比 T12 多一步:归档 → **就地改正文**
+        # (此刻 archive_drift 已经在拦)→ 取回 → 重新评审 → 再归档。
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        (self.archived() / "design.md").write_text("# Design\n\n归档后才发现要改的正文\n")
+        self.commit_all("edit delivered content after archiving")
+        self.assertNotEqual(self.validate_path(self.archived()).returncode, 0,
+                            "前提没成立:就地改本来就该被 archive_drift 拦下")
+
+        self.move_out_of_archive()
+        self.install_review()
+        self.commit_all("re-review the corrected content")
+        self.move_to_archive()
+        result = self.validate_path(self.archived())
+        self.assertEqual(result.returncode, 0,
+                         "BLOCK 指的那条路走不通 ⇒ 又一句无效药方:"
+                         + result.stdout + result.stderr)
+
+    def test_t16_stale_content_is_not_reported_as_a_view_mismatch(self):
+        # F2(第二轮 subdeepseek):内容在评审之后变了(working=新内容未绑,
+        # staged=旧内容仍被旧评审绑)⇒ 复验落进 view_mismatch,而那句药方在这条路上
+        # 是**假的**:它说 "a fresh review round cannot close this gap",
+        # 可这里重新评审恰恰是唯一的解药。git add 只会让 staged 也变成未绑的新内容。
+        self.install_review()
+        self.commit_all("closeout")
+        (self.repo / "source.py").write_text("answer = 99\n")
+        result = self.validate()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        self.assertNotIn("cannot close this gap", output,
+                         "药方反了:这条路上重新评审正是解药:" + output)
+        self.assertIn("rerun panel-review", output, output)
 
 if __name__ == "__main__":
     unittest.main()

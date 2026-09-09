@@ -909,6 +909,61 @@ g12_archived_prose_edits_get_revalidated() {
   rm -rf "$d"
 }
 
+# --------------------------------------------------------------- G13
+# 为什么加这一组(2026-09-09 第二轮 panel,subdeepseek 实测复现):
+#   G12 把"要复验的归档目录"从 decision/observations 加宽成"archive 下任何文件",
+#   于是 `git mv tracks/archive/<t> tracks/<t>`(取回)时,那些文件在 staged diff 里
+#   以"archive 路径被删除"的形式出现 ⇒ 目录被选进复验 ⇒ 闸要求
+#   `:tracks/archive/<t>/decision.json` 仍在 index(它已经随 mv 到 active 路径)⇒ 拦,
+#   而且报的是一句与实情无关的"不许删除或降级 legacy"。
+#   **取回正是 archive_drift 那条 BLOCK 自己让人走的路** —— 闸在拦自己给的药方。
+#   这单开单的理由就是"闸给的药方无效",所以这一条必须钉住:①放行合法取回,
+#   ②③ 同时挡住它可能开出的两个洞(移动中降级 legacy / 真删除)。
+g13_unarchiving_is_not_a_deletion() {
+  echo '[G13] 取回(mv 出 archive)不是删除 —— 但降级和真删除仍要拦'
+  local d rc
+
+  # ① 合法取回:带着一笔就地改把整份档案搬回 active。这正是 archive_drift 的 BLOCK
+  #    让操作者走的第一步,闸必须放行。
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/archive/t/verify.md
+    typed_decision '"self"' > tracks/archive/t/decision.json
+    printf '# Design\n' > tracks/archive/t/design.md
+    git add -A >/dev/null; git commit -qm archived >/dev/null
+    printf '# Design\n\n归档后发现要改正文\n' > tracks/archive/t/design.md
+    git add tracks/archive/t/design.md >/dev/null
+    git mv tracks/archive/t tracks/t >/dev/null 2>&1
+    git add -A >/dev/null )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1)
+  check 'G13: 带着就地改取回 ⇒ 放行(闸不许拦自己给的药方)' $?
+  rm -rf "$d"
+
+  # ② 洞一:借取回之名把 typed 降级成 legacy(active 路径放一份 schema_version=1)。
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/archive/t/verify.md
+    typed_decision '"self"' > tracks/archive/t/decision.json
+    git add -A >/dev/null; git commit -qm archived >/dev/null
+    git mv tracks/archive/t tracks/t >/dev/null 2>&1
+    printf '{"schema_version":1,"track":"t"}\n' > tracks/t/decision.json
+    git add -A >/dev/null )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G13: 取回时降级成 legacy ⇒ 仍然拦' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  # ③ 洞二:真删除 —— archive 里删掉 decision.json,active 路径也没有。
+  d="$(newrepo)"
+  ( cd "$d"; mkdir -p tracks/archive/t
+    { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/archive/t/verify.md
+    typed_decision '"self"' > tracks/archive/t/decision.json
+    git add -A >/dev/null; git commit -qm archived >/dev/null
+    git rm -q tracks/archive/t/decision.json >/dev/null )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G13: 真删除 typed decision ⇒ 仍然拦' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+}
+
 echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
@@ -929,5 +984,6 @@ g9_typed_shape_uses_staged_decision
 g10_manual_typed_archive_uses_staged_facts
 g11_archived_machine_facts_stay_typed
 g12_archived_prose_edits_get_revalidated
+g13_unarchiving_is_not_a_deletion
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
