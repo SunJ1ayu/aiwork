@@ -151,3 +151,11 @@ runlog: rw9-green rc=0 commit=01730be dirty=yes at=2026-09-09T05:02:40Z file=tra
 runlog: full-after-rw9 rc=0 commit=b7dc080 dirty=yes at=2026-09-09T05:03:16Z file=tracks/review-delivery-binding/evidence/20260909T050316Z-01-full-after-rw9.txt
 
 runlog: mutation-verified rc=0 commit=b7dc080 dirty=yes at=2026-09-09T05:09:35Z file=tracks/review-delivery-binding/evidence/20260909T050935Z-01-mutation-verified.txt
+
+最终回归(`--final`:跑的那段时间仓库无写入,source-stable 通过):
+
+runlog: final-regression rc=0 commit=98d7e30 dirty=yes final=yes at=2026-09-09T05:45:43Z file=tracks/review-delivery-binding/evidence/20260909T054543Z-01-final-regression.txt
+
+`bin/rust-check-review-tooling` 全绿:review-tooling 549/0、panel-observation 71/0、
+review-workspace 31/0(含 RW9)、track-record 82/0、track-guard 85/0、evidence-lifetime 41/0、
+workflow-docs 37/0(文档无漂移)、其余各套件 0 failed。
