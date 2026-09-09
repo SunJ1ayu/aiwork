@@ -246,6 +246,16 @@ for dir in $(archive_typed_validation_dirs); do
   # 才能证明这原本是 typed track，不能让它在移动中降级成 legacy。
   git cat-file -e "HEAD:tracks/$name/decision.json" 2>/dev/null && known_typed=1
   [[ "$known_typed" -eq 1 ]] || continue
+  # 取回(unarchive):整份档案搬回 tracks/<name>/ 时,decision.json 在 staged 里出现在
+  # **active** 路径而不是 archive 路径。那不是"删除或降级 legacy",而是 archive_drift
+  # 那条 BLOCK 自己指的合法出路的第一步 —— 不放行,闸就在拦自己给的药方
+  # (2026-09-09 第二轮 panel,subdeepseek 实跑复现;G13① 钉住)。
+  # 尺子和上面判 known_typed 的那把一样:decision.json 还在不在。搬出去之后这个
+  # track 归 active 侧的 shape 校验管,不再是归档复验的事;而"搬出去的同时让
+  # decision.json 消失"(G13②)和"原地删掉它"(G13③)都不满足这个条件,照旧拦。
+  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null; then
+    continue
+  fi
   if ! git cat-file -e ":$dir/decision.json" 2>/dev/null; then
     fail=1
     say "🔴 typed archive 的 staged snapshot 缺 decision.json（不许删除或降级 legacy）:$dir/decision.json"

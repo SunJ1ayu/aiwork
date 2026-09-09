@@ -291,7 +291,10 @@ case "$cmd" in
           echo "   下面这些文件只在其中一个视图里(未跟踪 / 已改未暂存):" >&2
           printf '%s\n' "$views" | head -20 | sed 's/^/     /' >&2
           [ "$(printf '%s\n' "$views" | wc -l)" -gt 20 ] && echo "     …(还有 $(( $(printf '%s\n' "$views" | wc -l) - 20 )) 个)" >&2
-          echo "   处理办法:git add 它们、删掉、或写进 .gitignore,然后重跑 track archive。" >&2
+          echo "   处理办法:**属于本单的**,git add 它们、删掉、或写进 .gitignore。" >&2
+          echo "   **属于别的 track 的(tracks/<别的名字>/…),让那一单自己先提交** ——" >&2
+          echo "   把它 git add 进这次归档,等于让别人的在途内容借本单的 PASS 混进库," >&2
+          echo "   而归档复验只验被归档的这一单,吸进来的部分没有任何人看过。" >&2
           echo "   ⚠️ 重跑 panel-review 解决不了这件事(实测:药方无效,每圈烧掉一整轮 panel)。" >&2
           echo "   目录留在原地,一个文件都没动。" >&2
           exit 1

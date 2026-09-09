@@ -517,8 +517,14 @@ def validate_review_delivery(data, track_dir, source, panel_runs, qualifying):
     # satisfied by the working view, while the archive commit hook checks staged. Telling
     # that operator to rerun the panel is a loop that costs one panel round per turn
     # (measured, WORKFLOW-DEBT D16) — so name the files instead.
-    if tree is None:
-        other = "staged" if source == "working" else "working"
+    # **只有被检查的是 staged 时**才可能是"视图差":评审绑的是 working 快照
+    # (index + 工作树 + 未跟踪文件),而归档 commit 的 hook 单独校验 index。
+    # 反方向(source=working,而 staged 仍被绑)说的是另一件事 —— 工作树里有评审
+    # 之后的改动,那是 stale content,解药正是重新评审。两个方向共用一句药方时,
+    # 它在 stale 那侧是**反的**("a fresh review round cannot close this gap"),
+    # 而判据只查共享前缀看不见(2026-09-09 第二轮 panel,subdeepseek F2;T16 钉住)。
+    if tree is None and source == "staged":
+        other = "working"
         try:
             alternative = delivery_fingerprint(repo, data["track"], source=other)
             differing = view_difference(repo, data["track"])
