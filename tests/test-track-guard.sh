@@ -969,6 +969,81 @@ g13_unarchiving_is_not_a_deletion() {
   rm -rf "$d"
 }
 
+# --------------------------------------------------------------- G14
+# 为什么加这一组(2026-09-09 第三轮 panel,subkimi 提出,主裁亲手复现):
+#   G13① 放行"取回"用的尺子是 `git cat-file -e ":tracks/<name>/decision.json"` ——
+#   它查的是 **index 里有没有**,不是"本次 staged 真的在把整份档案搬出去"。
+#   而 index 里装着**全部已提交文件**,不只是这次改的。于是:
+#     ① 删掉 archive 的 decision.json + 在 active 路径摆一份同名的,就能在同一笔提交里
+#        **顺手改掉归档正文**,豁免照样命中 ⇒ G12 的归档复验和 G13③ 的"不许删除"一起失效;
+#     ② 这笔一旦落库,`tracks/<name>/decision.json` 就常驻 index ⇒ 此后**每一笔**改
+#        `tracks/archive/<name>/**` 的提交都命中豁免,连往归档里塞一份伪造收据都放行。
+#   正确的尺子要两个条件同时成立:archive 侧在 index 里**已经搬空**,且 active 侧有
+#   decision.json。少任何一个都照旧拦(G13②③ 是那两侧的对照)。
+#
+# 🔴 夹具为什么必须把归档提交**改成 8 个月前**:规矩2 的 `verifies` 里有一条
+#   `git log --since='7 days ago' -- 'tracks/*/verify.md'`,它会把**刚建的**归档
+#   verify.md 也捞进来,于是攻击在到达豁免那段之前就被那张网拦下 —— 断言照样绿,
+#   但绿的理由是"归档是新的",不是"豁免守住了"。真实归档都是旧的,那张网碰不到。
+#   (主裁第一版夹具没改日期,攻击一 rc=1,差点把这个洞判成不成立。)
+aged_archive() {  # aged_archive <repo> —— 造一份 8 个月前归档的 typed track
+  ( cd "$1"; mkdir -p tracks/archive/t
+    { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/archive/t/verify.md
+    typed_decision '"self"' > tracks/archive/t/decision.json
+    printf '# Design\n' > tracks/archive/t/design.md
+    git add -A >/dev/null
+    GIT_AUTHOR_DATE="2026-01-05T10:00:00" GIT_COMMITTER_DATE="2026-01-05T10:00:00" \
+      git commit -qm archived >/dev/null )
+}
+
+g14_exemption_cannot_shield_archive_tampering() {
+  echo '[G14] 取回豁免不许被借来放行 archive 侧的篡改(index≠staged)'
+  local d rc
+
+  # ① 假取回:删 archive 的 decision + active 摆一份同名的 + 同一笔改掉归档正文。
+  #    archive 侧还剩 design.md/verify.md ⇒ 根本不是"整份搬出",必须拦。
+  d="$(newrepo)"; aged_archive "$d"
+  ( cd "$d"
+    printf '# Design\n\nTAMPERED:归档后改正文,没有任何新评审\n' > tracks/archive/t/design.md
+    git rm -q --cached tracks/archive/t/decision.json >/dev/null; rm -f tracks/archive/t/decision.json
+    mkdir -p tracks/t; typed_decision '"self"' > tracks/t/decision.json
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    git add -A >/dev/null )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G14①: 假取回(archive 侧有残留)借豁免改归档正文 ⇒ 仍然拦' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  # ② 永久化:①的状态一旦落库,active 的 decision.json 就常驻 index。此后再改归档
+  #    (连伪造一份 evidence 收据)也必须拦 —— 豁免不能变成这个 track 名的永久通行证。
+  d="$(newrepo)"; aged_archive "$d"
+  ( cd "$d"
+    git rm -q --cached tracks/archive/t/decision.json >/dev/null; rm -f tracks/archive/t/decision.json
+    mkdir -p tracks/t; typed_decision '"self"' > tracks/t/decision.json
+    printf '# Verify\n- findings: pending\n' > tracks/t/verify.md
+    git add -A >/dev/null
+    GIT_AUTHOR_DATE="2026-01-06T10:00:00" GIT_COMMITTER_DATE="2026-01-06T10:00:00" \
+      git commit -qm 'fake unarchive' >/dev/null
+    printf '# Design\n\nTAMPERED AGAIN:第二刀\n' > tracks/archive/t/design.md
+    mkdir -p tracks/archive/t/evidence
+    printf 'forged receipt: rc=0 PASS=999 FAIL=0\n' > tracks/archive/t/evidence/forged.txt
+    git add -A >/dev/null )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
+  check 'G14②: 豁免落库后再改归档/塞伪造收据 ⇒ 仍然拦(豁免不是永久通行证)' $([[ $rc -ne 0 ]]; echo $?)
+  rm -rf "$d"
+
+  # ③ 反误报对照:同样是**旧**归档的合法取回(整份 git mv 出去 + 一笔就地改)。
+  #    G13① 那份夹具是新归档,会被 7 天网顺手放过;这一条证明放行不靠那张网。
+  d="$(newrepo)"; aged_archive "$d"
+  ( cd "$d"
+    printf '# Design\n\n归档后发现要改正文\n' > tracks/archive/t/design.md
+    git add tracks/archive/t/design.md >/dev/null
+    git mv tracks/archive/t tracks/t >/dev/null 2>&1
+    git add -A >/dev/null )
+  (cd "$d" && "$GUARD" >/dev/null 2>&1)
+  check 'G14③: 旧归档的合法取回(整份搬出)⇒ 仍然放行' $?
+  rm -rf "$d"
+}
+
 echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
@@ -990,5 +1065,6 @@ g10_manual_typed_archive_uses_staged_facts
 g11_archived_machine_facts_stay_typed
 g12_archived_prose_edits_get_revalidated
 g13_unarchiving_is_not_a_deletion
+g14_exemption_cannot_shield_archive_tampering
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
