@@ -147,6 +147,14 @@ mutate "收口记录 verify.md 也算交付内容(归档后补写就被拦)" _re
                 continue=>            if False:
                 continue'
 
+# ---- 第二轮 BLOCK 的修复(2026-09-09):药方不许反着说 ----
+
+mutate "view_mismatch 不分方向(stale 那侧药方就是反的)" track-record \
+  "test_t16_stale_content_is_not_reported_as_a_view_mismatch" \
+  '    if tree is None and source == "staged":
+        other = "working"=>    if tree is None:
+        other = "staged" if source == "working" else "working"'
+
 # ---- 第二轮 panel(2026-09-09)挖出的缺口:只有反向断言的判据分不出红在哪 ----
 
 # subdeepseek 的注入实验,原样钉进红检:一刀切拒绝任何第二次归档 ⇒ 合法路径永远
@@ -163,6 +171,41 @@ mutate "第二次归档一律拒(合法再归档也走不通)" track-record \
 mutate "archive_drift 的药方退回只说 verify.md" track-record \
   "test_t13_archive_drift_block_names_the_legal_way_out" \
   '"place: unarchive it (git mv out of tracks/archive/), edit, rerun "=>"place: write the correction into verify.md instead of, "'
+
+# track-guard 侧的变异器:判据用 TRACK_BIN 认 bin 目录,所以整份 bin 复制出去
+# 变异,再让判据指向副本。**绝不在仓里就地变异**(靶子还原失败是本机踩过的坑)。
+mutate_guard() {  # mutate_guard <名字> <该被打红的断言名> <old=>new>
+  local name="$1" target="$2" patch="$3" out gbin="$work/guardbin"
+  rm -rf "$gbin"; cp -r "$ROOT/bin" "$gbin"
+  if ! MUT_PATCH="$patch" MUT_FILE="$gbin/track-guard" python3 - <<'MUTPY'
+import os, pathlib
+p = pathlib.Path(os.environ["MUT_FILE"]); s = p.read_text(encoding="utf-8")
+old, new = os.environ["MUT_PATCH"].split("=>", 1)
+if old not in s:
+    raise SystemExit(3)
+p.write_text(s.replace(old, new, 1), encoding="utf-8")
+MUTPY
+  then
+    bad "$name: 锚点没命中(实现改过、变异没生效)⇒ 这次红检什么都没证明"
+    return
+  fi
+  out="$(TRACK_BIN="$gbin" bash "$ROOT/tests/test-track-guard.sh" 2>&1)"
+  if [[ "$out" == *"FAIL: $target"* ]]; then
+    ok "$name ⇒ 打红了 $target"
+  elif [[ "$out" == *"$target"* ]]; then
+    bad "$name ⇒ **判据全绿放行**:$target 没咬住这条"
+  else
+    bad "$name ⇒ 判据里找不到 $target(名字改过?)"
+  fi
+}
+
+mutate_guard "取回豁免恒真(借取回之名删掉 decision.json 也放行)" \
+  "G13: 取回时降级成 legacy ⇒ 仍然拦" \
+  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null; then
+    continue
+  fi=>  if true; then
+    continue
+  fi'
 
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
