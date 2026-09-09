@@ -493,8 +493,10 @@ def validate_review_delivery(data, track_dir, source, panel_runs, qualifying):
                             {"changed_paths": changed[:10], "changed_total": len(changed),
                              "at_archive_commit": archived_then, "now": archived_now, "view": source},
                             "archived track content unchanged since its archive commit; "
-                            "write later corrections into verify.md, which stays editable "
-                            "together with observations/ and runlog receipts")
+                            "closeout records stay editable in place (verify.md, observations/, "
+                            "runlog receipts) — but delivered content cannot be corrected in "
+                            "place: unarchive it (git mv out of tracks/archive/), edit, rerun "
+                            "panel-review so a review binds the new content, then archive again")
     groups = {(group["run_id"], group["subject_digest"]) for group in qualifying}
 
     def bound(digest):
