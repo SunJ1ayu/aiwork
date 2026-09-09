@@ -435,5 +435,60 @@ class DeliveryTest(unittest.TestCase):
         result = self.validate_path(self.archived())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_t12_re_archiving_after_a_fresh_review_is_authorized(self):
+        # T1 的正向对照 —— 缺了它,T1 问不出自己在测什么。
+        # 2026-09-09 subdeepseek 的注入实验:把复验改成"history 里 add 数 >1 一律拒绝",
+        # 合法的再归档从此永远不可能,而**整套判据仍然全绿**(T1 照样红,只是红的原因
+        # 从"内容没被新评审覆盖"悄悄换成了"第二次归档一刀切")。一条只会说"不"的闸
+        # 和一条判得对的闸,在只有反向断言的判据面前长得一模一样。
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        self.assertEqual(self.validate_path(self.archived()).returncode, 0)
+
+        self.move_out_of_archive()
+        (self.repo / "source.py").write_text("answer = 2\n")
+        self.install_review()  # 新内容重新过评审 —— 这正是 T1 缺的那一步
+        self.commit_all("deliver new content WITH a fresh review")
+        self.move_to_archive()
+        result = self.validate_path(self.archived())
+        self.assertEqual(result.returncode, 0,
+                         "合法的再归档被拒:" + result.stdout + result.stderr)
+
+    def test_t13_archive_drift_block_names_the_legal_way_out(self):
+        # 这一单开单的理由就是"闸给的药方无效"(D16:让人重跑 panel,实测每圈烧一轮)。
+        # 而本单新加的 archive_drift 自己犯了同型的病:它只说"把更正写进 verify.md",
+        # 可 verify.md 在交付投影之外 —— 到不了交付的消费者。真要改正文,唯一合法的路
+        # 是取回→改→重新评审→再归档(T12 钉住那条路是通的)。闸必须把它说出来。
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        (self.archived() / "design.md").write_text("# Design\n\n归档后就地改正文。\n")
+        self.commit_all("edit delivered content after archiving")
+        result = self.validate_path(self.archived())
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        self.assertIn("unarchive", output,
+                      "BLOCK 没说合法出路,操作者只能瞎试:" + output)
+        self.assertIn("verify.md", output, output)
+
+    def test_t14_another_tracks_work_in_progress_also_blocks_archiving(self):
+        # C-1 是**全仓**口径:归档 example 时,别的 active track 里没提交的东西照样拦。
+        # 这是刻意的(评审绑定的就是全仓 working 视图),但代价没被任何判据钉住 ——
+        # T11 那两个脏文件都在仓根,把口径悄悄缩成"只看仓根"它一样绿。
+        other = self.repo / "tracks/other-track"
+        other.mkdir(parents=True)
+        (other / "proposal.md").write_text("另一个 track 的在途工作\n")
+        self.install_review()
+        self.archivable_closeout()
+        self.git("add", "tracks/example")
+        self.commit_hookless("closeout; the other track stays untracked")
+
+        cli = self.cli_archive()
+        output = cli.stdout + cli.stderr
+        self.assertNotEqual(cli.returncode, 0, output)
+        self.assertIn("tracks/other-track/proposal.md", output, output)
+        self.assertTrue(self.track.is_dir(), "拒绝归档时目录必须留在原地")
+
 if __name__ == "__main__":
     unittest.main()
