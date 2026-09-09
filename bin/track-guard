@@ -223,8 +223,14 @@ archiving_dirs_now() {
 #   1) 本次正搬入 archive；2) 已归档 decision/observations 后续被增删改。
 # 第二类刻意只盯机器源，不让修历史 verify.md 的错字触发整套归档闸。
 archive_machine_dirs_changed() {
-  staged | sed -nE \
-    's#^(tracks/archive/[^/]+)/(decision\.json|observations(/.*)?)$#\1#p' | sort -u
+  # 2026-09-09:原本只认 decision.json 和 observations/ —— 那时归档复验问的只有
+  # "typed outcome/coverage 满不满足",它们确实是唯一的机器事实源。本单起,复验还问
+  # "归档之后档案里的交付内容动没动"(D15 后半),而那个问题的答案藏在 design.md /
+  # tasks.md / evidence 正文里。名单不跟着扩,新加的比较就永远不会被叫起来
+  # (test-track-guard.sh 的 G12① 钉的就是这件事,当时是红的)。
+  # 收口记录(verify.md、observations、runlog 收据)本来就在投影之外,多叫一次复验
+  # 只是多花约 1 秒,不会因此变红 —— G12② 是那一侧的反误报对照。
+  staged | sed -nE 's#^(tracks/archive/[^/]+)/.+$#\1#p' | sort -u
 }
 
 archive_typed_validation_dirs() {
