@@ -987,10 +987,35 @@ g13_unarchiving_is_not_a_deletion() {
 #   但绿的理由是"归档是新的",不是"豁免守住了"。真实归档都是旧的,那张网碰不到。
 #   (主裁第一版夹具没改日期,攻击一 rc=1,差点把这个洞判成不成立。)
 aged_archive() {  # aged_archive <repo> —— 造一份 8 个月前归档的 typed track
-  ( cd "$1"; mkdir -p tracks/archive/t
+  # 🔴 夹具必须带 evidence/ observations/ 子目录:**每一个真实 track 都长这样**,
+  #   而平铺的夹具会让 G14④ 那条"药方走得通"永远绿 —— 子目录在目标侧不存在时
+  #   `git mv` 直接 rc=128 fatal(主裁 2026-09-09 第四轮派发前亲跑探针复现;
+  #   这是本单第 5 句坏药方,前四句见 bin/track-guard 与本文件的注释)。
+  ( cd "$1"; mkdir -p tracks/archive/t/evidence tracks/archive/t/observations
     { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/archive/t/verify.md
     typed_decision '"self"' > tracks/archive/t/decision.json
     printf '# Design\n' > tracks/archive/t/design.md
+    printf 'runlog: fixture rc=0\n' > tracks/archive/t/evidence/20260105T000000Z-01-suite.txt
+    # 观测要用**合法事件**:随手写一个 {"schema_version":1} 会被 observation shape 那道闸
+    # 拦下,红的理由就不是这一组要问的事了(主裁第一版夹具就是这样,G14③ 红在别处)。
+    cat > tracks/archive/t/observations/20260105T000000Z-runlog-execution_finished-001.json <<'OBS'
+{
+  "schema_version": 1,
+  "track": "t",
+  "run_id": "20260105T000000Z-01-fixture",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "fixture",
+  "started_at": "2026-01-05T00:00:00Z",
+  "finished_at": "2026-01-05T00:00:01Z",
+  "duration_ms": 1000,
+  "exit_code": 0,
+  "actual": {"adapter": "runlog", "model": null, "risk": null, "degraded": null,
+             "work_exit_code": 0, "legs": null},
+  "usage": {"input_tokens": null, "output_tokens": null, "total_tokens": null,
+            "api_cost": null, "billing_mode": null}
+}
+OBS
     git add -A >/dev/null
     GIT_AUTHOR_DATE="2026-01-05T10:00:00" GIT_COMMITTER_DATE="2026-01-05T10:00:00" \
       git commit -qm archived >/dev/null )
@@ -1060,14 +1085,19 @@ g14_exemption_cannot_shield_archive_tampering() {
   local out advice
   out="$( cd "$d" && "$GUARD" 2>&1 )"; rc=$?
   check 'G14④前置: 半截取回(只搬走 decision)⇒ 拦' $([[ $rc -ne 0 ]]; echo $?)
-  advice="$(printf '%s\n' "$out" | grep -oE 'git mv [^ ]+ [^ ]+' || true)"
+  # 药方按**整行**抓、按整行执行 —— 上一版拿 `grep -oE 'git mv [^ ]+ [^ ]+'` 抠片段,
+  # 等于替闸把它没写的部分(比如目标子目录还得先建)在判据里补齐了:闸写坏了也照样绿。
+  advice="$(printf '%s\n' "$out" | sed -nE 's/^track-guard: +((mkdir -p|git mv) .*)$/\1/p')"
   if [[ -z "$advice" ]]; then
     bad 'G14④: BLOCK 里没给出可执行的 git mv 药方'
   else
+    local broken=0 crc
     while IFS= read -r cmd; do
       [ -n "$cmd" ] || continue
-      ( cd "$d" && $cmd >/dev/null 2>&1 ) || true
+      ( cd "$d" && bash -c "$cmd" >/dev/null 2>&1 ); crc=$?
+      [[ $crc -eq 0 ]] || { broken=$((broken+1)); echo "      (药方这一句 rc=$crc:$cmd)"; }
     done <<< "$advice"
+    check 'G14④a: 药方每一句都真的执行得下去(rc=0,不是靠判据替它补齐)' $([[ $broken -eq 0 ]]; echo $?)
     ( cd "$d" && git add -A >/dev/null )
     ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
     check 'G14④: 照抄闸打印的药方执行一遍 ⇒ 闸放行(药方真走得通)' $?
