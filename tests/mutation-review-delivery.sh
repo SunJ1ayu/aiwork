@@ -175,9 +175,15 @@ mutate "archive_drift 的药方退回只说 verify.md" track-record \
 # track-guard 侧的变异器:判据用 TRACK_BIN 认 bin 目录,所以整份 bin 复制出去
 # 变异,再让判据指向副本。**绝不在仓里就地变异**(靶子还原失败是本机踩过的坑)。
 mutate_guard() {  # mutate_guard <名字> <该被打红的断言名> <old=>new>
-  local name="$1" target="$2" patch="$3" out gbin="$work/guardbin"
+  mutate_bin track-guard "$@"
+}
+
+# 有些防线不住在 track-guard 里(比如 `track archive` 那句裸 mv),但它们同样是判卷面。
+# 变异的是**整份 bin/ 的副本**,判据靠 TRACK_BIN 指过去,所以换个文件名就够。
+mutate_bin() {  # mutate_bin <bin 下的文件名> <名字> <该被打红的断言名> <old=>new>
+  local file="$1" name="$2" target="$3" patch="$4" out gbin="$work/guardbin"
   rm -rf "$gbin"; cp -r "$ROOT/bin" "$gbin"
-  if ! MUT_PATCH="$patch" MUT_FILE="$gbin/track-guard" python3 - <<'MUTPY'
+  if ! MUT_PATCH="$patch" MUT_FILE="$gbin/$file" python3 - <<'MUTPY'
 import os, pathlib
 p = pathlib.Path(os.environ["MUT_FILE"]); s = p.read_text(encoding="utf-8")
 old, new = os.environ["MUT_PATCH"].split("=>", 1)
@@ -201,7 +207,7 @@ MUTPY
 
 mutate_guard "取回豁免恒真(借取回之名删掉 decision.json 也放行)" \
   "G13: 取回时降级成 legacy ⇒ 仍然拦" \
-  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ -z "$archive_left" ]]; then
+  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ ${#archive_left_list[@]} -eq 0 ]]; then
     continue
   fi=>  if true; then
     continue
@@ -210,7 +216,7 @@ mutate_guard "取回豁免恒真(借取回之名删掉 decision.json 也放行)"
 # 2026-09-09 第三轮:豁免退回"只看 active 有没有 decision.json"那一版(index≠staged 的洞)。
 mutate_guard "豁免退回只查 active decision(不管 archive 搬空没有)" \
   "G14①: 假取回(archive 侧有残留)借豁免改归档正文 ⇒ 仍然拦" \
-  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ -z "$archive_left" ]]; then=>  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null; then'
+  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ ${#archive_left_list[@]} -eq 0 ]]; then=>  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null; then'
 
 # 药方退回"整目录 mv"那一版:目标已存在时 git 会静默嵌套成 tracks/<n>/<n>/ 且 rc=0。
 # 文案断言看不出来,只有**真执行一遍**的 G14④ 照得出。
@@ -218,15 +224,16 @@ mutate_guard "豁免退回只查 active decision(不管 archive 搬空没有)" \
 #  好在锚点没命中时 mutate_guard 会自己喊,不会静默变成"这条红检什么都没证明"。)
 mutate_guard "药方退回整目录 mv(目标已存在时静默嵌套)" \
   "G14④: 照抄闸打印的药方执行一遍 ⇒ 闸放行(药方真走得通)" \
-  '      while IFS= read -r left; do
-        [ -n "$left" ] || continue
+  '      for left in "${archive_left_list[@]}"; do
         rel="${left#$dir/}"
+        pre=""
+        [ -e "$left" ] || pre="git checkout -- $(shq "$left") && "
         if [[ "$rel" == */* ]]; then
-          say "     mkdir -p tracks/$name/${rel%/*} && git mv $left tracks/$name/$rel"
+          say "     ${pre}mkdir -p $(shq "tracks/$name/${rel%/*}") && git mv $(shq "$left") $(shq "tracks/$name/$rel")"
         else
-          say "     git mv $left tracks/$name/$rel"
+          say "     ${pre}git mv $(shq "$left") $(shq "tracks/$name/$rel")"
         fi
-      done <<< "$archive_left"=>      say "     git mv $dir tracks/$name"'
+      done=>      say "     git mv $dir tracks/$name"'
 
 # 2026-09-09 第四轮:药方退回"不带 mkdir"那一版。目标子目录不存在时 git mv 是
 # rc=128 fatal —— 而真实 track 全带 evidence/ observations/。只有逐句断言 rc 的
@@ -234,10 +241,28 @@ mutate_guard "药方退回整目录 mv(目标已存在时静默嵌套)" \
 mutate_guard "药方退回不带 mkdir(嵌套路径 git mv 直接 fatal)" \
   "G14④a: 药方每一句都真的执行得下去(rc=0,不是靠判据替它补齐)" \
   '        if [[ "$rel" == */* ]]; then
-          say "     mkdir -p tracks/$name/${rel%/*} && git mv $left tracks/$name/$rel"
+          say "     ${pre}mkdir -p $(shq "tracks/$name/${rel%/*}") && git mv $(shq "$left") $(shq "tracks/$name/$rel")"
         else
-          say "     git mv $left tracks/$name/$rel"
-        fi=>        say "     git mv $left tracks/$name/$rel"'
+          say "     ${pre}git mv $(shq "$left") $(shq "tracks/$name/$rel")"
+        fi=>        say "     ${pre}git mv $(shq "$left") $(shq "tracks/$name/$rel")"'
+
+# 2026-09-09 第四轮评审(subdeepseek)挖出的三处,各配一条"放松一格"。
+
+mutate_guard "残件列表退回默认 quotepath(非 ASCII 被 C-quote)" \
+  "G14⑤: 文件名带空格/非 ASCII 时,药方每一句照样跑得通" \
+  '    < <(git -c core.quotepath=false ls-files -z -- "$dir" 2>/dev/null)=>    < <(git ls-files -z -- "$dir" 2>/dev/null)'
+
+mutate_guard "药方不再给路径加引号(空格当场 word-split)" \
+  "G14⑤: 文件名带空格/非 ASCII 时,药方每一句照样跑得通" \
+  '    *[!A-Za-z0-9._/-]*) printf=>    *[!A-Za-z0-9._/-]*) : printf'
+
+mutate_guard "药方不再先把残件取回工作树(只在 index 时 git mv 必 fatal)" \
+  "G14⑥: 残件只在 index、工作树已删时,药方仍然走得通" \
+  '        [ -e "$left" ] || pre="git checkout -- $(shq "$left") && "=>        :'
+
+mutate_bin track "track archive 退回裸 mv(目标已存在时静默嵌套)" \
+  "G15: 目标目录已存在 ⇒ archive 命令拒绝" \
+  '    if [ -e "$proj/tracks/archive/$name" ]; then=>    if false; then'
 
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
