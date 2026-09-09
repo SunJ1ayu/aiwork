@@ -939,14 +939,19 @@ g13_unarchiving_is_not_a_deletion() {
   check 'G13: 带着就地改取回 ⇒ 放行(闸不许拦自己给的药方)' $?
   rm -rf "$d"
 
-  # ② 洞一:借取回之名把 typed 降级成 legacy(active 路径放一份 schema_version=1)。
+  # ② 洞一:借取回之名让 decision.json 消失(typed 降级成 legacy)。
+  #    题面 2026-09-09 修正过一次:第一版写的是"active 路径放一份 schema_version=1",
+  #    但夹具的 typed_decision 本来就是 schema 1,而这道闸判 typed 只看
+  #    decision.json 在不在、不看版本 ⇒ 那一版里 ① 和 ② 的实际行为**完全相同**,
+  #    ② 的绿是"豁免根本没生效"换来的假绿,不是"豁免挡住了降级"。
+  #    真正的降级形状是:搬出 archive 的同时把 decision.json 删掉。
   d="$(newrepo)"
   ( cd "$d"; mkdir -p tracks/archive/t
     { verify_with "**PASS**(主裁)"; printf -- '- 无机器证据:夹具\n'; } > tracks/archive/t/verify.md
     typed_decision '"self"' > tracks/archive/t/decision.json
     git add -A >/dev/null; git commit -qm archived >/dev/null
     git mv tracks/archive/t tracks/t >/dev/null 2>&1
-    printf '{"schema_version":1,"track":"t"}\n' > tracks/t/decision.json
+    git rm -qf tracks/t/decision.json >/dev/null
     git add -A >/dev/null )
   (cd "$d" && "$GUARD" >/dev/null 2>&1); rc=$?
   check 'G13: 取回时降级成 legacy ⇒ 仍然拦' $([[ $rc -ne 0 ]]; echo $?)
