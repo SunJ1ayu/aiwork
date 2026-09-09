@@ -450,3 +450,40 @@ authoritative group:**只要历史上某一次 run 里有 2 个不同家族的 e
 > 本次处置:`--no-verify` 绕过,并在 commit message 里把上述根因与证据写全
 > (commit `ef037a7`)。**绕闸只此一次、且绕法没有写成谎话** —— 这是本机
 > "误报最坏的形态是绕闸成了必经之路而绕法得写成谎话"那条账的正面样本。
+
+---
+
+## D15 / D16(2026-09-09,track review-delivery-binding 归档时留下,合并开一单)
+
+### D15:归档复验取的是 first-add 的树,不是本次归档那次
+`bin/track-record:465-470`,`validate_review_delivery` 对已归档路径用
+`git log --no-renames --reverse --diff-filter=A` 的**首行**回溯树 —— 那是该路径
+decision.json **第一次**被 add 的提交。
+**后果**:同一 track 名经手工 unarchive→re-archive 后,复验仍锁定第一次归档树;
+归档**之后**对 `tracks/archive/<name>/` 下文件的提交修改,对该复验同样不可见。
+r7 的 subdeepseek 用探针复现(内容 answer=1→2,第二次归档 `validate --phase archive
+--source staged` 仍 exit 0)。**主裁复核后认定比腿说的更狠一点**:释放链两道闸里,
+`bin/track archive`(mv 前、working 视图)拦得住,但**手工 `git mv` + commit 的
+re-archive 路径上,commit hook 那道会走历史树被旁路**。触发需业主级手工操作。
+> 这也修正了 `tests/mutation-review-delivery.sh:12-14` 头部那句作者自述
+>("历史归档用原始提交树放松后是响亮失败"):存在一个**不响亮的中间态**。
+**候选修法**:把树钉在归档当次提交(取 `--diff-filter=A` 最后一行,或由 archive
+工具写入提交标记),并补一条能造出"两次生命周期"的判据。
+
+### D16:两视图对未跟踪文件语义不同 ⇒ 有未跟踪文件时 v2 track 归不了档
+`bin/_review_delivery.py:110-115`:`source="working"` 跑 `git add -A -- :/`(**含未跟踪
+文件**),`source="staged"` 只用 index。而评审腿算指纹用工作副本快照(等价 working)、
+**归档那次 commit 的 hook 校验 staged** ⇒ 仓里只要有未跟踪文件,两者必然不等 ⇒ BLOCK。
+09-09 首次有 v2 track 归档时当场撞上(本仓当时 26 个未跟踪任务书;
+working=9dd0fb98 而 staged=ddda7a7b)。**这是主裁归档前自检抓到的,两条评审腿都没走到。**
+**为什么判据没问出来**:`test_views_equal_and_scan_does_not_change_source_index` 在
+**干净夹具**上平凡满足 —— r7 的 subdeepseek 恰好点到"个别判据在干净仓上结构上是
+平凡满足的",但它和主裁都没往下走一步:真实仓库不干净。
+**本次处置**:把任务书 `git add` 入库(实测 working 指纹一字未变、staged 追平),
+`.gitignore` 注释本就写着任务书该有历史。
+**候选修法**:归档前显式要求"无未跟踪文件"并**响亮拒绝**(别静默 BLOCK),
+或把差异文档化并让 `test_views_equal…` 在**脏夹具**上也跑一遍。
+
+### 顺带(同一单可捎上)
+`tasks/*-my-review.md` 躺在被审仓内 —— 反锚定的正本必须在仓外(`/root/panel-my-reviews/`),
+仓内那份是泄漏源,每轮 panel 的 anchor-leak 警告都在点它们的名。
