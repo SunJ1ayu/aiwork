@@ -246,6 +246,139 @@ class DeliveryTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("downgrade", result.stdout + result.stderr)
 
+    # ---------------- track archive-tree-and-untracked-views(D15/D16) ----------------
+    # 这一组钉的是两件在真实归档路上暴露、而夹具从没问过的事:
+    #   ① 已归档 track 的复验锁在哪棵树上(锁错 = 旧评审授权新交付);
+    #   ② working / staged 两视图对未跟踪文件语义不同,这个前置条件从没被说出来过。
+    # T2/T4/T7/T8 是**对照组**:它们今天就是绿的,存在的理由是让"修成全拦"当场露馅。
+
+    def commit_hookless(self, msg):
+        self.git("-c", "core.hooksPath=/dev/null", "commit", "-qm", msg)
+
+    def commit_all(self, msg):
+        self.git("add", "-A")
+        self.commit_hookless(msg)
+
+    def archived(self):
+        return self.repo / "tracks/archive/example"
+
+    def move_to_archive(self):
+        (self.repo / "tracks/archive").mkdir(parents=True, exist_ok=True)
+        self.git("mv", "tracks/example", "tracks/archive/example")
+        self.commit_hookless("archive")
+
+    def move_out_of_archive(self):
+        self.git("mv", "tracks/archive/example", "tracks/example")
+        self.commit_hookless("unarchive")
+
+    def validate_path(self, path, source="staged"):
+        return subprocess.run([str(ROOT / "bin/track-record"), "validate", "--phase", "archive",
+                               "--source", source, str(path)], capture_output=True, text=True)
+
+    def archivable_closeout(self):
+        # ev_check 的 5c:一份机器证据都没有时必须显式认账。夹具不跑真判据。
+        (self.track / "verify.md").write_text("# Verify\n\n- 无机器证据:夹具不跑真判据\n")
+
+    def cli_archive(self):
+        return subprocess.run([str(ROOT / "bin/track"), "archive", "example", str(self.repo)],
+                              capture_output=True, text=True)
+
+    def test_t1_second_archive_is_not_authorized_by_the_first_archive_tree(self):
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        first = self.validate_path(self.archived())
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        # 业主级手工操作:取回 → 改掉被交付的内容 → 再归档,中间没有任何新评审。
+        self.move_out_of_archive()
+        (self.repo / "source.py").write_text("answer = 2\n")
+        self.commit_all("deliver new content without a new review")
+        self.move_to_archive()
+        result = self.validate_path(self.archived())
+        self.assertNotEqual(result.returncode, 0,
+                            "旧评审授权了新交付:" + result.stdout + result.stderr)
+        self.assertIn("review_delivery", result.stdout + result.stderr)
+
+    def test_t2_single_lifecycle_archive_still_validates(self):
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        result = self.validate_path(self.archived())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_t3_delivered_content_edited_after_archiving_is_visible(self):
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        (self.archived() / "evidence/oracle.py").write_text("assert answer == 999\n")
+        self.commit_all("edit delivered content after archiving")
+        result = self.validate_path(self.archived())
+        self.assertNotEqual(result.returncode, 0,
+                            "归档后改交付内容没人看得见:" + result.stdout + result.stderr)
+
+    def test_t4_closeout_records_stay_editable_after_archiving(self):
+        # verify.md / observations 是收口记录,投影本来就有意排除;归档后补写它们
+        # 是正常动作,不许被 T3 那条连坐。
+        self.install_review()
+        self.commit_all("closeout")
+        self.move_to_archive()
+        (self.archived() / "verify.md").write_text("# Verify\n\n主裁补充:归档后追记。\n")
+        self.commit_all("append to the closeout record after archiving")
+        result = self.validate_path(self.archived())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_t5_view_mismatch_names_the_real_cause(self):
+        # 真实顺序:未跟踪文件在**评审之前**就躺在仓里 ⇒ 评审绑定的 working 指纹含它,
+        # 而归档那次 commit 的 hook 校验 staged ⇒ 必然不等。
+        (self.repo / "brief.md").write_text("untracked task brief\n")
+        self.install_review()
+        self.git("add", "tracks")
+        self.commit_hookless("closeout, the brief stays untracked")
+        result = self.validate_path(self.track, "staged")
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("view_mismatch", output)
+        self.assertIn("brief.md", output)
+        # 那句药方在这条路上是假的:照做一次仍然红,而每转一圈烧掉一整轮 panel。
+        self.assertNotIn("rerun panel-review", output)
+
+    def test_t6_cli_archive_refuses_before_moving_when_views_disagree(self):
+        (self.repo / "brief.md").write_text("untracked task brief\n")
+        self.install_review()
+        self.archivable_closeout()
+        self.git("add", "tracks")
+        self.commit_hookless("closeout, the brief stays untracked")
+        result = self.cli_archive()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertTrue(self.track.is_dir(), "拒绝必须发生在 mv 之前")
+        self.assertFalse(self.archived().exists(), "拒绝必须发生在 mv 之前")
+        self.assertIn("brief.md", output)
+
+    def test_t7_cli_archive_still_works_on_a_clean_repo(self):
+        self.install_review()
+        self.archivable_closeout()
+        self.commit_all("closeout")
+        result = self.cli_archive()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.archived().is_dir())
+
+    def test_t8_two_views_differ_exactly_on_the_dirty_worktree(self):
+        # 干净夹具上 working == staged 是**平凡满足**的;两视图真正的语义差只在脏树上
+        # 看得见,而这正是归档闸的前置条件。把它写成判据,别让下一个人在归档时才发现。
+        clean = self.fingerprint()
+        self.assertEqual(clean, self.fingerprint("staged"))
+        (self.repo / "brief.md").write_text("untracked task brief\n")
+        before = (self.repo / ".git/index").read_bytes()
+        self.assertNotEqual(self.fingerprint(), self.fingerprint("staged"))
+        self.assertEqual(clean, self.fingerprint("staged"), "未跟踪文件不许进 staged 视图")
+        self.assertEqual(before, (self.repo / ".git/index").read_bytes(), "脏树下扫描也不许动源 index")
+        self.git("add", "brief.md")
+        self.assertEqual(self.fingerprint(), self.fingerprint("staged"), "入库后两视图重新一致")
+        (self.repo / "source.py").write_text("answer = 2\n")
+        self.assertNotEqual(self.fingerprint(), self.fingerprint("staged"), "未暂存改动同样只进 working")
+
+
 
 if __name__ == "__main__":
     unittest.main()
