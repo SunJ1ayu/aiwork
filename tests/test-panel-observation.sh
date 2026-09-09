@@ -388,19 +388,26 @@ echo "[P9] 交付绑定的喂料端:归属 track 必须进腿的环境"
 # 而它只在 AIWORK_REVIEW_TRACK 有值时才算。派发端不把归属传进去 ⇒ 每条腿都产 v1
 # subject ⇒ 归档闸的 delivery 比较**永远走不到**,而 11 条单元判据照样全绿。
 # 这正是"闸建好了没接线"的形状,只有行为级判据问得出来。
+# 🔴 两次都往调用环境里注入 `AIWORK_REVIEW_TRACK=ghost`,这不是装饰:
+# 派发端对无归属用的是 `env -u`(抹掉继承值)。调用环境里**本来就没有**这个变量时,
+# "抹掉了"和"根本没这回事"长得一模一样 ⇒ 删掉 `-u` 那行判据照样全绿。
+# 2026-09-09 一条评审腿注入幽灵值当场证明了这件事(它是本轮唯一咬到判据的发现)。
+# 幽灵值同时让 P9a 问出"显式归属压得过继承值"。别把这两个 ghost 删掉。
 envfile="$d/leg-env"
 : > "$calls"; : > "$envfile"
+AIWORK_REVIEW_TRACK=ghost \
 PANEL_TEST_ENV="$envfile" PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-p9" PANEL_STAGGER_MAX=0 \
   bash "$d/bin/panel-review" --track current --risk standard --budget 1 \
   "${common[@]}" "$d/raw/p9-bound" >/dev/null 2>&1
 awk -F '\t' '{n++} $2 != "current" {bad=1} END {exit (n > 0 && !bad) ? 0 : 1}' "$envfile"
-check "P9a: --track 派出的腿在环境里拿到 AIWORK_REVIEW_TRACK" $?
+check "P9a: --track 派出的腿拿到本轮归属(且压得过继承来的陈旧值)" $?
 : > "$calls"; : > "$envfile"
+AIWORK_REVIEW_TRACK=ghost \
 PANEL_TEST_ENV="$envfile" PANEL_TEST_CALLS="$calls" PANEL_STATE_DIR="$d/state-p9b" PANEL_STAGGER_MAX=0 \
   bash "$d/bin/panel-review" --no-track --risk standard --budget 1 \
   "${common[@]}" "$d/raw/p9-unbound" >/dev/null 2>&1
 awk -F '\t' '{n++} $2 != "<unset>" {bad=1} END {exit (n > 0 && !bad) ? 0 : 1}' "$envfile"
-check "P9b: --no-track 不给腿伪造归属" $?
+check "P9b: --no-track 把继承来的归属显式抹掉,不给腿伪造归属" $?
 
 rm -rf "$d"
 echo "=== total: $PASS passed, $FAIL failed ==="
