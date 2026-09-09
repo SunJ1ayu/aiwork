@@ -339,6 +339,18 @@ case "$cmd" in
     fi
     _track_archive_sweep_worktrees "$name" "$keep_trees" "$discard_ignored" "$proj"
     mkdir -p "$proj/tracks/archive"
+    # 裸 `mv` 在**目标目录已存在**时不失败,而是把整个目录塞进去 ⇒ 落成
+    # tracks/archive/<n>/<n>/ 且 rc=0。最常见的来源:上一次取回只搬走了跟踪文件
+    # (`git mv` 不管未跟踪的),归档目录物理上还留着 —— 而 index 视图里它是空的,
+    # 谁都看不见。(2026-09-09 第四轮 subdeepseek 提出,主裁在真实路径上复现;G15 钉住。)
+    if [ -e "$proj/tracks/archive/$name" ]; then
+      echo "🔴 拒绝归档:$proj/tracks/archive/$name 已经存在。" >&2
+      echo "   常见来源:上一次取回只搬走了跟踪文件,未跟踪残留还留在那儿(git 看不见它)。" >&2
+      echo "   直接 mv 不会报错,只会静默嵌套成 tracks/archive/$name/$name/。" >&2
+      echo "   先看一眼 \`ls -a $proj/tracks/archive/$name\` 决定那份残留的去留,再重跑归档。" >&2
+      echo "   目录留在原地,没有半归档状态。" >&2
+      exit 1
+    fi
     mv "$src" "$proj/tracks/archive/$name"
     echo "archived -> $proj/tracks/archive/$name"
     ;;

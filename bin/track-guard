@@ -13,6 +13,18 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0
 say() { printf 'track-guard: %s\n' "$1" >&2; }
 
+# 打印进药方里的路径必须能**原样粘进 shell**:仓里的正文文件名是中文的常态
+# (`设计文档.md`),空格也不是没有。裸路径会当场断在 word-split 上,而 `git ls-files`
+# 默认还会把非 ASCII C-quote 成 "\346\224\266..." —— 那种字符串连剥前缀都剥不掉。
+# 所以列残件一律走 `-c core.quotepath=false ls-files -z`,打印一律过这个引号函数。
+# (2026-09-09 第四轮 subdeepseek 提出,主裁复现;G14⑤ 钉住。)
+shq() {
+  case "$1" in
+    *[!A-Za-z0-9._/-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 staged() { git diff --cached --name-only; }
 
 # active typed 机器源不能依赖 working verify.md 才触发校验；否则同一 commit 删除
@@ -259,8 +271,10 @@ for dir in $(archive_typed_validation_dirs); do
   # tracks/archive/<name>/** 的提交都命中豁免,连塞一份伪造收据都放行(G14②)。
   # 加上 ② 之后,"取回"必须是名副其实的整份搬出;"搬出去的同时让 decision.json
   # 消失"(G13②)、"原地删掉它"(G13③)、"留着正文只搬走 decision"(G14①②)全部照旧拦。
-  archive_left="$(git ls-files -- "$dir" 2>/dev/null)"
-  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ -z "$archive_left" ]]; then
+  archive_left_list=()
+  while IFS= read -r -d '' left; do archive_left_list+=("$left"); done \
+    < <(git -c core.quotepath=false ls-files -z -- "$dir" 2>/dev/null)
+  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ ${#archive_left_list[@]} -eq 0 ]]; then
     continue
   fi
   if ! git cat-file -e ":$dir/decision.json" 2>/dev/null; then
@@ -273,20 +287,24 @@ for dir in $(archive_typed_validation_dirs); do
       # 所以逐个文件给,目标路径写全。
       say "🔴 取回没搬干净:$dir/decision.json 已不在 index，但 archive 侧还留着这些"
       say "   (正文留在原地、decision.json 却搬走了 ⇒ 这份档案再没人复验得了):"
-      printf '%s\n' "$archive_left" | sed 's#^#   - #' >&2
+      printf '%s\n' "${archive_left_list[@]}" | sed 's#^#   - #' >&2
       say "   出路:取回要**整份**搬出 —— 把上面这些也搬进 tracks/$name/:"
-      # 目标子目录不存在时 `git mv` 是 **rc=128 fatal**,不是自己建 —— 而真实 track
-      # 全都带 evidence/ observations/(主裁 2026-09-09 第四轮派发前亲跑探针复现;
-      # 本单第 5 句坏药方,G14④a 逐句断言 rc 钉住)。所以嵌套路径要连 mkdir 一起给。
-      while IFS= read -r left; do
-        [ -n "$left" ] || continue
+      # 三处都是"药方必须真跑得通"踩出来的,别删:
+      #   · 目标子目录不存在时 `git mv` 是 **rc=128 fatal**,不是自己建 —— 而真实 track
+      #     全都带 evidence/ observations/(本单第 5 句坏药方,G14④a 钉住);
+      #   · 路径带空格/非 ASCII 时不加引号会当场断(G14⑤ 钉住);
+      #   · 残件只在 index、工作树已经没有时,`git mv` 是 rc=128 "bad source" ——
+      #     得先 `git checkout --` 把它取回工作树(G14⑥ 钉住)。
+      for left in "${archive_left_list[@]}"; do
         rel="${left#$dir/}"
+        pre=""
+        [ -e "$left" ] || pre="git checkout -- $(shq "$left") && "
         if [[ "$rel" == */* ]]; then
-          say "     mkdir -p tracks/$name/${rel%/*} && git mv $left tracks/$name/$rel"
+          say "     ${pre}mkdir -p $(shq "tracks/$name/${rel%/*}") && git mv $(shq "$left") $(shq "tracks/$name/$rel")"
         else
-          say "     git mv $left tracks/$name/$rel"
+          say "     ${pre}git mv $(shq "$left") $(shq "tracks/$name/$rel")"
         fi
-      done <<< "$archive_left"
+      done
       say "   (目标已存在时 git mv 会拒绝,先决定留哪一份;确实要作废整份档案就连正文一起删。)"
     else
       say "🔴 typed archive 的 staged snapshot 缺 decision.json（不许删除或降级 legacy）:$dir/decision.json"
