@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "review-delivery-binding",
+  "run_id": "20260909T020225Z-01-baseline",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "baseline",
+  "started_at": "2026-09-09T02:02:25Z",
+  "finished_at": "2026-09-09T02:02:25Z",
+  "duration_ms": 456,
+  "exit_code": 1,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 1,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

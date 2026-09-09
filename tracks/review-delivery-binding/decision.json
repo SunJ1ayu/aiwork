@@ -10,8 +10,8 @@
   "design": {
     "uncertainty": "high",
     "premise_attack": {
-      "status": "pending",
-      "evidence": []
+      "status": "done",
+      "evidence": ["evidence/premise-decision.md"]
     }
   },
   "execution_plan": {

@@ -13,6 +13,7 @@
 set -uo pipefail
 
 SUITES=(
+  "review-delivery|python3|/root/aiwork/tests/test_review_delivery.py"
   "review-result|python3|/root/aiwork/tests/test_review_result.py"
   "review-tooling|bash|/root/aiwork/tests/test-review-tooling.sh"
   "panel-observation|bash|/root/aiwork/tests/test-panel-observation.sh"
