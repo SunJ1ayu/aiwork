@@ -147,5 +147,22 @@ mutate "收口记录 verify.md 也算交付内容(归档后补写就被拦)" _re
                 continue=>            if False:
                 continue'
 
+# ---- 第二轮 panel(2026-09-09)挖出的缺口:只有反向断言的判据分不出红在哪 ----
+
+# subdeepseek 的注入实验,原样钉进红检:一刀切拒绝任何第二次归档 ⇒ 合法路径永远
+# 走不通,而在补 T12 之前**整套判据仍然全绿**(T1 照样红,只是红的理由换了个人)。
+mutate "第二次归档一律拒(合法再归档也走不通)" track-record \
+  "test_t12_re_archiving_after_a_fresh_review_is_authorized" \
+  '            tree = history.stdout.splitlines()[0] + "^{tree}"=>            adds = history.stdout.splitlines()
+            if len(adds) > 1:
+                raise DecisionError("observation.review_delivery", "delivery.rearchive", None,
+                                    "second archive refused outright")
+            tree = adds[0] + "^{tree}"'
+
+# 药方退回"只说 verify.md"那一版 —— 这单开单的病(D16:闸给的药方无效)的同型。
+mutate "archive_drift 的药方退回只说 verify.md" track-record \
+  "test_t13_archive_drift_block_names_the_legal_way_out" \
+  '"place: unarchive it (git mv out of tracks/archive/), edit, rerun "=>"place: write the correction into verify.md instead of, "'
+
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
