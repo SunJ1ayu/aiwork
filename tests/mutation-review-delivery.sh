@@ -248,9 +248,14 @@ mutate_guard "药方退回不带 mkdir(嵌套路径 git mv 直接 fatal)" \
 
 # 2026-09-09 第四轮评审(subdeepseek)挖出的三处,各配一条"放松一格"。
 
-mutate_guard "残件列表退回默认 quotepath(非 ASCII 被 C-quote)" \
+# 09-09 接手断线后重跑红检,这条第一版是"退回默认 core.quotepath" —— **它什么都没证明**:
+# 实测 `ls-files -z` 在两种 quotepath 设置下输出逐字节相同(C-quote 只发生在不带 -z 时),
+# 所以变异后判据当然全绿。承重的是 `-z` 本身,这一版咬它:退回修复前那种逐行读。
+mutate_guard "残件列表退回逐行读(丢掉 -z:非 ASCII 被 C-quote、空格被切)" \
   "G14⑤: 文件名带空格/非 ASCII 时,药方每一句照样跑得通" \
-  '    < <(git -c core.quotepath=false ls-files -z -- "$dir" 2>/dev/null)=>    < <(git ls-files -z -- "$dir" 2>/dev/null)'
+  '  while IFS= read -r -d '"'"''"'"' left; do archive_left_list+=("$left"); done \
+    < <(git ls-files -z -- "$dir" 2>/dev/null)=>  while IFS= read -r left; do [ -n "$left" ] && archive_left_list+=("$left"); done \
+    < <(git ls-files -- "$dir" 2>/dev/null)'
 
 mutate_guard "药方不再给路径加引号(空格当场 word-split)" \
   "G14⑤: 文件名带空格/非 ASCII 时,药方每一句照样跑得通" \
