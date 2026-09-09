@@ -661,7 +661,19 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
   local run_id="$1"; shift
   local name="$1"; shift
   local family="$1" adapter="$2" degraded="$3"; shift 3
-  setsid --wait bash -c '
+  # 归属 track 只进**腿自己的进程**:交付指纹由 _review-workspace.sh 在腿里算,
+  # 它只在这个变量有值时才算;不传 ⇒ 每条腿都产 v1 subject ⇒ 归档闸的 delivery
+  # 比较永远走不到,而单元判据照样全绿(接线缺失没有症状)。
+  # 作用域要收在这里,不能在脚本顶上 export:PANEL_ORACLE_CMD 和判据进程都是本脚本
+  # 的子进程,顶上 export 会让它们跟着走绑定路径 —— P0 那条判据存在的理由就是这个。
+  # 无归属时用 `env -u` 显式抹掉:继承来的陈旧值会给一次无归属评审盖上别人的绑定。
+  local -a leg_env=(env)
+  if [[ -n "$TRACK_NAME" ]]; then
+    leg_env+=("AIWORK_REVIEW_TRACK=$TRACK_NAME")
+  else
+    leg_env+=(-u AIWORK_REVIEW_TRACK)
+  fi
+  "${leg_env[@]}" setsid --wait bash -c '
     st="$1"; result="$2"; failed_st="$3"; failed_result="$4"; log="$5"; failed_log="$6"; evidence_log="$7"
     facts="$8"; diagnostic="$9"; shift 9
     helper="$1"; shift

@@ -56,6 +56,25 @@ submimo/claude 尚无统一 controller 用量接口，所以可完成归档，�
 不准 transcript、子目录或 symlink。CLI 归档和手工 staged rename 都校验 staged decision、
 staged observations 与 staged verify，working copy 不能替本次提交应试。
 
+### 评审证据绑定实际交付内容(`decision.json.schema_version = 2`)
+
+`schema_version: 2` 的 track 归档时,除了家族覆盖,还要求那轮评审**审的就是现在要交的东西**。
+每条腿在自己的进程里算一份交付指纹(整仓内容,按下面的收口清单归一化),写进
+`subject.delivery` 并进入 subject digest;归档闸重算一遍再比。对不上就 BLOCK,
+提示里写着 `rerun panel-review after content changes`。
+
+**评审之后还能改的,只有收口件**:本 track 的 `verify.md`、`tasks.md` 的勾选状态、
+`decision.json` 的 `outcome`、严格命名的机器收据(`evidence/<UTC>-<NN>-<slug>.txt`
+且内容确实是 runlog 收据)、`observations/*.json`,以及归档那一次的目录搬迁。
+**别的都承重** —— 源码、设计、普通 evidence、track 里的 oracle、风险字段、任务正文,
+以及文件模式与符号链接(收口件也不例外:`verify.md` 改成可执行或软链一样算改动)。
+所以顺序是:**先把实现改完,再派评审**;评审后改了源码就得重派一轮,这不是 bug。
+
+`schema_version: 1` 的旧 track 保持 `legacy-unbound`(历史不按今天的源码重判),
+但 v2 不许退回 v1。已归档的 track 重新校验时,比的是**它当初归档那个提交的树**,
+不是今天的工作区。没有迁移命令:模板已经是 v2,在飞的旧 track 要么继续 legacy,
+要么手改那一个整数(和 `outcome.verdict` 一样是手写字段)。
+
 Known high-impact factors (new write surfaces, permissions, auth, money, data consistency,
 migrations and control boundaries) mechanically require `impact.level=high`. High design
 uncertainty requires `premise_attack.status=done` and a durable in-track evidence file.

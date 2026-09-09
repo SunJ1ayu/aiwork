@@ -218,6 +218,21 @@ def load_decision(track_dir: Path, source: str) -> dict[str, Any] | None:
         raise DecisionError("json.parse", "decision.json", str(exc), "valid UTF-8 JSON") from exc
     if not isinstance(value, dict):
         raise DecisionError("field.type", "decision.json", value, "object")
+    if value.get("schema_version") == 1:
+        repo = git_root(track_dir)
+        if repo is not None:
+            for rel in (f"tracks/{track_dir.name}/decision.json", f"tracks/archive/{track_dir.name}/decision.json"):
+                for ref in (("HEAD:", ":") if source == "working" else ("HEAD:",)):
+                    prior = subprocess.run(["git", "-C", str(repo), "show", ref + rel],
+                                           capture_output=True, check=False)
+                    if prior.returncode:
+                        continue
+                    try:
+                        known = json.loads(prior.stdout)
+                    except (ValueError, UnicodeError):
+                        continue
+                    if isinstance(known, dict) and known.get("schema_version") == 2:
+                        raise DecisionError("decision.downgrade", "schema_version", 1, "2 (delivery binding already adopted)")
     return value
 
 
@@ -228,8 +243,8 @@ def validate_shape(data: dict[str, Any], track_dir: Path) -> None:
         ("schema_version", "track", "impact", "design", "execution_plan", "outcome"),
     )
     version = required(root, "schema_version", "")
-    if type(version) is not int or version != 1:
-        raise DecisionError("schema.version", "schema_version", version, 1)
+    if type(version) is not int or version not in (1, 2):
+        raise DecisionError("schema.version", "schema_version", version, "1|2")
     track = required(root, "track", "")
     if not isinstance(track, str) or not NAME_RE.fullmatch(track):
         raise DecisionError("field.type", "track", track, "single safe track name")
@@ -399,6 +414,7 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
                 },
                 f">= {required_reviews} coverage-eligible families in one successful panel run for one subject, without verdict conflict",
             )
+        validate_review_delivery(data, track_dir, source, panel_runs, qualifying)
     if data["execution_plan"]["adapter"] == "main" and not any(
         item["controller"] == "runlog" and item["exit_code"] == 0 for item in executions
     ):
@@ -432,6 +448,45 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
             )
 
 
+def validate_review_delivery(data, track_dir, source, panel_runs, qualifying):
+    if data["schema_version"] == 1:
+        return "legacy-unbound"
+    from _review_delivery import DeliveryError, delivery_fingerprint
+    repo = git_root(track_dir)
+    if repo is None:
+        raise DecisionError("observation.review_delivery", "delivery.repository", None, "Git repository")
+    tree = None
+    # Re-check historical machine facts against the original archive commit,
+    # never against today's unrelated source. New staged archives use the index.
+    rel = track_dir.relative_to(repo).as_posix()
+    if rel == f"tracks/archive/{data['track']}":
+        exists = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"HEAD:{rel}/decision.json"],
+                                capture_output=True, check=False)
+        if exists.returncode == 0:
+            history = subprocess.run(["git", "-C", str(repo), "log", "--no-renames", "--reverse",
+                                      "--diff-filter=A", "--format=%H", "--", f"{rel}/decision.json"],
+                                     capture_output=True, text=True, check=False)
+            if history.returncode or not history.stdout.strip():
+                raise DecisionError("observation.review_delivery", "delivery.archive", None, "original archive commit")
+            tree = history.stdout.splitlines()[0] + "^{tree}"
+    try:
+        target = delivery_fingerprint(repo, data["track"], source=source, tree=tree)
+    except (OSError, DeliveryError) as exc:
+        raise DecisionError("observation.review_delivery", "delivery.capture", str(exc), "stable readable delivery view") from exc
+    groups = {(group["run_id"], group["subject_digest"]) for group in qualifying}
+    for run in panel_runs:
+        for leg in run["actual"]["legs"]:
+            subject = leg.get("subject", {})
+            if (leg.get("run_id"), subject.get("digest")) not in groups:
+                continue
+            delivery = subject.get("delivery")
+            if delivery == {"policy_version": 1, "track": data["track"], "digest": target}:
+                return "bound"
+    raise DecisionError("observation.review_delivery", "observations[].actual.legs[].subject.delivery",
+                        {"target": target, "view": source},
+                        "qualifying same-run review bound to this delivery; rerun panel-review after content changes")
+
+
 def validate(track_dir: Path, phase: str, source: str, expected_impact: str | None = None) -> int:
     try:
         data = load_decision(track_dir, source)
@@ -454,7 +509,8 @@ def validate(track_dir: Path, phase: str, source: str, expected_impact: str | No
             validate_archive_observations(data, track_dir, source)
     except DecisionError as exc:
         return block(exc)
-    print(f"track-record: status=valid phase={phase} source={source} track={data['track']}")
+    binding = "required" if data["schema_version"] == 2 else "legacy-unbound"
+    print(f"track-record: status=valid phase={phase} source={source} track={data['track']} delivery={binding}")
     return 0
 
 
