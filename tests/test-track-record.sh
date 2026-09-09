@@ -133,7 +133,9 @@ python3 - "$d/tracks/typed-new/decision.json" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1], encoding="utf-8"))
 assert set(p) == {"schema_version", "track", "impact", "design", "execution_plan", "outcome"}
-assert p["schema_version"] == 1 and p["track"] == "typed-new"
+# 模板停在 v1 = 新建的 track 全是 legacy-unbound，交付绑定那道闸对新交付
+# 永远不生效。这里钉的是"新 track 默认受绑定"，不是某个数字。
+assert p["schema_version"] == 2 and p["track"] == "typed-new"
 assert p["impact"] == {"level": None, "factors": None}
 assert p["design"]["uncertainty"] is None
 assert p["design"]["premise_attack"] == {"status": None, "evidence": []}
