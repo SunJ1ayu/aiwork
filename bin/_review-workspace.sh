@@ -258,7 +258,9 @@ review_workspace_prepare() { # source-repo leg-name
   fi
   export REVIEW_SOURCE_REPO REVIEW_WORKSPACE_BASE_REAL REVIEW_WORKSPACE_DIR
   export REVIEW_WORK_REPO REVIEW_SNAPSHOT_HEAD REVIEW_SNAPSHOT_OBJECT_FORMAT
-  export REVIEW_SNAPSHOT_TREE REVIEW_SNAPSHOT_INDEX_TREE
+  # REVIEW_DELIVERY_DIGEST 也必须导出:写 facts 的那一步一旦被挪进子进程,
+  # 只靠 sourced shell 的全局变量就会**静默**退回无绑定的 v1 subject(RW9 钉住)。
+  export REVIEW_SNAPSHOT_TREE REVIEW_SNAPSHOT_INDEX_TREE REVIEW_DELIVERY_DIGEST
   return 0
 }
 
