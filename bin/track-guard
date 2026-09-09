@@ -250,15 +250,39 @@ for dir in $(archive_typed_validation_dirs); do
   # **active** 路径而不是 archive 路径。那不是"删除或降级 legacy",而是 archive_drift
   # 那条 BLOCK 自己指的合法出路的第一步 —— 不放行,闸就在拦自己给的药方
   # (2026-09-09 第二轮 panel,subdeepseek 实跑复现;G13① 钉住)。
-  # 尺子和上面判 known_typed 的那把一样:decision.json 还在不在。搬出去之后这个
-  # track 归 active 侧的 shape 校验管,不再是归档复验的事;而"搬出去的同时让
-  # decision.json 消失"(G13②)和"原地删掉它"(G13③)都不满足这个条件,照旧拦。
-  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null; then
+  # 尺子有**两个**条件,缺一不可(2026-09-09 第三轮 panel,subkimi 提出、主裁复现):
+  #   ① active 路径有 decision.json;② archive 侧在 index 里**已经搬空**。
+  # 只查 ① 是不够的 —— `git cat-file -e ":path"` 问的是 **index**,而 index 装着
+  # 全部已提交文件,不只是这次 staged 的。只查 ① 的话:同一笔提交里"删掉 archive 的
+  # decision.json + 在 active 路径摆一份同名的"就能顺手改掉归档正文(G14①),
+  # 而且这笔一旦落库,那个 decision.json 常驻 index ⇒ 此后**每一笔**改
+  # tracks/archive/<name>/** 的提交都命中豁免,连塞一份伪造收据都放行(G14②)。
+  # 加上 ② 之后,"取回"必须是名副其实的整份搬出;"搬出去的同时让 decision.json
+  # 消失"(G13②)、"原地删掉它"(G13③)、"留着正文只搬走 decision"(G14①②)全部照旧拦。
+  archive_left="$(git ls-files -- "$dir" 2>/dev/null)"
+  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ -z "$archive_left" ]]; then
     continue
   fi
   if ! git cat-file -e ":$dir/decision.json" 2>/dev/null; then
     fail=1
-    say "🔴 typed archive 的 staged snapshot 缺 decision.json（不许删除或降级 legacy）:$dir/decision.json"
+    if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null; then
+      # 像取回但没搬干净。说真原因 + 给**走得通**的出路(这单的主题就是"闸不许指错方向";
+      # 到这里为止本单已经写坏过三句药方了)。
+      # ⚠️ 这里不能写 `git mv $dir tracks/$name` —— 目标目录已存在时 git 会把整个目录
+      # **塞进去变成 tracks/<name>/<name>/**,而且 rc=0(主裁 2026-09-09 亲跑,见 G14④)。
+      # 所以逐个文件给,目标路径写全。
+      say "🔴 取回没搬干净:$dir/decision.json 已不在 index，但 archive 侧还留着这些"
+      say "   (正文留在原地、decision.json 却搬走了 ⇒ 这份档案再没人复验得了):"
+      printf '%s\n' "$archive_left" | sed 's#^#   - #' >&2
+      say "   出路:取回要**整份**搬出 —— 把上面这些也搬进 tracks/$name/:"
+      while IFS= read -r left; do
+        [ -n "$left" ] || continue
+        say "     git mv $left tracks/$name/${left#$dir/}"
+      done <<< "$archive_left"
+      say "   (目标已存在时 git mv 会拒绝,先决定留哪一份;确实要作废整份档案就连正文一起删。)"
+    else
+      say "🔴 typed archive 的 staged snapshot 缺 decision.json（不许删除或降级 legacy）:$dir/decision.json"
+    fi
     continue
   fi
   if ! "$BIN/track-record" validate --phase archive --source staged "$dir"; then
