@@ -14,9 +14,12 @@ fail=0
 say() { printf 'track-guard: %s\n' "$1" >&2; }
 
 # 打印进药方里的路径必须能**原样粘进 shell**:仓里的正文文件名是中文的常态
-# (`设计文档.md`),空格也不是没有。裸路径会当场断在 word-split 上,而 `git ls-files`
-# 默认还会把非 ASCII C-quote 成 "\346\224\266..." —— 那种字符串连剥前缀都剥不掉。
-# 所以列残件一律走 `-c core.quotepath=false ls-files -z`,打印一律过这个引号函数。
+# (`设计文档.md`),空格也不是没有。裸路径会当场断在 word-split 上,而**不带 -z** 的
+# `git ls-files` 还会把非 ASCII C-quote 成 "\346\224\266..." —— 那种字符串连剥前缀
+# 都剥不掉。两件事同一把锁:列残件走 `ls-files -z`,打印一律过下面这个引号函数。
+# `-z` 与 core.quotepath 无关 —— 09-09 实测两种设置下 -z 输出逐字节相同,所以这里
+# **不再写 `-c core.quotepath=false`**:那一格红检咬不动(变异后判据全绿),
+# 留着只会让下一个人以为它承重。承重的两把锁各有一条变异咬着。
 # (2026-09-09 第四轮 subdeepseek 提出,主裁复现;G14⑤ 钉住。)
 shq() {
   case "$1" in
@@ -273,7 +276,7 @@ for dir in $(archive_typed_validation_dirs); do
   # 消失"(G13②)、"原地删掉它"(G13③)、"留着正文只搬走 decision"(G14①②)全部照旧拦。
   archive_left_list=()
   while IFS= read -r -d '' left; do archive_left_list+=("$left"); done \
-    < <(git -c core.quotepath=false ls-files -z -- "$dir" 2>/dev/null)
+    < <(git ls-files -z -- "$dir" 2>/dev/null)
   if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ ${#archive_left_list[@]} -eq 0 ]]; then
     continue
   fi
