@@ -201,11 +201,25 @@ MUTPY
 
 mutate_guard "取回豁免恒真(借取回之名删掉 decision.json 也放行)" \
   "G13: 取回时降级成 legacy ⇒ 仍然拦" \
-  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null; then
+  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ -z "$archive_left" ]]; then
     continue
   fi=>  if true; then
     continue
   fi'
+
+# 2026-09-09 第三轮:豁免退回"只看 active 有没有 decision.json"那一版(index≠staged 的洞)。
+mutate_guard "豁免退回只查 active decision(不管 archive 搬空没有)" \
+  "G14①: 假取回(archive 侧有残留)借豁免改归档正文 ⇒ 仍然拦" \
+  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ -z "$archive_left" ]]; then=>  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null; then'
+
+# 药方退回"整目录 mv"那一版:目标已存在时 git 会静默嵌套成 tracks/<n>/<n>/ 且 rc=0。
+# 文案断言看不出来,只有**真执行一遍**的 G14④ 照得出。
+mutate_guard "药方退回整目录 mv(目标已存在时静默嵌套)" \
+  "G14④: 照抄闸打印的药方执行一遍 ⇒ 闸放行(药方真走得通)" \
+  '      while IFS= read -r left; do
+        [ -n "$left" ] || continue
+        say "     git mv $left tracks/$name/${left#$dir/}"
+      done <<< "$archive_left"=>      say "     git mv $dir tracks/$name"'
 
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

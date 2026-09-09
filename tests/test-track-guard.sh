@@ -1042,6 +1042,43 @@ g14_exemption_cannot_shield_archive_tampering() {
   (cd "$d" && "$GUARD" >/dev/null 2>&1)
   check 'G14③: 旧归档的合法取回(整份搬出)⇒ 仍然放行' $?
   rm -rf "$d"
+
+  # ④ 药方必须**走得通**:把闸自己打印的那几行 git mv 原样执行一遍,再跑一次闸,
+  #    必须放行。这单的开单理由就是"闸给的药方无效",到这里已经写坏过三句;
+  #    第一版这句写的是 `git mv tracks/archive/t tracks/t`,而目标目录已存在时
+  #    git 会把整个目录塞成 tracks/t/t/ 并且 **rc=0**(主裁亲跑复现)——
+  #    文案断言("消息里有没有出现某个词")照样绿,只有真执行才照得出来。
+  #    夹具形状:归档正文改了一笔(**这才让 archive 目录进得了复验名单** —— 只搬走
+  #    decision.json 的话,它在 staged 里以 R100 的**目标**路径出现,archive 侧一个
+  #    路径都不进 staged,这段代码根本不会被叫起来;主裁第一版夹具就是这样,
+  #    G14④ 红在"没给药方",而真相是压根没走到那里)。
+  d="$(newrepo)"; aged_archive "$d"
+  ( cd "$d"; mkdir -p tracks/t
+    printf '# Design\n\n归档后发现要改正文\n' > tracks/archive/t/design.md
+    git mv tracks/archive/t/decision.json tracks/t/decision.json >/dev/null 2>&1
+    git add -A >/dev/null )
+  local out advice
+  out="$( cd "$d" && "$GUARD" 2>&1 )"; rc=$?
+  check 'G14④前置: 半截取回(只搬走 decision)⇒ 拦' $([[ $rc -ne 0 ]]; echo $?)
+  advice="$(printf '%s\n' "$out" | grep -oE 'git mv [^ ]+ [^ ]+' || true)"
+  if [[ -z "$advice" ]]; then
+    bad 'G14④: BLOCK 里没给出可执行的 git mv 药方'
+  else
+    while IFS= read -r cmd; do
+      [ -n "$cmd" ] || continue
+      ( cd "$d" && $cmd >/dev/null 2>&1 ) || true
+    done <<< "$advice"
+    ( cd "$d" && git add -A >/dev/null )
+    ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+    check 'G14④: 照抄闸打印的药方执行一遍 ⇒ 闸放行(药方真走得通)' $?
+    # 顺带钉住"别再写出会嵌套的那句":药方不许把整个目录搬到已存在的目标上
+    if printf '%s\n' "$out" | grep -qE 'git mv tracks/archive/[^/ ]+ tracks/[^/ ]+$'; then
+      bad 'G14④: 药方写成了整目录 mv(目标已存在时会静默嵌套成 tracks/<n>/<n>/)'
+    else
+      ok 'G14④: 药方不是整目录 mv(不会静默嵌套)'
+    fi
+  fi
+  rm -rf "$d"
 }
 
 echo "=== track-guard oracle ==="
