@@ -337,12 +337,14 @@ case "$cmd" in
       echo "🔴 拒绝归档:工件引用了会话临时目录(见上)。目录留在原地,没有半归档状态。" >&2
       exit 1
     fi
-    _track_archive_sweep_worktrees "$name" "$keep_trees" "$discard_ignored" "$proj"
-    mkdir -p "$proj/tracks/archive"
     # 裸 `mv` 在**目标目录已存在**时不失败,而是把整个目录塞进去 ⇒ 落成
     # tracks/archive/<n>/<n>/ 且 rc=0。最常见的来源:上一次取回只搬走了跟踪文件
     # (`git mv` 不管未跟踪的),归档目录物理上还留着 —— 而 index 视图里它是空的,
     # 谁都看不见。(2026-09-09 第四轮 subdeepseek 提出,主裁在真实路径上复现;G15 钉住。)
+    # ⚠️ 位置有讲究:这一条必须排在 worktree sweep **之前** —— 和上面证据寿命那一段
+    # 同一个道理。sweep 走通时会真的 `git worktree remove`(不可逆),排在它后面就会
+    # 出现"树删了、归档还是失败了",而拒绝的文案却在说"目录留在原地,没有半归档状态"。
+    # (第一版就是排在后面的,主裁自审咬到;G15② 带对照组钉住。)
     if [ -e "$proj/tracks/archive/$name" ]; then
       echo "🔴 拒绝归档:$proj/tracks/archive/$name 已经存在。" >&2
       echo "   常见来源:上一次取回只搬走了跟踪文件,未跟踪残留还留在那儿(git 看不见它)。" >&2
@@ -351,6 +353,8 @@ case "$cmd" in
       echo "   目录留在原地,没有半归档状态。" >&2
       exit 1
     fi
+    _track_archive_sweep_worktrees "$name" "$keep_trees" "$discard_ignored" "$proj"
+    mkdir -p "$proj/tracks/archive"
     mv "$src" "$proj/tracks/archive/$name"
     echo "archived -> $proj/tracks/archive/$name"
     ;;
