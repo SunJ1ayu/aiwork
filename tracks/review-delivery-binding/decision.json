@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "track": "review-delivery-binding",
+  "impact": {
+    "level": "high",
+    "factors": [
+      "judging_control"
+    ]
+  },
+  "design": {
+    "uncertainty": "high",
+    "premise_attack": {
+      "status": "pending",
+      "evidence": []
+    }
+  },
+  "execution_plan": {
+    "adapter": "main",
+    "model": null
+  },
+  "outcome": {
+    "verdict": null
+  }
+}
