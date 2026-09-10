@@ -1214,6 +1214,43 @@ g15_archive_refuses_when_destination_exists() {
   rm -rf "$d" "$wtroot"
 }
 
+# ---------------------------------------------------------------- G16
+g16_moving_files_out_of_archive_is_seen() {
+  echo '[G16] 只把文件搬出归档目录的那笔提交,归档目录也必须进复验名单'
+  # 2026-09-10 主裁实测(第五轮之后):`staged()` 是 `git diff --cached --name-only`,
+  # 它对 rename **只印目标路径**。于是"部分取回"(把 decision/verify 搬到 active、
+  # 正文与收据留在 archive)这笔提交里,staged 一个 `tracks/archive/` 路径都没有
+  # ⇒ archive_typed_validation_dirs 为空 ⇒ 整段归档复验(含残件检查和本单打磨的
+  # 那几句药方)**压根不被叫起来**,半截取回静默落库、archive 侧残件无人过问。
+  # 为什么以前没照出来:G13①/G14 全家的夹具都**顺手 stage 了一笔 archive 侧文件**
+  # (G13① 的 `git add tracks/archive/t/design.md`、G14 的"归档正文改一笔"),
+  # 那一笔才是让目录进名单的原因 —— 判据一直在测"进了名单之后对不对",
+  # 没有一条测过"该进名单的时候进不进"。
+  local d rc out
+
+  # ① 部分取回,archive 侧零 staged 路径 ⇒ 必须拦,而且给的是残件药方
+  d="$(newrepo)"; aged_archive "$d"
+  ( cd "$d"; mkdir -p tracks/t
+    git mv tracks/archive/t/decision.json tracks/t/decision.json >/dev/null
+    git mv tracks/archive/t/verify.md tracks/t/verify.md >/dev/null
+    git add -A >/dev/null )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  [[ $rc -ne 0 ]]; check 'G16①: 部分取回(archive 侧无 staged 路径)⇒ 拦下' $?
+  grep -q '取回没搬干净' <<<"$out"
+  check 'G16①: 拦下的理由是残件没搬干净(不是别的闸顺手红的)' $?
+  grep -q 'tracks/archive/t/design.md' <<<"$out"
+  check 'G16①: 药方点名了留在 archive 侧的具体残件' $?
+  rm -rf "$d"
+
+  # ② 对照组:**完整**取回仍然放行 —— 修法不许把闸自己给的合法出路也拦掉
+  #    (没有这一格,把名单改宽会顺手把 G13 那条药方拦死,而 ① 照样绿)
+  d="$(newrepo)"; aged_archive "$d"
+  ( cd "$d"; mkdir -p tracks; git mv tracks/archive/t tracks/t >/dev/null 2>&1; git add -A >/dev/null )
+  ( cd "$d" && "$GUARD" >/dev/null 2>&1 )
+  check 'G16②: 完整取回(整份搬出)⇒ 仍然放行' $?
+  rm -rf "$d"
+}
+
 echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
@@ -1237,5 +1274,6 @@ g12_archived_prose_edits_get_revalidated
 g13_unarchiving_is_not_a_deletion
 g14_exemption_cannot_shield_archive_tampering
 g15_archive_refuses_when_destination_exists
+g16_moving_files_out_of_archive_is_seen
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
