@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "track": "ds-model-single-source",
+  "impact": {"level": "self", "factors": []},
+  "design": {"uncertainty": "low", "premise_attack": {"status": "not_required", "evidence": []}},
+  "execution_plan": {"adapter": "main", "model": null},
+  "outcome": {"verdict": "PASS"}
+}

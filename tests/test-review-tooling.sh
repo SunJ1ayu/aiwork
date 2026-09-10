@@ -361,6 +361,7 @@ v2_glob_not_pre_expanded() {
   # subdeepseek is a thin shim onto subchat; bin/ deploys as a set, so copy both.
   cp "$BIN/subdeepseek" "$stub_bin/subdeepseek"
   cp "$BIN/subchat" "$stub_bin/subchat"
+  cp "$BIN/deepseek-model" "$stub_bin/deepseek-model"
   # stub engine: subdeepseek does `exec python3 "$ENGINE" ...`; record argv.
   cat > "$stub_bin/submimo-review" <<PYEOF
 import sys
@@ -614,6 +615,7 @@ v8_subchat_provider_table() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/subchat" "$b/subchat"
+  cp "$BIN/deepseek-model" "$b/deepseek-model"
   cp "$BIN/subdeepseek" "$b/subdeepseek"
   cp "$BIN/subglm"   "$b/subglm"
   # stub engine: record argv + the MIMO_*/REVIEW_LABEL env subchat must inject.
@@ -635,6 +637,8 @@ PYEOF
   check "unknown provider exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
   grep -q "deepseek" "$d/e0.txt"; check "unknown-provider error lists supported providers" $?
 
+  # Change only the fixture config: both transport and help must follow it.
+  printf 'deepseek-fixture-next\n' > "$b/deepseek-model"
   # deepseek leg: base-URL style endpoint, default model, label; a stray
   # engine endpoint var inherited from the caller must NOT leak through; an
   # EMPTY (set-but-null) model var must still fall back to the default
@@ -645,8 +649,10 @@ PYEOF
   check "subchat deepseek review exits 0" $([[ $rc -eq 0 ]]; echo $?)
   [[ "$(envget "$d/c1.json" MIMO_BASE_URL)" == "https://api.deepseek.com" ]]
   check "deepseek: MIMO_BASE_URL default" $?
-  [[ "$(envget "$d/c1.json" MIMO_MODEL)" == "deepseek-v4-flash" ]]
+  [[ "$(envget "$d/c1.json" MIMO_MODEL)" == "deepseek-fixture-next" ]]
   check "deepseek: default model (even when env var set-but-empty)" $?
+  [[ "$(bash "$b/subdeepseek" --help 2>&1)" == *"DeepSeek default model: deepseek-fixture-next"* ]]
+  check "deepseek: help follows the shared default" $?
   [[ "$(envget "$d/c1.json" MIMO_TIMEOUT)" == "900" ]]
   check "deepseek: default timeout 900" $?
   [[ "$(envget "$d/c1.json" REVIEW_LABEL)" == "subdeepseek-review" ]]
@@ -684,11 +690,13 @@ PYEOF
   [[ "$(envget "$d/c3.json" MIMO_API_KEY)" == "file-key-zhipu" ]]
   check "zhipu: key loaded from auth file" $?
   printf '{"key":"file-key-ds"}' > "$d/sauth.json"
-  env -u DEEPSEEK_API_KEY CAPTURE="$d/c4.json" DEEPSEEK_AUTH_FILE="$d/sauth.json" \
+  env -u DEEPSEEK_API_KEY CAPTURE="$d/c4.json" DEEPSEEK_MODEL=deepseek-fixture-override DEEPSEEK_AUTH_FILE="$d/sauth.json" \
     bash "$b/subchat" deepseek review "$d/t.md" "$d/o4.log" "$d" >/dev/null 2>&1; rc=$?
   check "deepseek auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
   [[ "$(envget "$d/c4.json" MIMO_API_KEY)" == "file-key-ds" ]]
   check "deepseek: key loaded from auth file" $?
+  [[ "$(envget "$d/c4.json" MIMO_MODEL)" == "deepseek-fixture-override" ]]
+  check "deepseek: explicit model overrides shared default" $?
   # missing key everywhere is a hard error
   env -u DEEPSEEK_API_KEY CAPTURE="$d/c5.json" DEEPSEEK_AUTH_FILE="$d/nope.json" \
     bash "$b/subchat" deepseek review "$d/t.md" "$d/o5.log" "$d" >/dev/null 2>&1; rc=$?
@@ -741,7 +749,7 @@ v9_claude_shell_base() {
   # 它对 deepseek 仍然完全有效,断言一条不删、一条不弱。GLM 那条底座由 V28 问。
   # (本函数末尾那段 panel 选腿用例里的 subglm 桩保持不动:那里造的是桩,不碰真底座。)
   # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
-  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/deepseek-model" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
@@ -787,6 +795,8 @@ PYEOF
   check "agent: default Anthropic-compatible base URL (DeepSeek)" $?
   [[ "$(agentget "$d/a1.json" ANTHROPIC_DEFAULT_SONNET_MODEL)" == "ds-test-model" ]]
   check "agent: sonnet slot mapped to DEEPSEEK_MODEL" $?
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_DEFAULT_OPUS_MODEL)" == "ds-test-model" && "$(agentget "$d/a1.json" ANTHROPIC_DEFAULT_HAIKU_MODEL)" == "ds-test-model" ]]
+  check "agent: all model slots honor DEEPSEEK_MODEL" $?
   # 父 harness 那把真 Anthropic key 绝不许活着进子进程(它现在和我们的 key 抢同一格,
   # 所以断言从"必须是空"改成"必须是我们的、绝不是父进程那把")。
   [[ "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" != "real-anthropic-key" ]]
@@ -1368,7 +1378,7 @@ EOF
   # --- ⑤ subdeepseek-agent 的轮次上限:默认放宽到 80,env 仍可覆盖
   local ab="$d/agentbin"; mkdir -p "$ab"
   # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
-  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$ab/"
+  cp "$BIN/subdeepseek-agent" "$BIN/deepseek-model" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$ab/claude" <<'PYEOF'
 #!/usr/bin/env python3
@@ -1537,7 +1547,7 @@ v17_explore_agent_legs() {
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
   # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
-  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/deepseek-model" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # 假 claude:把 argv/stdin/env 落盘,输出由 STUB_REVIEW_OUT 控制。
   # 默认输出**不带任何裁决行** —— 发散的正常形态就是没有 Conclusion。
@@ -1842,7 +1852,7 @@ v21_agent_leg_body_is_single_source() {
   local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$ab/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$ab/claude" <<'CAPEOF'
 #!/usr/bin/env python3
@@ -2222,7 +2232,7 @@ v26_glm_on_opencode_go() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
-  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" \
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/deepseek-model" "$BIN/subagent" \
      "$BIN/subchat" "$BIN/subglm" "$BIN/subdeepseek" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$b/claude" <<'PYEOF2'
@@ -2397,7 +2407,7 @@ v27_knockon_of_the_backend_switch() {
   #    日志上只看得见"模型没回话"。这正是本单要根治的病,表驱动自己却没守卫。
   #    (08-18 四审有两条腿都断言这里是 fail-closed —— **它们都错了**,我实测的。
   #     所以这条断言不是抄评审意见,是抄实测。)
-  cp "$BIN/subglm-agent" "$BIN/subagent" "$b/"
+  cp "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$b/claude" <<'EOF'
 #!/usr/bin/env bash
@@ -2475,7 +2485,7 @@ v28_glm_on_opencode_base() {
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
   printf '# review this\n' > "$d/t.md"
-  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/subagent" "$b/"
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/deepseek-model" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local ochome="$d/ochome"
 
@@ -2663,7 +2673,7 @@ EOF
   #    反过来则放行到 `opencode run` 才报一个误导性的 rc=127。
   #    (四审两条腿独立点到:subdeepseek F2 / subglm MEDIUM。)
   local nb="$d/nobin"; mkdir -p "$nb"
-  cp "$BIN/subglm-agent" "$BIN/subagent" "$nb/"
+  cp "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$nb/"
   cp "$BIN/ro-repo-exec" "$nb/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   oc_stub "$nb"        # 只有 opencode,**没有 claude**
   env PATH="$nb:/usr/bin:/bin" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
@@ -3202,7 +3212,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cp "$BIN/_review-workspace.sh" "$b/" 2>/dev/null || true
 
@@ -3220,6 +3230,7 @@ work=BLOCKED; source=BLOCKED
 touch "$target/PWNED_IN_WORKSPACE" 2>/dev/null && work=WROTE
 touch "$PWN_REPO/PWNED_IN_SOURCE" 2>/dev/null && source=WROTE
 printf 'repo=%s\ncwd=%s\nwork=%s\nsource=%s\n' "$target" "$PWD" "$work" "$source" > "$PWN_OUT"
+printf 'model=%s\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" >> "$PWN_OUT"
 # claude 壳要 stream-json;别的腿吃纯文本。两种都吐,谁读谁的。
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
 echo "Conclusion: PASS"
@@ -3229,13 +3240,16 @@ PWN
   _mk_pwn_stub "$b/claude"; _mk_pwn_stub "$b/mimo"; _mk_pwn_stub "$b/kimi"
   _mk_pwn_stub "$b/opencode"   # ← GLM 腿的底座是 opencode,不是 claude(见 ①b)
 
+  printf 'deepseek-fixture-next\n' > "$b/deepseek-model"
+  [[ "$(bash "$b/subdeepseek-agent" --help 2>&1)" == *"DeepSeek default model: deepseek-fixture-next"* ]]
+  check "V36: agent help follows the shared default" $?
   local rc
   # ── ① claude 壳(subdeepseek-agent)
   # ⚠️ 这行原本写的是"subdeepseek-agent / subglm-agent 共用躯干 subagent",
   #    于是只测了一条腿就收工。**"共用躯干"不等于"共用路径"** —— 见 ①b。
   rm -f "$d/o1" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1" CAPTURE="$d/c1.json" \
-    DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 AIWORK_REVIEW_FACTS_PATH="$d/deepseek.facts.json" \
+    DEEPSEEK_API_KEY=dk DEEPSEEK_MODEL= REVIEW_NO_MY_REVIEW=1 AIWORK_REVIEW_FACTS_PATH="$d/deepseek.facts.json" \
     AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l1.log" "$repo" >/dev/null 2>&1; rc=$?
   grep -q '^work=WROTE$' "$d/o1" 2>/dev/null \
@@ -3250,10 +3264,11 @@ PWN
   check "V36: subdeepseek-agent 副本可写、原仓只读(假模型双向试写:$seen1)" $r1
   [[ $rc -eq 0 ]]
   check "V36: 腿在只读下仍然正常出结论(防线没把腿弄死 —— 08-18 就是死在这)" $?
-  python3 - "$d/deepseek.facts.json" <<'PY'
+  python3 - "$d/deepseek.facts.json" "$d/o1" <<'PY'
 import json,sys
 p=json.load(open(sys.argv[1]))
-assert p['model']['requested'] == p['model']['invoked'] == 'deepseek-v4-flash'
+assert p['model']['requested'] == p['model']['invoked'] == 'deepseek-fixture-next'
+assert 'model=deepseek-fixture-next' in open(sys.argv[2]).read().splitlines()
 assert p['source'] and p['view']['mode'] == 'full_snapshot'
 PY
   check "V36: subdeepseek-agent 交出实际模型与完整 snapshot facts" $?
@@ -3394,7 +3409,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -3689,7 +3704,7 @@ v40_second_panel_findings() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/subagent" "$BIN/submimo" \
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$BIN/submimo" \
      "$BIN/subkimi" "$BIN/ro-repo-exec" "$b/"
   [[ -f "$BIN/_my-review-gate.sh" ]] && cp "$BIN/_my-review-gate.sh" "$b/"
   [[ -f "$BIN/_review-home-guard.sh" ]] && cp "$BIN/_review-home-guard.sh" "$b/"

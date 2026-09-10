@@ -25,13 +25,16 @@ gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 ENGINE="$(dirname "$0")/submimo-review"
 
 usage() {
+  local default_model
+  default_model="$(cat "$(dirname "$0")/deepseek-model")" || exit 1
+  printf 'DeepSeek default model: %s\n\n' "$default_model" >&2
   cat >&2 <<'EOF'
 Usage:
   subchat PROVIDER review TASK_FILE LOG_FILE [REPO_DIR]
   subchat PROVIDER fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
 
 Providers (usually invoked via their shims):
-  deepseek   (shim: subdeepseek)  default model deepseek-v4-flash, env DEEPSEEK_*
+  deepseek   (shim: subdeepseek)  model from bin/deepseek-model, env DEEPSEEK_*
   zhipu      (shim: subglm)    default model glm-5.3-flash,     env ZHIPU_*
 
 Runs the provider's model as a read-only review sub-agent over an OpenAI-
@@ -77,7 +80,8 @@ case "$PROVIDER" in
     PREFIX="DEEPSEEK"
     # DeepSeek official API (same key file as subdeepseek-agent). Formerly this
     # leg rode SenseNova's chat API (provider "sensenova", retired 2026-07-18).
-    DEFAULT_MODEL="deepseek-v4-flash"   # 07-25:端点只认 v4-flash / v4-pro
+    DEFAULT_MODEL="$(cat "$(dirname "$0")/deepseek-model")" || die "cannot read deepseek-model"
+    [[ -n "$DEFAULT_MODEL" ]] || die "empty deepseek-model"
     ENDPOINT_ENV_VAR="MIMO_BASE_URL"    # engine suffixes a base URL with /chat/completions
     ENDPOINT="${DEEPSEEK_API_BASE:-https://api.deepseek.com}"
     DEFAULT_AUTH_FILE="$HOME/.config/deepseek/auth.json"

@@ -26,10 +26,13 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
   后按单文件实测 56 轮外推并钉住)。
 - **chat 腿(回落)**:`subdeepseek review TASK LOG REPO`,走官方 chat-completions
   (`api.deepseek.com`),自动附上 REPO 的 `git diff`。
-  默认模型 **`deepseek-v4-flash`**，轮次上限 **200**(2026-07-25 起;官方端点只认 `deepseek-v4-flash` /
-  `deepseek-v4-pro`,老的 `deepseek-chat`/`deepseek-reasoner` 已下架——两条腿当天双双 400
-  就是这个原因)。要更强一档用 `DEEPSEEK_MODEL=deepseek-v4-pro`。
   加文件用 `DEEPSEEK_INCLUDE`(panel 里用 `PANEL_INCLUDE` 一次喂两条 chat 腿)。
+
+两条路径的默认模型统一读取 **`bin/deepseek-model`**（一行 API 模型名）。
+以后换 DS 默认档只改这个文件；agent、chat 回落和两条入口的 `--help` 自动跟随，
+无需修改测试里的版本号或本说明。`DEEPSEEK_MODEL` 非空时仍优先用于本次调用。
+测试用临时配置中的虚构模型名核对传参与事实记录，历史账本夹具不代表当前默认档。
+
 
 ## subglm (GLM 模型,跑在 OpenCode Go 上) — 第三条腿
 

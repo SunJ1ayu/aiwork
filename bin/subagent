@@ -41,13 +41,16 @@ _RHG="$(dirname "$0")/_review-home-guard.sh"
 BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
+  local default_model
+  default_model="$(cat "$(dirname "$0")/deepseek-model")" || exit 1
+  printf 'DeepSeek default model: %s\n\n' "$default_model" >&2
   cat >&2 <<'EOF'
 Usage:
   subagent <provider> review  TASK_FILE LOG_FILE [REPO_DIR]
   subagent <provider> explore TASK_FILE LOG_FILE [REPO_DIR]
 
 Providers (thin shims in parentheses; callers normally use the shim):
-  deepseek  (subdeepseek-agent)  default deepseek-v4-flash, env DEEPSEEK_*
+  deepseek  (subdeepseek-agent)  model from bin/deepseek-model, env DEEPSEEK_*
   zhipu     (subglm-agent)       default glm-5.3-flash,     env ZHIPU_*
 
 Environment (PREFIX = DEEPSEEK | ZHIPU):
@@ -91,8 +94,8 @@ case "$PROVIDER" in
   deepseek)
     PREFIX="DEEPSEEK"; LABEL="subdeepseek-agent"
     BILLING_MODE="api"
-    # 07-25:官方端点只剩 v4-flash / v4-pro,老的 deepseek-chat / deepseek-reasoner 已下架。
-    DEFAULT_MODEL="deepseek-v4-flash"
+    DEFAULT_MODEL="$(cat "$BIN_DIR/deepseek-model")" || die "cannot read deepseek-model"
+    [[ -n "$DEFAULT_MODEL" ]] || die "empty deepseek-model"
     DEFAULT_BASE_URL="https://api.deepseek.com/anthropic"
     DEFAULT_AUTH_FILE="$HOME/.config/deepseek/auth.json"
     # 轮次预算**凭测量**:08-03 实测「只看一个文件」的琐碎评审就用掉 56 轮
