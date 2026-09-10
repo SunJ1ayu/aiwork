@@ -277,5 +277,18 @@ mutate_bin track "拒绝挪到 sweep 之后(先删树再拒绝)" \
   '    if [ -e "$proj/tracks/archive/$name" ]; then=>    _track_archive_sweep_worktrees "$name" "$keep_trees" "$discard_ignored" "$proj"
     if [ -e "$proj/tracks/archive/$name" ]; then'
 
+# 2026-09-10 第五轮之后:submimo 指出 `shq()` 本身没有任何变异咬着它 —— 现有两条咬的是
+# `-z` 和"药方不加引号",而"shq 退回裸 printf"这条路没人测。`case "" in` 让空串永远落到
+# 第二个分支(原样输出)= 把转义整个关掉,而文件里一个引号都不用碰。
+mutate_bin track-guard "shq 退回裸输出(转义整个关掉)" \
+  "G14⑤: 文件名带空格/非 ASCII 时,药方每一句照样跑得通" \
+  '  case "$1" in=>  case "" in'
+
+# 2026-09-10:名单看不见 rename 的源 ⇒ "只把文件搬出 archive/"那笔提交整段复验不被叫起来
+# (G16①,判据先行时 3 红)。变异退回只看 staged 的目标路径。
+mutate_bin track-guard "复验名单退回只看 staged 目标路径(看不见 rename 源)" \
+  "G16①: 部分取回(archive 侧无 staged 路径)⇒ 拦下" \
+  '  staged_and_rename_sources | sed -nE=>  staged | sed -nE'
+
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
