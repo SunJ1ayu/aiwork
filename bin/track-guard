@@ -245,7 +245,19 @@ archive_machine_dirs_changed() {
   # (test-track-guard.sh 的 G12① 钉的就是这件事,当时是红的)。
   # 收口记录(verify.md、observations、runlog 收据)本来就在投影之外,多叫一次复验
   # 只是多花约 1 秒,不会因此变红 —— G12② 是那一侧的反误报对照。
-  staged | sed -nE 's#^(tracks/archive/[^/]+)/.+$#\1#p' | sort -u
+  staged_and_rename_sources | sed -nE 's#^(tracks/archive/[^/]+)/.+$#\1#p' | sort -u
+}
+
+# rename 的**源路径**也算"这次动了它"。2026-09-10 实测:`staged()` 是
+# `git diff --cached --name-only`,它对 rename **只印目标**。于是"部分取回"
+# (decision/verify 搬到 active、正文与收据留在 archive)那笔提交里,staged 一个
+# `tracks/archive/` 路径都没有 ⇒ 上面这份名单为空 ⇒ 整段归档复验(含残件检查和它
+# 打印的药方)压根不被叫起来,半截取回静默落库(G16① 钉住,当时 3 红)。
+# 只往名单里**加**,不改 `staged()` 本身 —— 后者被上面每一道检查共用,动它的误报面
+# 是整份文件;而"完整取回"进了名单之后走的是取回豁免那条合法出路(G16② 反误报对照)。
+staged_and_rename_sources() {
+  staged
+  git diff --cached --name-status --find-renames 2>/dev/null | awk -F'\t' '$1 ~ /^R/ { print $2 }'
 }
 
 archive_typed_validation_dirs() {
