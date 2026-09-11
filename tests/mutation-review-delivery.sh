@@ -137,6 +137,14 @@ mutate "track archive 见谁拦谁(干净仓也归不了档)" track \
   "test_t7_cli_archive_still_works_on_a_clean_repo" \
   '        if [ -n "$views" ]; then=>        if [ -z "$views" ]; then'
 
+mutate "self 没有评审绑定却仍强制两视图一致" track \
+  "test_t18_self_archive_ignores_unbound_view_difference" \
+  'data["impact"]["level"] != "self"=>True'
+
+mutate "作废任务没有评审绑定却仍强制两视图一致" track \
+  "test_t19_superseded_archive_has_no_review_view_precondition" \
+  'data["outcome"]["verdict"] == "PASS"=>True'
+
 mutate "working 视图不再收未跟踪文件(两视图假装永远一致)" _review_delivery.py \
   "test_t8_two_views_differ_exactly_on_the_dirty_worktree" \
   '            if source == "working":=>            if False:'
