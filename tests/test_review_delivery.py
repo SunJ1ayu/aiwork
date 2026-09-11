@@ -370,6 +370,46 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(self.archived().is_dir())
 
+    def prepare_self_archive(self):
+        self.decision["impact"] = {"level": "self", "factors": []}
+        self.write_decision()
+        self.install_review()
+        # Self needs execution evidence, but no panel or bound delivery.
+        (self.track / "observations/review-1.json").unlink()
+        self.archivable_closeout()
+        self.commit_all("self closeout without panel")
+
+    def test_t17_self_archive_clean_control(self):
+        self.prepare_self_archive()
+        result = self.cli_archive()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.archived().is_dir())
+
+    def test_t18_self_archive_ignores_unbound_view_difference(self):
+        self.prepare_self_archive()
+        scratch = self.repo / "unrelated-notes.txt"
+        scratch.write_text("untracked notes\n")
+        (self.repo / "source.py").write_text("answer = 2\n")
+        result = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.cli_archive()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.archived().is_dir())
+        self.assertEqual(scratch.read_text(), "untracked notes\n")
+        self.assertEqual(self.git("show", ":source.py"), b"answer = 1\n")
+
+    def test_t19_superseded_archive_has_no_review_view_precondition(self):
+        self.decision["outcome"]["verdict"] = "ARCHIVED-SUPERSEDED"
+        self.write_decision()
+        self.archivable_closeout()
+        self.commit_all("superseded without panel")
+        (self.repo / "unrelated-notes.txt").write_text("untracked notes\n")
+        result = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.cli_archive()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.archived().is_dir())
+
     def test_t8_two_views_differ_exactly_on_the_dirty_worktree(self):
         # 干净夹具上 working == staged 是**平凡满足**的;两视图真正的语义差只在脏树上
         # 看得见,而这正是归档闸的前置条件。把它写成判据,别让下一个人在归档时才发现。

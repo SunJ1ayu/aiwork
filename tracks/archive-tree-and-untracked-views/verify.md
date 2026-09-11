@@ -288,3 +288,17 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 23 套件全部通过，review-tooling 553/0、track-guard 127/0；运行于 8f0f71c 干净树，HEAD 与源码视图稳定。先前 V45 失败在停止真实评审后消失，未修改测试或配置来绕过断言。
 
 - `runlog: r7-full-serial rc=0 commit=8f0f71c dirty=no final=yes at=2026-09-11T01:50:39Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T015039Z-01-r7-full-serial.txt`
+
+## 2026-09-11 下午接手：第七轮评审收货与第八轮误拦修复
+
+第七轮最终评审实际于 10:36 完成，run `20260911-102228-1695124-panel-review`，冻结 HEAD `fdf402e`。MiMo / DeepSeek 都正常完成、无降级、同 subject，两条 verdict 均为 PASS。主裁先重读生产 diff、稳定全量收据与仓外自审，再读取两份最终报告。
+
+- MiMo 对三个 NUL 目录选择入口、最新归档树、完整/部分取回的结论与源码及判据一致，采纳。其报告称变异 34 项不准确，实际主裁收据和 DeepSeek 独立运行均为 39/0；MiMo 自己的变异运行超时，不算变异完成证据。
+- DeepSeek A（本轮新增）：`bin/track` 对所有 v2 强制两视图一致，而 `track-record.validate_archive_observations` 只对 PASS 且非 self 要求评审绑定。主裁复现 self + 未跟踪/未暂存文件误拦，并从同一条件发现 ARCHIVED-SUPERSEDED 也被误拦。虽然评审将其列为低风险不阻断，主裁决定修复本单引入的行为回归。
+- DeepSeek B（原有）：archive 来源的 rename 全部被 `archiving_dirs_now` 跳过，跨档案的相同内容可能被 Git 配对为 R100，遗漏新目录的 legacy evidence 检查。已核旧 awk 与当前 case 条件一致；属于已有身份/跨档案 rename 选择策略，不是 NUL 改动引入。本单不宣称解决，后续题面应包含同批取回 old、归档 new 的对照。
+- DeepSeek C（原有）：active/archive 同名残件可先被投影 collision 拦住，未到更具体的目标存在提示。已核 validator 在前、目标检查在后，结果仍为拒绝，无静默放行。
+- 本轮不能直接用第七轮 PASS 归档：接下来实现会改变交付指纹，需对修复后的稳定内容重新取得两家覆盖。
+
+新判据 T17/T18/T19 + 现有 T6 亲跑：self 干净对照及 high 视图不等拒绝对照绿，self 脏视图与作废任务各红一条（4 项，2 失败）。判据先提交，修复随后提交。
+
+- `runlog: r8-self-red rc=1 commit=fdf402e dirty=yes at=2026-09-11T07:36:10Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T073610Z-01-r8-self-red.txt`
