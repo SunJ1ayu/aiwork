@@ -306,3 +306,7 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 修复仅收窄 `bin/track` 的视图前置条件：已经通过完整 archive validator 的 v2、PASS、非 self 任务才进入比较；其余形状/风险/执行证据规则不变。完整 delivery 测试 31/0，包括 self 与作废误拦回归和原有 high 拒绝对照。
 
 - `runlog: r8-delivery-green rc=0 commit=f52cf83 dirty=yes at=2026-09-11T07:37:25Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T073725Z-01-r8-delivery-green.txt`
+
+第八轮变异检查 41/0（原有 39 项和新增 2 项均有效），测试与实现运行期间没有改写。待办中的 D15/D16 已补实现状态，身份/跨档案 rename、取回入口、证据排序及评审腿诊断等未修范围集中列入 WORKFLOW-DEBT.md。
+
+- `runlog: r8-mutations rc=0 commit=3353e07 dirty=no at=2026-09-11T07:38:03Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T073803Z-01-r8-mutations.txt`

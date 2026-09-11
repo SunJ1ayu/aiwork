@@ -487,3 +487,15 @@ working=9dd0fb98 而 staged=ddda7a7b)。**这是主裁归档前自检抓到的,�
 ### 顺带(同一单可捎上)
 `tasks/*-my-review.md` 躺在被审仓内 —— 反锚定的正本必须在仓外(`/root/panel-my-reviews/`),
 仓内那份是泄漏源,每轮 panel 的 anchor-leak 警告都在点它们的名。
+
+## 2026-09-11：D15 / D16 实现状态与后续边界
+
+D15 / D16 的修复已落在 track `archive-tree-and-untracked-views`：历史复验取最新一次归档树，单独检查归档子树漂移；评审绑定的 PASS 任务在移动前检查 working/staged 是否一致并点名差异。NUL 路径选择补齐中文、引号、制表符、换行和 rename 源路径，保留无关档案与完整取回对照。`3353e07` 进一步排除没有评审绑定的 self 与非 PASS 任务，避免新增误拦。验收、最终评审与真实归档结果以该 track 的 verify.md / decision.json 为准，旧段落保留为原始问题记录。
+
+尚未纳入本单的边界（来源及实测详情见该 track 的 verify.md）：
+
+- **身份生命周期与跨档案 rename 选择**：整份删除后复用名字、纯 copy 造成同名副本仍未定义完整约束。另有更具体的 legacy 证据检查漏选：同批取回 old、归档内容相同的 new，Git 可能配成 archive/old → archive/new 的 R100；`archiving_dirs_now` 旧有“archive 来源 rename 全跳过”会漏选 new。后续测试须带不同内容对照，不能只修名称唯一。
+- **取回命令与诊断**：目前仍需手工完整搬回 tracked/untracked 内容；可评估 `track unarchive`。active/archive 同名残件有时先报 projection collision，未到目标存在提示，仍然拒绝。
+- **证据文件排序**：VOID 命名与 `ev_files` 最后收据排序的冲突仍待独立修复；不得将未收尾文件记成有效收据。
+- **评审腿与失败分类**：GLM 日志分类可能把引用正文的 billing_mode 当额度故障；chat 回退曾报 MissingSessionID；评审任务应明确临时实验放在自己的副本内。对应 A8/A9/A10 留在 verify，不算本单已修。
+- **历史路径消费者**：本单只修 typed/archive 三个目录入口；旧 `staged()` 在版本检测、工具路径和近期 verify 收集的逐行消费者未全部迁移，不能声称全仓任意文件名已支持。
