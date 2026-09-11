@@ -302,3 +302,7 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 新判据 T17/T18/T19 + 现有 T6 亲跑：self 干净对照及 high 视图不等拒绝对照绿，self 脏视图与作废任务各红一条（4 项，2 失败）。判据先提交，修复随后提交。
 
 - `runlog: r8-self-red rc=1 commit=fdf402e dirty=yes at=2026-09-11T07:36:10Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T073610Z-01-r8-self-red.txt`
+
+修复仅收窄 `bin/track` 的视图前置条件：已经通过完整 archive validator 的 v2、PASS、非 self 任务才进入比较；其余形状/风险/执行证据规则不变。完整 delivery 测试 31/0，包括 self 与作废误拦回归和原有 high 拒绝对照。
+
+- `runlog: r8-delivery-green rc=0 commit=f52cf83 dirty=yes at=2026-09-11T07:37:25Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T073725Z-01-r8-delivery-green.txt`

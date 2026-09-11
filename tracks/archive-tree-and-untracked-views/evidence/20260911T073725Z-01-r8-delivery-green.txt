@@ -1,0 +1,15 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    r8-delivery-green
+cmd:     python3 tests/test_review_delivery.py
+cwd:     /root/aiwork(仓根)
+commit:  f52cf83
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-11T07:37:25Z
+---------------- 输出开始 ----------------
+...............................
+----------------------------------------------------------------------
+Ran 31 tests in 7.670s
+
+OK
+---------------- 输出结束 ----------------
+runlog: r8-delivery-green rc=0 commit=f52cf83 dirty=yes at=2026-09-11T07:37:25Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T073725Z-01-r8-delivery-green.txt

@@ -279,7 +279,15 @@ case "$cmd" in
     # 这个前置条件以前从没被说出来过:2026-09-09 归档 review-delivery-binding 时,
     # 仓里 26 份未跟踪任务书让它必然不等,于是 working 这关放行、目录搬走、炸在 commit 上,
     # 而那条 BLOCK 让人去重跑 panel(实测无效,每圈烧一轮 panel)。挡在 mv 之前,并点名文件。
-    if [[ "$typed" -eq 1 ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("schema_version")==2 else 1)' "$src/decision.json" 2>/dev/null; then
+    # 与 archive validator 一致：self 和非 PASS 没有评审交付绑定，不能凭两视图
+    # 不同额外拒绝它们。上面的完整校验仍负责形状、风险、执行证据与合法 outcome。
+    if [[ "$typed" -eq 1 ]] && python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+sys.exit(0 if data.get("schema_version") == 2
+         and data["outcome"]["verdict"] == "PASS"
+         and data["impact"]["level"] != "self" else 1)
+' "$src/decision.json" 2>/dev/null; then
       repo_root="$(git -C "$proj" rev-parse --show-toplevel 2>/dev/null)" || repo_root=""
       if [ -n "$repo_root" ]; then
         if ! views="$(python3 "$(dirname "$0")/_review_delivery.py" --repo "$repo_root" --track "$name" --explain-views 2>&1)"; then
