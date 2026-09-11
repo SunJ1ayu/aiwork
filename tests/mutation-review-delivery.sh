@@ -288,7 +288,28 @@ mutate_bin track-guard "shq 退回裸输出(转义整个关掉)" \
 # (G16①,判据先行时 3 红)。变异退回只看 staged 的目标路径。
 mutate_bin track-guard "复验名单退回只看 staged 目标路径(看不见 rename 源)" \
   "G16①: 部分取回(archive 侧无 staged 路径)⇒ 拦下" \
-  '  staged_and_rename_sources | sed -nE=>  staged | sed -nE'
+  '  git diff --cached --name-only --no-renames -z=>  git diff --cached --name-only --find-renames -z'
+
+# 第七轮：三个路径入口各自有变异；精度与完整取回另有反误报变异。
+mutate_guard "active 路径退回展示文本(漏选特殊观测文件)" \
+  "G17 active unicode: 非法观测确实触发结构检查" \
+  '  done < <(git diff --cached --name-only -z) | sort -zu=>  done < <(git diff --cached --name-only) | sort -zu'
+
+mutate_guard "archive 路径退回展示文本(漏选特殊正文文件)" \
+  "G17 archive unicode: 正文修改确实触发归档复验" \
+  '  git diff --cached --name-only --no-renames -z=>  git diff --cached --name-only --no-renames'
+
+mutate_guard "归档状态退回展示文本(漏选特殊新增文件)" \
+  "G17 archiving unicode: 特殊路径新增仍触发证据检查" \
+  '  done < <(git diff --cached --name-status --find-renames -z) | sort -zu=>  done < <(git diff --cached --name-status --find-renames) | sort -zu'
+
+mutate_guard "复验名单扩大到全部已跟踪路径(无关 rename 误报)" \
+  "G18: 无关 rename 不复验无关的旧归档" \
+  '  git diff --cached --name-only --no-renames -z=>  git ls-files -z'
+
+mutate_guard "完整取回也不豁免(合法流程被拒)" \
+  "G16②: 完整取回(整份搬出)⇒ 仍然放行" \
+  '  if git cat-file -e ":tracks/$name/decision.json" 2>/dev/null && [[ ${#archive_left_list[@]} -eq 0 ]]; then=>  if false; then'
 
 printf -- '---- 合计 PASS=%s FAIL=%s ----\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
