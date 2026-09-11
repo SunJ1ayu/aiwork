@@ -310,3 +310,7 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 第八轮变异检查 41/0（原有 39 项和新增 2 项均有效），测试与实现运行期间没有改写。待办中的 D15/D16 已补实现状态，身份/跨档案 rename、取回入口、证据排序及评审腿诊断等未修范围集中列入 WORKFLOW-DEBT.md。
 
 - `runlog: r8-mutations rc=0 commit=3353e07 dirty=no at=2026-09-11T07:38:03Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T073803Z-01-r8-mutations.txt`
+
+第八轮最终全量回归完成：23 套件全部通过（review-tooling 553/0、track-guard 127/0），在干净 b019588 起跑，HEAD 与源码视图稳定；无真实评审并行，无测试/配置改动绕过失败。
+
+- `runlog: r8-full-serial rc=0 commit=b019588 dirty=no final=yes at=2026-09-11T07:45:32Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T074532Z-01-r8-full-serial.txt`
