@@ -34,11 +34,15 @@ staged() { git diff --cached --name-only; }
 # verify，再把 observation 塞进 transcript，就会被 `[ -f verify ] || continue` 跳过。
 # 真正搬入 archive 的 active 删除由下面 archive/staged validator 接管。
 active_typed_dirs_changed() {
-  staged | sed -nE \
-    's#^(tracks/[^/]+)/(decision\.json|verify\.md|observations(/.*)?)$#\1#p' | sort -u
+  local path
+  while IFS= read -r -d '' path; do
+    if [[ "$path" =~ ^(tracks/[^/]+)/(decision\.json|verify\.md|observations(/.*)?)$ ]]; then
+      printf '%s\0' "${BASH_REMATCH[1]}"
+    fi
+  done < <(git diff --cached --name-only -z) | sort -zu
 }
 
-for track_dir in $(active_typed_dirs_changed); do
+while IFS= read -r -d '' track_dir; do
   name="${track_dir#tracks/}"
   # 合法 archive move：staged destination 的 typed facts 会在归档循环完整校验。
   staged_active=0; staged_archive=0
@@ -75,7 +79,7 @@ for track_dir in $(active_typed_dirs_changed); do
     fail=1
     say "🔴 typed active 机器源的 staged snapshot 未通过 shape:$track_dir"
   fi
-done
+done < <(active_typed_dirs_changed)
 unset active_left staged_active staged_archive
 
 # 逃生口(规矩1 与规矩4 共用):本次提交带了 track 工件,或近 7 天有 verify.md 改动。
@@ -225,46 +229,47 @@ done
 # 2026-08-08 四审两条腿独立命中:按路径匹配的话,改一份两个月前就归档的 verify.md
 # 的错字也会被当成"你在归档"挡下,而仓里 8 份历史归档工件全部零收据 ⇒ 一碰就挡,
 # 报错文案还是错的。任务书自己写着「误报比漏报更致命」,我照样踩了进去。
+# 路径从 Git 到目录消费者都用 NUL 分隔；展示用 C-quote 与逐行解析会漏掉
+# 中文/引号/制表符/换行路径。状态 R/C 后有两个路径，其余状态只有一个。
 archiving_dirs_now() {
-  git diff --cached --name-status --find-renames 2>/dev/null \
-    | awk -F'\t' '$1 ~ /^R/ && $2 ~ /^tracks\/archive\// { next }   # archive/ 内部改名不是归档
-                   $1 !~ /^[MD]/ && $NF ~ /^tracks\/archive\/[^\/]+\// {
-                     split($NF, p, "/"); print p[1] "/" p[2] "/" p[3]
-                   }' | sort -u
+  local status path source
+  while IFS= read -r -d '' status && IFS= read -r -d '' path; do
+    source=""
+    case "$status" in
+      R*|C*) source="$path"; IFS= read -r -d '' path || return 1 ;;
+    esac
+    case "$status" in
+      R*) [[ "$source" == tracks/archive/* ]] && continue ;; # archive 内部改名不是归档
+      M*|D*) continue ;;
+    esac
+    if [[ "$path" =~ ^(tracks/archive/[^/]+)/ ]]; then
+      printf '%s\0' "${BASH_REMATCH[1]}"
+    fi
+  done < <(git diff --cached --name-status --find-renames -z) | sort -zu
 }
 
-# typed 机器源进了 archive 以后仍是账本事实，不是「归档时查一次就永久可信」。
-# 因此两类动作都要用 **staged snapshot** 重跑 archive validator：
-#   1) 本次正搬入 archive；2) 已归档 decision/observations 后续被增删改。
-# 第二类刻意只盯机器源，不让修历史 verify.md 的错字触发整套归档闸。
+# 归档后交付正文的改动也要复验；只提取这笔 diff 实际触碰的归档目录。
+# 收口记录由 validator 的投影排除，无关旧档案不进名单。
 archive_machine_dirs_changed() {
-  # 2026-09-09:原本只认 decision.json 和 observations/ —— 那时归档复验问的只有
-  # "typed outcome/coverage 满不满足",它们确实是唯一的机器事实源。本单起,复验还问
-  # "归档之后档案里的交付内容动没动"(D15 后半),而那个问题的答案藏在 design.md /
-  # tasks.md / evidence 正文里。名单不跟着扩,新加的比较就永远不会被叫起来
-  # (test-track-guard.sh 的 G12① 钉的就是这件事,当时是红的)。
-  # 收口记录(verify.md、observations、runlog 收据)本来就在投影之外,多叫一次复验
-  # 只是多花约 1 秒,不会因此变红 —— G12② 是那一侧的反误报对照。
-  staged_and_rename_sources | sed -nE 's#^(tracks/archive/[^/]+)/.+$#\1#p' | sort -u
+  local path
+  while IFS= read -r -d '' path; do
+    if [[ "$path" =~ ^(tracks/archive/[^/]+)/ ]]; then
+      printf '%s\0' "${BASH_REMATCH[1]}"
+    fi
+  done < <(staged_and_rename_sources) | sort -zu
 }
 
-# rename 的**源路径**也算"这次动了它"。2026-09-10 实测:`staged()` 是
-# `git diff --cached --name-only`,它对 rename **只印目标**。于是"部分取回"
-# (decision/verify 搬到 active、正文与收据留在 archive)那笔提交里,staged 一个
-# `tracks/archive/` 路径都没有 ⇒ 上面这份名单为空 ⇒ 整段归档复验(含残件检查和它
-# 打印的药方)压根不被叫起来,半截取回静默落库(G16① 钉住,当时 3 红)。
-# 只往名单里**加**,不改 `staged()` 本身 —— 后者被上面每一道检查共用,动它的误报面
-# 是整份文件;而"完整取回"进了名单之后走的是取回豁免那条合法出路(G16② 反误报对照)。
+# 名单只问哪些路径改变，不需要相似度推断：关闭 rename 检测，重命名自然成为
+# D 源路径 + A 目标路径。完整取回仍由下游的 index 搬空检查豁免(G16)。
 staged_and_rename_sources() {
-  staged
-  git diff --cached --name-status --find-renames 2>/dev/null | awk -F'\t' '$1 ~ /^R/ { print $2 }'
+  git diff --cached --name-only --no-renames -z
 }
 
 archive_typed_validation_dirs() {
-  { archiving_dirs_now; archive_machine_dirs_changed; } | sort -u
+  { archiving_dirs_now; archive_machine_dirs_changed; } | sort -zu
 }
 
-for dir in $(archive_typed_validation_dirs); do
+while IFS= read -r -d '' dir; do
   name="${dir#tracks/archive/}"
   known_typed=0
   git cat-file -e ":$dir/decision.json" 2>/dev/null && known_typed=1
@@ -330,9 +335,9 @@ for dir in $(archive_typed_validation_dirs); do
     fail=1
     say "🔴 规矩3:$dir 的 staged typed outcome/coverage 未满足归档条件。"
   fi
-done
+done < <(archive_typed_validation_dirs)
 
-for dir in $(archiving_dirs_now); do
+while IFS= read -r -d '' dir; do
   v="$dir/verify.md"
   if ! git cat-file -e ":$v" 2>/dev/null; then
     fail=1
@@ -353,7 +358,7 @@ for dir in $(archiving_dirs_now); do
       say "   git add 它,再提交。"
     fi
   done <<< "$(ev_files "$dir")"
-done
+done < <(archiving_dirs_now)
 
 if [ "$fail" -ne 0 ]; then
   say "被挡下的不是这次改动,是没留痕的判断。补上再提交。"

@@ -243,7 +243,8 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 - **A2(低,可移植性)** `printf '%s\n' "${archive_left_list[@]}"` 数组为空时:
   bash 5.2.21 实测 rc=0(打一个空行);bash <4.4 在 `set -u` 下会中止。本仓工具只跑在这台 Linux。
 - **A3** D-a(整档删除 + 名号复用照样放行)与 D-b(copy-not-move 绕同名唯一)本轮未修,
-  理由见任务书 Q3(非本轮引入、闸文案把"整份作废"当合法出路、删除在 diff 里看得见)。
+  理由：非本轮引入，且现有协议允许整份档案作废；身份复用与纯复制需要独立定义生命周期约束。
+  “删除在 diff 里看得见”不能证明跨提交的身份连续性，已撤回，不能作为延后依据。
 - **A4** G15 是"物理存在就拒",空目录也拒。我认为空的残留目录本身就是症状、值得停一次;
   误报面见任务书 Q4。
 - **A5** 方向账:`track unarchive` 才是根治,本轮只修文案与顺序(见上面规格自查)。
@@ -264,3 +265,8 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 亲跑昨天留下的 G17/G18，重现 115 passed / 12 failed。ASCII 对照和无关 rename 对照通过；特殊文件名在 active、archive 复验、新增归档证据三个入口均漏选。保留昨天原始红收据（首轮夹具年龄修正也有独立记录），先提交判据，再修实现。
 
 - `runlog: r7-resume-red rc=1 commit=c2bb789 dirty=yes at=2026-09-11T01:36:53Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013653Z-01-r7-resume-red.txt`
+
+实现：三个目录选择入口以 NUL 分隔读取真实 Git 路径，目录集合及消费者也保留 NUL。归档复验路径采用 `--no-renames`，将 rename 展开为源删除与目标新增，无须自行猜相似度。原 `staged()` 的其他历史消费者不在本次修复范围。针对性回归 127/0。第一遍绿检被沙箱禁止 unshare，rc=78；获准在沙箱外建立断网隔离后通过。
+
+- `runlog: r7-paths-green rc=78 commit=09c4a4f dirty=yes at=2026-09-11T01:38:25Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013825Z-01-r7-paths-green.txt`
+- `runlog: r7-paths-green rc=0 commit=09c4a4f dirty=yes at=2026-09-11T01:38:33Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013833Z-01-r7-paths-green.txt`
