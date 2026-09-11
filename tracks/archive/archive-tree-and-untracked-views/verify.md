@@ -7,8 +7,8 @@
 
 ## Mechanical checks
 
-- [x] 全量离线回归最终验收：r7-full-serial，23 套件全部通过，source-stable=yes。
-- [x] 针对性回归：track-guard 127/0；变异检查 39/0（第七轮收据见文末）
+- [x] 全量离线回归最终验收：r8-full-serial，23 套件全部通过，source-stable=yes。
+- [x] 针对性回归：track-guard 127/0；变异检查 41/0（第八轮收据见文末）
 - [x] runlog 执行前后扫描秘密形状；测试在断网隔离中运行，评审使用受保护副本。
 
 **历史机器收据**（第七轮补充见文末）：
@@ -314,3 +314,39 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 第八轮最终全量回归完成：23 套件全部通过（review-tooling 553/0、track-guard 127/0），在干净 b019588 起跑，HEAD 与源码视图稳定；无真实评审并行，无测试/配置改动绕过失败。
 
 - `runlog: r8-full-serial rc=0 commit=b019588 dirty=no final=yes at=2026-09-11T07:45:32Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T074532Z-01-r8-full-serial.txt`
+
+## 第八轮最终评审与主裁收货
+
+最终 run：`20260911-155228-2575375-panel-review`，冻结 HEAD `5481b92`，无升级追加、无降级。工具重建花名册：
+
+```
+submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=PASS) subglm=SKIP(health:dead:FAIL:3) subkimi=SKIP(health:dead:FAIL:3) subgemini=SKIP(health:dead:FAIL:6)
+```
+
+主裁亲算两份 evidence 日志哈希，均与 observation 对应；两个不同家族、同 run、同 subject，且 delivery 均等于当前工作树 `sha256:400942d33045620e04daa8c32529a9abd4b8186bd95ea08262a51ad00d826736`。旧轮结果保留历史用途，不拼接成新轮覆盖。
+
+- MiMo：31 项交付测试通过，条件与 validator 的分支一致。它将 T6 称为 standard 不准确：夹具实际是 high；将高风险测试当作 standard 测试覆盖的表述不采信。主裁按已校验的 self/standard/high 枚举核对 `!= self`，standard 与 high 均进入比较。
+- DeepSeek：31 项交付测试通过；独立对两个新增条件做变异并打红 T18/T19；额外 standard + 未跟踪文件仍在移动前拒绝、self 缺执行记录仍拒绝、作废任务缺 design 仍被形状校验拒绝、self 移动后的 staged 校验可通过。主裁对照 `track-record` 的 shape/dispatch、execution、review 分支及 `track` 先验证再比较的顺序复核，采纳，无存活的新阻断发现。
+- 反锚定限制仍如实保留：当前主裁自审在仓外，历史 verify/提交记录仍可被评审员读取；不声称完全盲审。
+- 机器 outcome 已由主裁写入 decision.json。tasks 中从第六轮延续的评审待办由本轮同 subject 的两家覆盖完成，不表示第六轮失败/中断记录变为成功。
+
+真实归档前已亲验：working/staged 交付差异为空；无未跟踪交付文件；`ev_check ... archive` 返回 0。接下来执行本单真实 archive 与提交钩子，结果续记于下。
+
+## 2026-09-11 晚间接手：真实归档
+
+断线现场 HEAD 为 `5481b92`，只有本单四份收口文件已暂存；生产代码与测试相对最终全量回归的 `b019588` 无差异。重新核验 MiMo / DeepSeek 的 evidence 文件哈希均与 observation 一致，working 与 staged 的交付指纹均仍为 `sha256:400942d33045620e04daa8c32529a9abd4b8186bd95ea08262a51ad00d826736`，视图差异为空，archive validator 通过。
+
+亲跑 `bin/track archive archive-tree-and-untracked-views /root/aiwork`，实际输出如下；命令成功，其他任务的工作树未触碰：
+
+```text
+track-record: status=valid phase=archive source=working track=archive-tree-and-untracked-views delivery=required
+worktree-sweep: /root/aiwork/worktrees
+  不属于本轮,只点名不触碰:
+    /root/aiwork/worktrees/keyonb-baseline
+    /root/aiwork/worktrees/opendesign-data-outside-install
+    /root/aiwork/worktrees/opendesign-windows-installer
+archived -> /root/aiwork/tracks/archive/archive-tree-and-untracked-views
+command-rc: 0
+```
+
+随后将完整目录搬迁暂存，通过真实 git commit 的 pre-commit 钩子后，续记提交结果。
