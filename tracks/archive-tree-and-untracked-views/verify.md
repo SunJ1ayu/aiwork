@@ -1,17 +1,17 @@
 # Verify: archive-tree-and-untracked-views
 
-- Date: 2026-09-09 → 2026-09-10(第五轮评审跨了两次断线;时间线见文末)
+- Date: 2026-09-09 → 2026-09-11（断线接手及最终记录见文末）
 
 > 机器消费的 impact / uncertainty / execution plan / outcome 只写在同目录
 > `decision.json`；这里保留检查、理由、发现与主 Agent 仲裁说明，不复制枚举。
 
 ## Mechanical checks
 
-- [x] build passes(本仓是 shell/python 工具集,无 build;`bin/rust-check-review-tooling` 全量防锈通过 —— 见 suite-full-r5)
-- [x] tests pass(`tests/test-track-guard.sh` 106/0;红检 `tests/mutation-review-delivery.sh` 32/0)
-- [x] no secrets / unsafe ops(runlog 自带 secret 扫描,36 份收据无命中;本单只改 `bin/track`、`bin/track-guard` 与两份判据)
+- [ ] 全量离线回归最终验收（结果与运行干扰见文末）
+- [x] 针对性回归：track-guard 127/0；变异检查 39/0（第七轮收据见文末）
+- [x] runlog 执行前后扫描秘密形状；测试在断网隔离中运行，评审使用受保护副本。
 
-**机器打印的**(不是我的转述)—— 全部 36 份收据的收尾行,逐字节:
+**历史机器收据**（第七轮补充见文末）：
 
 - `runlog: pins-red rc=1 commit=b5ac76d dirty=yes at=2026-09-09T07:02:07Z file=tracks/archive-tree-and-untracked-views/evidence/20260909T070207Z-01-pins-red.txt`
 - `runlog: suite-after-impl rc=0 commit=64a9863 dirty=yes at=2026-09-09T07:39:06Z file=tracks/archive-tree-and-untracked-views/evidence/20260909T073906Z-01-suite-after-impl.txt`
@@ -55,8 +55,8 @@
 - `runlog: mutation-r6 rc=0 commit=052529b dirty=yes at=2026-09-10T01:55:47Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T015547Z-01-mutation-r6.txt`
 - `runlog: suite-full-r6 rc=0 commit=823836b dirty=no final=yes at=2026-09-10T02:02:25Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T020225Z-01-suite-full-r6.txt`
 
-> 上面 14 份 `rc=1` 是本单的红收据(判据先行 / 红检对照组),一份没藏。
-> **结论所依据的最后一遍**是 `suite-full-r6`:`commit=823836b dirty=no final=yes` ——
+> 此处是第六轮及以前的历史收据；后续失败和成功记录均保留于文末。
+> **第六轮当时的全量回归**是 `suite-full-r6`:`commit=823836b dirty=no final=yes` ——
 > 全量回归(不只是本单那两个套件)在最后一次承重编辑之后跑的那一遍,全绿。
 > ⚠️ **两份同名 slug `mutation-r6` 的收据都在上面,如实说明**:第一份
 > (`20260910T015146Z`)起跑时脚本里只有 32 条变异 —— 我在它跑到文件末尾之前把两条
@@ -230,7 +230,7 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 - 副作用探针:archive 内部给已归档 track 改名 —— **本来就被 `rule=track.identity` 拦着**,
   我的改动只是在这个已失败的场景里多印一行不清楚的话,没有新误报。
 
-- arbitrated verdict (主裁): <待填:第六轮之后>
+- 最终仲裁：见文末第七轮记录；机器 outcome 只写 decision.json。
 
 ## Accepted deviations
 
@@ -270,3 +270,15 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 
 - `runlog: r7-paths-green rc=78 commit=09c4a4f dirty=yes at=2026-09-11T01:38:25Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013825Z-01-r7-paths-green.txt`
 - `runlog: r7-paths-green rc=0 commit=09c4a4f dirty=yes at=2026-09-11T01:38:33Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013833Z-01-r7-paths-green.txt`
+
+## 第七轮变异与运行干扰
+
+- 变异检查 39/0：原有变异继续命中，新添三个路径协议变异及两条反误报变异均打红被指名断言。
+- 首次全量运行的 review-tooling 为 552/1，其余套件未报告失败。V45 因主 agent 同时派发真实评审，检测到真实配置/钩子的 inode、mtime 变化；列出的内容哈希一致。归因于本次调度干扰，不能把这轮写成通过。
+- 同时，未完成的 runlog 收据进入了评审快照，完成后会改变交付指纹；已主动终止 `panel-archive-paths-r7-20260911-host`，两腿 rc=143，不计为完成评审。初次 sandbox 轮则因 unshare/DNS 拒绝失败，不是代码结论。部分日志亲读，无新的完整阻断发现。
+- `--final` 也检测到其他收据/observation 写入，source-stable=no，原始失败保留。修正执行顺序：等待所有测试结束，提交证据，单独全量回归，最后派发评审；期间不改判据或放松环境守卫。
+
+- `runlog: r7-paths-red rc=1 commit=c2bb789 dirty=yes at=2026-09-10T11:59:28Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T115928Z-01-r7-paths-red.txt`
+- `runlog: r7-paths-red-corrected rc=1 commit=c2bb789 dirty=yes at=2026-09-10T12:00:54Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T120054Z-01-r7-paths-red-corrected.txt`
+- `runlog: r7-full-regression rc=1 commit=db16723 dirty=no final=yes at=2026-09-11T01:39:59Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013959Z-01-r7-full-regression.txt`
+- `runlog: r7-mutations rc=0 commit=db16723 dirty=no at=2026-09-11T01:39:59Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013959Z-01-r7-mutations.txt`
