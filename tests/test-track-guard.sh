@@ -1251,6 +1251,73 @@ g16_moving_files_out_of_archive_is_seen() {
   rm -rf "$d"
 }
 
+# ---------------------------------------------------------------- G17
+# 第六轮 DS BLOCK：Git 的展示用 C-quote 不能作为机器路径协议。
+# ASCII 是同一夹具的对照；中文、引号、制表符、换行必须触发同一道检查。
+g17_quoted_paths_still_select_their_track() {
+  echo '[G17] 特殊文件名不能让 active/archive 检查漏选目录'
+  local d path label out rc i
+  local names=('plain' '中文' 'a"b' $'a\tb' $'a\nb')
+  local labels=(ascii unicode quote tab newline)
+  for i in "${!names[@]}"; do
+    path="${names[$i]}"; label="${labels[$i]}"
+    d="$(newrepo)"; aged_archive "$d"
+    ( cd "$d"; git config core.quotepath true
+      printf 'before\n' > "tracks/archive/t/$path.md"
+      git add -A; git commit -qm filename
+      printf 'after\n' >> "tracks/archive/t/$path.md"
+      git add -- "tracks/archive/t/$path.md" )
+    out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+    [[ $rc -ne 0 && "$out" == *'outcome.verdict'* ]]
+    check "G17 archive $label: 正文修改确实触发归档复验" $?
+    rm -rf "$d"
+
+    d="$(newrepo)"; aged_archive "$d"
+    ( cd "$d"; git config core.quotepath true
+      git mv tracks/archive/t tracks/t
+      GIT_AUTHOR_DATE='2026-01-06T10:00:00' GIT_COMMITTER_DATE='2026-01-06T10:00:00' git commit -qm active
+      printf '{"schema_version":1,"bad":true}\n' > "tracks/t/observations/$path.json"
+      git add -- "tracks/t/observations/$path.json" )
+    out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+    [[ $rc -ne 0 && "$out" == *'observation'* ]]
+    check "G17 active $label: 非法观测确实触发结构检查" $?
+    rm -rf "$d"
+  done
+
+  # 归档识别还有独立消费者：legacy 新增内容仍须检查证据。
+  # 没有 typed decision，避免另一道 typed 闸替这条检查作答。
+  for i in "${!names[@]}"; do
+    path="${names[$i]}"; label="${labels[$i]}"
+    d="$(newrepo)"
+    ( cd "$d"; git config core.quotepath true; mkdir -p tracks/archive/t
+      verify_with '**PASS**' > tracks/archive/t/verify.md
+      git add -A; git commit -qm legacy
+      printf 'new\n' > "tracks/archive/t/$path.md"
+      git add -- "tracks/archive/t/$path.md" )
+    out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+    [[ $rc -ne 0 && "$out" == *'5c:'* ]]
+    check "G17 archiving $label: 特殊路径新增仍触发证据检查" $?
+    rm -rf "$d"
+  done
+}
+
+g18_rename_selection_is_precise() {
+  echo '[G18] 无关 rename 不得触发其它归档的复验'
+  local d out rc
+  d="$(newrepo)"; aged_archive "$d"
+  # 这份旧归档尚无最终裁决；误把它选入名单会拒绝。
+  ( cd "$d"; mkdir docs; git mv README.md docs/README.md )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  [[ $rc -eq 0 ]]
+  check 'G18: 无关 rename 不复验无关的旧归档' $?
+  ( cd "$d"; printf 'changed\n' >> tracks/archive/t/design.md
+    git add tracks/archive/t/design.md )
+  out="$(cd "$d" && "$GUARD" 2>&1)"; rc=$?
+  [[ $rc -ne 0 && "$out" == *'outcome.verdict'* ]]
+  check 'G18 对照: 真碰到该归档时必须复验' $?
+  rm -rf "$d"
+}
+
 echo "=== track-guard oracle ==="
 g1_version_lives_where_the_product_says
 g2_verdict_must_be_filled_at_archive
@@ -1275,5 +1342,7 @@ g13_unarchiving_is_not_a_deletion
 g14_exemption_cannot_shield_archive_tampering
 g15_archive_refuses_when_destination_exists
 g16_moving_files_out_of_archive_is_seen
+g17_quoted_paths_still_select_their_track
+g18_rename_selection_is_precise
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

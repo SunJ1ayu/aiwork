@@ -49,10 +49,21 @@
 - `runlog: mutation-r5d rc=0 commit=bdd738c dirty=no at=2026-09-09T14:25:13Z file=tracks/archive-tree-and-untracked-views/evidence/20260909T142513Z-01-mutation-r5d.txt`
 - `runlog: suite-full-r5 rc=0 commit=5cedd63 dirty=no at=2026-09-10T01:00:52Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T010052Z-01-suite-full-r5.txt`
 - `runlog: guard-at-dispatch-head rc=0 commit=8546799 dirty=no at=2026-09-10T01:21:14Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T012114Z-01-guard-at-dispatch-head.txt`
+- `runlog: g16-red rc=1 commit=8546799 dirty=yes at=2026-09-10T01:48:29Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T014829Z-01-g16-red.txt`
+- `runlog: g16-green rc=0 commit=9fdb938 dirty=yes at=2026-09-10T01:49:41Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T014941Z-01-g16-green.txt`
+- `runlog: mutation-r6 rc=0 commit=052529b dirty=yes at=2026-09-10T01:51:46Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T015146Z-01-mutation-r6.txt`
+- `runlog: mutation-r6 rc=0 commit=052529b dirty=yes at=2026-09-10T01:55:47Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T015547Z-01-mutation-r6.txt`
+- `runlog: suite-full-r6 rc=0 commit=823836b dirty=no final=yes at=2026-09-10T02:02:25Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T020225Z-01-suite-full-r6.txt`
 
-> 上面 13 份 `rc=1` 是本单的红收据(判据先行 / 红检对照组),一份没藏。
-> **结论所依据的最后一遍**是 `guard-at-dispatch-head`:`commit=8546799 dirty=no` ——
-> 就是第五轮两条腿正在审的那个 head,树干净。
+> 上面 14 份 `rc=1` 是本单的红收据(判据先行 / 红检对照组),一份没藏。
+> **结论所依据的最后一遍**是 `suite-full-r6`:`commit=823836b dirty=no final=yes` ——
+> 全量回归(不只是本单那两个套件)在最后一次承重编辑之后跑的那一遍,全绿。
+> ⚠️ **两份同名 slug `mutation-r6` 的收据都在上面,如实说明**:第一份
+> (`20260910T015146Z`)起跑时脚本里只有 32 条变异 —— 我在它跑到文件末尾之前把两条
+> 变异**追加进了正在执行的脚本**,bash 边读边执行,于是它变成"前 32 条来自旧文件、
+> 后 2 条来自新文件"的混合体,却照样印出 34/0 一切正常的样子(唯一提示是 `dirty=yes`)。
+> **承重的是第二份(`20260910T015547Z`)。** 这是"跑收据时谁都不能写仓库"的新形态:
+> 被写的不是被测代码,是判卷脚本自己。
 > 另有两份 `VOID-*` 收据(断线砍在抬头处、零输出行)留在 evidence/ 里作为断点记录,
 > 它们**不含收尾行**,所以既不算证据、也进不了上面这份清单。
 
@@ -247,3 +258,9 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 - 09-10 09:15 再接手一次(本次)。改法:把控制器**整个 reparent 到 init**
   (`setsid --fork nohup`,实测 `PPID=1`),不再只依赖 panel-review 内部给腿套的
   `setsid --wait` —— 那层护甲挡得住打到进程组的 SIGTERM,挡不住顺着进程树走的清理。
+
+## 2026-09-11 断线接手：路径解析红检
+
+亲跑昨天留下的 G17/G18，重现 115 passed / 12 failed。ASCII 对照和无关 rename 对照通过；特殊文件名在 active、archive 复验、新增归档证据三个入口均漏选。保留昨天原始红收据（首轮夹具年龄修正也有独立记录），先提交判据，再修实现。
+
+- `runlog: r7-resume-red rc=1 commit=c2bb789 dirty=yes at=2026-09-11T01:36:53Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013653Z-01-r7-resume-red.txt`
