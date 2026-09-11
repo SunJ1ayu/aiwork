@@ -7,7 +7,7 @@
 
 ## Mechanical checks
 
-- [ ] 全量离线回归最终验收（结果与运行干扰见文末）
+- [x] 全量离线回归最终验收：r7-full-serial，23 套件全部通过，source-stable=yes。
 - [x] 针对性回归：track-guard 127/0；变异检查 39/0（第七轮收据见文末）
 - [x] runlog 执行前后扫描秘密形状；测试在断网隔离中运行，评审使用受保护副本。
 
@@ -282,3 +282,9 @@ kimi 那条"反常"线索接着查下去,是一个**真洞,而且它让本单前
 - `runlog: r7-paths-red-corrected rc=1 commit=c2bb789 dirty=yes at=2026-09-10T12:00:54Z file=tracks/archive-tree-and-untracked-views/evidence/20260910T120054Z-01-r7-paths-red-corrected.txt`
 - `runlog: r7-full-regression rc=1 commit=db16723 dirty=no final=yes at=2026-09-11T01:39:59Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013959Z-01-r7-full-regression.txt`
 - `runlog: r7-mutations rc=0 commit=db16723 dirty=no at=2026-09-11T01:39:59Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T013959Z-01-r7-mutations.txt`
+
+### 独占全量验收完成
+
+23 套件全部通过，review-tooling 553/0、track-guard 127/0；运行于 8f0f71c 干净树，HEAD 与源码视图稳定。先前 V45 失败在停止真实评审后消失，未修改测试或配置来绕过断言。
+
+- `runlog: r7-full-serial rc=0 commit=8f0f71c dirty=no final=yes at=2026-09-11T01:50:39Z file=tracks/archive-tree-and-untracked-views/evidence/20260911T015039Z-01-r7-full-serial.txt`
