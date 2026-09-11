@@ -350,3 +350,16 @@ command-rc: 0
 ```
 
 随后将完整目录搬迁暂存，通过真实 git commit 的 pre-commit 钩子后，续记提交结果。
+
+真实归档提交 `ea62387` 成功，未绕过 `.git/hooks/pre-commit`（直接执行 `bin/track-guard`）。下列为该次输出摘录，省略 123 个工件的逐文件 rename 列表：
+
+```text
+track-record: status=valid phase=shape source=staged track=ds-model-single-source delivery=required
+track-record: status=valid phase=shape source=staged track=review-delivery-binding delivery=required
+track-record: status=valid phase=archive source=staged track=archive-tree-and-untracked-views delivery=required
+[master ea62387] Archive reviewed delivery view fix through real commit gate
+ 123 files changed, 179 insertions(+), 7 deletions(-)
+command-rc: 0
+```
+
+提交后再次对归档目录执行 `track-record validate --phase archive`，working / staged 两种来源均为 `status=valid`、`delivery=required`；工作区干净。真实归档与钩子两项均已亲跑成功，tasks 剩余两项据此勾选。本次只追加收口记录，源码和测试不变，已有稳定全量回归、41 项变异及同 subject 两家评审仍适用。
