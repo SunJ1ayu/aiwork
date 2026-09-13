@@ -113,7 +113,7 @@ verify/retry 前重算,不同就拒绝(「代码变了,开新一轮」);status �
 | subglm-agent(opencode 底座) | 工具表 `task: False` | bin/subagent |
 | subkimi | PreToolUse 守卫默认 DENY,Agent/AgentSwarm 不在白名单 | kimi-review-home/hooks/guard.mjs |
 | subgemini(agy) | permissions 白名单只有 read_file + 只读 git,其余 headless auto-deny | bin/subgemini(**未实测 agy 是否有子 agent 工具**) |
-| subcodex(新) | `--disable multi_agent --disable multi_agent_v2` + `--ignore-user-config` | 本单实现,真跑核实 |
+| subcodex(新) | 覆盖 codex 模型目录去掉 `multi_agent_version` + 派发前 `codex debug prompt-input` 离线核验无 `<multi_agent_role>`;`-c web_search="disabled"` | **09-13 真跑证伪了第一版**:`--disable multi_agent/multi_agent_v2` 对 gpt-6-astra 无效(能力在模型目录里),腿身上有 `collaboration.spawn_agent` 和 `web__run`;改后两次真跑归因各开关,见 verify.md |
 
 **共同的敞口(如实写,不宣称严格)**:所有 agent 腿都有 Bash 跑在可丢弃副本里,原则上能在 shell 里调用
 另一个 AI CLI;所有腿也读得到宿主机上的其他文件(包括同伴日志)。这两条只有提示词约束 + 事后日志审计,
@@ -172,8 +172,10 @@ retry 覆盖旧 BLOCK、scoped 不关回落),每个变异必须打红点名的�
   这单**不回答**(GPT 计划 P4 的历史对照才回答)。汇报时不许说「切片评审更好」。
 - run_state=clean 全绿,可能只是**主 agent 切片切错了** —— 所有片都在自己范围内正确、跨片时序缺陷没人审。
   overall 腿是唯一兜底;判据只能证明 overall 腿被派了、拿到了全部片标题,证明不了它真的兜住。
-- subcodex 的桩只证明 argv 长这样;`--disable multi_agent` 在 codex 0.154 里是否真的关掉子 agent、
-  `--ignore-user-config` 是否挡住插件/MCP,只有真跑读 `--json` 事件流才知道(codex 额度 23:03 恢复后做)。
+- subcodex 的桩只证明 argv 长这样。**这条 09-13 23:19 兑现了**:真跑发现 `--disable multi_agent` 对
+  gpt-6-astra 无效、还带着联网工具,`--ignore-user-config` 也挡不住 `~/.codex/skills` 被列进提示。
+  修法里子 agent 那件有派发前的真 codex 离线核验兜底;联网那件离线看不到工具表,换 codex 大版本要重跑真探针。
+  仍敞着:skill 列表仍可见;每次 `codex exec` 往业主 `~/.codex/config.toml` 追加一条临时目录 trust 记录。
 - 预算计数的是 `reserved.json`;如果某条腿**自己**内部重试多次(adapter 层 429 backoff),那不在预算里
   —— 那是同一会话内的传输重试,计划里明确另算。
 

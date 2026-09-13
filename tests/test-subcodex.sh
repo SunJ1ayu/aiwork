@@ -2,9 +2,14 @@
 # subcodex oracle —— GPT 只读评审腿(track sliced-panel-review 的整体腿)。codex 是桩,
 # 只读挂载 ro-repo-exec 是真的。
 #
-# 桩只证明「我们递给 codex 的参数长这样、结果被这样收尾」;`--disable multi_agent` 在真 codex
-# 里是否真的关掉子 agent、`--ignore-user-config` 是否真的挡住插件/MCP,**这份判据证明不了**,
-# 要靠真跑读 --json 事件流(verify.md 里单列)。
+# 桩只证明「我们递给 codex 的参数长这样、结果被这样收尾」;开关在真 codex 里是否生效,
+# **这份判据证明不了**,要靠真跑(verify.md 里单列)。
+#
+# 2026-09-13 真跑已经证伪过一次:`--disable multi_agent/multi_agent_v2` 对 gpt-6-astra **无效**,
+# 子 agent 能力写在 codex 的模型目录里(multi_agent_version=v2),腿身上照样有 spawn_agent;
+# `web__run` 联网工具也在。实测有效的是:覆盖模型目录去掉该字段 + `-c web_search="disabled"`。
+# 桩 codex 的 `debug prompt-input` 因此**按实测行为**模拟:目录里的该模型带 multi_agent_version
+# ⇒ 渲染出 <multi_agent_role>。C5 钉的就是这两件和派发前的离线核验。
 set -uo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78
@@ -35,7 +40,47 @@ MODEL="$(cat "$ROOT/bin/codex-model" 2>/dev/null)"
 cat > "$d/fake/codex" <<'EOF'
 #!/usr/bin/env bash
 cap="$CODEX_TEST_CAPTURE"
+if [[ "${1:-}" == debug ]]; then
+  case "${2:-}" in
+    models)  # 真 codex 的目录形状:{"models":[{slug, multi_agent_version, ...}]}
+      python3 - ${CODEX_TEST_CATALOG:-} <<'PY'
+import json, sys
+print(json.dumps({"models": [{"slug": s, "tool_mode": "code_mode_only", "multi_agent_version": "v2",
+                              "multi_agent_reasoning_effort": "xhigh"} for s in sys.argv[1:]]}))
+PY
+      exit 0 ;;
+    prompt-input)
+      printf '%s\n' "$@" > "$cap.preview.argv"
+      catalog=""; model=""
+      for a in "$@"; do
+        [[ "$a" == model_catalog_json=* ]] && catalog="$(sed -E 's/^model_catalog_json="?([^"]*)"?$/\1/' <<<"$a")"
+        [[ "$a" == model=* ]] && model="$(sed -E 's/^model="?([^"]*)"?$/\1/' <<<"$a")"
+      done
+      leak="$(python3 - "$catalog" "$model" "${CODEX_TEST_MODE:-}" <<'PY'
+import json, sys
+catalog, model, mode = sys.argv[1:4]
+if mode == "role_leak":
+    print("leak"); sys.exit()
+try:
+    entries = [m for m in json.load(open(catalog))["models"] if m.get("slug") == model]
+except Exception:
+    entries = [{"multi_agent_version": "v2"}]  # 没给目录 = codex 用自带目录 = 子 agent 还在
+print("leak" if not entries or any("multi_agent_version" in m for m in entries) else "clean")
+PY
+)"
+      if [[ "$leak" == leak ]]; then
+        printf '[{"type":"message","role":"developer","content":[{"type":"input_text","text":"<multi_agent_role>You can use spawn_agent</multi_agent_role>"}]}]\n'
+      else
+        printf '[{"type":"message","role":"user","content":[{"type":"input_text","text":"probe"}]}]\n'
+      fi
+      exit 0 ;;
+  esac
+  exit 2
+fi
 printf '%s\n' "$@" > "$cap.argv"
+for a in "$@"; do  # 派发那一刻把目录副本抄走(ws 跑完就清理了)
+  [[ "$a" == model_catalog_json=* ]] && cp "$(sed -E 's/^model_catalog_json="?([^"]*)"?$/\1/' <<<"$a")" "$cap.catalog.json" 2>/dev/null
+done
 pwd -P > "$cap.pwd"
 cat > "$cap.stdin"
 { if touch "$CODEX_TEST_SOURCE/PWNED" 2>/dev/null; then echo src-writable; else echo src-readonly; fi
@@ -73,6 +118,7 @@ printf '# task\nTASK_SENTINEL_c0d3\n' > "$d/task.md"
 sc() {  # sc <capture-name> <subcodex args...>  (env 由调用者前缀)
   local name="$1"; shift
   rm -f "$d/cap/$name".*
+  CODEX_TEST_CATALOG="${CODEX_TEST_CATALOG-$MODEL gpt-fixture-next gpt-override}" \
   CODEX_TEST_CAPTURE="$d/cap/$name" CODEX_TEST_SOURCE="$d/repo" PATH="$d/fake:$PATH" \
     REVIEW_WORKSPACE_BASE="$d/ws" AIWORK_REVIEW_RESULT_BIN="$d/bin/_review_result.py" \
     AIWORK_REVIEW_FACTS_PATH="$d/cap/$name.facts.json" \
@@ -101,7 +147,7 @@ argv_pair c1 -m "$MODEL"; check "C1: -m 取自 bin/codex-model($MODEL)" $?
 argv_pair c1 -c project_doc_max_bytes=0; check "C1: 带 -c project_doc_max_bytes=0(不吞仓里的 AGENTS.md)" $?
 argv_has c1 --ignore-user-config; check "C1: --ignore-user-config(不加载业主的插件/MCP/配置)" $?
 argv_has c1 --ephemeral; check "C1: --ephemeral(不往业主的会话历史里落评审会话)" $?
-argv_pair c1 --disable multi_agent; check "C1: --disable multi_agent(腿内不许再派子 agent)" $?
+argv_pair c1 --disable multi_agent; check "C1: --disable multi_agent(只对不在模型目录里带子 agent 的模型有效,见 C5)" $?
 argv_pair c1 --disable multi_agent_v2; check "C1: --disable multi_agent_v2" $?
 argv_has c1 --json; check "C1: --json 事件流留证" $?
 grep -q 'TASK_SENTINEL_c0d3' "$d/cap/c1.stdin" 2>/dev/null
@@ -158,6 +204,46 @@ check "C4: 没写自审又没显式跳过 ⇒ review 拒绝且没调用 codex(�
 CODEX_TEST_REPORTED=gpt-something-else REVIEW_NO_MY_REVIEW=1 sc c9 review "$d/task.md" "$d/c9.log" "$d/repo" >/dev/null 2>&1
 facts c9 "f['model']['reported'] == 'gpt-something-else' and f['model']['invoked'] == '$MODEL'"
 check "C4: 事件流报告的模型与请求不符时如实记下(不许用请求值盖掉)" $?
+
+echo "[C5] 子 agent 与联网:真正生效的开关(2026-09-13 真跑实测)+ 派发前离线核验"
+argv_pair c1 -c 'web_search="disabled"'
+check "C5: 派发带 -c web_search=\"disabled\"(实测拿掉 web__run 的就是它)" $?
+_cat_arg="$(awk 'prev=="-c" && /^model_catalog_json=/ {print; exit} {prev=$0}' "$d/cap/c1.argv" 2>/dev/null)"
+python3 - "$d/cap/c1.catalog.json" "$MODEL" <<'PY'
+import json, sys
+try:
+    entries = [m for m in json.load(open(sys.argv[1]))["models"] if m.get("slug") == sys.argv[2]]
+except Exception:
+    sys.exit(1)
+sys.exit(0 if len(entries) == 1 and "multi_agent_version" not in entries[0] else 1)
+PY
+_cat_ok=$?
+check "C5: 派发带 -c model_catalog_json=<目录副本>,副本里该模型没有 multi_agent_version" \
+  $([[ -n "$_cat_arg" && "$_cat_ok" -eq 0 ]]; echo $?)
+python3 - "$d/cap/c1.argv" "$d/cap/c1.preview.argv" <<'PY'
+import sys
+def cfg(path):
+    try:
+        args = open(path).read().splitlines()
+    except OSError:
+        return None
+    out = []
+    for i, a in enumerate(args):
+        if a in ("-c", "--disable", "--enable") and i + 1 < len(args):
+            v = args[i + 1]
+            out.append((a, v.split("=", 1)[0] if v.startswith("model_catalog_json=") else v))
+    return sorted(out)
+exec_cfg, preview_cfg = cfg(sys.argv[1]), cfg(sys.argv[2])
+sys.exit(0 if exec_cfg and preview_cfg is not None and set(exec_cfg) <= set(preview_cfg + [("-c", "approval_policy=never")]) else 1)
+PY
+check "C5: 派发前用同一组 -c/--disable 开关跑过 codex debug prompt-input(核验的就是要派发的配置)" $?
+CODEX_TEST_MODE=role_leak REVIEW_NO_MY_REVIEW=1 sc c10 review "$d/task.md" "$d/c10.log" "$d/repo" >/dev/null 2>"$d/c10.err"; rc=$?
+check "C5: 离线核验仍看到 <multi_agent_role> ⇒ 拒跑、没派发 codex exec、理由点名 sub-agent" \
+  $([[ $rc -ne 0 && ! -e "$d/cap/c10.argv" && -e "$d/cap/c10.preview.argv" ]] && grep -qi 'sub-agent' "$d/c10.err"; echo $?)
+CODEX_TEST_CATALOG="gpt-some-other" REVIEW_NO_MY_REVIEW=1 sc c11 review "$d/task.md" "$d/c11.log" "$d/repo" >/dev/null 2>"$d/c11.err"; rc=$?
+check "C5: 模型不在 codex 模型目录里 ⇒ 拒跑、没派发 codex exec(不带着默认目录悄悄去跑)" \
+  $([[ $rc -ne 0 && ! -e "$d/cap/c11.argv" ]] && grep -q 'catalog' "$d/c11.err"; echo $?)
+check "C5: 拒跑之后可丢弃副本同样清理干净" $([[ -z "$(ls -A "$d/ws" 2>/dev/null)" ]]; echo $?)
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
