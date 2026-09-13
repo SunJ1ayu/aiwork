@@ -1,0 +1,12 @@
+task=task
+impact-risk=standard
+requested-budget=1
+selected-count=1
+selected=subdeepseek(deepseek/subdeepseek-agent)
+snapshot-head=01709fc
+leg	submimo	0	off
+leg	subdeepseek	1	healthy
+leg	subglm	0	off
+leg	subkimi	0	off
+leg	subgemini	0	off
+leg	subcodex	0	off

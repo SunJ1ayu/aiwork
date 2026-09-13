@@ -44,6 +44,21 @@ runlog: full-regression rc=0 commit=eca7b4a dirty=yes at=2026-09-13T16:07:37Z fi
 - V2 subcodex 三次:`evidence/v2-live-subcodex/`(README 里有表)。第一版不合格(子 agent 工具 + web__run 在),
   修后两次各去掉一个开关做归因。仓内修复与验证过的副本逐行一致(注释行除外,只差一句报错文案)。
 
+- V3 切片评审机制真跑(09-14 00:15,原始记录 `evidence/v3-live-slice/`):一次性练习仓,改动里埋了
+  片内缺陷(`store.py` 用 `"w"` 截断)和跨片契约错位(写 `ts` 字符串 / 读 `timestamp` 转 int)。
+  - 分配:store→submimo(xiaomi)、report→subdeepseek(deepseek)、overall→subcodex(openai),家族两两不同;
+    每项花名册 `selected-count=1`、`escalation=none`、`coverage=INELIGIBLE`,其余腿 off。
+  - 三份结果 `review_contract_version=2`,不合格理由**只有** `review_contract_unsupported` ⇒ 状态 done 名副其实;
+    普通轮换游标 mtime 仍是 09-11 15:52(没被推);health.tsv 三条腿记 INELIGIBLE、连败 0。
+  - 腿内工具:subdeepseek 只用了 Bash×5 / Read×3;subcodex 事件只有 command_execution 与 agent_message;
+    submimo 日志无子 agent / 联网调用。**这只说明这一轮没用,不说明腿做不到**(除 subcodex 已机械关掉)。
+  - 三条腿都报出了两处埋的缺陷(练习仓太小,**不能**据此说切片评审更好)。
+  - verify:登记 F1~F3,复核 F3(出处 deepseek)⇒ 自动派给 submimo(xiaomi),任务书只写出处切片、不写腿名;
+    复核腿自己跑复现后判 CONFIRMED。extra 1/1。
+  - extra 用完后 `retry store` ⇒ `REFUSED budget` rc=3,reserved.json 仍 4 份、没有 attempt-2;
+    `decide` 未登记的 F9 ⇒ 拒绝;F1~F3 记 accepted-risk(理由:练习仓故意埋的)后 run_state=clean、problems 空。
+  - 合计会话 = 3 初始 + 1 复核 = 4 = reserved.json 份数。
+
 ## Review
 
 - 规格自查(读任何 panel 输出之前先答):<如果规格本身就是错的,会错成什么样、我怎么发现?

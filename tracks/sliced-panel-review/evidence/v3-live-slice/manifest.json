@@ -1,0 +1,5 @@
+{"version": 1, "goal": "goal.md",
+ "slices": [{"id": "store", "title": "写入端 store.py", "brief": "slice-store.md"},
+            {"id": "report", "title": "读取端 report.py", "brief": "slice-report.md"}],
+ "overall": {"leg": "subcodex"},
+ "budget": {"extra_sessions": 1}}
