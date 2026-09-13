@@ -1,0 +1,44 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    redcheck-review-result
+cmd:     python3 tests/test_review_result.py
+cwd:     /root/aiwork(仓根)
+commit:  eaaea75
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-13T14:22:36Z
+---------------- 输出开始 ----------------
+.......F.....F......
+======================================================================
+FAIL: test_gpt_review_leg_has_a_known_family_identity (__main__.ReviewResultTest.test_gpt_review_leg_has_a_known_family_identity)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_review_result.py", line 466, in test_gpt_review_leg_has_a_known_family_identity
+    self.assertEqual(eligibility_reasons(result), [])
+AssertionError: Lists differ: ['adapter_family_unknown'] != []
+
+First list contains 1 additional elements.
+First extra element 0:
+'adapter_family_unknown'
+
+- ['adapter_family_unknown']
++ []
+
+======================================================================
+FAIL: test_scoped_slice_results_are_marked_in_data_and_never_old_coverage (__main__.ReviewResultTest.test_scoped_slice_results_are_marked_in_data_and_never_old_coverage)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_review_result.py", line 445, in test_scoped_slice_results_are_marked_in_data_and_never_old_coverage
+    scoped = self._emit_complete(
+             ^^^^^^^^^^^^^^^^^^^^
+  File "/root/aiwork/tests/test_review_result.py", line 435, in _emit_complete
+    self.assertEqual(proc.returncode, 0, proc.stderr)
+AssertionError: 2 != 0 : usage: _review_result.py [-h]
+                         {normalize,validate,eligible,describe,emit,facts} ...
+_review_result.py: error: unrecognized arguments: --review-contract-version 2
+
+
+----------------------------------------------------------------------
+Ran 20 tests in 0.732s
+
+FAILED (failures=2)
+---------------- 输出结束 ----------------
+runlog: redcheck-review-result rc=1 commit=eaaea75 dirty=yes at=2026-09-13T14:22:36Z file=tracks/sliced-panel-review/evidence/20260913T142236Z-01-redcheck-review-result.txt

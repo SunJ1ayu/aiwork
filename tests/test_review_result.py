@@ -413,6 +413,60 @@ class ReviewResultTest(unittest.TestCase):
         result = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(result["failure_kind"], "auth")
 
+    def _emit_complete(self, name: str, adapter: str, family: str, model: str, *extra: str) -> dict:
+        helper = str(ROOT / "bin" / "_review_result.py")
+        facts = self.root / f"{name}.facts.json"
+        path = self.root / f"{name}.result.json"
+        subprocess.run(
+            [sys.executable, helper, "facts", "--output", str(facts),
+             "--requested-model", model, "--invoked-model", model,
+             "--git-object-format", "sha1", "--head-oid", "1" * 40,
+             "--index-tree-oid", "2" * 40, "--worktree-tree-oid", "3" * 40,
+             "--view-delivery-state", "complete", "--view-mode", "full_snapshot"],
+            check=True,
+        )
+        proc = subprocess.run(
+            [sys.executable, helper, "emit", "--result", str(path), "--facts", str(facts),
+             "--run-id", f"panel-{name}", "--name", adapter, "--family", family,
+             "--adapter", adapter, "--exit-code", "0",
+             "--task-sha256", self.result["subject"]["task_sha256"], "--log", str(self.log), *extra],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_scoped_slice_results_are_marked_in_data_and_never_old_coverage(self) -> None:
+        # track sliced-panel-review:切片/整体/复核腿只对**分派给它的那部分**负责,不是旧契约里的
+        # 「整任务全量评审」。只靠调度器不传 --track 是流程上的排除;手动 observe 一份切片结果
+        # 就能凑满 standard track 的 1 家族预算。所以要在**数据上**就标出来。
+        full = self._emit_complete("full", "subkimi", "moonshot", "kimi-code/k3")
+        self.assertEqual(full["review_contract_version"], 1)
+        self.assertEqual(eligibility_reasons(full), [])
+        scoped = self._emit_complete(
+            "scoped", "subkimi", "moonshot", "kimi-code/k3", "--review-contract-version", "2")
+        self.assertEqual(scoped["review_contract_version"], 2)
+        # 恰好只差这一条:别的理由混进来说明桩或实现在别处坏了,那种红不算咬住契约。
+        self.assertEqual(eligibility_reasons(scoped), ["review_contract_unsupported"])
+        self.assertEqual(summarize_results([scoped])["eligible_family_count"], 0)
+        bad = subprocess.run(
+            [sys.executable, str(ROOT / "bin" / "_review_result.py"), "emit",
+             "--result", str(self.root / "bad.result.json"), "--run-id", "panel-bad",
+             "--name", "subkimi", "--family", "moonshot", "--adapter", "subkimi",
+             "--exit-code", "0", "--task-sha256", self.result["subject"]["task_sha256"],
+             "--review-contract-version", "3"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertFalse((self.root / "bad.result.json").exists())
+
+    def test_gpt_review_leg_has_a_known_family_identity(self) -> None:
+        # subcodex(GPT 整体腿)是新腿:身份表漏了它,每份结果都会带 adapter_family_unknown,
+        # 切片 status 会把一条好好的整体腿记成 ineligible。
+        result = self._emit_complete("codex", "subcodex", "openai", "gpt-6-astra")
+        self.assertEqual(eligibility_reasons(result), [])
+        wrong = self._emit_complete("codex-wrong", "subcodex", "openai", "kimi-code/k3")
+        self.assertIn("model_family_mismatch", eligibility_reasons(wrong))
+
 
 if __name__ == "__main__":
     unittest.main()

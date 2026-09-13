@@ -18,6 +18,8 @@ SUITES=(
   "review-tooling|bash|/root/aiwork/tests/test-review-tooling.sh"
   "panel-observation|bash|/root/aiwork/tests/test-panel-observation.sh"
   "panel-roster|bash|/root/aiwork/tests/test-panel-roster.sh"
+  "panel-slice|bash|/root/aiwork/tests/test-panel-slice.sh"
+  "subcodex|bash|/root/aiwork/tests/test-subcodex.sh"
   "fix-oracle|bash|/root/aiwork/tests/test-submimo-fix-oracle.sh"
   "retry|python3|/root/aiwork/tests/test_submimo_retry.py"
   "track-guard|bash|/root/aiwork/tests/test-track-guard.sh"
