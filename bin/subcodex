@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# subcodex —— GPT(codex CLI)只读评审腿:review / explore(track sliced-panel-review,2026-09-13)。
+#
+# 身份:**角色腿**。它在 `_panel-roster-lib.sh` 的 PANEL_ROLE_LEG_SPECS 里,不进普通
+# panel-review 轮换池 —— GPT 同时是默认执行腿(delegate-codex),进池会轮到它审自家代码。
+# 目前只由 panel-slice 钉住当「独立整体腿」派发。
+#
+# 与 delegate-codex 的区别:那边是**写代码**的执行腿(隔离 worktree、可写);这边是**评审**:
+#   · 源仓经 ro-repo-exec 物理只读;codex 在一份可丢弃副本里读、跑测试;
+#   · 模型单源 bin/codex-model(换模型只改那一行;SUBCODEX_MODEL 单次覆盖);
+#   · -c project_doc_max_bytes=0 每次都带(否则它会吞被评审仓里的 AGENTS.md 并向上递归找);
+#   · --ignore-user-config:不加载业主 ~/.codex/config.toml 里的插件/MCP/profile;
+#   · --ephemeral:评审会话不落进业主的会话历史;
+#   · 腿内不许再派子 agent、不许联网(切片评审「单层」的前提):见下面 CODEX_CFG 那段,
+#     **第一版的 `--disable multi_agent` 被真跑证伪过**;
+#   · 任务书走 stdin(argv 单参数上限 128KiB,delegate-codex 为此踩过 E2BIG)。
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+die() { echo "subcodex: $*" >&2; exit 1; }
+usage() {
+  cat >&2 <<'EOF'
+Usage: subcodex <review|explore> TASK_FILE LOG_FILE [REPO_DIR]
+
+GPT review leg on the codex CLI. codex reads and tests a disposable snapshot;
+the source repo stays physically read-only. review requires a standalone
+`Conclusion: PASS|BLOCK|NEEDS_MORE_INFO` line; explore requires a non-empty answer.
+No fix mode (use delegate-codex for implementation work).
+
+Environment:
+  SUBCODEX_MODEL    exact gpt-<model-id> (default: bin/codex-model)
+  SUBCODEX_EFFORT   model_reasoning_effort (default: high)
+  SUBCODEX_TIMEOUT  wall-clock seconds (default: 1500)
+  CODEX_BIN         codex executable (default: codex on PATH)
+
+Logs: LOG_FILE = header + codex's final message; <log>.stream.jsonl = --json events;
+<log>.stderr = codex stderr.
+EOF
+}
+
+. "$BIN_DIR/_my-review-gate.sh" || die 'missing _my-review-gate.sh (fail closed)'
+gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
+if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
+[[ $# -ge 3 && $# -le 4 ]] || { usage; exit 2; }
+MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
+[[ "$MODE" == review || "$MODE" == explore ]] || { usage; exit 2; }
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+TASK_FILE="$(realpath "$TASK_FILE")"
+LOG_FILE="$(realpath -m "$LOG_FILE")"
+SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" || die 'needs a Git worktree with HEAD'
+SOURCE_REPO="$(realpath "$SOURCE_REPO")"
+my_review_gate "$MODE" "$TASK_FILE" "$SOURCE_REPO" subcodex || exit 1
+
+if [[ -n "${SUBCODEX_MODEL:-}" ]]; then
+  MODEL="$SUBCODEX_MODEL"
+  [[ "$MODEL" =~ ^gpt-[A-Za-z0-9._-]+$ ]] || die "SUBCODEX_MODEL must be one exact gpt-<model-id>, got '$MODEL'"
+else
+  MODEL="$(tr -d '[:space:]' < "$BIN_DIR/codex-model" 2>/dev/null)" || die 'cannot read bin/codex-model'
+  [[ "$MODEL" =~ ^gpt-[A-Za-z0-9._-]+$ ]] \
+    || die "bin/codex-model must hold exactly one gpt-<model-id>, got '$MODEL'"
+fi
+EFFORT="${SUBCODEX_EFFORT:-high}"
+[[ "$EFFORT" =~ ^[a-z]+$ ]] || die "SUBCODEX_EFFORT must be a lowercase word, got '$EFFORT'"
+TIMEOUT_SECONDS="${SUBCODEX_TIMEOUT:-1500}"
+[[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die 'SUBCODEX_TIMEOUT must be a positive integer'
+CODEX="${CODEX_BIN:-codex}"
+command -v "$CODEX" >/dev/null 2>&1 || die "codex CLI not found ($CODEX)"
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcodex: missing ro-repo-exec; refusing to review in a writable repo (fail closed)' >&2; exit 78; }
+[[ -f "$BIN_DIR/_review_result.py" || -n "${AIWORK_REVIEW_RESULT_BIN:-}" ]] || die 'missing _review_result.py'
+
+. "$BIN_DIR/_review-workspace.sh" || die 'missing _review-workspace.sh'
+review_workspace_prepare "$SOURCE_REPO" subcodex || exit 78
+cleanup() {
+  local rc=$?
+  review_workspace_cleanup || echo 'subcodex: workspace cleanup failed' >&2
+  trap - EXIT
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+REPO_DIR="$(review_workspace_repo)" || exit 78
+
+# ── 腿身上不许有子 agent、不许联网(2026-09-13 真跑实测后改)───────────────────────
+# 第一版只带 `--disable multi_agent --disable multi_agent_v2`,真跑一次就被证伪:gpt-6-astra 身上
+# 照样有 collaboration.spawn_agent 一整组,还有 web__run。子 agent 能力写在 codex 的**模型目录**里
+# (multi_agent_version=v2),feature 开关管不到。实测有效的两件(两次真跑分别去掉一件做过归因):
+#   · 给本次调用一份去掉 multi_agent_version 的目录副本(-c model_catalog_json=);
+#   · -c web_search="disabled"。
+# 目录那件有**机器核验**:派发前用同一组开关跑 `codex debug prompt-input`(离线、不花额度、<1s),
+# 渲染出来还有 <multi_agent_role> 就拒跑 —— codex 哪天换了字段名,这里会拒跑,而不是悄悄又能派子 agent。
+# 联网那件离线看不到工具表,只有真跑能证明;升 codex 后重跑一次真探针(legs.md 记着怎么跑)。
+# 敞着的两件(如实写,不宣称严格):业主 ~/.codex/skills 里的 skill 仍列在它的提示里、它会去读;
+# 每次 `codex exec` 会往业主 ~/.codex/config.toml 追加一条这个临时副本的 trust 记录。
+CODEX_CFG=(
+  -c project_doc_max_bytes=0 -c "model_reasoning_effort=$EFFORT" -c "model=\"$MODEL\""
+  -c 'web_search="disabled"'
+  --disable multi_agent --disable multi_agent_v2
+  --disable apps --disable plugins --disable browser_use --disable browser_use_external
+  --disable computer_use --disable in_app_browser --disable image_generation
+  --disable memories --disable hooks
+)
+CATALOG="$REVIEW_WORKSPACE_DIR/model-catalog.json"
+if ! "$CODEX" debug models 2>/dev/null | python3 -c '
+import json, sys
+model, out = sys.argv[1], sys.argv[2]
+data = json.load(sys.stdin)
+entries = data.get("models") if isinstance(data, dict) else None
+if not isinstance(entries, list) or sum(1 for m in entries if isinstance(m, dict) and m.get("slug") == model) != 1:
+    sys.exit(f"model {model} is not exactly once in the codex model catalog")
+for m in entries:
+    if isinstance(m, dict):
+        m.pop("multi_agent_version", None); m.pop("multi_agent_reasoning_effort", None)
+json.dump(data, open(out, "w", encoding="utf-8"))
+' "$MODEL" "$CATALOG"; then
+  echo "subcodex: cannot build a sub-agent-free model catalog for $MODEL (fail closed)" >&2; exit 78
+fi
+CODEX_CFG+=(-c "model_catalog_json=\"$CATALOG\"")
+PREVIEW="$REVIEW_WORKSPACE_DIR/prompt-preview.json"
+if ! ( cd "$REPO_DIR" && "$CODEX" debug prompt-input "${CODEX_CFG[@]}" probe ) > "$PREVIEW" 2>/dev/null \
+    || [[ ! -s "$PREVIEW" ]] || grep -q 'multi_agent_role' "$PREVIEW"; then
+  echo "subcodex: codex would still expose sub-agent tools to $MODEL; refusing (fail closed)" >&2; exit 78
+fi
+
+PROMPT_FILE="$REVIEW_WORKSPACE_DIR/prompt.md"
+LAST_MSG="$REVIEW_WORKSPACE_DIR/last-message.md"
+cat > "$PROMPT_FILE" <<'EOF'
+You are an independent reviewer working in a disposable writable snapshot of a repository.
+Read the actual files yourself and verify the task's claims; do not take them at face value.
+You may run local tests, lint, builds and diagnostics; their outputs may be written only inside
+this snapshot. Do not intentionally edit source files. Do not push, merge, install dependencies,
+run migrations, access production, change credentials, browse the web, spawn sub-agents, or
+invoke other AI models / AI CLIs. Do not wait for user input.
+EOF
+if [[ "$MODE" == review ]]; then
+  cat >> "$PROMPT_FILE" <<'EOF'
+Give findings with severity, file:line evidence and reasoning. End with exactly one standalone line:
+Conclusion: PASS
+Conclusion: BLOCK
+Conclusion: NEEDS_MORE_INFO
+EOF
+else
+  cat >> "$PROMPT_FILE" <<'EOF'
+This is a design exploration, not a review: propose ONE concrete direction, state assumptions,
+tradeoffs and blind spots of the brief. Do not output PASS/BLOCK.
+EOF
+fi
+printf '\n--- TASK ---\n' >> "$PROMPT_FILE"
+cat "$TASK_FILE" >> "$PROMPT_FILE"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+BASE="${LOG_FILE%.log}"
+STREAM="$BASE.stream.jsonl"; STDERR_LOG="$BASE.stderr"
+{
+  echo "# subcodex $MODE log"
+  echo "time: $(date -Iseconds)"
+  echo "model: $MODEL (effort: $EFFORT)"
+  echo "repo: $REPO_DIR (snapshot of $SOURCE_REPO, source mounted read-only)"
+  echo "task: $TASK_FILE"
+  echo
+} > "$LOG_FILE"
+review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
+
+(
+  cd "$REPO_DIR" || exit 78
+  "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- timeout -k 10 "$TIMEOUT_SECONDS" "$CODEX" exec \
+    -C "$REPO_DIR" -m "$MODEL" --json -o "$LAST_MSG" \
+    --ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check \
+    "${CODEX_CFG[@]}" \
+    -s workspace-write -c approval_policy=never \
+    - < "$PROMPT_FILE"
+) > "$STREAM" 2> "$STDERR_LOG"
+RC=$?
+
+if [[ -s "$LAST_MSG" ]]; then
+  cat "$LAST_MSG" >> "$LOG_FILE"
+else
+  echo "(codex produced no final message; see ${STREAM##*/} and ${STDERR_LOG##*/})" >> "$LOG_FILE"
+fi
+
+# 事件流里**自己报出来**的模型:只看结构字段,跳过模型写的正文/工具输出(那里面出现 "model" 不算数)。
+REPORTED="$(python3 - "$STREAM" <<'PY' 2>/dev/null
+import json, sys
+SKIP = {"arguments", "output", "content", "text", "message", "delta", "item", "items", "result", "stdout", "stderr"}
+def find(value, depth=0):
+    if depth > 4:
+        return None
+    if isinstance(value, dict):
+        model = value.get("model")
+        if isinstance(model, str) and model:
+            return model
+        for key, child in value.items():
+            if key in SKIP:
+                continue
+            found = find(child, depth + 1)
+            if found:
+                return found
+    return None
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        found = find(json.loads(line))
+    except ValueError:
+        continue
+    if found:
+        print(found)
+        break
+PY
+)"
+
+VERDICT=UNKNOWN
+if [[ "$MODE" == review ]]; then
+  VERDICT="$(python3 "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}" normalize "$LOG_FILE" 2>/dev/null || echo UNKNOWN)"
+fi
+FAILURE=""
+if grep -qE 'usage_limit_exceeded|hit your usage limit' "$STREAM" "$STDERR_LOG" 2>/dev/null; then FAILURE=quota; fi
+
+if [[ "$RC" == 124 || "$RC" == 137 ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription timed_out partial timeout "$VERDICT" "" "$REPORTED" || exit 78
+  echo "subcodex: timed out after ${TIMEOUT_SECONDS}s; partial output kept in $LOG_FILE" >&2
+  exit 124
+fi
+if [[ "$RC" != 0 ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial "$FAILURE" "$VERDICT" "" "$REPORTED" || exit 78
+  echo "subcodex: codex exited rc=$RC${FAILURE:+ ($FAILURE)}; see $STREAM and $STDERR_LOG" >&2
+  exit "$RC"
+fi
+if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial no_verdict UNKNOWN "" "$REPORTED" || exit 78
+  die "review output contains no standalone verdict line (log: $LOG_FILE)"
+fi
+if [[ "$MODE" == explore && ! -s "$LAST_MSG" ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial runtime "" "" "$REPORTED" || exit 78
+  die "explore produced no answer (log: $LOG_FILE)"
+fi
+review_workspace_write_facts "$MODEL" "$MODEL" subscription exited complete "" \
+  "$([[ "$MODE" == review ]] && echo "$VERDICT")" "" "$REPORTED" || exit 78
+exit 0

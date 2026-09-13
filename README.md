@@ -111,6 +111,26 @@ agent to verify, never a verdict to adopt.
   keep a `.err` sidecar.
 - `bin/panel-explore BRIEF [REPO] [LOG_PREFIX]` — divergent: three model
   families each propose ONE direction; no verdict by design.
+- `bin/panel-slice run|verify|retry|decide|status` — sliced review, single layer:
+  the main agent's manifest splits one change into 2..8 slices; each slice is one
+  session of one healthy leg from a distinct model family, plus one independent
+  overall leg (default `subcodex`, GPT) whose family no slice uses. N slices =
+  exactly N+1 sessions; `verify` sends recorded findings to a different family,
+  `retry` re-dispatches one item, both from a shared `extra_sessions` budget.
+  Every work item is one `panel-review --scoped-review --pin-leg LEG` call, so
+  isolation, task freezing, setsid survival, typed results and health all stay in
+  panel-review. Scoped results carry `review_contract_version=2` and never count as
+  archive coverage; panel-slice never binds a track. Run dirs live outside the repo
+  (default `logs/slice-<manifest>-<ts>/`); `status` is rebuilt from disk and
+  `findings.jsonl` is append-only.
+- `bin/subcodex <review|explore>` — GPT review leg on `codex exec`, model from
+  [`bin/codex-model`](bin/codex-model) (`SUBCODEX_MODEL` overrides one run). A
+  role-only leg (`PANEL_ROLE_LEG_SPECS`): never rotated into normal panel-review,
+  because GPT is also the default implementation leg. Source repo read-only via
+  `ro-repo-exec`, disposable snapshot, `--ignore-user-config --ephemeral`, prompt via
+  stdin. Sub-agent tools are removed with a per-run model catalog override (feature
+  flags alone do not remove them for gpt-6-astra) and checked offline with
+  `codex debug prompt-input` before dispatch; web search is disabled.
 
 Both stagger launches and the engine retries 429/5xx with bounded backoff.
 

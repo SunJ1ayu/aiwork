@@ -12,22 +12,37 @@
 
 ## Mechanical checks
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+- [x] build passes(bash -n / python 语法随判据跑)
+- [x] tests pass:全量离线总闸 25 套件全绿(最后一次改代码之后跑的,见最后一行收据)
+- [x] no secrets / unsafe ops:runlog 前后扫秘密形状;判据断网跑;真跑只在仓外一次性小仓
 
-**机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
-
-```
-runlog -t sliced-panel-review -- <判据命令>
-```
+**机器打印的**(逐字节,红的一份不藏):
 
 ```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
+runlog: redcheck-review-result rc=1 commit=eaaea75 dirty=yes at=2026-09-13T14:22:36Z file=tracks/sliced-panel-review/evidence/20260913T142236Z-01-redcheck-review-result.txt
+runlog: redcheck-subcodex rc=1 commit=eaaea75 dirty=yes at=2026-09-13T14:22:37Z file=tracks/sliced-panel-review/evidence/20260913T142237Z-01-redcheck-subcodex.txt
+runlog: redcheck-subcodex rc=1 commit=eaaea75 dirty=yes at=2026-09-13T14:25:03Z file=tracks/sliced-panel-review/evidence/20260913T142503Z-01-redcheck-subcodex.txt
+runlog: redcheck-panel-slice rc=1 commit=eaaea75 dirty=yes at=2026-09-13T14:25:03Z file=tracks/sliced-panel-review/evidence/20260913T142503Z-02-redcheck-panel-slice.txt
+runlog: redcheck-panel-slice rc=1 commit=eaaea75 dirty=yes at=2026-09-13T14:26:09Z file=tracks/sliced-panel-review/evidence/20260913T142609Z-01-redcheck-panel-slice.txt
+runlog: redcheck-subcodex-catalog rc=1 commit=74f39d5 dirty=yes at=2026-09-13T15:31:52Z file=tracks/sliced-panel-review/evidence/20260913T153152Z-01-redcheck-subcodex-catalog.txt
+runlog: mutation-panel-slice rc=1 commit=60480ee dirty=yes at=2026-09-13T15:35:33Z file=tracks/sliced-panel-review/evidence/20260913T153533Z-01-mutation-panel-slice.txt
+runlog: mutation-panel-slice rc=0 commit=eca7b4a dirty=yes at=2026-09-13T15:52:31Z file=tracks/sliced-panel-review/evidence/20260913T155231Z-01-mutation-panel-slice.txt
+runlog: full-regression rc=0 commit=eca7b4a dirty=yes at=2026-09-13T16:07:37Z file=tracks/sliced-panel-review/evidence/20260913T160737Z-01-full-regression.txt
 ```
+
+每份红收据是什么:
+- 前五份:判据先行对 base `eaaea75` 红检(review-result 2 红;subcodex 30 红 1 绿;panel-slice 两轮,
+  第二轮收紧了「零调用拒绝」要求 `REFUSED <rule>` 标记 —— 二进制不存在时 rc≠0 且零调用会空转成绿)。判据 commit `74f39d5`。
+- `redcheck-subcodex-catalog rc=1`:V2 真跑证伪 `--disable multi_agent` 后补的 C5,对第一版实现红 5 条 / 绿 32。
+  同一份判据对仓外候选修复 37/0。判据 commit `60480ee`。
+- `mutation-panel-slice rc=1`(咬住 30 / 漏网 1):漏网的 M4 报「靶子名不在基线里」,**实际在**。
+  量具自己的毛病:pipefail 下 `grep PASS | grep -qF` 吃 SIGPIPE,200 次随机漏 2~3 次(关 pipefail 0/200)。
+  改成单条 grep 后 300 次零漏零误中,单独 commit `eca7b4a`,第二轮 31/0。
+  **同一写法还在** mutation-dead-leg-streak / mutation-panel-roster / mutation-subgemini 里(方向都是误报漏网,不会假绿),不在本单修。
+
+真跑(不是 runlog 收据,原始报告与事件流入库):
+- V2 subcodex 三次:`evidence/v2-live-subcodex/`(README 里有表)。第一版不合格(子 agent 工具 + web__run 在),
+  修后两次各去掉一个开关做归因。仓内修复与验证过的副本逐行一致(注释行除外,只差一句报错文案)。
 
 ## Review
 

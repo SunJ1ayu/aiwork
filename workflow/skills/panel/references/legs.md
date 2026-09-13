@@ -237,21 +237,27 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
   拷贝,加第五条腿时漏了四份,其中最贵的一份让 panel **给一条从没跑过的腿记了 rc=0**。
 - `fix` **故意不支持**。
 
-## codex (GPT-5.6-Sol) — frontier 档(**不在轮换池里**,主 agent 手动并排拉起),2026-07-26 起
+## subcodex (GPT,跑在 codex CLI 上) — **角色腿,不进轮换池**,2026-09-13 起
 
-**还没有包成脚本,当前是主 agent 手动并排拉起;它不在 `PANEL_LEGS_ORDER` 里。** 参见 [[codex-as-employee]] 记忆。
+只由 `panel-slice` 以 `panel-review --scoped-review --pin-leg subcodex` 钉住派发(默认整体腿),
+登记在 `_panel-roster-lib.sh` 的 `PANEL_ROLE_LEG_SPECS`。**不进普通池**:GPT 同时是默认执行腿
+(delegate-codex),进池会轮到它审自家代码;订阅额度也会被普通 high 评审悄悄吃掉。
 
-```
-codex exec -C REPO -s read-only -o PREFIX.codex.log "评审任务书(要求中文回答)"
-```
-
-- 与轮换池各腿的关键差别:**它不是弱模型**。池内腿的共同假阴性是它们结构上的盲区;
-  补一条 frontier 腿的价值 > 再补一条同档腿。
-- **`-s read-only` 必须带**——评审员不该有写权限。
-- **额度**:走 ChatGPT 订阅(`auth_mode=chatgpt`),不烧 Claude 额度。
-- `--output-schema FILE` 可以让它按 JSON Schema 输出裁决,比正则匹配 "Conclusion:" 稳
-  (中文全角冒号误判那笔工具债的正解)。
-- **不需要**再加 `-c project_doc_max_bytes=0`:2026-07-26 起本机说明书叫 `CLAUDE.md`,
-  Codex 只认 `AGENTS.md`,结构上就读不到,忘不忘都一样。
-- `panel-review` **不需要**为它改代码——那个工具只是个并行派发器,手动并排拉一条腿即可。
-  等它变成常规动作再考虑包成 `subcodex`(理由只能是"让两个 flag 忘不掉",不是为了好看)。
+- 模型单源 `bin/codex-model`(现 `gpt-6-astra`),`SUBCODEX_MODEL` 单次覆盖。
+- 源仓 `ro-repo-exec` 物理只读,codex 在可丢弃副本里读、跑测试(`-s workspace-write`);任务书走 stdin。
+- `-c project_doc_max_bytes=0`(被评审仓里有 AGENTS.md 时它会自动吞)、`--ignore-user-config --ignore-rules --ephemeral`。
+- **子 agent 与联网 —— 09-13 真跑证伪过第一版(codex 0.154)**:`--disable multi_agent/multi_agent_v2`
+  对 gpt-6-astra **无效**,子 agent 能力写在**模型目录**里(`multi_agent_version=v2`),腿身上照样有
+  `collaboration.spawn_agent`,还有 `web__run`。有效的是:每次生成去掉该字段的目录副本
+  (`-c model_catalog_json=`)+ `-c web_search="disabled"`(两次真跑各去掉一件做过归因)。
+  子 agent 那件派发前有机器核验:`codex debug prompt-input` 离线渲染里还有 `<multi_agent_role>` 就拒跑。
+- **升 codex / 换模型后重跑一次真探针**(联网那件离线核不了):一次性小仓 + 任务书里让它
+  「列出全部工具名(含 functions.exec 里的),明说有没有联网 / 派子 agent 的工具」:
+  ```
+  REVIEW_NO_MY_REVIEW=1 bin/subcodex review TASK.md OUT/subcodex.log REPO
+  ```
+  读报告,再在 `OUT/subcodex.stream.jsonl` 里核实际调用过什么。
+- 敞着的(如实写):`~/.codex/skills` 的 skill 清单仍在它的提示里、它会去读;每次 exec 往业主
+  `~/.codex/config.toml` 追加一条临时副本的 trust 记录;`--json` 事件流不报模型名(facts 里 reported 为空)。
+- 额度耗尽分型 `quota`(健康池据此冷却);无裁决行 rc≠0;`fix` 故意不支持(实现走 delegate-codex)。
+- 手动并排拉一条 GPT 评审也直接用它,别再裸敲 `codex exec`(那几个开关手敲必漏,子 agent 那件手敲也关不掉)。

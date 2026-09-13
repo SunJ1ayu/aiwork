@@ -23,6 +23,11 @@ SCHEMA_VERSION = 2
 SUBJECT_MANIFEST_VERSION = 1
 NORMALIZER_VERSION = 1
 REVIEW_CONTRACT_VERSION = 1
+# 契约 2 = scoped review(track sliced-panel-review):切片/整体/复核腿只对分派给它的那部分负责,
+# 不是契约 1 的「整任务全量评审」。它**故意不在** SUPPORTED_REVIEW_CONTRACTS 里 ⇒ 旧覆盖谓词
+# 一律 review_contract_unsupported。要让切片结果承担放行资格,得另立新策略,不是往这里加一个数。
+SCOPED_REVIEW_CONTRACT_VERSION = 2
+EMITTABLE_REVIEW_CONTRACTS = (REVIEW_CONTRACT_VERSION, SCOPED_REVIEW_CONTRACT_VERSION)
 SUPPORTED_REVIEW_CONTRACTS = frozenset({REVIEW_CONTRACT_VERSION})
 
 VERDICTS = frozenset({"PASS", "BLOCK", "NEEDS_MORE_INFO", "UNKNOWN"})
@@ -97,6 +102,7 @@ ADAPTER_IDENTITIES = {
     "subglm": ("zhipu", "glm-"),
     "subkimi": ("moonshot", "kimi-code/"),
     "subgemini": ("google", "gemini-"),
+    "subcodex": ("openai", "gpt-"),
 }
 
 
@@ -556,7 +562,7 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
     billing_mode = facts["billing_mode"] if facts is not None else args.billing_mode
     return {
         "schema_version": SCHEMA_VERSION,
-        "review_contract_version": REVIEW_CONTRACT_VERSION,
+        "review_contract_version": args.review_contract_version,
         "run_id": args.run_id,
         "name": args.name,
         "family": args.family,
@@ -702,6 +708,8 @@ def parser() -> argparse.ArgumentParser:
     emit.add_argument("--duration-ms", type=int)
     emit.add_argument("--failure-kind", choices=sorted(FAILURE_KINDS))
     emit.add_argument("--billing-mode", choices=sorted(BILLING_MODES))
+    emit.add_argument("--review-contract-version", type=int, choices=EMITTABLE_REVIEW_CONTRACTS,
+                      default=REVIEW_CONTRACT_VERSION)
     facts = commands.add_parser("facts", help="atomically publish adapter facts for the terminal producer")
     facts.add_argument("--output", type=Path, required=True)
     facts.add_argument("--requested-model")

@@ -219,6 +219,31 @@ in the brief / Smallest first step)。**故意没有裁决——分歧的铺开�
 brief 放 `/root/aiwork/tasks/`,日志放 `/root/aiwork/logs/`。两个 `panel-*` 工具都做了
 启动错峰,共享引擎对 429/5xx 有带上限的退避,并行扇出不会再静默丢腿。
 
+## panel-slice — 切片评审(试点,2026-09-13 起)
+
+一份改动切成 2..8 片,**每片一次会话、一个不同家族的腿**,外加一条独立整体腿(默认
+`subcodex` = GPT,家族不与任何片重复)。N 片 = **恰好** N+1 次会话,腿里不再派子 agent;
+每项都是一次钉住单腿的 `panel-review --scoped-review`,反锚定闸/任务冻结/抗断线全部照旧。
+
+```
+panel-slice run [--require-my-review PATH | --no-my-review] MANIFEST [REPO] [RUN_DIR]
+panel-slice status RUN_DIR [--json]                 # 纯读盘重建
+panel-slice verify RUN_DIR VERIFY_MANIFEST          # 登记 finding + 换家族定点复核(占 extra)
+panel-slice retry  RUN_DIR ITEM [--leg LEG]         # 重派一项(占 extra)
+panel-slice decide RUN_DIR FINDING confirmed|rejected|accepted-risk|inconclusive --reason …
+```
+
+- **什么时候用**:改动大到「每条腿全量看一遍」注意力被摊薄,而且我说得清切片边界。
+  小改动、切不开的改动,照旧 panel-review。
+- **不能替代归档门槛**:切片结果 `review_contract_version=2`,**永不**计入任何 track 的
+  self/standard/high 覆盖,`panel-slice` 也拒绝绑 track。要归档资格照旧跑 panel-review。
+- 最大的盲点是**我切错片**:各片单看都对、连起来是错的,只有整体腿兜底。
+- `run_state=clean` 只是事实汇总(都收齐了、BLOCK 都登记并处置了),**不是 PASS**。
+- 审 aiwork 自己时:RUN_DIR 默认在 `logs/`(仓内,会被拒),自审默认在 `tasks/`(同样仓内)——
+  两个都显式给仓外路径。
+- 清单格式/分配/预算/状态语义:`panel-slice --help`;为什么这么设计、各腿「不许派子 agent」
+  逐腿核实表:track `sliced-panel-review` 的 design.md;GPT 腿细节:legs.md 的 subcodex 一节。
+
 ## 各评审腿的后端细节
 
 平时不需要;真要改模型、换 key、排查某条腿死了的时候再读:

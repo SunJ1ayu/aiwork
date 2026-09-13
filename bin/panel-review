@@ -41,6 +41,12 @@ EOF
     printf '  %-14s family=%-10s agent=%-20s switch=%s%s\n' \
       "$name" "$family" "$agent" "$switch" "$fallback" >&2
   done
+  echo >&2
+  echo 'Role-only legs (never rotated; panel-slice pins them via --scoped-review --pin-leg):' >&2
+  for spec in "${PANEL_ROLE_LEG_SPECS[@]}"; do
+    IFS='|' read -r name family agent chat switch <<< "$spec"
+    printf '  %-14s family=%-10s agent=%-20s switch=%s\n' "$name" "$family" "$agent" "$switch" >&2
+  done
   cat >&2 <<'EOF'
 
 Args:
@@ -54,6 +60,12 @@ Options / env:
   --all                      explicit full-pool review (special high risk)
   --track NAME               bind dispatch/observation to a typed track in the main repo
   --no-track                 explicitly state that this review belongs to no track
+  --scoped-review            internal (panel-slice): the reviewer owns only an assigned slice/overall/
+                             verification scope. Results carry review_contract_version=2 and never
+                             count as full-review coverage; no --track, no --all, no chat fallback,
+                             the normal rotation cursor is left alone, and budget>0 needs --pin-leg.
+  --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
+                             (pool legs and role-only legs such as subcodex)
   PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
   PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
   PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
@@ -83,6 +95,8 @@ EOF
 
 MY_REVIEW=""
 NO_MY_REVIEW=0
+SCOPED_REVIEW=0
+PIN_LEG=""
 IMPACT_RISK="${PANEL_IMPACT_RISK:-high}"
 REVIEW_BUDGET="${PANEL_REVIEW_BUDGET:-}"
 ALL_REVIEWERS=0
@@ -111,6 +125,11 @@ while [[ $# -gt 0 ]]; do
       [[ -n "$TRACK_NAME" ]] || { echo "panel-review: --track needs a name" >&2; exit 2; }
       shift 2 ;;
     --no-track) NO_TRACK=1; shift ;;
+    --scoped-review) SCOPED_REVIEW=1; shift ;;
+    --pin-leg)
+      PIN_LEG="${2:-}"
+      [[ -n "$PIN_LEG" ]] || { echo "panel-review: --pin-leg needs a leg name" >&2; exit 2; }
+      shift 2 ;;
     *) POSARGS+=("$1"); shift ;;
   esac
 done
@@ -135,6 +154,36 @@ if [[ "$ALL_REVIEWERS" -eq 1 ]]; then REVIEW_BUDGET="$POOL_SIZE"; fi
 # Explicit off or a missing executable still wins.
 FORCE_ALL=0
 [[ "$ALL_REVIEWERS" -eq 1 || "$REVIEW_BUDGET" -eq "$POOL_SIZE" ]] && FORCE_ALL=1
+
+# ── scoped review(track sliced-panel-review)────────────────────────────────
+# panel-slice 的每个工作项 = 一次钉住单腿的 scoped 评审。这几条拒绝都在**任何落盘之前**:
+# 它们防的是「切片结果被当成整任务评审」和「内部开关变成普通评审的后门」。
+REVIEW_CONTRACT_VERSION=1
+if [[ -n "$PIN_LEG" && "$SCOPED_REVIEW" -eq 0 ]]; then
+  echo "panel-review: --pin-leg is internal to --scoped-review (panel-slice); a normal review rotates the pool" >&2
+  exit 2
+fi
+if [[ "$SCOPED_REVIEW" -eq 1 ]]; then
+  REVIEW_CONTRACT_VERSION=2
+  if [[ -n "$TRACK_NAME" ]]; then
+    echo "panel-review: --scoped-review cannot bind --track: scoped results are never archive coverage" >&2
+    exit 2
+  fi
+  if [[ "$ALL_REVIEWERS" -eq 1 ]]; then
+    echo "panel-review: --scoped-review cannot use --all: panel-slice assigns exactly one leg per work item" >&2
+    exit 2
+  fi
+  if [[ "$REVIEW_BUDGET" -gt 0 && -z "$PIN_LEG" ]]; then
+    echo "panel-review: --scoped-review with budget>0 needs --pin-leg (panel-slice owns the family assignment)" >&2
+    exit 2
+  fi
+  if [[ -n "$PIN_LEG" ]] && ! panel_leg_family "$PIN_LEG" >/dev/null; then
+    echo "panel-review: --pin-leg '$PIN_LEG' is not in PANEL_LEG_SPECS or PANEL_ROLE_LEG_SPECS" >&2
+    exit 2
+  fi
+  # 钉住单腿时「预算=池大小」不是「全池评审」:健康/冷却照常生效。
+  FORCE_ALL=0
+fi
 
 TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
 TASK_FILE="$1"
@@ -262,6 +311,8 @@ unset _task_before _task_copy _task_after TASK_SNAPSHOT_TMP
 # 东西,要配 PANEL_INCLUDE);off = 不派发、不报 rc。
 # 要 agent 但没装底座腿 ⇒ 回落聊天腿(老行为,不许退化);没有聊天腿的腿就是它自己。
 LEGS=("${PANEL_LEGS_ORDER[@]}")
+# 角色腿只在 scoped 模式里看得见;普通评审的池、花名册、预算上限一个字不变。
+if [[ "$SCOPED_REVIEW" -eq 1 ]]; then LEGS+=("${PANEL_ROLE_LEGS_ORDER[@]}"); fi
 declare -A LEG_CMD LEG_CHAT LEG_LOG LEG_ERR LEG_AVAILABLE LEG_HEALTH LEG_SELECTED LEG_RC LEG_OVERRIDE_OK
 for _leg in "${LEGS[@]}"; do
   # fail-closed:表里没有这条腿就当场拒跑。静默继续 = 一条没有家族、没有二进制的
@@ -270,6 +321,8 @@ for _leg in "${LEGS[@]}"; do
   _chat="$(panel_leg_chat "$_leg")"
   _switch="$(panel_leg_switch "$_leg")"
   _mode="${!_switch:-agent}"
+  # 钉住一条腿 = 其余腿本轮视为 off(plan/花名册如实印 off,不伪装成被轮换跳过)。
+  if [[ -n "$PIN_LEG" && "$_leg" != "$PIN_LEG" ]]; then _mode=off; fi
   if [[ "$_mode" == "off" ]]; then
     _cmd=""
   elif [[ "$_mode" == "agent" && -x "$BIN/$_agent" ]]; then
@@ -281,6 +334,9 @@ for _leg in "${LEGS[@]}"; do
   fi
   LEG_CMD[$_leg]="$_cmd"
   LEG_CHAT[$_leg]="${_chat:+$BIN/$_chat}"
+  # scoped 模式不许 agent→chat 自动回落:那是「一个工作项花了两次调用」,而 panel-slice
+  # 的会话预算只数得到一次。底座腿死了就如实记失败,要不要重派由主 agent 花 extra 预算决定。
+  [[ "$SCOPED_REVIEW" -eq 0 ]] || LEG_CHAT[$_leg]=""
   LEG_LOG[$_leg]="${LOG_PREFIX}.$_leg.log"
   LEG_ERR[$_leg]="${LOG_PREFIX}.$_leg.log.err"
 done
@@ -402,7 +458,8 @@ for ((_off=0; _off<${#LEGS[@]} && SELECTED_COUNT<REVIEW_BUDGET; _off++)); do
   LEG_SELECTED[$_leg]=1
   SELECTED_COUNT=$((SELECTED_COUNT + 1))
 done
-if [[ "$FORCE_ALL" -ne 1 ]]; then
+# scoped(钉腿)派发不推游标:panel-slice 一轮就要调好几次,推了会扰乱普通评审的轮换公平。
+if [[ "$FORCE_ALL" -ne 1 && "$SCOPED_REVIEW" -eq 0 ]]; then
   _cursor_tmp="$CURSOR_FILE.tmp.$$"
   printf '%s\n' "$(((SELECT_START + 1) % ${#LEGS[@]}))" > "$_cursor_tmp" && mv -f "$_cursor_tmp" "$CURSOR_FILE"
 fi
@@ -678,7 +735,7 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
     facts="$8"; diagnostic="$9"; shift 9
     helper="$1"; shift
     run_id="$1"; shift
-    name="$1"; family="$2"; adapter="$3"; degraded="$4"; task_sha="$5"; shift 5
+    name="$1"; family="$2"; adapter="$3"; degraded="$4"; task_sha="$5"; contract="$6"; shift 6
     started="$(date -u +%FT%TZ)"
     started_ns="$(date +%s%N)"
     export AIWORK_REVIEW_FACTS_PATH="$facts" AIWORK_REVIEW_RESULT_BIN="$helper"
@@ -696,7 +753,8 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
     facts_args=(); [[ ! -f "$facts" ]] || facts_args=(--facts "$facts")
     if python3 "$helper" emit --result "$result" "${facts_args[@]}" --run-id "$run_id" --name "$name" \
         --family "$family" --adapter "$adapter" --exit-code "$rc" --task-sha256 "$task_sha" \
-        --degraded "$degraded" --log "$evidence_log" --diagnostic "$diagnostic" --duration-ms "$duration_ms" >/dev/null; then
+        --degraded "$degraded" --log "$evidence_log" --diagnostic "$diagnostic" --duration-ms "$duration_ms" \
+        --review-contract-version "$contract" >/dev/null; then
       rm -f -- "$facts"
     else
       echo "panel-review: typed terminal write failed: $result" >&2
@@ -706,7 +764,7 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
     printf "rc=%s\nstarted=%s\nfinished=%s\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st.tmp" && mv -f "$st.tmp" "$st"
     exit $rc
   ' _ "$state" "$result" "$failed_state" "$failed_result" "$log" "$failed_log" "$evidence_log" \
-    "$facts" "$diagnostic" "$REVIEW_RESULT_BIN" "$run_id" "$name" "$family" "$adapter" "$degraded" "$PANEL_TASK_SHA256" "$@"
+    "$facts" "$diagnostic" "$REVIEW_RESULT_BIN" "$run_id" "$name" "$family" "$adapter" "$degraded" "$PANEL_TASK_SHA256" "$REVIEW_CONTRACT_VERSION" "$@"
 }
 
 # Every controller decision below consumes the validated terminal sidecar. Raw

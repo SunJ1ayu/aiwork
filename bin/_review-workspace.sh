@@ -272,10 +272,10 @@ review_workspace_repo() {
   printf '%s\n' "$REVIEW_WORK_REPO"
 }
 
-review_workspace_write_facts() { # requested-model invoked-model [billing-mode [process-state [evidence [failure-kind [verdict [degraded]]]]]]
+review_workspace_write_facts() { # requested-model invoked-model [billing-mode [process-state [evidence [failure-kind [verdict [degraded [reported-model]]]]]]]
   local requested="${1:-}" invoked="${2:-}" billing="${3:-subscription}"
   local process_state="${4:-}" completeness="${5:-}" failure_kind="${6:-}" verdict="${7:-}"
-  local degraded="${8:-}"
+  local degraded="${8:-}" reported="${9:-}"
   local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper="${AIWORK_REVIEW_RESULT_BIN:-}"
   local -a outcome=()
   if [[ -n "${REVIEW_DELIVERY_DIGEST:-}" ]]; then
@@ -289,6 +289,9 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
   [[ -z "$failure_kind" ]] || outcome+=(--failure-kind "$failure_kind")
   [[ -z "$verdict" ]] || outcome+=(--verdict "$verdict")
   [[ -z "$degraded" ]] || outcome+=(--degraded "$degraded")
+  # 供应商事件流里**自己报出来**的模型(subcodex 读 --json 流)。空 = 没报,记 null;
+  # 报了而与请求不符时照实写,让 eligibility 出 model_report_mismatch,不许拿请求值盖掉。
+  [[ -z "$reported" ]] || outcome+=(--reported-model "$reported")
   python3 "$helper" facts --output "$output" \
     --requested-model "$requested" --invoked-model "$invoked" \
     --git-object-format "$REVIEW_SNAPSHOT_OBJECT_FORMAT" \

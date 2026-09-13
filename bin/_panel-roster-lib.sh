@@ -49,10 +49,24 @@ PANEL_LEG_SPECS=(
   "subgemini|google|subgemini||PANEL_GEMINI_LEG"
 )
 
+# ── 角色腿表:同一格式,但**不进**普通轮换池 ─────────────────────────────
+# 只由 panel-slice 以 `panel-review --scoped-review --pin-leg <腿>` 钉住派发(track sliced-panel-review)。
+#   subcodex `PANEL_CODEX_LEG`:GPT 整体腿。不进普通池的理由:GPT 同时是默认执行腿
+#           (delegate-codex),进池就会轮到它审自家代码;而且 codex 订阅额度 2026-09-13
+#           当天就被耗尽过一次,普通 high 评审不该悄悄去吃它。
+# 普通 panel-review / `--all` / 花名册 / 预算上限一律只看上面那张表。
+PANEL_ROLE_LEG_SPECS=(
+  "subcodex|openai|subcodex||PANEL_CODEX_LEG"
+)
+
 # 腿名单从表里长出来。**不许在别处再写第二份**(上面那六条就是这么来的)。
 PANEL_LEGS_ORDER=()
 for _panel_spec in "${PANEL_LEG_SPECS[@]}"; do
   PANEL_LEGS_ORDER+=("${_panel_spec%%|*}")
+done
+PANEL_ROLE_LEGS_ORDER=()
+for _panel_spec in "${PANEL_ROLE_LEG_SPECS[@]}"; do
+  PANEL_ROLE_LEGS_ORDER+=("${_panel_spec%%|*}")
 done
 unset _panel_spec
 
@@ -61,7 +75,7 @@ unset _panel_spec
 # (「覆盖了两个不同模型家族」,而其中一条根本没被数进去)。
 panel_leg_field() {  # panel_leg_field <腿名> <family|agent|chat|switch>
   local leg="$1" want="$2" spec name family agent chat switch
-  for spec in "${PANEL_LEG_SPECS[@]}"; do
+  for spec in "${PANEL_LEG_SPECS[@]}" "${PANEL_ROLE_LEG_SPECS[@]}"; do
     IFS='|' read -r name family agent chat switch <<< "$spec"
     [[ "$name" == "$leg" ]] || continue
     case "$want" in
@@ -195,6 +209,11 @@ render_roster() {  # render_roster <prefix>
   echo "# 日志:${prefix}.*.log"
   line=""
   for name in "${PANEL_LEGS_ORDER[@]}"; do line+="${line:+ }$(roster_entry_from_disk "$prefix" "$name")"; done
+  # 角色腿只在它真出现在这一轮 plan 里时才印(scoped 钉住派发);普通花名册格式一个字不变。
+  for name in "${PANEL_ROLE_LEGS_ORDER[@]}"; do
+    [[ -n "$(_plan_leg_field "$plan" "$name" 2)" ]] || continue
+    line+="${line:+ }$(roster_entry_from_disk "$prefix" "$name")"
+  done
   echo "$line"
   if [[ -n "$head_before" && -n "$head_after" && "$head_before" != "$head_after" ]]; then
     echo "# ⚠️ 评审期间 HEAD 从 $head_before 移到 $head_after —— 各腿未必评的同一棵树。"
