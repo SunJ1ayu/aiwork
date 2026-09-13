@@ -45,12 +45,14 @@ if [[ "${1:-}" == debug ]]; then
     models)  # 真 codex 的目录形状:{"models":[{slug, multi_agent_version, ...}]}
       python3 - ${CODEX_TEST_CATALOG:-} <<'PY'
 import json, sys
-print(json.dumps({"models": [{"slug": s, "tool_mode": "code_mode_only", "multi_agent_version": "v2",
-                              "multi_agent_reasoning_effort": "xhigh"} for s in sys.argv[1:]]}))
+import os
+ma = {} if os.environ.get("CODEX_TEST_NO_MA") == "1" else {"multi_agent_version": "v2", "multi_agent_reasoning_effort": "xhigh"}
+print(json.dumps({"models": [dict({"slug": s, "tool_mode": "code_mode_only"}, **ma) for s in sys.argv[1:]]}))
 PY
       exit 0 ;;
     prompt-input)
       printf '%s\n' "$@" > "$cap.preview.argv"
+      { printf '%s\n' "$@"; echo '----'; } >> "$cap.preview.all"
       catalog=""; model=""
       for a in "$@"; do
         [[ "$a" == model_catalog_json=* ]] && catalog="$(sed -E 's/^model_catalog_json="?([^"]*)"?$/\1/' <<<"$a")"
@@ -59,12 +61,16 @@ PY
       leak="$(python3 - "$catalog" "$model" "${CODEX_TEST_MODE:-}" <<'PY'
 import json, sys
 catalog, model, mode = sys.argv[1:4]
+import os
 if mode == "role_leak":
     print("leak"); sys.exit()
+if mode == "blind_detector":  # codex 改了渲染标记的名字:子 agent 其实还在,但 <multi_agent_role> 不再出现
+    print("clean"); sys.exit()
 try:
     entries = [m for m in json.load(open(catalog))["models"] if m.get("slug") == model]
 except Exception:
-    entries = [{"multi_agent_version": "v2"}]  # 没给目录 = codex 用自带目录 = 子 agent 还在
+    # 没给目录 = codex 用自带目录 = 与 `debug models` 输出的同一份
+    entries = [{}] if os.environ.get("CODEX_TEST_NO_MA") == "1" else [{"multi_agent_version": "v2"}]
 print("leak" if not entries or any("multi_agent_version" in m for m in entries) else "clean")
 PY
 )"
@@ -244,6 +250,17 @@ CODEX_TEST_CATALOG="gpt-some-other" REVIEW_NO_MY_REVIEW=1 sc c11 review "$d/task
 check "C5: 模型不在 codex 模型目录里 ⇒ 拒跑、没派发 codex exec(不带着默认目录悄悄去跑)" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c11.argv" ]] && grep -q 'catalog' "$d/c11.err"; echo $?)
 check "C5: 拒跑之后可丢弃副本同样清理干净" $([[ -z "$(ls -A "$d/ws" 2>/dev/null)" ]]; echo $?)
+# C6:2026-09-14 panel-review 高风险评审(subdeepseek)发现 E 后补 —— 检测器自检。
+# 只看「覆盖后的渲染里没有 <multi_agent_role>」,codex 一改标记名就恒过(注释却写着会拒跑)。
+# 自检:模型目录声明了 multi_agent_version 时,**不覆盖目录**的基线渲染里必须看得见标记,看不见 = 检测器瞎了。
+awk 'BEGIN{blk=""; found=0} /^----$/ {if (blk !~ /model_catalog_json=/ && blk ~ /(^|\n)prompt-input(\n|$)/) found=1; blk=""; next} {blk = blk $0 "\n"} END{exit found?0:1}' "$d/cap/c1.preview.all" 2>/dev/null
+check "C6: 派发前另做一次不带目录覆盖的基线渲染(检测器自检)" $?
+CODEX_TEST_MODE=blind_detector REVIEW_NO_MY_REVIEW=1 sc c12 review "$d/task.md" "$d/c12.log" "$d/repo" >/dev/null 2>"$d/c12.err"; rc=$?
+check "C6: 目录声明有子 agent、基线渲染却看不到 <multi_agent_role>(检测器瞎了)⇒ 拒跑、没派发 codex exec、理由点名 blind" \
+  $([[ $rc -ne 0 && ! -e "$d/cap/c12.argv" ]] && grep -qi 'blind' "$d/c12.err"; echo $?)
+CODEX_TEST_NO_MA=1 REVIEW_NO_MY_REVIEW=1 sc c13 review "$d/task.md" "$d/c13.log" "$d/repo" >/dev/null 2>"$d/c13.err"; rc=$?
+check "C6: 对照组:目录里本来就没有子 agent 字段的模型 ⇒ 自检不误拒、照常派发" \
+  $([[ $rc -eq 0 && -e "$d/cap/c13.argv" ]]; echo $?)
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

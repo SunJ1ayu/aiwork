@@ -369,7 +369,7 @@ check "S5: plan.json 记下了 s1 的腿与家族($s1_leg/$s1_family)" $([[ -n "
 vman() {  # vman <file> <json>
   printf '%s\n' "$2" > "$1"
 }
-F1='{"id":"F1","source":"s1","severity":"high","claim":"CLAIM_SENTINEL_F1 retry drops block","evidence":"bin/x:1"}'
+F1='{"id":"F1","source":"s1#1","severity":"high","claim":"CLAIM_SENTINEL_F1 retry drops block","evidence":"bin/x:1"}'
 vman "$d/v-pin.json" "{\"version\":1,\"findings\":[$F1],\"checks\":[{\"id\":\"c1\",\"findings\":[\"F1\"],\"leg\":\"$s1_leg\"}]}"
 n0="$(ncalls "$d")"
 out="$(slice "$d" verify "$run" "$d/v-pin.json" 2>&1)"; rc=$?
@@ -402,13 +402,21 @@ status_json "$d" "$run"
 jq_py "$d/st.json" "[i['role'] for i in s['items'] if i['id']=='c1'] == ['verify'] and [f['status'] for f in s['findings'] if f['id']=='F1'] == ['open'] and s['unacknowledged'] == [] and s['run_state'] == 'attention' and s['budget']['extra_used'] == 1"
 check "S5: status:c1 是 verify 项、F1 未处置 ⇒ attention;s1 的 BLOCK 已被 F1 登记;extra 1/2" $?
 cp "$run/findings.jsonl" "$d/ledger.before"
-vman "$d/v-dup.json" '{"version":1,"findings":[{"id":"F1","source":"s1","severity":"low","claim":"something else"}],"checks":[]}'
+vman "$d/v-dup.json" '{"version":1,"findings":[{"id":"F1","source":"s1#1","severity":"low","claim":"something else"}],"checks":[]}'
 out="$(slice "$d" verify "$run" "$d/v-dup.json" 2>&1)"; rc=$?
 check "S5: 同 id 不同内容的 finding ⇒ 拒绝,问题账逐字节不变(只追加不改写)" \
   $([[ $rc -ne 0 ]] && refused finding "$out" && cmp -s "$d/ledger.before" "$run/findings.jsonl"; echo $?)
 vman "$d/v-src.json" '{"version":1,"findings":[{"id":"F2","source":"nosuch","severity":"low","claim":"x"}],"checks":[]}'
 out="$(slice "$d" verify "$run" "$d/v-src.json" 2>&1)"; rc=$?
 check "S5: finding 出处不是本轮的项 ⇒ 拒绝,问题账不变" \
+  $([[ $rc -ne 0 ]] && refused finding "$out" && cmp -s "$d/ledger.before" "$run/findings.jsonl"; echo $?)
+vman "$d/v-bare.json" '{"version":1,"findings":[{"id":"F4","source":"s2","severity":"low","claim":"x"}],"checks":[]}'
+out="$(slice "$d" verify "$run" "$d/v-bare.json" 2>&1)"; rc=$?
+check "S5: finding 出处只写项名(s2)不写第几次尝试 ⇒ 拒绝,问题账不变(登记必须对准一次尝试)" \
+  $([[ $rc -ne 0 ]] && refused finding "$out" && cmp -s "$d/ledger.before" "$run/findings.jsonl"; echo $?)
+vman "$d/v-noatt.json" '{"version":1,"findings":[{"id":"F5","source":"s2#9","severity":"low","claim":"x"}],"checks":[]}'
+out="$(slice "$d" verify "$run" "$d/v-noatt.json" 2>&1)"; rc=$?
+check "S5: finding 出处指向不存在的尝试(s2#9)⇒ 拒绝,问题账不变" \
   $([[ $rc -ne 0 ]] && refused finding "$out" && cmp -s "$d/ledger.before" "$run/findings.jsonl"; echo $?)
 out="$(slice "$d" decide "$run" F9 rejected --reason nope 2>&1)"; rc=$?
 check "S5: decide 一个没登记过的 finding ⇒ 拒绝,问题账不变" \
@@ -436,7 +444,7 @@ check "S5: 后来的 decide 生效(confirmed ⇒ 重新 open),历史仍在账里
 echo "[S6] 源码变了 ⇒ verify / retry 拒绝(开新一轮,不拿旧代码上的评审继续)"
 printf 'changed\n' >> "$d/repo/app.txt"
 n0="$(ncalls "$d")"; cp "$run/findings.jsonl" "$d/ledger.before"
-vman "$d/v-src2.json" '{"version":1,"findings":[{"id":"F3","source":"s2","severity":"low","claim":"x"}],"checks":[{"id":"c9","findings":["F3"]}]}'
+vman "$d/v-src2.json" '{"version":1,"findings":[{"id":"F3","source":"s2#1","severity":"low","claim":"x"}],"checks":[{"id":"c9","findings":["F3"]}]}'
 out="$(slice "$d" verify "$run" "$d/v-src2.json" 2>&1)"; rc=$?
 check "S6: 仓里改过已跟踪文件 ⇒ verify 拒绝、零调用、问题账不变" \
   $([[ $rc -ne 0 && "$(ncalls "$d")" -eq "$n0" ]] && refused source-changed "$out" && cmp -s "$d/ledger.before" "$run/findings.jsonl"; echo $?)
@@ -491,6 +499,19 @@ PY
 _iv=$?
 check "S8: run 正常结束" $([[ $rc -eq 0 ]]; echo $?)
 check "S8: 三次调用的运行区间互不重叠" "$_iv"
+d="$TMP_ROOT/s8b"; make_fixture "$d"; write_manifest "$d" 2 2
+for _i in s1 s2 overall; do printf 'sleep:1.5\n' > "$d/modes/$_i"; done
+slice "$d" run "$d/m/manifest.json" "$d/repo" "$d/runs/r" >/dev/null 2>&1; rc=$?
+python3 - "$d/calls" "$d/calls.end" <<'PY2'
+import sys
+starts = {(r.split("\t")[1], r.split("\t")[2]): int(r.rstrip("\n").split("\t")[6]) for r in open(sys.argv[1]) if r.strip()}
+ends = {(r.split("\t")[0], r.split("\t")[1]): int(r.rstrip("\n").split("\t")[2]) for r in open(sys.argv[2]) if r.strip()}
+spans = sorted((starts[k], ends[k]) for k in starts)
+sys.exit(0 if len(spans) == 3 and any(a[1] > b[0] for a, b in zip(spans, spans[1:])) else 1)
+PY2
+_ov=$?
+check "S8: 不给 max_concurrency(默认=初始项数)⇒ 至少两条腿的运行区间重叠(真的并行派发)" \
+  $([[ $rc -eq 0 && $_ov -eq 0 ]]; echo $?)
 
 # ═══════════════════════════════════════════════════════════════════════
 echo "[S9] panel-review 的 scoped 开关:拒绝规则、不回落聊天腿、角色腿不进普通池、不推游标"
@@ -558,6 +579,74 @@ PANEL_HEALTH_OVERRIDE=subdeepseek=healthy SLICE_TEST_CALLS="$d/calls" SLICE_TEST
   --pin-leg subdeepseek "$d/task.md" "$d/repo" "$d/p/nofb/items/x/attempt-1/panel" >/dev/null 2>&1
 check "S9: scoped 模式 agent 腿失败 ⇒ 不调聊天腿(恰好 1 次调用,不暗中多花一次)" \
   $([[ "$(ncalls "$d")" -eq 1 && "$(cut -f1 "$d/calls")" == subdeepseek-agent ]]; echo $?)
+
+# ═══════════════════════════════════════════════════════════════════════
+# S10/S11:2026-09-14 panel-review 高风险评审(subdeepseek)发现 D / A 后补的判据。
+echo "[S10] 登记对准一次尝试:同一项两次 BLOCK,只登记第 2 次不会顺带确认第 1 次"
+d="$TMP_ROOT/s10"; make_fixture "$d"; write_manifest "$d" 2 3
+printf 'block\n' > "$d/modes/s1.1"; printf 'block\n' > "$d/modes/s1.2"
+run="$d/runs/r"
+slice "$d" run "$d/m/manifest.json" "$d/repo" "$run" >/dev/null 2>&1
+slice "$d" retry "$run" s1 >/dev/null 2>&1; rc=$?
+status_json "$d" "$run"
+jq_py "$d/st.json" "$rc == 0 and [a['verdict'] for i in s['items'] if i['id']=='s1' for a in i['attempts']] == ['BLOCK','BLOCK']"
+check "S10: 夹具就绪:s1 两次尝试都是 BLOCK" $?
+printf '%s\n' '{"version":1,"findings":[{"id":"G2","source":"s1#2","severity":"high","claim":"second block reason"}],"checks":[]}' > "$d/v2.json"
+out="$(slice "$d" verify "$run" "$d/v2.json" 2>&1)"; rc=$?
+status_json "$d" "$run"
+jq_py "$d/st.json" "$rc == 0 and {'item':'s1','attempt':1,'verdict':'BLOCK'} in s['unacknowledged'] and {'item':'s1','attempt':2,'verdict':'BLOCK'} not in s['unacknowledged']"
+check "S10: 只登记 s1#2 ⇒ s1#1 的 BLOCK 仍在「未登记」里(不按项一笔勾销)" $?
+slice "$d" decide "$run" G2 rejected --reason "stub" >/dev/null 2>&1; rc=$?
+status_json "$d" "$run"
+jq_py "$d/st.json" "$rc == 0 and [f['status'] for f in s['findings'] if f['id']=='G2'] == ['closed'] and s['run_state'] == 'attention'"
+check "S10: G2 处置关闭之后 run_state 仍是 attention(s1#1 的 BLOCK 没人登记)" $?
+printf '%s\n' '{"version":1,"findings":[{"id":"G1","source":"s1#1","severity":"high","claim":"first block reason"}],"checks":[]}' > "$d/v1.json"
+slice "$d" verify "$run" "$d/v1.json" >/dev/null 2>&1; rc=$?
+slice "$d" decide "$run" G1 rejected --reason "stub" >/dev/null 2>&1; rc2=$?
+status_json "$d" "$run"
+jq_py "$d/st.json" "$rc == 0 and $rc2 == 0 and s['unacknowledged'] == [] and s['run_state'] == 'clean'"
+check "S10: s1#1 也登记并处置后 ⇒ 未登记清单为空、clean" $?
+
+echo "[S11] 占了额度却永远等不到终态的尝试:abandon 出口(有活进程引用就拒)"
+d="$TMP_ROOT/s11"; make_fixture "$d"; write_manifest "$d" 2 2
+run="$d/runs/r"
+slice "$d" run "$d/m/manifest.json" "$d/repo" "$run" >/dev/null 2>&1
+s1_leg="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print([i for i in p["items"] if i["id"]=="s1"][0]["leg"])' "$run/plan.json" 2>/dev/null)"
+s1_family="$(panel_leg_family "$s1_leg" 2>/dev/null)"
+# 模拟控制器在 reserve 之后、起子进程之前被砍:盘上只有 reserved.json,没有 plan / state / controller.exit。
+python3 "$d/bin/_panel_slice.py" reserve --run-dir "$run" --item s1 --attempt 2 \
+  --leg "$s1_leg" --family "$s1_family" --category extra 2>/dev/null
+att="$run/items/s1/attempt-2"
+status_json "$d" "$run"
+jq_py "$d/st.json" "[a['state'] for i in s['items'] if i['id']=='s1' for a in i['attempts']] == ['done','unknown'] and s['run_state'] == 'incomplete'"
+check "S11: 夹具就绪:s1#2 只有 reserved.json ⇒ unknown / incomplete" $?
+out="$(slice "$d" retry "$run" s1 2>&1)"; rc=$?
+check "S11: 对照组:unknown 的项照旧不许 retry" $([[ $rc -ne 0 ]] && refused unknown-attempt "$out"; echo $?)
+bash -c 'sleep 30' _ "$att/panel" & _holder=$!
+sleep 0.3
+out="$(slice "$d" abandon "$run" 's1#2' --reason "controller killed before launch" 2>&1)"; rc=$?
+check "S11: 还有进程的命令行引用这次尝试的目录 ⇒ abandon 拒绝(REFUSED alive),不写 abandoned.json" \
+  $([[ $rc -ne 0 && ! -e "$att/abandoned.json" ]] && refused alive "$out"; echo $?)
+kill "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
+out="$(slice "$d" abandon "$run" 's1#2' 2>&1)"; rc=$?
+check "S11: abandon 不给理由 ⇒ 拒绝" $([[ $rc -ne 0 && ! -e "$att/abandoned.json" ]] && refused reason "$out"; echo $?)
+out="$(slice "$d" abandon "$run" 's2#1' --reason "x" 2>&1)"; rc=$?
+check "S11: abandon 一个已有终态(done)的尝试 ⇒ 拒绝(只收 unknown)" \
+  $([[ $rc -ne 0 && ! -e "$run/items/s2/attempt-1/abandoned.json" ]] && refused abandon "$out"; echo $?)
+out="$(slice "$d" abandon "$run" 's1#2' --reason "controller killed before launch" 2>&1)"; rc=$?
+status_json "$d" "$run"
+jq_py "$d/st.json" "$rc == 0 and [a['state'] for i in s['items'] if i['id']=='s1' for a in i['attempts']] == ['done','abandoned'] and s['budget']['extra_used'] == 1 and s['run_state'] == 'clean'"
+_st=$?
+check "S11: 无活进程时 abandon 成功:状态 abandoned(不再是 unknown)、额度照记 1、run 不再卡在 incomplete" \
+  $([[ $_st -eq 0 && -s "$att/abandoned.json" && -s "$att/reserved.json" ]]; echo $?)
+n0="$(ncalls "$d")"
+slice "$d" retry "$run" s1 >/dev/null 2>&1; rc=$?
+check "S11: abandon 之后允许 retry:恰好多 1 次调用,是第 3 次尝试" \
+  $([[ $rc -eq 0 && "$(ncalls "$d")" -eq $((n0+1)) && -s "$run/items/s1/attempt-3/reserved.json" ]]; echo $?)
+cp "$run/items/s1/attempt-1/panel.$s1_leg.result.json" "$att/" 2>/dev/null
+status_json "$d" "$run"
+jq_py "$d/st.json" "[a['state'] for i in s['items'] if i['id']=='s1' for a in i['attempts']][1] == 'done'"
+check "S11: 被 abandon 的尝试事后落了结果(腿其实还活着)⇒ 按结果算 done,abandon 不掩盖真实结果" $?
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
