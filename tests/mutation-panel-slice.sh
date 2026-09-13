@@ -31,7 +31,10 @@ mutate() {  # mutate <编号> <slice|codex> <该打红的断言关键字>   (pyt
   py="$(cat)"
   if [[ "$which" == codex ]]; then base="$CODEX_BASE"; oracle="$CODEX_ORACLE"; else base="$SLICE_BASE"; oracle="$SLICE_ORACLE"; fi
   # 一律 grep -F:断言名里有 `**`、括号、问号,当正则会静默匹配不上(2026-08-23 撞过)。
-  if ! grep "PASS:" <<<"$base" | grep -qF -- "$target"; then
+  # 一律**单条** grep、不走管道:`grep PASS | grep -qF` 在 pipefail 下,grep -q 命中即退出,
+  # 上游 grep 还在写就吃 SIGPIPE ⇒ 整条管道 rc=141 ⇒ 被当成「没匹配上」。2026-09-13 实测
+  # 每 200 次随机漏 2~3 次(关掉 pipefail 为 0/200),第一轮红检的 M4「靶子名过期」就是它。
+  if ! grep -qF -- "PASS: $target" <<<"$base"; then
     echo "  [漏网] $id 的靶子「$target」在基线里不是一条断言 —— 靶子名过期"; MISS=$((MISS+1)); return
   fi
   restore
@@ -39,7 +42,7 @@ mutate() {  # mutate <编号> <slice|codex> <该打红的断言关键字>   (pyt
     echo "  [漏网] $id 的锚点没命中 —— 锚点过期本身就是问题"; MISS=$((MISS+1)); restore; return
   fi
   out="$(bash "$oracle" 2>&1)"
-  if grep "FAIL:" <<<"$out" | grep -qF -- "$target"; then
+  if grep -qF -- "FAIL: $target" <<<"$out"; then
     echo "  [OK]   $id -> 「$target」如期红了"; BIT=$((BIT+1))
   else
     echo "  [漏网] $id -> 改坏了,而「$target」还是绿的 ⇒ 那条断言是摆设"; MISS=$((MISS+1))
