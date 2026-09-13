@@ -622,8 +622,12 @@ jq_py "$d/st.json" "[a['state'] for i in s['items'] if i['id']=='s1' for a in i[
 check "S11: 夹具就绪:s1#2 只有 reserved.json ⇒ unknown / incomplete" $?
 out="$(slice "$d" retry "$run" s1 2>&1)"; rc=$?
 check "S11: 对照组:unknown 的项照旧不许 retry" $([[ $rc -ne 0 ]] && refused unknown-attempt "$out"; echo $?)
-bash -c 'sleep 30' _ "$att/panel" & _holder=$!
+# 占位进程必须**自己**带着这个路径活着:`bash -c 'sleep 30'` 会被 bash 直接 exec 成 `sleep 30`,
+# 命令行里就没有路径了(2026-09-14 实测:第一版夹具就是这样没造出前提,S11 红在夹具上不在实现上)。
+bash -c 'sleep 30; :' _ "$att/panel" & _holder=$!
 sleep 0.3
+tr '\0' '\n' < "/proc/$_holder/cmdline" 2>/dev/null | grep -qxF -- "$att/panel"
+check "S11: 夹具前提:占位进程的命令行里确实带着这次尝试的路径" $?
 out="$(slice "$d" abandon "$run" 's1#2' --reason "controller killed before launch" 2>&1)"; rc=$?
 check "S11: 还有进程的命令行引用这次尝试的目录 ⇒ abandon 拒绝(REFUSED alive),不写 abandoned.json" \
   $([[ $rc -ne 0 && ! -e "$att/abandoned.json" ]] && refused alive "$out"; echo $?)
