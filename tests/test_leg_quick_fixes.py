@@ -138,6 +138,19 @@ class FailureKind(LegCase):
     def test_kimi_five_hour_window_is_a_rate_limit_not_auth_or_runtime(self):
         self.assertEqual(self.emit(KIMI_LIMIT + "\n"), "rate_limit")
 
+    def test_billing_text_that_says_quota_will_reset_is_quota(self):
+        # Review round one, Kimi F2: a payment failure can promise a reset "on the next billing
+        # cycle". That needs a human (top up), so it must stay quota and keep counting toward dead.
+        self.assertEqual(self.emit("HTTP 402: payment required. Your quota will reset on the next "
+                                   "billing cycle.\n"), "quota")
+
+    def test_window_words_in_model_prose_never_exempt_a_failure(self):
+        # Review round one, Kimi F1: with our diagnostic empty the classifier falls back to the
+        # model's report. Prose about "usage limit" (e.g. reviewing this very change) must not turn
+        # a crash into a self-healing window limit.
+        kind = self.emit("", log_text="The adapter maps a 5-hour usage limit to rate_limit.\n")
+        self.assertNotEqual(kind, "rate_limit")
+
     def test_controls_balance_is_quota_and_bad_key_is_auth(self):
         self.assertEqual(self.emit("HTTP 402: Insufficient balance\n"), "quota")
         self.assertEqual(self.emit("Error: 401 unauthorized - invalid api key\n"), "auth")
@@ -155,6 +168,24 @@ class FailureKind(LegCase):
                              str(self.d / "k.log"), str(self.repo)], KIMI_REVIEW_HOME=str(home))
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("5-hour usage limit", proc.stderr)
+
+    def test_subkimi_copies_only_cli_error_lines(self):
+        # Review round one, Kimi F5: copying the whole log would bring model prose back into the
+        # diagnostic, reviving the F1 path through the front door.
+        self.copy("subkimi", "kimi-model", "ro-repo-exec")
+        home = self.d / "review-home"
+        (home / "hooks").mkdir(parents=True)
+        (home / "credentials").mkdir()
+        (home / "config.toml").write_text('default_model = "x"\n')
+        shutil.copy2(ROOT / "kimi-review-home" / "hooks" / "guard.mjs", home / "hooks" / "guard.mjs")
+        (home / "credentials" / "kimi-code.json").write_text("{}")
+        prose = "PROSE_LINE_4d2e the reviewed code handles usage limit errors"
+        self.fake("kimi", "#!/usr/bin/env python3\nprint(%r)\nprint(%r)\nraise SystemExit(1)\n"
+                  % (prose, KIMI_LIMIT))
+        proc = self.run_cmd(["bash", str(self.bin / "subkimi"), "review", str(self.task),
+                             str(self.d / "k2.log"), str(self.repo)], KIMI_REVIEW_HOME=str(home))
+        self.assertIn("5-hour usage limit", proc.stderr)
+        self.assertNotIn("PROSE_LINE_4d2e", proc.stderr)
 
 
 LEG_STUB = """#!/usr/bin/env bash
@@ -190,7 +221,14 @@ class DeadStreak(LegCase):
     def test_window_limit_does_not_grow_the_streak(self):
         row = self.rounds(KIMI_LIMIT, 3)
         self.assertEqual(row[3], "0", row)
-        self.assertNotEqual(row[1], "PASS", row)
+        # Review round one, Kimi F3: health.tsv must say which kind it was; "quota" means top up.
+        self.assertEqual(row[1], "rate_limit", row)
+
+    def test_control_balance_exhaustion_still_counts(self):
+        # Review round one, Kimi F4: exempting quota along with rate_limit would pass the tests above.
+        row = self.rounds("HTTP 402: Insufficient balance", 1)
+        self.assertEqual(row[3], "1", row)
+        self.assertEqual(row[1], "quota", row)
 
     def test_control_runtime_failure_still_counts(self):
         row = self.rounds("boom", 1)
