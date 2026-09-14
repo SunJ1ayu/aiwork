@@ -125,6 +125,12 @@ runlog: mutation-grok-m8-before-oracle rc=1 commit=4207d21 dirty=no at=2026-09-1
 runlog: mutation-grok-m8-after-oracle rc=0 commit=120528e dirty=yes at=2026-09-14T07:15:09Z file=tracks/grok-leg-kimi-model/evidence/20260914T071509Z-01-mutation-grok-m8-after-oracle.txt
 ```
 
+**最终全量回归**(第二轮外审前,跑前树干净,26 组全 0 失败,收据里 `skip` 出现 0 次):
+
+```
+runlog: full-regression-final rc=0 commit=06a814d dirty=no final=yes at=2026-09-14T07:16:59Z file=tracks/grok-leg-kimi-model/evidence/20260914T071659Z-01-full-regression-final.txt
+```
+
 R1 判据先红后绿:
 
 ```
@@ -147,6 +153,8 @@ runlog: delegate-entry-redcheck-longout-green rc=0 commit=9e1bed1 dirty=no at=20
     但二进制自带文档里有真的:`GROK_FOLDER_TRUST=0`「ungates project hooks along with MCP/LSP」
     (叠加 `--always-approve` = 被审仓代码执行)、`GROK_CODE_XAI_API_KEY`/`GROK_AUTH_PROVIDER_*`(绕过登录副本)、
     `compat.claude.agents/rules`、`compat.cursor.agents/rules`(扫 CLAUDE.md 与规则文件;GPT 只关了 hooks/mcps/skills)。
+    另据同一份文档 `compat.claude.agents` 管 `~/.claude/` 具名文件 ⇒ **修复前 Grok 会把业主的 `/root/.claude/CLAUDE.md`
+    读进上下文**(`compat.codex.*` 文档写明 inert,不扫 `~/.codex`)。
     本机 `env` 与 profile 里 `GROK_*` 为 0 个 ⇒ **当下不可利用**;沙箱边界 + 高代价 + 改动小 ⇒ 本单修:
     判据 `17263f4` 注入调用方变量、要求到不了 CLI 且四项扫描为 0,红(收据)→ 修 `b7ff89f` 清掉所有继承的 `GROK_*` → 绿。
   - **P2 AGENTS.md 会进 Grok 上下文(DeepSeek 应修)⇒ 部分采纳。** 二进制文档确认读 `<repo-root>/AGENTS.md`、`<cwd>/AGENTS.md`,
