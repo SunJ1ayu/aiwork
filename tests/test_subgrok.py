@@ -141,11 +141,13 @@ class GrokTest(unittest.TestCase):
         # reviewed-repo code execution. GROK_CODE_XAI_API_KEY would bypass the copied session
         # login. Instruction scans (CLAUDE.md, Claude/Cursor rules and agents) must be off like
         # the hook/MCP/skill scans already are.
+        # A name nobody could hard-code: the sweep must cover every caller GROK_*, not a list.
+        probe = 'GROK_PROBE_' + os.urandom(6).hex().upper()
         result = self.run_leg(extra={'GROK_FOLDER_TRUST':'0', 'GROK_CODE_XAI_API_KEY':'fake-key',
-                                     'GROK_CLAUDE_RULES_ENABLED':'1', 'GROK_WEB_FETCH':'1'})
+                                     'GROK_CLAUDE_RULES_ENABLED':'1', 'GROK_WEB_FETCH':'1', probe:'1'})
         self.assertEqual(result.returncode,0,result.stderr)
         env = json.loads((self.d/'leg.record.json').read_text())['grok_env']
-        for inherited in ('GROK_FOLDER_TRUST','GROK_CODE_XAI_API_KEY','GROK_WEB_FETCH'):
+        for inherited in ('GROK_FOLDER_TRUST','GROK_CODE_XAI_API_KEY','GROK_WEB_FETCH',probe):
             self.assertNotIn(inherited, env)
         for scan in ('GROK_CLAUDE_AGENTS_ENABLED','GROK_CLAUDE_RULES_ENABLED',
                      'GROK_CURSOR_AGENTS_ENABLED','GROK_CURSOR_RULES_ENABLED',
