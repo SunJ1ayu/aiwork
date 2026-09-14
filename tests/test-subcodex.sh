@@ -249,6 +249,11 @@ check "C5: 离线核验仍看到 <multi_agent_role> ⇒ 拒跑、没派发 codex
 CODEX_TEST_CATALOG="gpt-some-other" REVIEW_NO_MY_REVIEW=1 sc c11 review "$d/task.md" "$d/c11.log" "$d/repo" >/dev/null 2>"$d/c11.err"; rc=$?
 check "C5: 模型不在 codex 模型目录里 ⇒ 拒跑、没派发 codex exec(不带着默认目录悄悄去跑)" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c11.argv" ]] && grep -q 'catalog' "$d/c11.err"; echo $?)
+# 2026-09-14 变异红检 C11 漏网后补:检测器自检加的 `next(...)` 在模型缺席时会自己崩 ⇒ 缺席照样拒跑,
+# 「恰好一次」那道检查被盖住、删掉它上面那条断言仍绿。它唯一还看得见的后果是**重复出现**。
+CODEX_TEST_CATALOG="$MODEL $MODEL gpt-some-other" REVIEW_NO_MY_REVIEW=1 sc c13 review "$d/task.md" "$d/c13.log" "$d/repo" >/dev/null 2>"$d/c13.err"; rc=$?
+check "C5: 模型在 codex 模型目录里出现两次 ⇒ 拒跑、没派发 codex exec、理由点名 exactly once" \
+  $([[ $rc -ne 0 && ! -e "$d/cap/c13.argv" ]] && grep -q 'exactly once' "$d/c13.err"; echo $?)
 check "C5: 拒跑之后可丢弃副本同样清理干净" $([[ -z "$(ls -A "$d/ws" 2>/dev/null)" ]]; echo $?)
 # C6:2026-09-14 panel-review 高风险评审(subdeepseek)发现 E 后补 —— 检测器自检。
 # 只看「覆盖后的渲染里没有 <multi_agent_role>」,codex 一改标记名就恒过(注释却写着会拒跑)。

@@ -88,12 +88,15 @@ sub M9 slice "S7: 砍掉之后立刻看:有 unknown、没有一条被说成 fail
 sub M10 slice "S6: 新增未跟踪文件也算源码变了" bin/_panel_slice.py \
   '    for rel in untracked:' '    for rel in []:'
 sub M11 slice "S5: 复核钉回出处同一家族 ⇒ 拒绝" bin/_panel_slice.py \
-  '                    excluded |= item_families(run_dir, src, items)
+  '                    excluded |= item_families(run_dir, parsed[0], items)
             if raw.get("leg") is not None:' \
   '                    pass
             if raw.get("leg") is not None:'
+# M12 锚点带上下一行:abandon 里有同一句理由检查(2026-09-14 那句出现两次 ⇒ 锚点「没命中」)
 sub M12 slice "S5: decide 不给理由 ⇒ 拒绝" bin/_panel_slice.py \
-  '    if not args.reason or not args.reason.strip():' '    if False:'
+  '    if not args.reason or not args.reason.strip():
+        raise Refused("reason", "a decision needs --reason' '    if False:
+        raise Refused("reason", "a decision needs --reason'
 sub M13 slice "S5: 同 id 不同内容的 finding ⇒ 拒绝" bin/_panel_slice.py \
   '                if old != new:' '                if False:'
 sub M14 slice "S9: --scoped-review 与 --track 同时给 ⇒ 拒绝且零调用" bin/panel-review \
@@ -156,7 +159,8 @@ sub C9 codex "C5: 派发带 -c model_catalog_json=<目录副本>" bin/subcodex \
 sub C10 codex "C5: 离线核验仍看到 <multi_agent_role> ⇒ 拒跑" bin/subcodex \
   "|| [[ ! -s \"\$PREVIEW\" ]] || grep -q 'multi_agent_role' \"\$PREVIEW\"; then" \
   "|| [[ ! -s \"\$PREVIEW\" ]]; then"
-sub C11 codex "C5: 模型不在 codex 模型目录里 ⇒ 拒跑" bin/subcodex \
+# C11 靶子 2026-09-14 从「模型不在目录里」挪到「出现两次」:缺席时 next(...) 另有一条路拒跑,删掉这道检查问不出来
+sub C11 codex "C5: 模型在 codex 模型目录里出现两次 ⇒ 拒跑" bin/subcodex \
   'sum(1 for m in entries if isinstance(m, dict) and m.get("slug") == model) != 1' 'False'
 sub C12 codex "C6: 目录声明有子 agent、基线渲染却看不到 <multi_agent_role>(检测器瞎了)⇒ 拒跑" bin/subcodex \
   "      || ! grep -q 'multi_agent_role' \"\$BASELINE\"; then" '      || false; then'
