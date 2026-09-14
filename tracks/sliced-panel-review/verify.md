@@ -56,7 +56,7 @@ runlog: round2-full-regression rc=0 commit=0cc6c66 dirty=yes at=2026-09-14T02:41
 - `round2-mutation-panel-slice rc=1`(咬住 34 / 漏网 3):C11 是**真判据缺口**(E 修复加的 `next(...)` 在模型缺席时自己崩,
   盖住了「恰好一次」计数 ⇒ 删计数全绿),补 C5「出现两次 ⇒ 拒跑」;M11/M12 是锚点过期。`0cc6c66`,重跑 37/0。
 - 最后一份 `round2-full-regression rc=0` 跑在 `0cc6c66`,**那是最后一次改代码的提交**;之后 `e5ea7e9`/`42168d1`/`0762d47`
-  只动了 `tasks/` 与 `observations/`。`dirty=yes` 是当时还没入库的变异收据与 observation(`e5ea7e9` 才提交),`bin/` 已还原。
+  只动了 `tasks/`、`observations/` 和两份 runlog 收据(`e5ea7e9` 入库的变异重跑与总闸收据),`bin/`/`tests/` 零改动。`dirty=yes` 是当时还没入库的变异收据与 observation(`e5ea7e9` 才提交),`bin/` 已还原。
 
 真跑(不是 runlog 收据,原始报告与事件流入库):
 - V2 subcodex 三次:`evidence/v2-live-subcodex/`(README 里有表)。第一版不合格(子 agent 工具 + web__run 在),
@@ -68,6 +68,8 @@ runlog: round2-full-regression rc=0 commit=0cc6c66 dirty=yes at=2026-09-14T02:41
     每项花名册 `selected-count=1`、`escalation=none`、`coverage=INELIGIBLE`,其余腿 off。
   - 三份结果 `review_contract_version=2`,不合格理由**只有** `review_contract_unsupported` ⇒ 状态 done 名副其实;
     普通轮换游标 mtime 仍是 09-11 15:52(没被推);health.tsv 三条腿记 INELIGIBLE、连败 0。
+    **这两句是当时看本机活状态(`logs/.panel-state/`,被 .gitignore 忽略)得来的,仓里没有副本、事后复核不了**;
+    它们要支撑的「契约 2 不推游标、记 INELIGIBLE」由判据 S1/S9 的收据承重。
   - 腿内工具:subdeepseek 只用了 Bash×5 / Read×3;subcodex 事件只有 command_execution 与 agent_message;
     submimo 日志无子 agent / 联网调用。**这只说明这一轮没用,不说明腿做不到**(除 subcodex 已机械关掉)。
   - 三条腿都报出了两处埋的缺陷(练习仓太小,**不能**据此说切片评审更好)。
@@ -120,6 +122,16 @@ runlog: round2-full-regression rc=0 commit=0cc6c66 dirty=yes at=2026-09-14T02:41
 - arbitrated verdict (主裁): 通过。取证轮两个不同家族(xiaomi / deepseek)都给出非降级 PASS、无 BLOCK/NMI、与我两轮自审无冲突;
   第一轮三条中危按判据先行修掉且有红收据与 37/0 变异;第二轮新发现里唯一成立的是只影响旧账本的 low。
   **这不证明规格对**:切片评审是否更好本单不回答,逐腿「不派子 agent」除 subcodex 外仍是读出来的。
+
+- 归档前增量评审(证据寿命闸要求给三行临时路径标 `[仓外不承重]`,证据属交付内容 ⇒ 重审):
+  `panel-sliced-panel-review-archive-delta-review-20260914-123815`(审 `0eb7254`,题面只问 `0762d47..HEAD` 的范围与三处标记):
+  `submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=PASS) subglm=SKIP(health:dead:FAIL:3) subkimi=SKIP(health:dead:FAIL:3) subgemini=SKIP(health:dead:FAIL:6)`
+  - 两腿都指出范围里多一份 `tasks/sliced-panel-review-archive-delta-review.md`(题面本身,我在题里漏列了)。接受。
+  - subdeepseek [low] 本文件「之后三个提交只动了 tasks/ 与 observations/」漏了 `e5ea7e9` 入库的两份收据 —— 核实属实,已改。
+  - subdeepseek [low] V3 那两句游标/health.tsv 的事实仓里无副本 —— 属实,已在该处写明是活状态观察、由 S1/S9 收据承重。
+  - 两腿都核了三处标记不承重(V3 run 目录内容已全量入库;trust 记录的四个工作区名在仓内日志里可复算;探针路径无结论引用)。
+  - 仲裁:增量不改变任何承重结论,维持通过。**这次重审是我造成的**:派取证轮之前没把 `track archive` 预跑一遍,
+    证据寿命闸排在交付绑定之后、派发前就能跑到。
 
 ## Accepted deviations
 
