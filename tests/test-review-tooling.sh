@@ -86,7 +86,7 @@ if [[ "${REVIEW_TOOLING_ENV_SCRUBBED:-}" != "1" ]]; then
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
     -u PANEL_ORACLE_CMD -u PANEL_GLM_LEG -u PANEL_DEEPSEEK_LEG \
-    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG \
+    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG \
     REVIEW_TOOLING_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
 
@@ -96,7 +96,7 @@ if [[ "${REVIEW_TOOLING_ENV_PROBE:-}" == "1" ]]; then
   for _v in PANEL_DIFF_BASE PANEL_INCLUDE ZHIPU_INCLUDE DEEPSEEK_INCLUDE \
     PANEL_HEALTH_OVERRIDE PANEL_SELECTION_START PANEL_STATE_DIR PANEL_STAGGER_MAX \
     PANEL_IMPACT_RISK PANEL_REVIEW_BUDGET PANEL_ORACLE_CMD PANEL_GLM_LEG \
-    PANEL_DEEPSEEK_LEG PANEL_MIMO_LEG PANEL_KIMI_LEG PANEL_GEMINI_LEG; do
+    PANEL_DEEPSEEK_LEG PANEL_MIMO_LEG PANEL_KIMI_LEG PANEL_GEMINI_LEG PANEL_GROK_LEG; do
     [[ -z "${!_v+x}" ]] || exit 1
   done
   exit 0
@@ -1146,7 +1146,7 @@ v13_subkimi_leg() {
   fi
 
   # --- subkimi wrapper against a stub kimi + fixture review home
-  cp "$BIN/subkimi" "$b/subkimi"
+  cp "$BIN/subkimi" "$BIN/kimi-model" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   printf 'default_model = "x"\n' > "$rh/config.toml"
@@ -1179,6 +1179,36 @@ sys.exit(0 if any('tests' in str(x) and 'Bash' in str(x) for x in a) else 1)" "$
   [[ "$(kimiget "$d/k1.json" KIMI_CODE_NO_AUTO_UPDATE)" == "1" ]]
   check "subkimi: auto-update disabled" $?
   grep -q 'Conclusion: PASS' "$d/k1.log"; check "subkimi: verdict recorded in log" $?
+
+  # 改配置后观察 CLI 实际 argv；不用当前版本号作断言。
+  local km
+  for km in kimi-code/fixture-next kimi-code/fixture-later; do
+    printf '%s\n' "$km" > "$b/kimi-model"
+    env -u KIMI_MODEL PATH="$b:$PATH" CAPTURE="$d/model.json" KIMI_REVIEW_HOME="$rh" \
+      bash "$b/subkimi" review "$d/t.md" "$d/model.log" "$d/repo" >/dev/null 2>&1
+    python3 - "$d/model.json" "$km" <<'PY'
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+assert a[a.index('-m')+1] == sys.argv[2]
+PY
+    check "subkimi: 只改模型文件就改变实际 CLI 调用 ($km)" $?
+  done
+  env KIMI_MODEL=kimi-code/fixture-override PATH="$b:$PATH" CAPTURE="$d/override.json" KIMI_REVIEW_HOME="$rh" \
+    bash "$b/subkimi" review "$d/t.md" "$d/override.log" "$d/repo" >/dev/null 2>&1
+  python3 - "$d/override.json" <<'PY'
+import json,sys
+a=json.load(open(sys.argv[1]))['argv']
+assert a[a.index('-m')+1] == 'kimi-code/fixture-override'
+PY
+  check "subkimi: KIMI_MODEL 单次覆盖默认配置" $?
+  for km in '' 'kimi-code/one kimi-code/two'; do
+    printf '%s\n' "$km" > "$b/kimi-model"
+    env -u KIMI_MODEL PATH="$b:$PATH" CAPTURE="$d/invalid.json" KIMI_REVIEW_HOME="$rh" \
+      bash "$b/subkimi" review "$d/t.md" "$d/invalid.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    [[ $rc -ne 0 && ! -e "$d/invalid.json" ]]
+    check "subkimi: 空或非法模型配置不派发" $?
+  done
+  cp "$BIN/kimi-model" "$b/kimi-model"
 
   env PATH="$b:$PATH" CAPTURE="$d/k2.json" KIMI_REVIEW_HOME="$rh" STUB_REVIEW_OUT="no verdict here" \
     bash "$b/subkimi" review "$d/t.md" "$d/k2.log" "$d/repo" >/dev/null 2>&1; rc=$?
@@ -1443,7 +1473,7 @@ v16_timeout_and_blind_chat_leg() {
   # 07-27 取证:kimi 900s 被砍时,最值钱的发现已经在正文里,唯独裁决行没写成
   # (prompt 原文要求 "MUST end your review with a final line")。工具调用只有个位数,
   # 时间全花在长推理上 —— 所以解法不是缩小它的自读面,而是让裁决先落地。
-  cp "$BIN/subkimi" "$pb/subkimi"
+  cp "$BIN/subkimi" "$BIN/kimi-model" "$pb/"
   cp "$BIN/ro-repo-exec" "$pb/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   printf 'default_model = "x"\n' > "$rh/config.toml"
@@ -3212,7 +3242,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$BIN/kimi-model" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cp "$BIN/_review-workspace.sh" "$b/" 2>/dev/null || true
 
@@ -3345,10 +3375,10 @@ PY
     && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r3=$?
   local seen3; seen3="$(cat "$d/o3" 2>/dev/null || echo 没跑)"
   check "V36: subkimi 副本可写、原仓只读(双向试写:$seen3)" $r3
-  python3 - "$d/kimi.facts.json" <<'PY'
+  python3 - "$d/kimi.facts.json" "$(cat "$b/kimi-model")" <<'PY'
 import json,sys
 p=json.load(open(sys.argv[1]))
-assert p['model']['requested'] == p['model']['invoked'] == 'kimi-code/k3'
+assert p['model']['requested'] == p['model']['invoked'] == sys.argv[2]
 assert p['source'] and p['view'] == {'delivery_state':'complete','mode':'full_snapshot'}
 assert p['process_state'] == 'exited' and p['verdict'] == 'PASS'
 PY
@@ -3409,7 +3439,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$BIN/kimi-model" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -3705,7 +3735,7 @@ v40_second_panel_findings() {
   fi
 
   cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/deepseek-model" "$BIN/subagent" "$BIN/submimo" \
-     "$BIN/subkimi" "$BIN/ro-repo-exec" "$b/"
+     "$BIN/subkimi" "$BIN/kimi-model" "$BIN/ro-repo-exec" "$b/"
   [[ -f "$BIN/_my-review-gate.sh" ]] && cp "$BIN/_my-review-gate.sh" "$b/"
   [[ -f "$BIN/_review-home-guard.sh" ]] && cp "$BIN/_review-home-guard.sh" "$b/"
 
@@ -3888,6 +3918,24 @@ SEL
     [[ -f "$rt/config.toml" ]] && grep -q "$rt/hooks/guard.mjs" "$rt/config.toml" \
       && ! grep -q '/root/aiwork/kimi-review-home/hooks' "$rt/config.toml"
     check "V40⑦: 运行期 home 的 hook 指向自己那份 guard(不是仓内种子 ⇒ 副本不是死代码)" $?
+    # 用未来模型名验证种子没有第二份硬编码，检查实际生成的配置。
+    local km
+    for km in kimi-code/fixture-next kimi-code/fixture-later; do
+      printf '%s\n' "$km" > "$b/kimi-model"
+      env -u KIMI_MODEL PATH="$b:$PATH" HOME="$fakehome" REVIEW_NO_MY_REVIEW=1 \
+        bash "$b/subkimi" review "$d/t.md" "$d/model-config.log" "$repo" >/dev/null 2>&1
+      python3 - "$rt/config.toml" "$km" <<'PY'
+import sys,tomllib
+c=tomllib.load(open(sys.argv[1],'rb'))
+alias=sys.argv[2]
+assert c['default_model'] == alias
+assert list(c['models']) == [alias]
+m=c['models'][alias]
+assert m['model'] == alias.split('/',1)[1]
+assert m['max_context_size'] == 1048576 and m['default_effort'] == 'max'
+PY
+      check "V40⑦: 模型文件驱动运行期 alias 和 API model ID ($km)" $?
+    done
   else
     bad "V40⑦: hook 指向运行期 home(前置不满足:真种子里没有 config.toml)"
   fi

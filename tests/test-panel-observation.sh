@@ -15,7 +15,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 本机为"判据里飘着的全局 export"记过账(08-18,一天五条假绿)。
 if [[ "${PANEL_OBS_ENV_SCRUBBED:-}" != "1" ]]; then
   exec env -u PANEL_MIMO_LEG -u PANEL_DEEPSEEK_LEG -u PANEL_GLM_LEG \
-    -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG \
+    -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG \
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
     -u PANEL_DIFF_BASE -u PANEL_INCLUDE -u PANEL_ORACLE_CMD \
@@ -60,6 +60,7 @@ case "${AIWORK_REVIEW_ADAPTER:?}" in
   subglm) model=glm-4.5 ;;
   subkimi) model=kimi-code/k2.5 ;;
   subgemini) model=gemini-2.5-pro ;;
+    subgrok) model=grok-fixture ;;
 esac
 object_format="$(git -C "$4" rev-parse --show-object-format)"
 head_oid="$(git -C "$4" rev-parse HEAD)"

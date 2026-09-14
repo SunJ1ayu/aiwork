@@ -25,7 +25,7 @@ if [[ "${PANEL_ROSTER_ENV_SCRUBBED:-}" != "1" ]]; then
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
     -u PANEL_ORACLE_CMD -u PANEL_GLM_LEG -u PANEL_DEEPSEEK_LEG \
-    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG \
+    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG \
     PANEL_ROSTER_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
 PASS=0; FAIL=0
@@ -48,6 +48,7 @@ if [[ "$3" -eq 0 ]]; then
     subglm) model=glm-4.5 ;;
     subkimi) model=kimi-code/k2.5 ;;
     subgemini) model=gemini-2.5-pro ;;
+    subgrok) model=grok-fixture ;;
   esac
   object_format="\$(git -C "\$4" rev-parse --show-object-format)"
   head_oid="\$(git -C "\$4" rev-parse HEAD)"
