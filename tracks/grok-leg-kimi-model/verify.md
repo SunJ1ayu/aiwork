@@ -56,6 +56,14 @@
   - 同型排查(不在本单修,记账):`bin/` 下 `| grep -q` 共 18 处。开 pipefail 且方向是**假绿**的只有
     `track-commit-msg` 查版本号 bump 的 4 处(`git diff -U0 -- <版本文件> | grep -qE`,输出通常很小,概率低);
     `_evidence.sh` 3 处只会误报且调用方未开 pipefail;其余是误匹配或输出很小。
+- **G4 被审仓里的 Grok 项目配置(文档级确认,未真跑)**:Grok CLI 内嵌文档(`grok-native` strings):项目级
+  `.grok/config.toml` 只贡献 `[mcp_servers]`/`[plugins]`/`[permission]`/`[mcp] max_output_bytes`;项目 hooks 与仓内
+  MCP/LSP 要过 folder-trust(`trusted_folders.toml`),未信任即静默跳过;`--always-approve` 下「deny 规则、hooks、
+  admin lock 仍生效」。subgrok 每次用全新 `GROK_HOME` ⇒ 信任清单为空 ⇒ 被审仓带进来的 hooks/MCP 不启用。
+  没找到「always-approve 绕过 folder-trust」的说法,但这是读文档不是实测。项目 `AGENTS.md` 会进上下文(提示注入面),与其他腿同。
+- **K3 subkimi 并发渲染竞争(low)**:运行期 home 是共享的,每次按本次模型整份重写 `config.toml`(原子替换)。
+  两个**不同** `KIMI_MODEL` 的 subkimi 并发时,后写者会把先跑者要的 `[models."<alias>"]` 覆盖掉 ⇒ 先跑者报
+  「model not configured」而失败。旧版种子同时列两种模型,没有这个竞争。默认模型相同的并发(panel-slice)渲染结果逐字节一致,不受影响。
 - **G3 凭证副本在强杀后残留(info)**:subgrok 的清理靠 EXIT trap,SIGKILL(`timeout -k`)时不跑 ⇒ 临时 home 里的
   auth.json 副本(600)留在 workspace 根。workspace 根本身就没有过期清扫(现存 392 个残留快照,约 83M,各腿都有)。
 
@@ -92,6 +100,12 @@ runlog: redcheck-kimi-model-rerun rc=0 commit=9e1bed1 dirty=yes at=2026-09-14T06
 ```
 runlog: mutation-grok-before-oracle rc=1 commit=cdd1cc4 dirty=yes at=2026-09-14T06:25:51Z file=tracks/grok-leg-kimi-model/evidence/20260914T062551Z-01-mutation-grok-before-oracle.txt
 runlog: mutation-grok-after-oracle rc=0 commit=cdd1cc4 dirty=yes at=2026-09-14T06:26:43Z file=tracks/grok-leg-kimi-model/evidence/20260914T062643Z-01-mutation-grok-after-oracle.txt
+```
+
+全量回归(最终,跑前树干净,26 组;收据里 `skip` 出现 0 次):
+
+```
+runlog: full-regression rc=0 commit=78de17d dirty=no final=yes at=2026-09-14T06:36:05Z file=tracks/grok-leg-kimi-model/evidence/20260914T063605Z-01-full-regression.txt
 ```
 
 R1 判据先红后绿:
