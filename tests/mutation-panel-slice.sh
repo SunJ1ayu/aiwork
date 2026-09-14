@@ -118,6 +118,18 @@ sub M19 slice "S7: 还是 unknown 的项不许 retry" bin/_panel_slice.py \
   '        if latest["state"] == "unknown":' '        if False:'
 sub M20 slice "S3: 自审文件在被评审仓内 ⇒ 拒绝且零调用" bin/_panel_slice.py \
   '        if inside(candidate, repo_real):' '        if False:'
+# M21~M25:2026-09-14 高风险评审发现 A / D / F 修复后补的
+sub M21 slice "S8: 不给 max_concurrency(默认=初始项数)⇒ 至少两条腿的运行区间重叠" bin/panel-slice \
+  '  [[ "$conc" =~ ^[1-9][0-9]*$ ]] || conc=1' '  conc=1'
+sub M22 slice "S11: 还有进程的命令行引用这次尝试的目录 ⇒ abandon 拒绝" bin/_panel_slice.py \
+  '        alive = processes_referencing(attempt_dir)' '        alive = []'
+sub M23 slice "S10: 只登记 s1#2 ⇒ s1#1 的 BLOCK 仍在「未登记」里" bin/_panel_slice.py \
+  'and (item["id"], a["n"]) not in acknowledged):' 'and item["id"] not in {k[0] for k in acknowledged}):'
+sub M24 slice "S11: abandon 一个已有终态(done)的尝试 ⇒ 拒绝" bin/_panel_slice.py \
+  '        if state != "unknown":' '        if False:'
+sub M25 slice "S5: finding 出处只写项名(s2)不写第几次尝试 ⇒ 拒绝" bin/_panel_slice.py \
+  'parsed = split_source(raw["source"]) if isinstance(raw["source"], str) else None' \
+  'parsed = (split_source(raw["source"]) or (raw["source"], 1)) if isinstance(raw["source"], str) else None'
 
 echo "== 红检开始(GPT 整体腿 subcodex)=="
 sub C1 codex "C1: --disable multi_agent(" bin/subcodex \
@@ -146,6 +158,8 @@ sub C10 codex "C5: 离线核验仍看到 <multi_agent_role> ⇒ 拒跑" bin/subc
   "|| [[ ! -s \"\$PREVIEW\" ]]; then"
 sub C11 codex "C5: 模型不在 codex 模型目录里 ⇒ 拒跑" bin/subcodex \
   'sum(1 for m in entries if isinstance(m, dict) and m.get("slug") == model) != 1' 'False'
+sub C12 codex "C6: 目录声明有子 agent、基线渲染却看不到 <multi_agent_role>(检测器瞎了)⇒ 拒跑" bin/subcodex \
+  "      || ! grep -q 'multi_agent_role' \"\$BASELINE\"; then" '      || false; then'
 
 printf -- '---- 合计 咬住=%s 漏网=%s ----\n' "$BIT" "$MISS"
 for f in "${TARGETS[@]}"; do
