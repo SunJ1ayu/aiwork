@@ -54,5 +54,14 @@ mutant M7-不要求is_error为False bin/_grok-stream.py \
   'and terminal.get("is_error") is False' 'and True' \
   test_empty_or_failed_or_wrong_model_never_succeeds
 
+mutant M8-只清测试点名的三个变量 bin/subgrok \
+  '[[ "$_name" == GROK_* ]] && GROK_ENV_UNSET+=(-u "$_name")' \
+  'case "$_name" in GROK_FOLDER_TRUST|GROK_CODE_XAI_API_KEY|GROK_WEB_FETCH) GROK_ENV_UNSET+=(-u "$_name") ;; esac' \
+  test_caller_grok_env_and_repo_instruction_scans_do_not_reach_cli
+mutant M9-不关规则文件扫描 bin/subgrok \
+  '    GROK_CLAUDE_RULES_ENABLED=0 GROK_CURSOR_RULES_ENABLED=0 \' \
+  '    \' \
+  test_caller_grok_env_and_repo_instruction_scans_do_not_reach_cli
+
 [[ -z "$(git status --porcelain -- "${IMPL[@]}")" ]] || { echo "恢复失败"; exit 2; }
 exit "$escaped"
