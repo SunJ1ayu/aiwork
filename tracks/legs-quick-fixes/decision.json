@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "track": "legs-quick-fixes",
+  "impact": {
+    "level": "high",
+    "factors": [
+      "judging_control",
+      "cross_module"
+    ]
+  },
+  "design": {
+    "uncertainty": "low",
+    "premise_attack": {
+      "status": "not_required",
+      "evidence": []
+    }
+  },
+  "execution_plan": {
+    "adapter": "main",
+    "model": null
+  },
+  "outcome": {
+    "verdict": null
+  }
+}
