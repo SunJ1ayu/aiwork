@@ -10,6 +10,6 @@
 - [x] T3 A2 失败归类:窗口限额=rate_limit 先于 auth;subkimi 抄 CLI error 行到诊断
 - [x] T4 A3 连败计数:rate_limit 冷却但不计数
 - [x] T5 A4 opencode `continue_loop_on_deny`;A5 OpenCode Go 会话头
-- [ ] T6 判据转绿 + 全量回归 `runlog --final`
-- [ ] T7 真跑冒烟:GLM 底座腿、GLM 聊天回落腿、Kimi 各一次(在使用现场验证)
+- [x] T6 判据转绿 + 全量回归 `runlog --final`
+- [x] T7 真跑冒烟:GLM 底座腿、GLM 聊天回落腿、Kimi 各一次(在使用现场验证)
 - [ ] T8 预跑归档闸 → high 外审 → 主裁 → 归档
