@@ -33,6 +33,7 @@ assert home.parent == cwd.parent and home != cwd
 assert arg('--leader-socket') == str(home/'leader.sock')
 assert 'use_leader = false' in (home/'config.toml').read_text()
 assert '--no-subagents' in a and '--no-plan' in a
+assert '--disable-web-search' in a
 assert arg('--tools') == 'read_file,list_dir,grep,run_terminal_cmd'
 assert arg('--disallowed-tools') == 'search_tool,use_tool'
 assert '--always-approve' in a
@@ -67,8 +68,10 @@ emit({'type':'assistant','message':{'model':model,'content':[{'type':'text','tex
 if case=='timeout': time.sleep(20)
 if case=='truncated': raise SystemExit(0)
 if case=='malformed': print('{broken',flush=True)
+# cancelled/is_error: CLI claims subtype=success, yet the turn did not end normally.
 emit({'type':'result','subtype':'error_max_turns' if case=='turns' else 'success',
-      'is_error':case=='turns','stop_reason':'max_turns' if case=='turns' else 'end_turn',
+      'is_error':case in ('turns','is_error'),
+      'stop_reason':{'turns':'max_turns','cancelled':'cancelled'}.get(case,'end_turn'),
       'num_turns':2,'result':text})
 if case=='exit': raise SystemExit(42)
 '''
@@ -144,7 +147,7 @@ class GrokTest(unittest.TestCase):
         self.assertEqual(json.loads((self.d/'leg.record.json').read_text())['model'],'grok-4.8')
 
     def test_empty_or_failed_or_wrong_model_never_succeeds(self):
-        for case in ('empty','no_verdict','turns','truncated','malformed','model','exit'):
+        for case in ('empty','no_verdict','turns','truncated','malformed','model','exit','cancelled','is_error'):
             with self.subTest(case=case):
                 result = self.run_leg(case=case)
                 self.assertNotEqual(result.returncode,0)

@@ -313,6 +313,16 @@ EOF
   bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh \
        --must-fail "期望 NEW" --oracle 'bash tests/oracle.sh' >"$d/e8" 2>&1; rc=$?
   check "E1: 红在目标断言上 ⇒ 通过" $([[ $rc -eq 0 ]]; echo $?)
+  #    ⑦b 判据输出很长、目标断言排在前面(真实回归套件就是这形状)⇒ 照样认得出。
+  #    2026-09-14 实事故(track grok-leg-kimi-model):test-review-tooling.sh 红在
+  #    「只改模型文件就改变实际 CLI 调用」上,redcheck 却报 rc=5「没红在该红的地方」。
+  #    `printf "$OUT" | grep -q` 在 pipefail 下:grep 一命中就退,printf 还在写 ⇒ SIGPIPE
+  #    ⇒ 管道 rc=141 ⇒ 「命中」被读成「没命中」。实测 40 次错 11~19 次;
+  #    这里让命中之后还有 ~1MB 输出,把竞态变成确定事件。
+  bash "$BIN/redcheck" --repo "$repo" --base HEAD~1 --impl src/impl.sh --must-fail "期望 NEW" \
+       --oracle 'bash tests/oracle.sh; rc=$?; head -c 1000000 /dev/zero | tr "\0" x | fold -w 100; exit $rc' \
+       >"$d/e8b" 2>&1; rc=$?
+  check "E1: 目标断言在长输出前面 ⇒ 仍判红在目标上(rc=0,不许被 SIGPIPE 读成没命中)" $([[ $rc -eq 0 ]]; echo $?)
 
   # ⑧ --impl 里有**基线上还不存在的新文件**(整单新增一个工具就是这形状)。
   #    "退回"对它的正确含义是**删掉**,不是 checkout 报错就算了 ——
