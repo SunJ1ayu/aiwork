@@ -14,6 +14,8 @@
 - A4 `bin/subagent` 渲染 opencode 配置加 `experimental.continue_loop_on_deny = true`。
 - A5 `bin/subchat` 只对 zhipu(OpenCode Go)让引擎带会话头;`bin/submimo-review` 每次运行生成一个 id,重试沿用同一个。
 
+- A6(第二轮外审后加入)`bin/_review_result.py` 裁决值认独占一行的中文词,括号英文须一致 —— proposal 里「不先放宽解析器」的前提被 09-14 GLM 真评审证伪(A1 重申契约后仍写 `结论：通过`)。
+
 ## Key trade-offs / risks
 
 - A3 把「额度窗口」和「余额耗尽」分开:余额耗尽要人充值,仍应停轮换;窗口限额 5 小时自愈,不该停。

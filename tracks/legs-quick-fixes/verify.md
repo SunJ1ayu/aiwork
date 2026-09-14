@@ -62,6 +62,14 @@ runlog: full-regression rc=0 commit=592a335 dirty=yes final=yes at=2026-09-14T07
 runlog: oracle-r1-findings-red rc=1 commit=e75ae0a dirty=yes at=2026-09-14T08:28:50Z file=tracks/legs-quick-fixes/evidence/20260914T082850Z-01-oracle-r1-findings-red.txt
 runlog: oracle-r1-findings-green rc=0 commit=cc07024 dirty=no at=2026-09-14T08:30:24Z file=tracks/legs-quick-fixes/evidence/20260914T083024Z-01-oracle-r1-findings-green.txt
 runlog: full-regression-r1 rc=0 commit=a2166ec dirty=no final=yes at=2026-09-14T08:30:33Z file=tracks/legs-quick-fixes/evidence/20260914T083033Z-01-full-regression-r1.txt
+``` **第二轮外审后过期,见下。**
+
+第二轮外审发现(DeepSeek F1~F4 + GLM 中文裁决)→ 判据 `233d681` 先红 → 修 `6d8cbf6` → 绿 → 最终全量回归:
+
+```
+runlog: oracle-r2-findings-red rc=1 commit=233d681 dirty=yes at=2026-09-14T09:00:52Z file=tracks/legs-quick-fixes/evidence/20260914T090052Z-01-oracle-r2-findings-red.txt
+runlog: oracle-r2-findings-green rc=0 commit=6d8cbf6 dirty=no at=2026-09-14T09:02:01Z file=tracks/legs-quick-fixes/evidence/20260914T090201Z-01-oracle-r2-findings-green.txt
+runlog: full-regression-r2 rc=0 commit=99a94ae dirty=no final=yes at=2026-09-14T09:02:11Z file=tracks/legs-quick-fixes/evidence/20260914T090211Z-01-full-regression-r2.txt
 ```
 
 ## Review
@@ -82,7 +90,28 @@ runlog: full-regression-r1 rc=0 commit=a2166ec dirty=no final=yes at=2026-09-14T
   - **Kimi F5(INFO)部分采纳。** 补 `test_subkimi_copies_only_cli_error_lines`(只抄错误行、不抄正文);
     契约判据只跑 GLM 不跑 DeepSeek:两者共用同一 `REVIEW_PROMPT` 变量,接受。
   - MiMo PASS:结论与我自审一致(回落路径是窄概率旧逻辑、会话头四项成立、A1/A4 无副作用、判据盲区已记),无新发现。
-- arbitrated verdict (主裁): 第一轮后改了交付(F1~F3)⇒ 需第二轮 high 复核同一 subject 后再裁。
+- 腿的花名册(第二轮,subject `b417a2d`):
+  submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=BLOCK) subglm=FAIL(rc=1,降级:回落聊天腿也没成) subkimi=SKIP(rotation) subgemini=SKIP(health:dead:FAIL:6) subgrok=off
+- findings(第二轮,逐条核实):
+  - **DeepSeek F1(HIGH)成立,已修 —— 我上一轮修 F2 时打坏了一条真实文案。** `refs/ctxdiet-backup-20260726-210435/memory/subkimi-moonshot-wrapper.md:39`
+    与 `logs/panel-rcpycache.subkimi.log` 原文 `error: failed to run prompt: provider.api_error: 403 You've reached your usage limit for this
+    billing cycle. Your quota will be refreshed in the next cycle …`:下个周期自愈,但 `billing` 否决后被 `403` 认成 auth 并计连败。
+    教训:**我拿一条假设的欠费文案(402 … next billing cycle)去收紧,打坏了一条真实出现过的文案** —— 收紧前该先去日志里搜真实措辞。
+    否决词改为 `payment|balance|402`。
+  - **DeepSeek F2(MEDIUM)成立,已补判据**:加真实 billing-cycle 原文 ⇒ rate_limit。
+  - **DeepSeek F3(MEDIUM)部分不成立**:它说判据里 kimi 错误行是「按期望前缀捏造的」。实为两份真实腿日志逐字复制
+    (09-09 `provider.auth_error`、08-08 `provider.api_error`,前缀都是 `error: failed to run prompt:`);判据里已注明出处。
+    CLI 改措辞就退回 runtime 的风险仍在,已在风险判断里。
+  - **DeepSeek F4(LOW)成立,已修判据**:F1 断言从「≠ rate_limit」改为「= runtime」。
+  - **DeepSeek F5(LOW,旧有)成立,不在本单**:agent 腿(subagent)与 submimo 非零退出时 facts 写死 `failure_kind=runtime`,文本归类器根本不跑
+    ⇒ A2/A3 只惠及 subkimi 与聊天腿。写死是有意的:subagent 的 stderr 里是底座工具轨迹(含被审代码里的 auth 等词),放开就回到 08-28 那类误判。
+    要做需像 subkimi 一样只抽供应商错误行 —— 记账。
+  - **GLM FAIL 查实不是腿坏了**:opencode DB 该会话 `finish=stop`、33 条消息,最后一段正文完整写完审查,收尾一行 `结论：通过`
+    ⇒ 解析器不认中文值 ⇒ 整份作废,回落聊天腿又把工具调用当文本输出(`<tool_call>bash…`)无裁决。**A1 的「任务书后重申契约」没拦住它**
+    (09-07 `结论：通过 (PASS)` 之后第二次)⇒ 设计里「不先放宽解析器」的前提被证伪:题面位置不够,中文值本身要认。
+    判据先红:独占一行的 `通过/不通过/阻断/需要更多信息` 认;括号英文须一致;`通过但有疑问`/`基本通过`/行内提及/`通过 | 阻断` 仍 UNKNOWN。
+  - MiMo PASS:与自审一致,无新发现。
+- arbitrated verdict (主裁): 第二轮后又改了交付(F1、中文裁决)⇒ 第三轮 high 复核后再裁。
 
 ## Accepted deviations
 
