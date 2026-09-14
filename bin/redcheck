@@ -228,7 +228,9 @@ if [[ $ORC -eq 0 ]]; then
 fi
 
 if [[ -n "$MUSTFAIL" ]]; then
-  if ! printf '%s' "$OUT" | grep -qE "$MUSTFAIL"; then
+  # here-string,不是管道:`printf | grep -q` 在 pipefail 下,grep 命中即退 ⇒ printf 吃 SIGPIPE
+  # ⇒ 管道 rc=141 ⇒ 命中被读成没命中(2026-09-14 真实回归套件上 40 次错 11~19 次,判据 E1⑦b)。
+  if ! grep -qE "$MUSTFAIL" <<< "$OUT"; then
     echo
     echo "  ❌ 判据红了,但**没红在该红的地方**:输出里找不到 /$MUSTFAIL/。"
     echo "     红在别处(炸了、依赖缺了、语法错了)和没红检过是一回事。"
