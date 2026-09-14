@@ -259,5 +259,7 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
   读报告,再在 `OUT/subcodex.stream.jsonl` 里核实际调用过什么。
 - 敞着的(如实写):`~/.codex/skills` 的 skill 清单仍在它的提示里、它会去读;每次 exec 往业主
   `~/.codex/config.toml` 追加一条临时副本的 trust 记录;`--json` 事件流不报模型名(facts 里 reported 为空)。
+  没评估过的更小修法:`CODEX_HOME=<私有目录>` + 私有 `auth.json` 软链到业主那份(codex 若换名写 auth.json,
+  软链会变成独立副本 ⇒ 刷新令牌分叉;要拿真登录实验才知道,动之前问业主)。
 - 额度耗尽分型 `quota`(健康池据此冷却);无裁决行 rc≠0;`fix` 故意不支持(实现走 delegate-codex)。
 - 手动并排拉一条 GPT 评审也直接用它,别再裸敲 `codex exec`(那几个开关手敲必漏,子 agent 那件手敲也关不掉)。

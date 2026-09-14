@@ -111,7 +111,7 @@ agent to verify, never a verdict to adopt.
   keep a `.err` sidecar.
 - `bin/panel-explore BRIEF [REPO] [LOG_PREFIX]` — divergent: three model
   families each propose ONE direction; no verdict by design.
-- `bin/panel-slice run|verify|retry|decide|status` — sliced review, single layer:
+- `bin/panel-slice run|verify|retry|abandon|decide|status` — sliced review, single layer:
   the main agent's manifest splits one change into 2..8 slices; each slice is one
   session of one healthy leg from a distinct model family, plus one independent
   overall leg (default `subcodex`, GPT) whose family no slice uses. N slices =

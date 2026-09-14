@@ -88,9 +88,13 @@ REPO_DIR="$(review_workspace_repo)" || exit 78
 # (multi_agent_version=v2),feature 开关管不到。实测有效的两件(两次真跑分别去掉一件做过归因):
 #   · 给本次调用一份去掉 multi_agent_version 的目录副本(-c model_catalog_json=);
 #   · -c web_search="disabled"。
-# 目录那件有**机器核验**:派发前用同一组开关跑 `codex debug prompt-input`(离线、不花额度、<1s),
-# 渲染出来还有 <multi_agent_role> 就拒跑 —— codex 哪天换了字段名,这里会拒跑,而不是悄悄又能派子 agent。
-# 联网那件离线看不到工具表,只有真跑能证明;升 codex 后重跑一次真探针(legs.md 记着怎么跑)。
+# 目录那件有**机器核验**,派发前离线跑 `codex debug prompt-input`(不花额度、<1s):
+#   ① 检测器自检:目录声明了 multi_agent_version 时,**不覆盖目录**的基线渲染里必须看得见
+#      <multi_agent_role> —— 看不见说明 codex 改了标记名,下面那道检查已经瞎了 ⇒ 拒跑;
+#   ② 覆盖目录后的渲染里还有 <multi_agent_role> ⇒ 拒跑(改了字段名、剥离没生效)。
+# 覆盖不到的一种(如实写):codex **同时**改了目录字段名和渲染标记名 ⇒ ①② 都看不见 ⇒ 放行。
+# 2026-09-14 之前这里写的是「换了字段名会拒跑」,只说对了一半(评审发现 E)。
+# 所以升 codex 后仍要重跑一次真探针;联网那件离线看不到工具表,更只能靠真探针(legs.md 记着怎么跑)。
 # 敞着的两件(如实写,不宣称严格):业主 ~/.codex/skills 里的 skill 仍列在它的提示里、它会去读;
 # 每次 `codex exec` 会往业主 ~/.codex/config.toml 追加一条这个临时副本的 trust 记录。
 CODEX_CFG=(
@@ -102,19 +106,30 @@ CODEX_CFG=(
   --disable memories --disable hooks
 )
 CATALOG="$REVIEW_WORKSPACE_DIR/model-catalog.json"
-if ! "$CODEX" debug models 2>/dev/null | python3 -c '
+MA_DECLARED="$("$CODEX" debug models 2>/dev/null | python3 -c '
 import json, sys
 model, out = sys.argv[1], sys.argv[2]
 data = json.load(sys.stdin)
 entries = data.get("models") if isinstance(data, dict) else None
 if not isinstance(entries, list) or sum(1 for m in entries if isinstance(m, dict) and m.get("slug") == model) != 1:
     sys.exit(f"model {model} is not exactly once in the codex model catalog")
+entry = next(m for m in entries if isinstance(m, dict) and m.get("slug") == model)
+print("declared" if "multi_agent_version" in entry else "absent")
 for m in entries:
     if isinstance(m, dict):
         m.pop("multi_agent_version", None); m.pop("multi_agent_reasoning_effort", None)
 json.dump(data, open(out, "w", encoding="utf-8"))
-' "$MODEL" "$CATALOG"; then
+' "$MODEL" "$CATALOG")" || {
   echo "subcodex: cannot build a sub-agent-free model catalog for $MODEL (fail closed)" >&2; exit 78
+}
+BASELINE="$REVIEW_WORKSPACE_DIR/prompt-baseline.json"
+if [[ "$MA_DECLARED" == declared ]]; then
+  if ! ( cd "$REPO_DIR" && "$CODEX" debug prompt-input "${CODEX_CFG[@]}" probe ) > "$BASELINE" 2>/dev/null \
+      || ! grep -q 'multi_agent_role' "$BASELINE"; then
+    echo "subcodex: the sub-agent check is blind: the catalog declares multi_agent_version for $MODEL but codex" \
+      "no longer renders <multi_agent_role> without the override; re-verify with a live probe (fail closed)" >&2
+    exit 78
+  fi
 fi
 CODEX_CFG+=(-c "model_catalog_json=\"$CATALOG\"")
 PREVIEW="$REVIEW_WORKSPACE_DIR/prompt-preview.json"

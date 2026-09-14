@@ -31,6 +31,7 @@ Usage:
   panel-slice run [--require-my-review PATH | --no-my-review] MANIFEST [REPO_DIR] [RUN_DIR]
   panel-slice verify RUN_DIR VERIFY_MANIFEST
   panel-slice retry  RUN_DIR ITEM_ID [--leg LEG]
+  panel-slice abandon RUN_DIR ITEM#N --reason TEXT
   panel-slice decide RUN_DIR FINDING_ID confirmed|rejected|accepted-risk|inconclusive --reason TEXT
   panel-slice status RUN_DIR [--json]
 
@@ -40,8 +41,13 @@ run      main agent's manifest: goal + 2..8 slices + overall leg + extra budget.
          family is not used by any slice. N slices => exactly N+1 leg sessions.
 verify   record findings (append-only) and dispatch targeted checks; every checker
          comes from a family that did not raise the finding. Uses extra budget.
-retry    re-dispatch one item (failed / no verdict / timeout ...). Uses extra budget.
-         Earlier attempts stay on disk; a later PASS never hides an earlier BLOCK.
+retry    re-dispatch one item as a new attempt: a failed / no-verdict / timed-out one, or a
+         done one you want looked at again. Every retry spends one extra session, whatever
+         the earlier attempt's state. Earlier attempts stay on disk; a later PASS never hides
+         an earlier BLOCK. An attempt still `unknown` (may be running) cannot be retried.
+abandon  close an `unknown` attempt that will never finish (controller killed before the leg
+         started, machine rebooted). Refused while any process command line references the
+         attempt directory. The reservation stays counted; a result that lands later wins.
 decide   the main agent's disposition of one finding, appended with a reason.
 status   rebuilt from disk only. run_state clean|attention|incomplete is a fact
          summary, never a verdict.
@@ -53,9 +59,11 @@ Manifest (JSON; paths relative to the manifest file):
    "budget": {"extra_sessions": 2, "max_concurrency": null}}
 Verify manifest:
   {"version": 1,
-   "findings": [{"id": "F1", "source": "dispatch|overall|<check>|main", "severity": "high",
+   "findings": [{"id": "F1", "source": "dispatch#1|overall#1|<check>#1|main", "severity": "high",
                  "claim": "...", "evidence": "bin/x:12 ..."}],
    "checks": [{"id": "c1", "findings": ["F1"], "leg": null, "note": "..."}]}
+  A finding's source names ONE attempt (`<item>#<n>`): it acknowledges that attempt's
+  BLOCK / NEEDS_MORE_INFO only. Every blocking verdict of every attempt needs its own finding.
 
 Scoped results carry review_contract_version=2: they NEVER count as archive coverage,
 and panel-slice never binds a track. Refusals print `panel-slice: REFUSED <rule>: ...`
@@ -246,6 +254,22 @@ cmd_retry() {
   finish
 }
 
+cmd_abandon() {
+  local pos=() reason=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --reason) reason="${2:-}"; shift 2 ;;
+      -*) usage; exit 2 ;;
+      *) pos+=("$1"); shift ;;
+    esac
+  done
+  [[ ${#pos[@]} -eq 2 ]] || { usage; exit 2; }
+  RUN_DIR="$(realpath -m "${pos[0]}")"
+  python3 "$HELPER" abandon --run-dir "$RUN_DIR" --attempt-spec "${pos[1]}" --reason "$reason" || exit 3
+  python3 "$HELPER" status --run-dir "$RUN_DIR" >/dev/null || exit 3
+  echo "panel-slice abandon: ${pos[1]} -> abandoned(额度照记;之后可以 retry)"
+}
+
 cmd_decide() {
   local pos=() reason=""
   while [[ $# -gt 0 ]]; do
@@ -280,6 +304,7 @@ case "$sub" in
   run) cmd_run "$@" ;;
   verify) cmd_verify "$@" ;;
   retry) cmd_retry "$@" ;;
+  abandon) cmd_abandon "$@" ;;
   decide) cmd_decide "$@" ;;
   status) cmd_status "$@" ;;
   -h|--help|help) usage; exit 0 ;;

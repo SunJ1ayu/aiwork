@@ -13,7 +13,9 @@ corroborated independently by `codex debug prompt-input` (prompt-input-offline.t
 Commands actually run are in each `*.stream.jsonl`. All three runs read
 `/root/.codex/skills/karpathy-guidelines/SKILL.md` (skill list still visible).
 Run 1 appended a `[projects."/tmp/aiwork-review-workspaces/subcodex.Bkm9LPoB/repo"]`
-trust entry to `~/.codex/config.toml`.
+trust entry to `~/.codex/config.toml`. Checked again 2026-09-14: the file holds exactly
+four such entries (`subcodex.Bkm9LPoB`, `.dbVjclUI`, `.oUrQLf8I`, `.0mUmKSP0`) = runs 1-3
+here plus the V3 overall leg, so every live `codex exec` so far appended one.
 
 The repo `bin/subcodex` after the fix differs from the run-2 copy only in one error
 message string (comment lines excluded).

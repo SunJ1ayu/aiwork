@@ -29,7 +29,10 @@
                 │
    主 agent 读报告 → verify 清单(登记 finding + 指定复核)
       panel-slice verify:finding 追加入账;复核腿家族 ≠ 该 finding 出处的家族;占 extra 预算,all-or-nothing
-      panel-slice retry:失败/无裁决的项重派一次,占 extra;旧尝试的 BLOCK 不会被新 PASS 抹掉
+      panel-slice retry:失败/无裁决的项,或想再看一遍的 done 项,重派一次;**每次都占 extra**,
+                         最新尝试还是 unknown 的不许 retry;旧尝试的 BLOCK 不会被新 PASS 抹掉
+      panel-slice abandon:unknown 且没有任何活进程命令行引用它的尝试 ⇒ 主 agent 带理由宣布放弃;
+                         额度照记,之后可 retry;事后结果真落盘了,按结果算(2026-09-14 评审发现 A)
       panel-slice decide:主 agent 对 finding 的处置(confirmed/rejected/accepted-risk/inconclusive)只追加
                 │
           主 agent 仲裁(run_state=clean 也只是事实汇总,不是 PASS)
@@ -76,11 +79,14 @@ status.md            人读汇总(`status --json` 输出稳定、无时间戳)
 `done`(rc=0、PASS/BLOCK、非降级、证据完整、eligibility 理由**恰好只有** review_contract_unsupported)/
 `needs_more_info` / `no_verdict` / `failed(kind)` / `degraded` / `ineligible(理由)` /
 `not_dispatched`(控制器写了 plan 但腿没被选中,例如探针后健康变了)/ `launch_failed`(控制器 rc≠0 且无 plan)/
-`unknown`(占了额度但没有终态 —— **不说它死了**,可能还在跑)/ `contract_violation`(契约版本不是 2)。
+`unknown`(占了额度但没有终态 —— **不说它死了**,可能还在跑)/ `abandoned`(主 agent 用 abandon 宣布
+永远不会结束;有结果落盘时让位给结果)/ `contract_violation`(契约版本不是 2)。
 
 run_state:
 - `incomplete`:任一初始项(片/overall)没有 `done` 的尝试;或有 unknown;或 done 的尝试之间源码指纹不一致;或 contract_violation。
 - `attention`:齐了,但有未处置的 finding、未登记的 BLOCK/NMI(任一尝试,不止最后一次)、派出去没完成的复核。
+  **登记对准一次尝试**:finding 的 `source` 写 `<item>#<n>`(或 `main`),只确认那一次尝试的 BLOCK/NMI;
+  同一项两次 BLOCK 要各有一条 finding。第一版按项确认,给 s1 登记任意一条就把 s1 所有拦截裁决一笔勾销(评审发现 D)。
 - `clean`:以上都没有。**只是事实汇总,永远不是 PASS。**
 
 ### 分配规则
@@ -125,7 +131,9 @@ verify/retry 前重算,不同就拒绝(「代码变了,开新一轮」);status �
   run 级身份由 `plan.json` 的 run_id 串起来。多几个控制器进程,换来零重复的派发/终态代码。
 - **探针与派发之间健康可能变**:被选中的腿恰好进了冷却 ⇒ 该项 `not_dispatched`,额度已占。宁可多占不少记。
 - **提示词级隔离**(见上表敞口)。
-- **契约 2 让 health.tsv 记 INELIGIBLE**:不冷却不判死,只是诊断字样。
+- **契约 2 让 health.tsv 记 INELIGIBLE**:不冷却不判死,只是诊断字样。**health.tsv 是两种模式共享的账**:
+  一次 scoped 成功会把该腿的连败清零(评审发现 I)。方向与一次普通成功相同 —— 腿进程确实跑完并给出了裁决,
+  而且 scoped 关掉了聊天腿回落,证据只强不弱;但切片跑动会改变普通轮换看到的健康状态,这是有意的共享。
 - **findings 由主 agent 登记**:不从模型自由文本里自动抽 finding(不可靠);代价是登记要手工,
   由「未登记的 BLOCK」这条 attention 兜住「看见 BLOCK 却不登记」。
 
@@ -159,6 +167,11 @@ verify/retry 前重算,不同就拒绝(「代码变了,开新一轮」);status �
 10. panel-review:`--scoped-review --track` 拒绝;scoped 预算>0 不钉腿拒绝;普通 `--all` 不派角色腿、花名册不出现角色腿。
 11. subcodex:argv 含单源模型 / `project_doc_max_bytes=0` / `--ignore-user-config` / `--ephemeral` / 禁 multi_agent;
     跑在 ro-repo-exec 里(桩试写源仓失败、写副本成功);无裁决 rc≠0;额度耗尽文本 ⇒ failure_kind=quota;fix 模式拒绝。
+12. (09-14 评审后补)finding 出处必须点名一次尝试;同项两次 BLOCK 只登记第 2 次 ⇒ 第 1 次仍未登记、不 clean(S5/S10)。
+13. (同上)unknown 尝试的 abandon:有活进程命令行引用就拒、无理由拒、非 unknown 拒;成功后额度照记、可 retry、
+    事后落盘的结果优先(S11);默认并发下腿真的并行(S8)。
+14. (同上)subcodex 检测器自检:目录声明子 agent 而不覆盖目录的基线渲染看不到 `<multi_agent_role>` ⇒ 拒跑;
+    目录本来就不声明的模型不误拒(C6)。
 
 每条判据先对当前 HEAD 红检(实现前必须红,且红在断言上不是红在语法/缺件崩溃上),判据单独 commit;
 实现后跑 `tests/mutation-panel-slice.sh`:故意改坏关键谓词(契约版本回 1、放开家族互异、预算不查、
@@ -175,7 +188,12 @@ retry 覆盖旧 BLOCK、scoped 不关回落),每个变异必须打红点名的�
 - subcodex 的桩只证明 argv 长这样。**这条 09-13 23:19 兑现了**:真跑发现 `--disable multi_agent` 对
   gpt-6-astra 无效、还带着联网工具,`--ignore-user-config` 也挡不住 `~/.codex/skills` 被列进提示。
   修法里子 agent 那件有派发前的真 codex 离线核验兜底;联网那件离线看不到工具表,换 codex 大版本要重跑真探针。
-  仍敞着:skill 列表仍可见;每次 `codex exec` 往业主 `~/.codex/config.toml` 追加一条临时目录 trust 记录。
+  仍敞着:skill 列表仍可见;每次 `codex exec` 往业主 `~/.codex/config.toml` 追加一条临时目录 trust 记录
+  (09-14 核:config.toml 里恰好 4 条,对应 V2 三次 + V3 一次真跑,一次不差)。
+  **不修的理由只排除了一种修法**(给 codex 复制一份凭证进独立 HOME ⇒ 刷新令牌轮换可能分叉,弄坏业主本机与 gateway 的登录)。
+  评审发现 G 指出的更小候选**没评估过**:`CODEX_HOME=<私有目录>` + 私有 `auth.json` 软链到业主那份。
+  它的风险也没排除:codex 若以「写临时文件再换名」的方式保存 auth.json,软链会被换成一份独立副本 —— 正是要避免的分叉;
+  离线翻二进制字符串证明不了写法,要证明只能拿业主真登录做实验 ⇒ 不在本单,记后续单,动之前要业主点头。
 - 预算计数的是 `reserved.json`;如果某条腿**自己**内部重试多次(adapter 层 429 backoff),那不在预算里
   —— 那是同一会话内的传输重试,计划里明确另算。
 

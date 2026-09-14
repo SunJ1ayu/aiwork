@@ -229,7 +229,8 @@ brief 放 `/root/aiwork/tasks/`,日志放 `/root/aiwork/logs/`。两个 `panel-*
 panel-slice run [--require-my-review PATH | --no-my-review] MANIFEST [REPO] [RUN_DIR]
 panel-slice status RUN_DIR [--json]                 # 纯读盘重建
 panel-slice verify RUN_DIR VERIFY_MANIFEST          # 登记 finding + 换家族定点复核(占 extra)
-panel-slice retry  RUN_DIR ITEM [--leg LEG]         # 重派一项(占 extra)
+panel-slice retry  RUN_DIR ITEM [--leg LEG]         # 重派一项(每次都占 extra,done 的也算)
+panel-slice abandon RUN_DIR ITEM#N --reason …       # 永远等不到终态的 unknown 尝试(有活进程引用就拒)
 panel-slice decide RUN_DIR FINDING confirmed|rejected|accepted-risk|inconclusive --reason …
 ```
 
@@ -239,6 +240,8 @@ panel-slice decide RUN_DIR FINDING confirmed|rejected|accepted-risk|inconclusive
   self/standard/high 覆盖,`panel-slice` 也拒绝绑 track。要归档资格照旧跑 panel-review。
 - 最大的盲点是**我切错片**:各片单看都对、连起来是错的,只有整体腿兜底。
 - `run_state=clean` 只是事实汇总(都收齐了、BLOCK 都登记并处置了),**不是 PASS**。
+- 登记 finding 的 `source` 写**哪一次尝试**(`dispatch#1`、`overall#2`),不是只写项名:
+  一条 finding 只确认那一次的 BLOCK/NMI,同一项两次 BLOCK 要登记两条。
 - 审 aiwork 自己时:RUN_DIR 默认在 `logs/`(仓内,会被拒),自审默认在 `tasks/`(同样仓内)——
   两个都显式给仓外路径。
 - 清单格式/分配/预算/状态语义:`panel-slice --help`;为什么这么设计、各腿「不许派子 agent」

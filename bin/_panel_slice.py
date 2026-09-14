@@ -290,10 +290,18 @@ def render_overall_task(goal: str, extra: str | None, slices: list[dict[str, Any
 {plan_block}"""
 
 
+def split_source(source: str) -> tuple[str, int] | None:
+    """`<item>#<n>` -> (item, n). "main" and anything malformed -> None."""
+
+    match = re.fullmatch(r"([a-z0-9][a-z0-9-]{0,31})#([1-9][0-9]*)", source or "")
+    return (match.group(1), int(match.group(2))) if match else None
+
+
 def source_label(source: str, items: dict[str, dict[str, Any]]) -> str:
     if source == "main":
         return "主 agent 自己的审查"
-    item = items.get(source)
+    parsed = split_source(source)
+    item = items.get(parsed[0]) if parsed else None
     if item is None:
         return source
     if item["role"] == "slice":
@@ -459,6 +467,15 @@ def classify_attempt(n: int, path: Path) -> dict[str, Any]:
     if state_path.is_file():
         info.update(state="result_missing", detail=state_path.read_text(encoding="utf-8").split("\n", 1)[0])
         return info
+    abandoned_path = path / "abandoned.json"
+    if abandoned_path.is_file():
+        # 结果优先(上面已判):abandon 之后结果又落了盘,说明腿其实还活着,照结果算。
+        try:
+            reason = read_json(abandoned_path).get("reason")
+        except (OSError, json.JSONDecodeError):
+            reason = None
+        info.update(state="abandoned", detail=(reason or "")[:200] or None)
+        return info
     if panel_plan.is_file():
         selected, health = plan_leg_selected(panel_plan, leg)
         if selected == "0":
@@ -486,7 +503,9 @@ def build_status(run_dir: Path) -> dict[str, Any]:
         if event["event"] == "check":
             for fid in event["findings"]:
                 checks_by_finding.setdefault(fid, []).append(event["id"])
-    acknowledged_sources = {e["source"] for e in finding_events}
+    # 登记对准**一次尝试**(source = item#n):一条 finding 只确认它点名的那次尝试的 BLOCK/NMI。
+    # 按项确认的话,给 s1 登记任意一条就会把 s1 所有尝试的拦截裁决一笔勾销(2026-09-14 评审发现 D)。
+    acknowledged = {split_source(e["source"]) for e in finding_events} - {None}
 
     out_items = []
     incomplete: list[str] = []
@@ -504,7 +523,7 @@ def build_status(run_dir: Path) -> dict[str, Any]:
             if a["state"] == "contract_violation":
                 incomplete.append(f"{item['id']}#{a['n']} contract_violation({a['detail']})")
             if (item["role"] != "verify" and a["verdict"] in UNACKNOWLEDGED_VERDICTS
-                    and item["id"] not in acknowledged_sources):
+                    and (item["id"], a["n"]) not in acknowledged):
                 unacknowledged.append({"item": item["id"], "attempt": a["n"], "verdict": a["verdict"]})
         if not covered:
             if item["role"] == "verify":
@@ -856,8 +875,13 @@ def cmd_verify(args: argparse.Namespace) -> None:
                 raise Refused("finding", f"{where}.id must match {FINDING_ID_RE.pattern}: {fid!r}")
             if fid in manifest_findings:
                 raise Refused("finding", f"{where}.id duplicated in this manifest: {fid}")
-            if raw["source"] != "main" and raw["source"] not in items:
-                raise Refused("finding", f"{where}.source {raw['source']!r} is not an item of this run (or 'main')")
+            if raw["source"] != "main":
+                parsed = split_source(raw["source"]) if isinstance(raw["source"], str) else None
+                if parsed is None or parsed[0] not in items:
+                    raise Refused("finding", f"{where}.source {raw['source']!r} must be 'main' or '<item>#<attempt>' "
+                                             "naming one attempt of this run (e.g. 'dispatch#1')")
+                if not (run_dir / "items" / parsed[0] / f"attempt-{parsed[1]}" / "reserved.json").is_file():
+                    raise Refused("finding", f"{where}.source {raw['source']!r}: that attempt does not exist in this run")
             if raw["severity"] not in SEVERITIES:
                 raise Refused("finding", f"{where}.severity must be one of {', '.join(SEVERITIES)}")
             try:
@@ -906,9 +930,9 @@ def cmd_verify(args: argparse.Namespace) -> None:
                 text_field(note, f"{where}.note")
             excluded: set[str] = set()
             for fid in fids:
-                src = known[fid]["source"]
-                if src != "main":
-                    excluded |= item_families(run_dir, src, items)
+                parsed = split_source(known[fid]["source"])
+                if parsed is not None:
+                    excluded |= item_families(run_dir, parsed[0], items)
             if raw.get("leg") is not None:
                 leg = raw["leg"]
                 if leg not in legs:
@@ -977,9 +1001,9 @@ def cmd_retry(args: argparse.Namespace) -> None:
     if item["role"] == "verify":
         ledger = {e["id"]: e for e in read_ledger(run_dir) if e["event"] == "finding"}
         for fid in item["findings"]:
-            src = ledger.get(fid, {}).get("source")
-            if src and src != "main":
-                excluded |= item_families(run_dir, src, items)
+            parsed = split_source(ledger.get(fid, {}).get("source", ""))
+            if parsed is not None:
+                excluded |= item_families(run_dir, parsed[0], items)
     else:
         for other in plan["items"]:
             if other["id"] == item["id"]:
@@ -1033,6 +1057,73 @@ def cmd_reserve(args: argparse.Namespace) -> None:
             os.fsync(handle.fileno())
 
 
+def processes_referencing(path: Path) -> list[int]:
+    """PIDs whose command line has an argument equal to, or under, `path`.
+
+    Once launched, the processes that can finish an attempt carry its directory on their
+    command lines: the pinned panel-review gets `<attempt>/panel` as LOG_PREFIX, and the
+    setsid'd session wrapper that writes the terminal state/result gets paths under it.
+    One gap (checked 2026-09-14, not covered): panel-slice's own launch subshell between
+    `reserve` and exec'ing panel-review carries only the controller's argv. So abandon is
+    for a controller known to be dead; a result that lands later still wins in status.
+    No /proc ⇒ we cannot tell ⇒ refuse (fail closed)."""
+
+    needles = {os.fsencode(os.path.realpath(path)), os.fsencode(os.path.abspath(path))}
+    if not os.path.isdir("/proc"):
+        raise Refused("alive", "cannot inspect running processes (/proc missing); refusing to abandon")
+    me, hits = os.getpid(), []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as handle:
+                argv = handle.read().split(b"\0")
+        except OSError:
+            continue
+        if any(arg == needle or arg.startswith(needle + b"/") for arg in argv for needle in needles):
+            hits.append(int(entry))
+    return sorted(hits)
+
+
+def cmd_abandon(args: argparse.Namespace) -> None:
+    """Close an attempt that holds a reservation but will never reach a terminal state.
+
+    `unknown` deliberately blocks retry (the leg may still be running and a second dispatch
+    would spend twice). When the controller died between `reserve` and panel-review writing
+    its plan — or the machine rebooted under a setsid'd leg — nothing will ever finish it.
+    abandon is the main agent's explicit, reasoned claim that it is dead, checked against the
+    live process table. The reservation stays counted: the slot may already have been spent."""
+
+    run_dir = Path(args.run_dir)
+    load_plan(run_dir)
+    if not args.reason or not args.reason.strip():
+        raise Refused("reason", "abandon needs --reason (why you believe this attempt will never finish)")
+    parsed = split_source(args.attempt_spec)
+    if parsed is None:
+        raise Refused("item", f"attempt must be written '<item>#<n>', got {args.attempt_spec!r}")
+    attempt_dir = run_dir / "items" / parsed[0] / f"attempt-{parsed[1]}"
+    if not (attempt_dir / "reserved.json").is_file():
+        raise Refused("item", f"no reserved attempt {args.attempt_spec} in this run")
+    with RunLock(run_dir):
+        state = classify_attempt(parsed[1], attempt_dir)["state"]
+        if state != "unknown":
+            raise Refused("abandon", f"{args.attempt_spec} is {state}, not unknown; only an attempt with no "
+                                     "terminal state can be abandoned")
+        alive = processes_referencing(attempt_dir)
+        if alive:
+            raise Refused("alive", f"{args.attempt_spec} is still referenced by running process(es) "
+                                   f"{', '.join(map(str, alive))}; it may still finish")
+        try:
+            fd = os.open(attempt_dir / "abandoned.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError as exc:
+            raise Refused("abandon", f"{args.attempt_spec} is already abandoned") from exc
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(dump_json({"item": parsed[0], "attempt": parsed[1], "reason": args.reason.strip(),
+                                    "at": now_utc(), "live_processes_checked": True}))
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
 def cmd_decide(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir)
     load_plan(run_dir)
@@ -1068,7 +1159,7 @@ def cmd_run_rc(args: argparse.Namespace) -> None:
         if (path / "reserved.json").is_file():
             info = classify_attempt(int(n), path)
             if info["state"] not in ("failed", "unknown", "launch_failed", "lost", "not_dispatched", "result_invalid",
-                                     "result_missing"):
+                                     "result_missing", "abandoned"):
                 ok = True
     raise SystemExit(0 if ok else 1)
 
@@ -1099,6 +1190,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--item", required=True); p.add_argument("--attempt", type=int, required=True)
     p.add_argument("--leg", required=True); p.add_argument("--family", required=True)
     p.add_argument("--category", choices=("initial", "extra"), required=True)
+    p = sub.add_parser("abandon"); run_common(p)
+    p.add_argument("--attempt-spec", required=True); p.add_argument("--reason", default="")
     p = sub.add_parser("decide"); run_common(p)
     p.add_argument("--finding", required=True); p.add_argument("--status", required=True)
     p.add_argument("--reason", default="")
@@ -1113,7 +1206,8 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     handlers = {"check": cmd_check, "plan": cmd_plan, "verify": cmd_verify, "retry": cmd_retry,
-                "reserve": cmd_reserve, "decide": cmd_decide, "status": cmd_status, "run-rc": cmd_run_rc}
+                "reserve": cmd_reserve, "abandon": cmd_abandon, "decide": cmd_decide, "status": cmd_status,
+                "run-rc": cmd_run_rc}
     try:
         if args.command == "repo-of":
             print(load_plan(Path(args.run_dir))["repo"])
