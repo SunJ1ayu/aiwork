@@ -116,6 +116,15 @@ runlog: subgrok-env-sweep-green rc=0 commit=b7ff89f dirty=no at=2026-09-14T07:01
 runlog: mutation-grok-after-env-sweep rc=0 commit=b7ff89f dirty=yes at=2026-09-14T07:01:35Z file=tracks/grok-leg-kimi-model/evidence/20260914T070135Z-01-mutation-grok-after-env-sweep.txt
 ```
 
+第一版 P1 判据只注入 3 个固定名字 ⇒ 我加变异 M8(只 unset 这 3 个)证明它骗得过,再给判据加随机名 `GROK_PROBE_<hex>`(`120528e`);
+M9 = 不关规则文件扫描。修复后第一遍回归(`3444f05`)因判据又改而过期:
+
+```
+runlog: full-regression-after-p1 rc=0 commit=3444f05 dirty=no final=yes at=2026-09-14T07:03:52Z file=tracks/grok-leg-kimi-model/evidence/20260914T070352Z-01-full-regression-after-p1.txt
+runlog: mutation-grok-m8-before-oracle rc=1 commit=4207d21 dirty=no at=2026-09-14T07:13:26Z file=tracks/grok-leg-kimi-model/evidence/20260914T071326Z-01-mutation-grok-m8-before-oracle.txt
+runlog: mutation-grok-m8-after-oracle rc=0 commit=120528e dirty=yes at=2026-09-14T07:15:09Z file=tracks/grok-leg-kimi-model/evidence/20260914T071509Z-01-mutation-grok-m8-after-oracle.txt
+```
+
 R1 判据先红后绿:
 
 ```
