@@ -103,6 +103,7 @@ ADAPTER_IDENTITIES = {
     "subkimi": ("moonshot", "kimi-code/"),
     "subgemini": ("google", "gemini-"),
     "subcodex": ("openai", "gpt-"),
+    "subgrok": ("xai", "grok-"),
 }
 
 

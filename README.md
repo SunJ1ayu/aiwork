@@ -45,6 +45,17 @@ instructions; this README only maps the machinery.
 - `bin/subgemini` — Gemini membership-backed, review-only Antigravity CLI leg with
   no chat fallback. `bin/subgemini-diag` extracts denied tools/commands from its
   local conversation database.
+- `bin/subgrok` — Grok Build CLI, `review` and `explore`; both read their default
+  model from [`bin/grok-model`](bin/grok-model). A model upgrade changes that one
+  configuration line, not the adapter or panel; `GROK_MODEL` overrides one run.
+  Uses an isolated runtime home and disposable snapshot with the source mounted
+  read-only. Existing `~/.grok/auth.json` supplies session login; `XAI_API_KEY`
+  explicitly selects API billing. Override with `GROK_MODEL`, `GROK_AUTH_FILE`,
+  `GROK_TIMEOUT` (900 seconds), or `GROK_MAX_TURNS` (80). No chat fallback or fix
+  mode. `PANEL_GROK_LEG=off` disables it in either panel. The report log contains
+  assistant text only; `.stream.jsonl` and `.stream-summary.json` preserve tools,
+  actual model, completion and reported usage. Timeout/turn-limit/error output
+  remains partial evidence and never counts as completed review coverage.
 - `bin/submimo-iso` — concurrency-safe submimo for two simultaneous
   driver agents (e.g. Claude + Codex).
 
@@ -109,8 +120,8 @@ agent to verify, never a verdict to adopt.
   explicitly when the review belongs to no typed active track. Main agent arbitrates.
   It exits non-zero only if every actually dispatched leg fails; failed legs
   keep a `.err` sidecar.
-- `bin/panel-explore BRIEF [REPO] [LOG_PREFIX]` — divergent: three model
-  families each propose ONE direction; no verdict by design.
+- `bin/panel-explore BRIEF [REPO] [LOG_PREFIX]` — divergent: MiMo, DeepSeek,
+  GLM and Grok each propose ONE direction; no verdict by design.
 - `bin/panel-slice run|verify|retry|abandon|decide|status` — sliced review, single layer:
   the main agent's manifest splits one change into 2..8 slices; each slice is one
   session of one healthy leg from a distinct model family, plus one independent

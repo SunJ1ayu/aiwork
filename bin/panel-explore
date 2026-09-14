@@ -6,7 +6,7 @@ set -uo pipefail
 # panel-review converges: three weak models check one design/diff and the main
 # agent (the frontier model driving the session) arbitrates down to a single
 # PASS/BLOCK verdict.
-# panel-explore diverges: three DIFFERENT model families (MiMo / DeepSeek / GLM)
+# panel-explore diverges: DIFFERENT model families (MiMo / DeepSeek / GLM / Grok)
 # each answer the SAME design brief in isolation and propose ONE concrete
 # direction from the angle their priors favor, plus the blind spots they see in
 # the brief. There is deliberately NO verdict - the spread is the output.
@@ -24,12 +24,13 @@ usage() {
 Usage:
   panel-explore BRIEF_FILE [REPO_DIR] [LOG_PREFIX]
 
-Runs all three models in parallel on the SAME design brief:
+Runs the enabled exploration models in parallel on the SAME design brief:
   submimo explore -> <LOG_PREFIX>.submimo.log
   subdeepseek-agent explore -> <LOG_PREFIX>.subdeepseek.log
                          (falls back to subdeepseek review when requested/needed)
   subglm-agent explore -> <LOG_PREFIX>.subglm.log
                          (falls back to subglm review when requested/needed)
+  subgrok explore -> <LOG_PREFIX>.subgrok.log (PANEL_GROK_LEG=off disables)
 
 Each returns ONE position paper (Direction / Core bet / How it works / Best at /
 Sacrifices / Blind spots in the brief / Smallest first step). No PASS/BLOCK.
@@ -39,7 +40,7 @@ Args:
   REPO_DIR     repo for context (default: $PWD)
   LOG_PREFIX   log path prefix (default: /root/aiwork/logs/explore-<briefname>-<ts>)
 
-The main agent reads ALL three, then SYNTHESISES - it never averages them into a
+The main agent reads ALL reports, then SYNTHESISES - it never averages them into a
 verdict. A failure in one model does not block the others.
 EOF
 }
@@ -65,6 +66,13 @@ SUBGLM_LOG="${LOG_PREFIX}.subglm.log"
 SUBMIMO_ERR="${SUBMIMO_LOG}.err"
 SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
 SUBGLM_ERR="${SUBGLM_LOG}.err"
+SUBGROK_LOG="${LOG_PREFIX}.subgrok.log"
+SUBGROK_ERR="${SUBGROK_LOG}.err"
+GROK_LEG="${PANEL_GROK_LEG:-agent}"
+[[ "$GROK_LEG" == agent || "$GROK_LEG" == off ]] || {
+  echo 'panel-explore: PANEL_GROK_LEG must be agent or off (no chat fallback)' >&2
+  exit 2
+}
 
 # GLM/DeepSeek leg selection mirrors panel-review: 两条都默认**底座腿**。
 # GLM 那格 2026-08-18 一天翻了两次(白天 chat / 晚上 agent),两次都是被事实推的 ——
@@ -120,6 +128,11 @@ echo "panel-explore: brief=$BRIEF_FILE repo=$REPO_DIR temp=$MIMO_TEMPERATURE"
 echo "  submimo(explore) -> $SUBMIMO_LOG"
 echo "  subdeepseek      -> $SUBDEEPSEEK_LOG (leg: $(basename "$DEEPSEEK_CMD"))"
 echo "  subglm           -> $SUBGLM_LOG (leg: $(basename "$GLM_CMD"))"
+if [[ "$GROK_LEG" == agent ]]; then
+  echo "  subgrok(explore) -> $SUBGROK_LOG"
+else
+  echo '  subgrok          -> off'
+fi
 echo "  running all in parallel..."
 
 # Light pre-launch stagger (mirrors panel-review): the three models share provider
@@ -162,10 +175,17 @@ PID_DEEPSEEK=$!
 stagger
 run_leg "$GLM_CMD" "$BIN/subglm" "$SUBGLM_LOG" "$SUBGLM_ERR" subglm &
 PID_GLM=$!
+PID_GROK=""; RC_GROK=1
+if [[ "$GROK_LEG" == agent ]]; then
+  stagger
+  "$BIN/subgrok" explore "$BRIEF_FILE" "$SUBGROK_LOG" "$REPO_DIR" >/dev/null 2>"$SUBGROK_ERR" &
+  PID_GROK=$!
+fi
 
 wait "$PID_MIMO";  RC_MIMO=$?
 wait "$PID_DEEPSEEK"; RC_DEEPSEEK=$?
 wait "$PID_GLM";   RC_GLM=$?
+if [[ -n "$PID_GROK" ]]; then wait "$PID_GROK"; RC_GROK=$?; fi
 
 echo
 echo "panel-explore: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK  subglm rc=$RC_GLM"
@@ -184,9 +204,17 @@ if [[ $RC_GLM -eq 0 ]]; then
 else
   echo "  WARNING: subglm failed (rc=$RC_GLM); reason in $SUBGLM_ERR, log $SUBGLM_LOG"
 fi
-echo "  read all three, commit your OWN direction first, then SYNTHESISE."
+if [[ -n "$PID_GROK" ]]; then
+  echo "  subgrok rc=$RC_GROK"
+  if [[ $RC_GROK -eq 0 ]]; then
+    [[ -s "$SUBGROK_ERR" ]] || rm -f "$SUBGROK_ERR"
+  else
+    echo "  WARNING: subgrok failed (rc=$RC_GROK); reason in $SUBGROK_ERR, log $SUBGROK_LOG"
+  fi
+fi
+echo "  read all reports, commit your OWN direction first, then SYNTHESISE."
 echo "  do NOT collapse the spread into a single verdict - the spread is the point."
 
-# Non-zero only if ALL three failed (panel produced no directions at all).
-if [[ $RC_MIMO -ne 0 && $RC_DEEPSEEK -ne 0 && $RC_GLM -ne 0 ]]; then exit 1; fi
+# Non-zero only if every dispatched leg failed (no directions at all).
+if [[ $RC_MIMO -ne 0 && $RC_DEEPSEEK -ne 0 && $RC_GLM -ne 0 && $RC_GROK -ne 0 ]]; then exit 1; fi
 exit 0

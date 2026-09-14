@@ -43,7 +43,6 @@ _RHG="$(dirname "$0")/_review-home-guard.sh"
 # 当场 EROFS、腿起不来。另两条腿的运行期目录早就在 ~/.cache/aiwork/ 下,
 # kimi 是唯一的例外,这里把它拉齐。仓内那份继续当**种子**(见下面的同步)。
 REVIEW_HOME="${KIMI_REVIEW_HOME:-$HOME/.cache/aiwork/kimi-review-home}"
-DEFAULT_MODEL="kimi-code/k3"
 
 usage() {
   cat >&2 <<'EOF'
@@ -56,8 +55,7 @@ The reviewer reads and tests a disposable clone; the source repo remains
 read-only and direct write tools stay blocked in an isolated KIMI_CODE_HOME.
 
 Environment:
-  KIMI_MODEL        optional, model alias (default: kimi-code/k3, 1M context;
-                    kimi-code/kimi-for-coding = K2.7 coding-tuned, also available)
+  KIMI_MODEL        optional, kimi-code/<model-id> (default from bin/kimi-model)
   KIMI_TIMEOUT      optional, seconds before timeout (default 1500; 07-27 取证:
                     900 不够,时间花在长推理而非自读仓库)
   KIMI_REVIEW_HOME  optional, default $HOME/.cache/aiwork/kimi-review-home
@@ -101,6 +99,10 @@ my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subkimi" || exit 1
 #    这里不依赖同步的任何结果。
 if [[ -n "${REVIEW_PRINT_HOME:-}" ]]; then printf '%s\n' "$REVIEW_HOME"; exit 0; fi
 
+# 模型选择只有一个源；CLI alias 与 API model ID 均从它派生。
+MODEL="${KIMI_MODEL:-$(cat "$BIN_DIR/kimi-model")}" || die 'cannot read bin/kimi-model'
+[[ "$MODEL" =~ ^kimi-code/[A-Za-z0-9._-]+$ ]] || die 'model must be one kimi-code/<model-id>'
+
 # ── 运行期 home:种子同步 + 位置检查(track repo-write-audit,2026-08-19 第二轮)──
 # 仓内的 `kimi-review-home/` 继续留在版本控制里当**种子**:config.toml 和
 # hooks/guard.mjs 是判卷防线的一部分,必须可审计。每次跑都从种子覆盖到运行期 home
@@ -114,7 +116,6 @@ if [[ -z "${KIMI_REVIEW_HOME:-}" && -d "$KIMI_SEED_HOME" ]]; then
     cp -a "$KIMI_SEED_HOME" "$REVIEW_HOME" 2>/dev/null || true
   fi
   mkdir -p "$REVIEW_HOME/hooks"
-  cp -f "$KIMI_SEED_HOME/config.toml" "$REVIEW_HOME/config.toml" 2>/dev/null || true
   for _h in "$KIMI_SEED_HOME"/hooks/*; do
     [[ -f "$_h" ]] && cp -f "$_h" "$REVIEW_HOME/hooks/" 2>/dev/null || true
   done
@@ -123,21 +124,19 @@ if [[ -z "${KIMI_REVIEW_HOME:-}" && -d "$KIMI_SEED_HOME" ]]; then
   # 上面辛辛苦苦同步过来的 guard 副本**是死代码**,真正被执行的还是仓内那份,
   # 而仓在只读挂载下(还随时可能被换掉),"运行期 home 自包含"就是句假话。
   # 老账:同一件事写两处、只更新一处。
-  KIMI_RUNTIME_HOME="$REVIEW_HOME" python3 - "$REVIEW_HOME/config.toml" <<'PYHOOK' || true
+  KIMI_RUNTIME_HOME="$REVIEW_HOME" python3 - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || die 'cannot render review config'
 import os, re, sys
-p = sys.argv[1]
 home = os.environ["KIMI_RUNTIME_HOME"].rstrip("/")
-try:
-    s = open(p).read()
-except OSError:
-    sys.exit(0)
+model = sys.argv[2]
+p = home + "/config.toml"
+s = open(sys.argv[1]).read()
+s = s.replace("__KIMI_MODEL_ALIAS__", model).replace("__KIMI_MODEL_ID__", model.split("/", 1)[1])
 s2 = re.sub(r'(command\s*=\s*"node )[^"]*/hooks/guard\.mjs"',
             lambda m: m.group(1) + home + '/hooks/guard.mjs"', s)
-if s2 != s:
-    tmp = p + ".tmp." + str(os.getpid())
-    with open(tmp, "w") as fh:
-        fh.write(s2)
-    os.replace(tmp, p)      # 原子改名:别让并发的另一条腿读到半截 config
+tmp = p + ".tmp." + str(os.getpid())
+with open(tmp, "w") as fh:
+    fh.write(s2)
+os.replace(tmp, p)      # 原子改名:别让并发的另一条腿读到半截 config
 PYHOOK
 fi
 
@@ -159,7 +158,6 @@ review_home_guard kimi "$REVIEW_HOME" "$SOURCE_REPO" KIMI_REVIEW_HOME || exit 1
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
 RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
-MODEL="${KIMI_MODEL:-$DEFAULT_MODEL}"
 TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 
 if [[ "$MODE" == "fix" ]]; then

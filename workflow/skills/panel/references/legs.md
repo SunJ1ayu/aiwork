@@ -99,14 +99,39 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - 轮次上限在配置的 `steps` 字段(opencode 没有命令行开关,schema 里 `maxSteps` 已废弃),
   取供应商表里那个历史值 40 —— 换底座不许把上限弄丢。
 
+## subgrok (Grok Build) — 评审与规划
+
+`/root/aiwork/bin/subgrok <review|explore> TASK LOG REPO`。
+评审加入 `panel-review` 的 xai 家族轮换池；规划加入 `panel-explore`，输出一个方向，
+不要求裁决。`PANEL_GROK_LEG=off` 在两个调度器中关闭这条腿；无聊天回落或 fix 模式。
+
+- **模型是配置**：两个模式的默认模型只读 `bin/grok-model`（一行精确模型 ID）。
+  升级模型只改这个文件；单次调用用 `GROK_MODEL` 覆盖。文档与测试不复制默认版本号。
+  测试用虚构的后续版本验证两种模式都随配置变化；实际调用还校验流中的模型身份。
+- **底座是官方 Grok Build CLI**，headless + `streaming-messages-json`；
+  只有 CLI 协议变化才需要改适配器。默认 900 秒、80 轮，分别用 `GROK_TIMEOUT`、
+  `GROK_MAX_TURNS` 调整。
+- **认证**：复用 `~/.grok/auth.json` 的登录，`GROK_AUTH_FILE` 可另指凭证文件；
+  设置 `XAI_API_KEY` 则用 API 计费。每次调用复制凭证到独立的临时 Grok home，
+  不共享会话、记忆或 leader，结束后连同副本一起清理。
+- **隔离**：复用 `_review-workspace.sh` 与 `ro-repo-exec`，原仓物理只读，
+  工具可在可丢弃副本里读文件、搜索、跑本地测试。关闭编辑、联网工具与子代理。
+  不拿 Grok 自带 Plan 模式当只读边界，也不等待它的交互审批。
+- **证据**：`.log` 仅含主代理文本；`.stream.jsonl` 保留工具事件，
+  `.stream-summary.json` 记录模型、完成状态、轮数和报告的 usage/cost。
+  必须有正常完成事件；超时、撞轮次、模型不符、截断流与无裁决评审均失败。
+  部分报告会保留，但不能充当完成的评审覆盖。
+
 ## subkimi (月之暗面 Kimi) — 轮换池成员
 
 `/root/aiwork/bin/subkimi`,Kimi 会员 OAuth,**从第一天起就是 agent 底座**:跑原生
 `kimi-code` CLI 的 headless 模式(`kimi -p`),评审员自己读仓库,无盲评、无需喂 INCLUDE。
 
 - `subkimi review TASK LOG REPO`,裁决 gate 为 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。
-  默认模型 `kimi-code/k3`(K3,1M 上下文,effort=max);
-  `KIMI_MODEL=kimi-code/kimi-for-coding` 切到 K2.7 编程调优版。超时 `KIMI_TIMEOUT`(默认 1500s)。
+  默认模型只读 `bin/kimi-model`（一行 `kimi-code/<model-id>`），升级只改这一行；
+  单次调用用 `KIMI_MODEL` 覆盖。CLI 参数、日志与运行期模型配置都由所选模型派生，
+  文档和测试不复制默认版本号。评审配置为 1M 上下文、effort=max；供应商协议或能力
+  变化才需调整配置模板。超时 `KIMI_TIMEOUT`(默认 1500s)。
 - **隔离**:跑在 `KIMI_CODE_HOME=/root/aiwork/kimi-review-home`(绝不碰全局 `~/.kimi-code`)。
   该 home 的配置带一个 PreToolUse 守卫 hook(`hooks/guard.mjs`,**默认 DENY**):只放行
   Read/Glob/Grep/todo 类工具 + 不含元字符的只读 git;Write/Edit/Agent/AgentSwarm/Skill/

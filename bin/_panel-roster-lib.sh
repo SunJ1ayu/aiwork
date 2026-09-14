@@ -47,6 +47,7 @@ PANEL_LEG_SPECS=(
   "subglm|zhipu|subglm-agent|subglm|PANEL_GLM_LEG"
   "subkimi|moonshot|subkimi||PANEL_KIMI_LEG"
   "subgemini|google|subgemini||PANEL_GEMINI_LEG"
+  "subgrok|xai|subgrok||PANEL_GROK_LEG"
 )
 
 # ── 角色腿表:同一格式,但**不进**普通轮换池 ─────────────────────────────

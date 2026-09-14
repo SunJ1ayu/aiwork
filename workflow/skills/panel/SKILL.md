@@ -211,9 +211,11 @@ PASS / BLOCK / NEEDS_MORE_INFO + 存活的发现。**绝不能只凭评审员的
 in the brief / Smallest first step)。**故意没有裁决——分歧的铺开本身就是产出。**
 
 `panel-explore BRIEF_FILE [REPO_DIR] [LOG_PREFIX]`,同样只派发不决策。
+默认派 MiMo、DeepSeek、GLM 和 Grok；`PANEL_GROK_LEG=off` 关闭 Grok。
+Grok 的 review/explore 共用 `bin/grok-model`，升级模型只改这一个配置文件。
 
-同样的反锚定纪律:**主 agent 先把自己的方向写下来**,再把三份读作角度扩展 + 盲点网,然后
-**综合**。不要把分歧塌缩成一个答案,不要平均成假共识,不要让三份浅见洗成"很全面"。
+同样的反锚定纪律:**主 agent 先把自己的方向写下来**,再把各份报告读作角度扩展 + 盲点网,然后
+**综合**。不要把分歧塌缩成一个答案,不要平均成假共识,不要让多份浅见洗成"很全面"。
 **brief 要写得更精简**——过度规定"好答案应该覆盖哪些点",模型就会锚定、不再发散。
 
 brief 放 `/root/aiwork/tasks/`,日志放 `/root/aiwork/logs/`。两个 `panel-*` 工具都做了
