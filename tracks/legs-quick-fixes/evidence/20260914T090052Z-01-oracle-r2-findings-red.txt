@@ -1,0 +1,109 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    oracle-r2-findings-red
+cmd:     python3 tests/test_leg_quick_fixes.py
+cwd:     /root/aiwork(仓根)
+commit:  233d681
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-14T09:00:52Z
+---------------- 输出开始 ----------------
+/usr/lib/python3.12/unittest/case.py:669: ResourceWarning: unclosed <socket.socket fd=3, family=2, type=1, proto=0, laddr=('127.0.0.1', 43817)>
+  function, args, kwargs = self._cleanups.pop()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./usr/lib/python3.12/unittest/case.py:669: ResourceWarning: unclosed <socket.socket fd=3, family=2, type=1, proto=0, laddr=('127.0.0.1', 43589)>
+  function, args, kwargs = self._cleanups.pop()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..FFFFFFF......F......
+======================================================================
+FAIL: test_standalone_chinese_verdict_words_are_verdicts (__main__.ChineseVerdict.test_standalone_chinese_verdict_words_are_verdicts) (text='结论：通过\n')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 219, in test_standalone_chinese_verdict_words_are_verdicts
+    self.assertEqual(self.normalize(text), want)
+AssertionError: 'UNKNOWN' != 'PASS'
+- UNKNOWN
++ PASS
+
+
+======================================================================
+FAIL: test_standalone_chinese_verdict_words_are_verdicts (__main__.ChineseVerdict.test_standalone_chinese_verdict_words_are_verdicts) (text='结论：通过 (PASS)\n')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 219, in test_standalone_chinese_verdict_words_are_verdicts
+    self.assertEqual(self.normalize(text), want)
+AssertionError: 'UNKNOWN' != 'PASS'
+- UNKNOWN
++ PASS
+
+
+======================================================================
+FAIL: test_standalone_chinese_verdict_words_are_verdicts (__main__.ChineseVerdict.test_standalone_chinese_verdict_words_are_verdicts) (text='结论：通过（PASS）\n')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 219, in test_standalone_chinese_verdict_words_are_verdicts
+    self.assertEqual(self.normalize(text), want)
+AssertionError: 'UNKNOWN' != 'PASS'
+- UNKNOWN
++ PASS
+
+
+======================================================================
+FAIL: test_standalone_chinese_verdict_words_are_verdicts (__main__.ChineseVerdict.test_standalone_chinese_verdict_words_are_verdicts) (text='结论：阻断\n')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 219, in test_standalone_chinese_verdict_words_are_verdicts
+    self.assertEqual(self.normalize(text), want)
+AssertionError: 'UNKNOWN' != 'BLOCK'
+- UNKNOWN
++ BLOCK
+
+
+======================================================================
+FAIL: test_standalone_chinese_verdict_words_are_verdicts (__main__.ChineseVerdict.test_standalone_chinese_verdict_words_are_verdicts) (text='结论：不通过\n')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 219, in test_standalone_chinese_verdict_words_are_verdicts
+    self.assertEqual(self.normalize(text), want)
+AssertionError: 'UNKNOWN' != 'BLOCK'
+- UNKNOWN
++ BLOCK
+
+
+======================================================================
+FAIL: test_standalone_chinese_verdict_words_are_verdicts (__main__.ChineseVerdict.test_standalone_chinese_verdict_words_are_verdicts) (text='结论: 需要更多信息\n')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 219, in test_standalone_chinese_verdict_words_are_verdicts
+    self.assertEqual(self.normalize(text), want)
+AssertionError: 'UNKNOWN' != 'NEEDS_MORE_INFO'
+- UNKNOWN
++ NEEDS_MORE_INFO
+
+
+======================================================================
+FAIL: test_standalone_chinese_verdict_words_are_verdicts (__main__.ChineseVerdict.test_standalone_chinese_verdict_words_are_verdicts) (text='**结论：通过**\n')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 219, in test_standalone_chinese_verdict_words_are_verdicts
+    self.assertEqual(self.normalize(text), want)
+AssertionError: 'UNKNOWN' != 'PASS'
+- UNKNOWN
++ PASS
+
+
+======================================================================
+FAIL: test_real_kimi_billing_cycle_limit_is_a_rate_limit (__main__.FailureKind.test_real_kimi_billing_cycle_limit_is_a_rate_limit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 149, in test_real_kimi_billing_cycle_limit_is_a_rate_limit
+    self.assertEqual(self.emit(KIMI_BILLING_CYCLE + "\n"), "rate_limit")
+AssertionError: 'auth' != 'rate_limit'
+- auth
++ rate_limit
+
+
+----------------------------------------------------------------------
+Ran 17 tests in 10.003s
+
+FAILED (failures=8)
+---------------- 输出结束 ----------------
+runlog: oracle-r2-findings-red rc=1 commit=233d681 dirty=yes at=2026-09-14T09:00:52Z file=tracks/legs-quick-fixes/evidence/20260914T090052Z-01-oracle-r2-findings-red.txt

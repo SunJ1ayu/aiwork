@@ -54,9 +54,14 @@ BILLING_MODES = frozenset({"subscription", "api", "local"})
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+:-]*$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+VERDICT_WORDS = {"通过": "PASS", "不通过": "BLOCK", "阻断": "BLOCK", "需要更多信息": "NEEDS_MORE_INFO"}
+# 裁决值认中文(GLM 真评审两次整份作废:09-07 `结论：通过 (PASS)`、09-14 `结论：通过`),
+# 但仍要求独占一行、值是完整一个词;括号里再写一遍英文时两者必须一致。
 VERDICT_LINE_RE = re.compile(
     r"^[\t ]*[*_`]*[\t ]*(?:Conclusion|Verdict|结论)[\t ]*[：:][\t ]*"
-    r"(PASS|BLOCK|NEEDS_MORE_INFO|NMI)[\t ]*[*_`]*[\t ]*$",
+    r"(PASS|BLOCK|NEEDS_MORE_INFO|NMI|通过|不通过|阻断|需要更多信息)"
+    r"(?:[\t ]*[(（][\t ]*(PASS|BLOCK|NEEDS_MORE_INFO|NMI)[\t ]*[)）])?"
+    r"[\t ]*[*_`]*[\t ]*$",
     re.IGNORECASE,
 )
 AUTH_FAILURE_RE = re.compile(r"unauthori[sz]ed|forbidden|invalid.{0,20}key|\bauth\b|\b401\b|\b403\b", re.I)
@@ -66,8 +71,9 @@ QUOTA_FAILURE_RE = re.compile(r"quota|额度|balance|billing", re.I)
 # reset …")。它带着 403 和 quota 两个词,按旧顺序先被 auth 认走;真实含义是「等窗口过去」,归 rate_limit。
 WINDOW_LIMIT_RE = re.compile(r"usage limit", re.I)
 # 同一句里有付费/余额措辞就不算窗口:「402 payment required. Your quota will reset on the next billing
-# cycle」要人充值,得留在 quota 继续计连败(外审第一轮 Kimi F2)。
-BILLING_FAILURE_RE = re.compile(r"billing|payment|balance|\b402\b", re.I)
+# cycle」要人充值,得留在 quota 继续计连败(外审第一轮 Kimi F2)。**不认 billing 这个词**:Kimi 真实的
+# 「usage limit for this billing cycle」会在下个周期自愈,按 billing 否决就被 403 认成 auth(外审第二轮 DeepSeek F1)。
+BILLING_FAILURE_RE = re.compile(r"payment|balance|\b402\b", re.I)
 
 TOP_KEYS = (
     "schema_version",
@@ -170,10 +176,17 @@ def normalize_verdict(text: str) -> str:
         match = VERDICT_LINE_RE.fullmatch(line)
         if not match:
             continue
-        found = match.group(1).upper()
-        if found == "NMI":
-            found = "NEEDS_MORE_INFO"
+        value = _canonical_verdict(match.group(1))
+        echo = match.group(2)
+        if echo is not None and _canonical_verdict(echo) != value:
+            continue
+        found = value
     return found
+
+
+def _canonical_verdict(word: str) -> str:
+    value = VERDICT_WORDS.get(word, word.upper())
+    return "NEEDS_MORE_INFO" if value == "NMI" else value
 
 
 def sha256_bytes(data: bytes) -> str:
