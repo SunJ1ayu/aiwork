@@ -2,7 +2,7 @@
 
 - run_state: **clean** —— 事实汇总,**不是裁决**(not a verdict);主 agent 仍须亲读每份报告再仲裁。
 - 预算:初始 3/3, extra 1/1(retry 与 verify 共用)
-- run 目录:/tmp/claude-0/-root/ed36ff12-1b54-424b-aece-9acfe39b5cc7/scratchpad/v3/run
+- run 目录:/tmp/claude-0/-root/ed36ff12-1b54-424b-aece-9acfe39b5cc7/scratchpad/v3/run [仓外不承重]
 - 切片结果契约版本=2:**永不计入**任何 track 的归档覆盖。
 
 | 项 | 角色 | 尝试 | 腿/家族 | 状态 | 裁决 |
