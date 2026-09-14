@@ -39,4 +39,4 @@
   —— 09-14 00:15 xiaomi/deepseek/openai 各 1 次 + 换家族复核 1 次 = 4 会话,全部对账;见 verify.md
 - [x] V4 主 agent 自审落盘(仓外 my-review)→ panel-review high 预算评审 → 主裁
 - [x] V5 归档
-- [ ] V6 `git stash pop` 放回 GPT 的 Grok/Kimi 改动,解冲突(只合并,不改它的内容),`sync-workflow-docs --force`,重跑总闸
+- [x] V6 `git stash pop` 放回 GPT 的 Grok/Kimi 改动,解冲突(只合并,不改它的内容),`sync-workflow-docs --force`,重跑总闸
