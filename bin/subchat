@@ -137,7 +137,10 @@ fi
 # Only the selected endpoint var may reach the engine: a stray one inherited from
 # the caller's env (e.g. MIMO_CHAT_COMPLETIONS_URL on the deepseek leg) would
 # silently override the base URL.
-unset MIMO_BASE_URL MIMO_CHAT_COMPLETIONS_URL
+unset MIMO_BASE_URL MIMO_CHAT_COMPLETIONS_URL MIMO_SESSION_HEADER
+# OpenCode Go 要求每个会话带稳定的 x-opencode-session(09-09 HTTP 400 MissingSessionID;
+# opencode.ai/docs/go)。只给 zhipu 这条腿;调用方环境里继承来的一律先清掉。
+[[ "$PROVIDER" == zhipu ]] && export MIMO_SESSION_HEADER="x-opencode-session"
 export MIMO_API_KEY="$API_KEY"
 export "$ENDPOINT_ENV_VAR"="$ENDPOINT"
 export MIMO_MODEL="$MODEL"

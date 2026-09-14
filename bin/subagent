@@ -219,7 +219,12 @@ your review with a final line of exactly this form:
 Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 
 --- REVIEW TASK ---
-$(cat "$TASK_FILE")"
+$(cat "$TASK_FILE")
+--- END OF REVIEW TASK ---
+
+Reminder, whatever the task above says about format: the last line of your review
+must be exactly one of
+Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"
 
 EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent design-exploration agent running inside a read-only harness. Explore the repository yourself with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}) when the codebase matters to the brief. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
 
@@ -401,7 +406,10 @@ cfg = {"$schema": "https://opencode.ai/config.json",
                          # `steps`(schema 里 maxSteps 已标废弃,别用那个名字)。
                          # 没有它,这条腿在 opencode 上就只剩挂钟超时兜着 = 上限丢了。
                          "steps": int(steps),
-                         "tools": tools, "permission": perm}}}
+                         "tools": tools, "permission": perm}},
+       # opencode 默认「一次工具被拒就结束整轮」(1.18.18 源码:shouldBreak = continue_loop_on_deny !== true)。
+       # GLM 09-10 碰了一次仓外目录被拒,整轮评审作废;被拒的调用照样被拒,只是让它换条路继续。
+       "experimental": {"continue_loop_on_deny": True}}
 tmpath = cfgpath + ".tmp." + str(os.getpid())
 with open(tmpath, "w") as fh:
     json.dump(cfg, fh, indent=2)

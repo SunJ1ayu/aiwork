@@ -62,6 +62,9 @@ VERDICT_LINE_RE = re.compile(
 AUTH_FAILURE_RE = re.compile(r"unauthori[sz]ed|forbidden|invalid.{0,20}key|\bauth\b|\b401\b|\b403\b", re.I)
 RATE_LIMIT_RE = re.compile(r"rate.?limit|too many requests|\b429\b", re.I)
 QUOTA_FAILURE_RE = re.compile(r"quota|额度|balance|billing", re.I)
+# 会自己恢复的窗口限额(Kimi 09-09 原话 "403 You've reached your 5-hour usage limit. Your quota will
+# reset …")。它带着 403 和 quota 两个词,按旧顺序先被 auth 认走;真实含义是「等窗口过去」,归 rate_limit。
+WINDOW_LIMIT_RE = re.compile(r"usage limit|quota will reset", re.I)
 
 TOP_KEYS = (
     "schema_version",
@@ -539,7 +542,9 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
         if process_state == "timed_out":
             failure_kind = "timeout"
         elif process_state != "exited" or args.exit_code != 0:
-            if AUTH_FAILURE_RE.search(failure_text):
+            if WINDOW_LIMIT_RE.search(failure_text):
+                failure_kind = "rate_limit"
+            elif AUTH_FAILURE_RE.search(failure_text):
                 failure_kind = "auth"
             elif RATE_LIMIT_RE.search(failure_text):
                 failure_kind = "rate_limit"

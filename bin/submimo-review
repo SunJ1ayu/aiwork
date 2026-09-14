@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import uuid
 import time
 import urllib.error
 import urllib.request
@@ -232,6 +233,18 @@ def collect_untracked(repo: Path, max_file_bytes: int, max_total_bytes: int) -> 
     return collected
 
 
+def session_header() -> dict[str, str]:
+    name = os.environ.get("MIMO_SESSION_HEADER", "").strip()
+    if not name:
+        return {}
+    if not re.fullmatch(r"[A-Za-z0-9-]+", name):
+        fail(f"invalid MIMO_SESSION_HEADER: {name!r}")
+    return {name: SESSION_ID}
+
+
+SESSION_ID = uuid.uuid4().hex
+
+
 def chat_url() -> str:
     explicit = os.environ.get("MIMO_CHAT_COMPLETIONS_URL")
     if explicit:
@@ -283,6 +296,8 @@ def call_model(prompt: str, timeout: int) -> str:
             # Cloudflare 后面 —— 同一个请求 curl 200 / urllib 403,只差这一行。
             # 这不是绕反爬,是补上一个本来就该有的客户端身份。
             "User-Agent": os.environ.get("MIMO_USER_AGENT", "aiwork-review/1.0"),
+            # 一次运行一个会话 id;req 在重试循环外只建一次 ⇒ 重试沿用同一个。
+            **session_header(),
         },
         method="POST",
     )

@@ -922,7 +922,12 @@ record_health() {  # record_health <leg>
     fi
   fi
   local lastlog
-  if [[ "$state" != exited || "$exit_code" -ne 0 ]]; then
+  if [[ "$state" != exited || "$exit_code" -ne 0 ]] && [[ "$failure" == rate_limit ]]; then
+    # 窗口限额(429 / "5-hour usage limit")自己会恢复:照样冷却,但**不计入**连败 ——
+    # 停轮换是「要人动手」的信号,等窗口过去不需要人。余额耗尽(quota)、auth、runtime 照旧计数。
+    streak="$prior_streak"; first="$prior_first"
+    lastlog="$log"
+  elif [[ "$state" != exited || "$exit_code" -ne 0 ]]; then
     if [[ "$prior_first" =~ ^[0-9]+$ && "$prior_streak" -gt 0 ]]; then
       first="$prior_first"
       # 🔴 **一个冷却窗口里的连发失败只算一次**(2026-08-25 第二轮 subdeepseek F1)。
