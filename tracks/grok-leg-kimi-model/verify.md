@@ -74,9 +74,9 @@
 
 ## Mechanical checks
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+- [x] build passes(无构建步骤;shell/python 语法由全量回归覆盖)
+- [x] tests pass(`full-regression-final` rc=0,见下)
+- [x] no secrets / unsafe ops(runlog 秘密形状扫描通过;无 push/删除/装依赖)
 
 **机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
 
@@ -149,7 +149,10 @@ runlog: delegate-entry-redcheck-longout-green rc=0 commit=9e1bed1 dirty=no at=20
 - findings(第一轮,逐条对代码/二进制核实):
   - **P1 成立但原话不成立 ⇒ 顺藤摸出真洞,已修。** 两腿都指 `bin/subgrok` 的 `env -u` 只清 3 个变量。
     DeepSeek 点名 `GROK_AUTH_FILE`/`GROK_LEADER_SOCKET`/`GROK_SESSION`,MiMo 点名 `GROK_API_KEY`/`GROK_LOG_DIR`
-    —— **这五个名字在 `grok-native` 二进制里出现 0 次**,CLI 根本不读,原话的后果不会发生。
+    —— 其中 `GROK_AUTH_FILE`/`GROK_API_KEY`/`GROK_LOG_DIR` 在 `grok-native` 里出现 0 次,`GROK_SESSION` 只作 `GROK_SESSION_ID` 等的前缀;
+    **更正(第三轮 DeepSeek F6):`GROK_LEADER_SOCKET` 出现 2 次,是真环境名**(紧挨 `--grok-ws-url` 常量),DeepSeek 第一轮点它是对的。
+    我原先写「五个都是 0 次」,用的是 `grep -c -w`:二进制里常量首尾相接(`…MODEGROK_LEADER_SOCKETGROK_LOG…`),
+    **`-w` 要求词边界,对拼接常量是瞎的** —— 量具无声地给了 0。修复清的是全部 `GROK_*`,结论不受影响。
     但二进制自带文档里有真的:`GROK_FOLDER_TRUST=0`「ungates project hooks along with MCP/LSP」
     (叠加 `--always-approve` = 被审仓代码执行)、`GROK_CODE_XAI_API_KEY`/`GROK_AUTH_PROVIDER_*`(绕过登录副本)、
     `compat.claude.agents/rules`、`compat.cursor.agents/rules`(扫 CLAUDE.md 与规则文件;GPT 只关了 hooks/mcps/skills)。
@@ -181,7 +184,31 @@ runlog: delegate-entry-redcheck-longout-green rc=0 commit=9e1bed1 dirty=no at=20
 - arbitrated verdict (主裁): 第二轮只有 1 条合格覆盖(high 要 2)⇒ 不能归档。第三轮用 `--all`(本单含 sandbox_boundary 因子),
   Gemini(地区被拒)与 Grok(未登录)关掉,GLM/Kimi 虽在停轮换也一起派 —— 顺带给修腿单攒它们在真实评审里的现况证据。
   题面把输出契约在末尾再说一遍(MiMo 这轮和 GLM 09-07 都是「写完了没按格式收尾」)。
+- 腿的花名册(第三轮,subject `1907e0e`,`--all`):
+  submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=PASS) subglm=PASS(verdict=PASS) subkimi=PASS(verdict=PASS) subgemini=off subgrok=off
+- findings(第三轮,四腿均 PASS,逐条核实):
+  - **判据只在 review 模式注入调用方环境**(DeepSeek/GLM/Kimi 三腿独立命中):属实;清理代码在模式分支之前、两模式共用 ⇒ 无活洞,
+    是判据覆盖缺口。接受,进 Grok 上线清单(三腿独立命中 = 真,但它指的是「判据能被怎样的实现骗过」,不是「现在有洞」)。
+  - **10 个兼容开关里判据只断言 6 个**(GLM/Kimi):属实,删 `GROK_CLAUDE_MCPS`/`GROK_CURSOR_HOOKS`/两个 `*_SKILLS` 任一行测试仍绿
+    (这 4 个是 GPT 原有设置)。接受,进上线清单。
+  - DeepSeek F1 `GROK_TOOL_SEARCH=0` 是二进制不读的死设置(我派发前也记了);F3 HOME 未重定向 ⇒ `~/.claude/settings.json`
+    权限规则仍生效(always-approve 下只收紧不放宽);F4 `/etc/grok` Always/Admin 层(本机无);F5 `XDG_CONFIG_HOME` 在 config
+    解析附近出现、优先级未坐实;F6 已在 P1 更正;F7 `bin/subgrok` 注释「repo instruction scans (CLAUDE.md…)」过宽 ——
+    仓根 `CLAUDE.md`/`AGENTS.md` 仍被读(文档原句 generic top-level CLAUDE.md stay recognized)。均 info/low,接受。
+  - GLM:`GROK_FOLDER_TRUST` 只清不显式设 1(依赖默认)、OTel 端点变量直通(遥测已关);Kimi:代理变量直通(共有 S1)、
+    裸 `XAI_API_BASE_URL` 只在 TUI 枚举里出现、活的覆盖名是 `GROK_XAI_API_BASE_URL`(已被清)。均 info,接受。
+  - MiMo:`XAI_*` 其余变量为 devbox/遥测/超时类,info。
+  - 附带证据(给修腿单):GLM(opencode 底座)约 4.5 分钟、Kimi(K2.8)约 9.5 分钟,都按格式交卷;health.tsv 两腿 streak 归 0,自动回到轮换。
+- arbitrated verdict (主裁): **PASS**。第三轮同一 subject 下 4 个家族合格覆盖(high 要 2),无 PASS/BLOCK 冲突;
+  三轮所有发现要么已修(R1、P1、M、M8)、要么核实为 info/low 并列入下面的偏差与上线清单。
+  规格层面仍成立的缺口(K2 能力声明、G1 登录寿命)不是本单能在离线环境证明的,如实留账。
 
 ## Accepted deviations
 
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
+- **Grok 未真跑**:业主 09-14 跳过登录。离线判据 + 二进制文档核对 ≠ 运行时回显;Grok 在登录并通过下面清单前不算「可用」。
+- **Grok 上线清单(登录后另开单,一次做完)**:① G1 跑一次比对刷新令牌哈希,若轮换则回写凭证;② P3 `GROK_MAX_TURNS=1` 看撞轮次时的 subtype;
+  ③ 环境清理判据补 explore 注入 + 断言全部 10 个兼容开关;④ 显式 `GROK_FOLDER_TRUST=1`、删死设置 `GROK_TOOL_SEARCH`、改准注释;
+  ⑤ `XDG_CONFIG_HOME` 与 `/etc/grok` 层的优先级实测;⑥ G3 SIGKILL 残留副本清扫。
+- **K2 / K3**:Kimi 能力声明写死、并发不同模型渲染竞争 ⇒ 修腿单。
+- **R1 同型**:`track-commit-msg` 版本号检测 4 处 `| grep -q` 在 pipefail 下方向为假绿(低概率)⇒ 另记账。
+- **P2 / S1**:仓根 `AGENTS.md`/`CLAUDE.md` 进上下文、shell + always-approve + 工具层不断网 —— 各腿共有姿态(codex 除外),不在本单。
