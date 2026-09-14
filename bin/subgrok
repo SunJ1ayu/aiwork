@@ -118,20 +118,32 @@ BASE="${LOG_FILE%.log}"
 STREAM="$BASE.stream.jsonl"; SUMMARY="$BASE.stream-summary.json"
 : > "$LOG_FILE"
 review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" || exit 78
+# No caller GROK_* reaches the CLI; only the values set below. The binary reads
+# dozens of them: GROK_FOLDER_TRUST=0 ungates repo hooks/MCP (reviewed-repo code
+# execution under --always-approve), GROK_CODE_XAI_API_KEY / GROK_AUTH_PROVIDER_*
+# bypass the copied login, GROK_CONFIG* point at other config (track
+# grok-leg-kimi-model, panel round one).
+GROK_ENV_UNSET=()
+for _name in $(compgen -e); do
+  [[ "$_name" == GROK_* ]] && GROK_ENV_UNSET+=(-u "$_name")
+done
 set +e
 (
   cd "$REPO_DIR" || exit 78
-  # Disable compatibility MCP/hook scanning as well as default memory/subagents.
+  # Disable compatibility MCP/hook/skill scanning and repo instruction scans
+  # (CLAUDE.md, Claude/Cursor rules and agents) as well as memory/subagents.
   # --tools uses internal IDs: the shell's ID is run_terminal_cmd, not bash.
   # Auto-approve only the admitted tools inside the source-read-only namespace.
   # v1.0.24 dontAsk + --allow Bash cancelled real shell calls with CLI rc=0;
   # the stream completion gate caught that cancellation (live shell probe).
-  env -u GROK_CONFIG -u GROK_CONFIG_PATH -u GROK_AGENT \
+  env ${GROK_ENV_UNSET[@]+"${GROK_ENV_UNSET[@]}"} \
     GROK_HOME="$RUNTIME_HOME" GROK_DISABLE_AUTOUPDATER=1 GROK_MEMORY=0 \
     GROK_SUBAGENTS=0 GROK_TOOL_SEARCH=0 GROK_WRITE_FILE=0 \
     GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 \
     GROK_CLAUDE_HOOKS_ENABLED=0 GROK_CURSOR_HOOKS_ENABLED=0 \
     GROK_CLAUDE_SKILLS_ENABLED=0 GROK_CURSOR_SKILLS_ENABLED=0 \
+    GROK_CLAUDE_AGENTS_ENABLED=0 GROK_CURSOR_AGENTS_ENABLED=0 \
+    GROK_CLAUDE_RULES_ENABLED=0 GROK_CURSOR_RULES_ENABLED=0 \
     "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- \
     timeout -k 10 "$TIMEOUT_SECONDS" grok --cwd "$REPO_DIR" \
       --leader-socket "$RUNTIME_HOME/leader.sock" -m "$MODEL" \
