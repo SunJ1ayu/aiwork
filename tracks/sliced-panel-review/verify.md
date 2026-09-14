@@ -28,6 +28,15 @@ runlog: redcheck-subcodex-catalog rc=1 commit=74f39d5 dirty=yes at=2026-09-13T15
 runlog: mutation-panel-slice rc=1 commit=60480ee dirty=yes at=2026-09-13T15:35:33Z file=tracks/sliced-panel-review/evidence/20260913T153533Z-01-mutation-panel-slice.txt
 runlog: mutation-panel-slice rc=0 commit=eca7b4a dirty=yes at=2026-09-13T15:52:31Z file=tracks/sliced-panel-review/evidence/20260913T155231Z-01-mutation-panel-slice.txt
 runlog: full-regression rc=0 commit=eca7b4a dirty=yes at=2026-09-13T16:07:37Z file=tracks/sliced-panel-review/evidence/20260913T160737Z-01-full-regression.txt
+runlog: redcheck-round2-subcodex rc=1 commit=c7a5e31 dirty=yes at=2026-09-13T16:37:27Z file=tracks/sliced-panel-review/evidence/20260913T163727Z-01-redcheck-round2-subcodex.txt
+runlog: redcheck-round2-panel-slice rc=1 commit=c7a5e31 dirty=yes at=2026-09-13T16:37:33Z file=tracks/sliced-panel-review/evidence/20260913T163733Z-01-redcheck-round2-panel-slice.txt
+runlog: redcheck-round2-panel-slice-fixture rc=1 commit=bfac8cc dirty=yes at=2026-09-13T16:42:20Z file=tracks/sliced-panel-review/evidence/20260913T164220Z-01-redcheck-round2-panel-slice-fixture.txt
+runlog: round2-fix-panel-slice rc=0 commit=8844c9b dirty=yes at=2026-09-14T01:28:03Z file=tracks/sliced-panel-review/evidence/20260914T012803Z-01-round2-fix-panel-slice.txt
+runlog: round2-fix-subcodex rc=0 commit=8844c9b dirty=yes at=2026-09-14T01:28:53Z file=tracks/sliced-panel-review/evidence/20260914T012853Z-01-round2-fix-subcodex.txt
+runlog: round2-fix-review-result rc=0 commit=8844c9b dirty=yes at=2026-09-14T01:28:59Z file=tracks/sliced-panel-review/evidence/20260914T012859Z-01-round2-fix-review-result.txt
+runlog: round2-mutation-panel-slice rc=1 commit=9c980fb dirty=no at=2026-09-14T01:29:33Z file=tracks/sliced-panel-review/evidence/20260914T012933Z-01-round2-mutation-panel-slice.txt
+runlog: round2-mutation-panel-slice-rerun rc=0 commit=0cc6c66 dirty=no at=2026-09-14T02:05:36Z file=tracks/sliced-panel-review/evidence/20260914T020536Z-01-round2-mutation-panel-slice-rerun.txt
+runlog: round2-full-regression rc=0 commit=0cc6c66 dirty=yes at=2026-09-14T02:41:26Z file=tracks/sliced-panel-review/evidence/20260914T024126Z-01-round2-full-regression.txt
 ```
 
 每份红收据是什么:
@@ -39,6 +48,15 @@ runlog: full-regression rc=0 commit=eca7b4a dirty=yes at=2026-09-13T16:07:37Z fi
   量具自己的毛病:pipefail 下 `grep PASS | grep -qF` 吃 SIGPIPE,200 次随机漏 2~3 次(关 pipefail 0/200)。
   改成单条 grep 后 300 次零漏零误中,单独 commit `eca7b4a`,第二轮 31/0。
   **同一写法还在** mutation-dead-leg-streak / mutation-panel-roster / mutation-subgemini 里(方向都是误报漏网,不会假绿),不在本单修。
+
+第二轮(第一轮评审 A~I 之后)的红收据是什么:
+- `redcheck-round2-subcodex rc=1` / `redcheck-round2-panel-slice rc=1`:A/D/E/F 的判据先行,对 `c7a5e31` 红在新断言上;判据 commit `bfac8cc`。
+- `redcheck-round2-panel-slice-fixture rc=1`:S11 占位进程被 bash exec 成 `sleep 30`、命令行里没有尝试路径 ⇒ 夹具前提断言自己红;
+  改成 `bash -c 'sleep 30; :' _ "$att/panel"` 单独 commit `8844c9b`。
+- `round2-mutation-panel-slice rc=1`(咬住 34 / 漏网 3):C11 是**真判据缺口**(E 修复加的 `next(...)` 在模型缺席时自己崩,
+  盖住了「恰好一次」计数 ⇒ 删计数全绿),补 C5「出现两次 ⇒ 拒跑」;M11/M12 是锚点过期。`0cc6c66`,重跑 37/0。
+- 最后一份 `round2-full-regression rc=0` 跑在 `0cc6c66`,**那是最后一次改代码的提交**;之后 `e5ea7e9`/`42168d1`/`0762d47`
+  只动了 `tasks/` 与 `observations/`。`dirty=yes` 是当时还没入库的变异收据与 observation(`e5ea7e9` 才提交),`bin/` 已还原。
 
 真跑(不是 runlog 收据,原始报告与事件流入库):
 - V2 subcodex 三次:`evidence/v2-live-subcodex/`(README 里有表)。第一版不合格(子 agent 工具 + web__run 在),
@@ -61,23 +79,52 @@ runlog: full-regression rc=0 commit=eca7b4a dirty=yes at=2026-09-13T16:07:37Z fi
 
 ## Review
 
-- 规格自查(读任何 panel 输出之前先答):<如果规格本身就是错的,会错成什么样、我怎么发现?
-  panel 只验"实现合不合规格",验不了"规格对不对" —— 全池一致 PASS 也不等于题是对的。>
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
-  > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
-  > **控制器没活到收尾时它压根不存在** —— 那时跑 `panel-roster <日志前缀>` 从盘上重建,
-  > 与控制器自己写的**归一化后一致**(判据 R5b 守着;抬头有渲染时间戳,不是字面逐字节)。**一轮零记录的评审也粘得出这一行**,
-  > 所以"那轮被砍了所以没有花名册"不再是理由(2026-08-23,track panel-roster-from-disk)。
-  > 08-06 立这条的理由:08-05 我在这里手写了"三条腿一致 PASS",而 Kimi 根本没出结论
-  > (同一页第 90 行我自己还写着它没出报告)—— 手抄一份终端上的东西,抄错那次没人会发现。
+- 规格自查(读任何 panel 输出之前先答,全文在仓外 `/root/aiwork-my-reviews/sliced-panel-review-review-my-review.md`
+  与 `…-round2-my-review.md`):
+  1. 「腿内不许派子 agent」逐腿核实表是读代码推出来的,只有 subcodex 真跑过 —— 而它真跑后当场证伪(F1,已修)。
+     其余腿的表项仍是读出来的,V3 真跑只说明**那一轮没用**,不说明做不到。
+  2. 「一个工作项 = 一次会话」数的是 `reserved.json`;腿 adapter 内部的 429 重试不在里面(设计已写明)。
+  3. 本单**不回答**「切片评审更好」;V3 三条腿都报出埋的缺陷只因练习仓太小。
+  4. 第二轮最该怀疑的是我第一轮自审的定级:A(我的 F3,定 low)、D(我的 F6,定 info)被评审腿按「run_state=clean
+     会被当门禁」升到中 —— 实现不合 design 第 83 行「任一尝试」,我把「不合规格」写成了「可接受的取舍」。
+- 腿的花名册(原样粘自 `.roster`):
+  - 第一轮 `panel-sliced-panel-review-review-20260914-002213`(审 `c7a5e31`):
+    `submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=PASS) subglm=SKIP(health:dead:FAIL:3) subkimi=SKIP(health:dead:FAIL:3) subgemini=SKIP(health:dead:FAIL:6)`
+  - 第二轮第 1 次 `panel-sliced-panel-review-round2-review-20260914-104926`(审 `e5ea7e9`,**作废**):
+    `submimo=FAIL(rc=124) subdeepseek=FAIL(rc=1,降级:回落聊天腿也没成) subglm=SKIP(health:dead:FAIL:3) subkimi=SKIP(health:dead:FAIL:3) subgemini=SKIP(health:dead:FAIL:6)`
+  - 第二轮第 2 次 `panel-sliced-panel-review-round2-review-20260914-114834`(审 `42168d1`,**作废**):
+    `submimo=FAIL(rc=124) subdeepseek=PASS(verdict=PASS,降级:回落聊天腿,只看得见 diff) subglm=SKIP(health:dead:FAIL:3) subkimi=SKIP(health:dead:FAIL:3) subgemini=SKIP(health:dead:FAIL:6)`
+  - 第二轮第 3 次 `panel-sliced-panel-review-round2-review-20260914-121829`(审 `0762d47`,**本单取证轮**):
+    `submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=PASS) subglm=SKIP(health:dead:FAIL:3) subkimi=SKIP(health:dead:FAIL:3) subgemini=SKIP(health:dead:FAIL:6)`
+  > 前两次为什么零有效腿(查的是底座自己的会话库,不是腿日志尾巴):DeepSeek 第 1 次 `402 Insufficient Balance`(业主已充值);
+  > 小米两次都死在 `bash tests/mutation-panel-slice.sh` 上(MiMoCode 会话库里该工具调用停在 running,工具等待自设 600s/2400s,
+  > 腿墙钟 900s/1500s)—— 任务书红字写了不要跑,但 Q4 同时问「变异咬不咬得住」,**题面自相矛盾**;
+  > DeepSeek 第 2 次事件流停在「now let me write the final review」时到 900s。`0762d47` 只改 Q4 的验法与时限说明,五个问题不变。
+  > 健康池只剩这两家(glm/kimi/gemini 连败停轮换),两次重派都用了 `PANEL_HEALTH_OVERRIDE` 放回冷却中的这两条腿。
 - findings:
-  - <...>
-  > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
-  > 花名册在上一格,查工件不查自述。
-- arbitrated verdict (主裁): <...>
-  > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
-  > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
+  - 第一轮(subdeepseek A~I;submimo 无阻断发现):A/D/E 修(判据先行 `bfac8cc`,修复 `8dd49d7`),F 补判据(S8 并行 + M21),
+    B 改帮助/设计文案,G 如实写「CODEX_HOME 软链没评估过」只记账,H 驳回(质疑的是「每次追加 trust」没证据 ——
+    `~/.codex/config.toml` 恰好 4 条 = 4 次真跑),I 设计点名 health.tsv 共享。
+  - 第二轮取证轮 submimo:无发现;亲手做了 M23/C11/C12 三处单点变异,都红在点名断言上。
+  - 第二轮取证轮 subdeepseek(五条,逐条对代码核过):
+    1. [low] launch 子 shell 在 reserve→exec 之间命令行不带尝试目录 ⇒ abandon 理论上能放弃仍会跑完的尝试。
+       **= 我的 R1**,docstring 已写;晚到的结果仍优先(`classify_attempt` 结果判在 abandoned 之前)。接受。
+    2. [low] `cmd_verify`/`cmd_retry` 对解析不出的 source 静默跳过家族排除(`bin/_panel_slice.py:933`、`:1004` 核实属实)。
+       新账本入口已拒绝这种写法(除 `main`),只有改格式前的旧账会走到。**成立,记后续**:改成非 `main` 且解析不出就拒。
+       不在本单修:切片结果契约 2 不进任何归档覆盖,且改源码要重派整轮 high。
+    3. [info] source 指向别项的已存在尝试即可通过 ⇒ 可绕开该项家族排除。source 由主 agent 写,是受信输入。接受。
+    4. [low] 「H 的证据不证明增长有界,驳回措辞过强」。**驳回**:H 质疑的是「每次追加」这句话有没有证据,不是增长是否有界;
+       「每次追加、不回收」本来就在 `design.md:191` 的「仍敞着」和 `legs.md` 里。
+    5. [info] subcodex 目录字段名 + 渲染标记名同时改的盲区。**= 我的 R4**,注释已写。接受。
+  - 我自己第二轮的 R3(读不了的 `/proc/*/cmdline` 跳过)、R6(retry 执行时不提示在重派已完成项)两腿没有反驳,维持 low、记账。
+- arbitrated verdict (主裁): 通过。取证轮两个不同家族(xiaomi / deepseek)都给出非降级 PASS、无 BLOCK/NMI、与我两轮自审无冲突;
+  第一轮三条中危按判据先行修掉且有红收据与 37/0 变异;第二轮新发现里唯一成立的是只影响旧账本的 low。
+  **这不证明规格对**:切片评审是否更好本单不回答,逐腿「不派子 agent」除 subcodex 外仍是读出来的。
 
 ## Accepted deviations
 
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
+- 后续欠账(不阻断本单):verify/retry 对非 `main` 且解析不出的 source 应当拒绝而非静默跳过家族排除;
+  retry 重派已完成项时执行期不提示;`processes_referencing` 跳过读不了的 cmdline(单用户 root 下无碍);
+  subcodex 仍可见 `~/.codex/skills`、每次 `codex exec` 往业主 config.toml 追加 trust 记录(独立 HOME 会分叉刷新令牌,未评估)。
+- 评审流程上的欠账(另开修腿单):腿墙钟把「在跑长命令 / 正在写报告」和「卡死」混为一谈,本单两次零有效腿都死在墙钟上;
+  底座腿单条工具命令的等待上限可以超过腿墙钟。

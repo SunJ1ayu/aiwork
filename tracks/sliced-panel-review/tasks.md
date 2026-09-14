@@ -28,15 +28,15 @@
 - [x] I5 `bin/panel-slice`:run/verify/retry/decide/status,探针、并发上限、setsid、controller.exit
 - [x] I6 `bin/subcodex` + `bin/codex-model`
 - [x] I7 注册:`rust-check-review-tooling` SUITES;文档 panel SKILL.md / legs.md / README;`sync-workflow-docs`
-- [ ] I8 `tests/mutation-panel-slice.sh` 变异红检
+- [x] I8 `tests/mutation-panel-slice.sh` 变异红检
 
 ## 验证与收口
 
-- [ ] V1 新判据 + 全量总闸 `rust-check-review-tooling` 用 runlog 留收据
+- [x] V1 新判据 + 全量总闸 `rust-check-review-tooling` 用 runlog 留收据
 - [x] V2 真跑:codex 额度恢复后 subcodex 最小 review 一次(读 --json 事件核实工具面/子 agent 关闭)
   —— 09-13 23:19 第一版**不合格**(子 agent 工具 + web__run 都在);修后两次真跑归因各开关,见 verify.md
 - [x] V3 真跑:小切片评审(≥2 片 + overall)一次,核对调用数、终态、预算、status
   —— 09-14 00:15 xiaomi/deepseek/openai 各 1 次 + 换家族复核 1 次 = 4 会话,全部对账;见 verify.md
-- [ ] V4 主 agent 自审落盘(仓外 my-review)→ panel-review high 预算评审 → 主裁
-- [ ] V5 归档
+- [x] V4 主 agent 自审落盘(仓外 my-review)→ panel-review high 预算评审 → 主裁
+- [x] V5 归档
 - [ ] V6 `git stash pop` 放回 GPT 的 Grok/Kimi 改动,解冲突(只合并,不改它的内容),`sync-workflow-docs --force`,重跑总闸
