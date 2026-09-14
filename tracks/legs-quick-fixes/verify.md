@@ -54,26 +54,35 @@ runlog: full-regression rc=0 commit=592a335 dirty=yes final=yes at=2026-09-14T07
 ```
 
 - 红收据:旧实现上恰好 7 条目标红、3 条对照绿。
-- 全量回归 27 组全绿(含新套件 `leg-quick-fixes`);`dirty=yes` 只是上一份未提交的 `oracle-green` 收据与 observation,实现与判据跑前已提交。
+- 全量回归 27 组全绿(含新套件 `leg-quick-fixes`);`dirty=yes` 只是上一份未提交的 `oracle-green` 收据与 observation,实现与判据跑前已提交。 **第一轮外审后过期,见下。**
+
+第一轮外审发现(Kimi F1~F5)→ 判据 `e75ae0a` 先红 → 修 `cc07024` → 绿 → 最终全量回归:
+
+```
+runlog: oracle-r1-findings-red rc=1 commit=e75ae0a dirty=yes at=2026-09-14T08:28:50Z file=tracks/legs-quick-fixes/evidence/20260914T082850Z-01-oracle-r1-findings-red.txt
+runlog: oracle-r1-findings-green rc=0 commit=cc07024 dirty=no at=2026-09-14T08:30:24Z file=tracks/legs-quick-fixes/evidence/20260914T083024Z-01-oracle-r1-findings-green.txt
+runlog: full-regression-r1 rc=0 commit=a2166ec dirty=no final=yes at=2026-09-14T08:30:33Z file=tracks/legs-quick-fixes/evidence/20260914T083033Z-01-full-regression-r1.txt
+```
 
 ## Review
 
-- 规格自查(读任何 panel 输出之前先答):<如果规格本身就是错的,会错成什么样、我怎么发现?
-  panel 只验"实现合不合规格",验不了"规格对不对" —— 全池一致 PASS 也不等于题是对的。>
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
-  > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
-  > **控制器没活到收尾时它压根不存在** —— 那时跑 `panel-roster <日志前缀>` 从盘上重建,
-  > 与控制器自己写的**归一化后一致**(判据 R5b 守着;抬头有渲染时间戳,不是字面逐字节)。**一轮零记录的评审也粘得出这一行**,
-  > 所以"那轮被砍了所以没有花名册"不再是理由(2026-08-23,track panel-roster-from-disk)。
-  > 08-06 立这条的理由:08-05 我在这里手写了"三条腿一致 PASS",而 Kimi 根本没出结论
-  > (同一页第 90 行我自己还写着它没出报告)—— 手抄一份终端上的东西,抄错那次没人会发现。
-- findings:
-  - <...>
-  > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
-  > 花名册在上一格,查工件不查自述。
-- arbitrated verdict (主裁): <...>
-  > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
-  > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
+- 规格自查:规格=「腿交的活要算数、死因要记对」。若规格本身错,最可能错在 A3 的分界 ——「自愈的窗口」和「要人管的欠费」
+  靠文案区分,文案是供应商写的、会变。第一轮 Kimi 正是从这里攻进来的(F2);我能做的是让豁免只来自我们自己的诊断、
+  且遇付费词就不豁免,错的方向是「多踢一次好腿」而不是「永不踢坏腿」。
+- 腿的花名册(第一轮,subject `f58ec51`):
+  submimo=PASS(verdict=PASS) subdeepseek=SKIP(rotation) subglm=SKIP(rotation) subkimi=PASS(verdict=PASS) subgemini=SKIP(health:dead:FAIL:6) subgrok=off
+- findings(第一轮,逐条核实):
+  - **Kimi F2(MEDIUM)成立,已修。** 我加的 `quota will reset` 太宽:「402 payment required. Your quota will reset on the next billing cycle」
+    被归 rate_limit ⇒ 欠费的腿永不停轮换。窗口词收窄为 `usage limit`,且同句有 billing/payment/balance/402 就不算窗口。
+  - **Kimi F1(MEDIUM)成立,且比它说的更宽,已修。** 诊断为空回落到正文时,不只我新加的窗口词,**原有的 `rate.?limit` 也会匹配正文**
+    (判据里我写的正文恰好含 `rate_limit`,修完 F1 仍红一条才暴露)。rate_limit 现在只从我们自己的诊断得出。
+  - **Kimi F3(LOW)成立,已修。** health.tsv 把 rate_limit 记成 quota,运维分不清「等窗口」和「欠费」⇒ 记成 rate_limit(无代码依赖旧标签,已 grep)。
+  - **Kimi F4(LOW)成立,已补判据。** 正文回落零覆盖、DeadStreak 无 quota 对照 ⇒ 补 `test_window_words_in_model_prose_never_exempt_a_failure`、
+    `test_control_balance_exhaustion_still_counts`。「继承的 MIMO_SESSION_HEADER 被清」仍不可从外部观测,接受。
+  - **Kimi F5(INFO)部分采纳。** 补 `test_subkimi_copies_only_cli_error_lines`(只抄错误行、不抄正文);
+    契约判据只跑 GLM 不跑 DeepSeek:两者共用同一 `REVIEW_PROMPT` 变量,接受。
+  - MiMo PASS:结论与我自审一致(回落路径是窄概率旧逻辑、会话头四项成立、A1/A4 无副作用、判据盲区已记),无新发现。
+- arbitrated verdict (主裁): 第一轮后改了交付(F1~F3)⇒ 需第二轮 high 复核同一 subject 后再裁。
 
 ## Accepted deviations
 
