@@ -32,8 +32,13 @@ ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "bin"
 CONTRACT = "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"
 TASK_MARKER = "UNIQUE_TASK_BODY_7f3a91"
+# Both lines are verbatim kimi-code CLI output from real review legs, not fabricated shapes:
+# logs/panel-delivery-r3-20260909T040119Z.subkimi.log (09-09) and logs/panel-rcpycache.subkimi.log (08-08).
 KIMI_LIMIT = ("error: failed to run prompt: provider.auth_error: 403 You've reached your "
               "5-hour usage limit. Your quota will reset when the current 5-hour window ends.")
+KIMI_BILLING_CYCLE = ("error: failed to run prompt: provider.api_error: 403 You've reached your usage "
+                      "limit for this billing cycle. Your quota will be refreshed in the next cycle. To "
+                      "continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing")
 SCRUB = ("PANEL_", "AIWORK_REVIEW_", "REVIEW_", "KIMI_", "ZHIPU_", "DEEPSEEK_", "MIMO_",
          "OPENCODE_", "GROK_")
 
@@ -138,6 +143,11 @@ class FailureKind(LegCase):
     def test_kimi_five_hour_window_is_a_rate_limit_not_auth_or_runtime(self):
         self.assertEqual(self.emit(KIMI_LIMIT + "\n"), "rate_limit")
 
+    def test_real_kimi_billing_cycle_limit_is_a_rate_limit(self):
+        # Review round two, DeepSeek F1: vetoing on the word "billing" turned this real, self-healing
+        # message into auth (403) and counted it toward dead.
+        self.assertEqual(self.emit(KIMI_BILLING_CYCLE + "\n"), "rate_limit")
+
     def test_billing_text_that_says_quota_will_reset_is_quota(self):
         # Review round one, Kimi F2: a payment failure can promise a reset "on the next billing
         # cycle". That needs a human (top up), so it must stay quota and keep counting toward dead.
@@ -149,7 +159,7 @@ class FailureKind(LegCase):
         # model's report. Prose about "usage limit" (e.g. reviewing this very change) must not turn
         # a crash into a self-healing window limit.
         kind = self.emit("", log_text="The adapter maps a 5-hour usage limit to rate_limit.\n")
-        self.assertNotEqual(kind, "rate_limit")
+        self.assertEqual(kind, "runtime")  # review round two, DeepSeek F4: pin the right bucket, not just "not this one"
 
     def test_controls_balance_is_quota_and_bad_key_is_auth(self):
         self.assertEqual(self.emit("HTTP 402: Insufficient balance\n"), "quota")
@@ -186,6 +196,34 @@ class FailureKind(LegCase):
                              str(self.d / "k2.log"), str(self.repo)], KIMI_REVIEW_HOME=str(home))
         self.assertIn("5-hour usage limit", proc.stderr)
         self.assertNotIn("PROSE_LINE_4d2e", proc.stderr)
+
+
+class ChineseVerdict(LegCase):
+    """A6: GLM finished real reviews with `结论：通过 (PASS)` (09-07) and `结论：通过` (09-14, after A1's
+    reminder), and both whole reports were discarded as having no verdict."""
+
+    def normalize(self, text):
+        log = self.d / "v.log"
+        log.write_text(text)
+        proc = subprocess.run([sys.executable, str(BIN / "_review_result.py"), "normalize", str(log)],
+                              capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout.strip()
+
+    def test_standalone_chinese_verdict_words_are_verdicts(self):
+        for text, want in (("结论：通过\n", "PASS"), ("结论：通过 (PASS)\n", "PASS"),
+                           ("结论：通过（PASS）\n", "PASS"), ("结论：阻断\n", "BLOCK"),
+                           ("结论：不通过\n", "BLOCK"), ("结论: 需要更多信息\n", "NEEDS_MORE_INFO"),
+                           ("**结论：通过**\n", "PASS")):
+            with self.subTest(text=text):
+                self.assertEqual(self.normalize(text), want)
+
+    def test_chinese_verdicts_stay_strict(self):
+        for text in ("结论：通过 (BLOCK)\n", "结论：通过但有疑问\n", "结论：基本通过\n",
+                     "我认为结论：通过\n", "结论：通过 | 阻断\n"):
+            with self.subTest(text=text):
+                self.assertEqual(self.normalize(text), "UNKNOWN")
+        self.assertEqual(self.normalize("结论：通过\n复查后\nConclusion: BLOCK\n"), "BLOCK")
 
 
 LEG_STUB = """#!/usr/bin/env bash
