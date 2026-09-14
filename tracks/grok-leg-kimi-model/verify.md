@@ -168,7 +168,19 @@ runlog: delegate-entry-redcheck-longout-green rc=0 commit=9e1bed1 dirty=no at=20
   - **P6 KIMI_MODEL 正则对显式 home 也生效(DeepSeek info)⇒ 有意收紧,接受。**
   - 两腿对 Q1(假 complete)、Q2(c)(只读覆盖整棵进程树)、Q3(渲染旧路径)均无发现,与我自审一致。
     MiMo 表格里「cancelled 用例 is_error=True」写错了(实为 is_error=False、stop_reason=cancelled),不影响结论。
-- arbitrated verdict (主裁): 第一轮后改了交付(P1),第一轮覆盖不再对应归档的树 ⇒ 需第二轮 high 复核同一 subject 后再裁。
+- 腿的花名册(第二轮,subject `91d30d3`):
+  submimo=PASS(verdict=UNKNOWN) subdeepseek=PASS(verdict=PASS) subglm=SKIP(health:dead:FAIL:3) subkimi=SKIP(health:dead:FAIL:3) subgemini=SKIP(health:dead:FAIL:6) subgrok=off
+- findings(第二轮):
+  - DeepSeek PASS,4 条均低/info,逐条核实后接受:① 环境清理判据只在 review 模式注入(清理代码在模式分支之前,两模式共用,无活洞;
+    我派发前自审已记);② `*_SESSIONS_ENABLED` 与 `GROK_CODEX_*` 未关(文档:sessions 格「staged, inert」、codex 格「reserved and currently inert」);
+    ③ `/etc/grok/{managed_config,requirements}.toml` 是 Always 层且能贡献 hooks,subgrok 关不掉(本机不存在、root 属主)⇒ 进 Grok 上线清单;
+    ④ `compgen -e` 收不到 bash 不能表示的变量名(如 `GROK_A*B`),CLI 按固定名读 ⇒ 无影响。
+  - MiMo 报告正文结论「修复正确、无高危非 GROK_ 漏口、P3~P6 未变性质」,但**没写 `Conclusion:` 行**(以自带的 Status/Summary 模板收尾)
+    ⇒ verdict=UNKNOWN,不算覆盖。它唯一新提的「`.envrc` 可能被加载、`load_envrc` 没设」**不成立**:`bin/subgrok` 运行期
+    `config.toml` 写着 `[session] load_envrc = false`。
+- arbitrated verdict (主裁): 第二轮只有 1 条合格覆盖(high 要 2)⇒ 不能归档。第三轮用 `--all`(本单含 sandbox_boundary 因子),
+  Gemini(地区被拒)与 Grok(未登录)关掉,GLM/Kimi 虽在停轮换也一起派 —— 顺带给修腿单攒它们在真实评审里的现况证据。
+  题面把输出契约在末尾再说一遍(MiMo 这轮和 GLM 09-07 都是「写完了没按格式收尾」)。
 
 ## Accepted deviations
 
