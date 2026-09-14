@@ -51,7 +51,8 @@ else:
     raise SystemExit('source repository was writable')
 prompt = pathlib.Path(arg('--prompt-file')).read_text()
 case = os.environ.get('FAKE_CASE', '')
-record = {'model':model, 'cwd':str(cwd), 'home':str(home), 'prompt':prompt}
+record = {'model':model, 'cwd':str(cwd), 'home':str(home), 'prompt':prompt,
+          'grok_env':{k:v for k,v in os.environ.items() if k.startswith('GROK_')}}
 pathlib.Path(os.environ['FAKE_RECORD']).write_text(json.dumps(record))
 def emit(e): print(json.dumps(e), flush=True)
 emit({'type':'system','subtype':'init','model':model if case!='model' else 'grok-wrong'})
@@ -134,6 +135,23 @@ class GrokTest(unittest.TestCase):
         self.assertEqual(facts['verdict'],'BLOCK')
         self.assertEqual(facts['evidence_completeness'],'complete')
         self.assertEqual(facts['view']['delivery_state'],'complete')
+
+    def test_caller_grok_env_and_repo_instruction_scans_do_not_reach_cli(self):
+        # GROK_FOLDER_TRUST=0 ungates repo hooks/MCP (Grok docs); with --always-approve that is
+        # reviewed-repo code execution. GROK_CODE_XAI_API_KEY would bypass the copied session
+        # login. Instruction scans (CLAUDE.md, Claude/Cursor rules and agents) must be off like
+        # the hook/MCP/skill scans already are.
+        result = self.run_leg(extra={'GROK_FOLDER_TRUST':'0', 'GROK_CODE_XAI_API_KEY':'fake-key',
+                                     'GROK_CLAUDE_RULES_ENABLED':'1', 'GROK_WEB_FETCH':'1'})
+        self.assertEqual(result.returncode,0,result.stderr)
+        env = json.loads((self.d/'leg.record.json').read_text())['grok_env']
+        for inherited in ('GROK_FOLDER_TRUST','GROK_CODE_XAI_API_KEY','GROK_WEB_FETCH'):
+            self.assertNotIn(inherited, env)
+        for scan in ('GROK_CLAUDE_AGENTS_ENABLED','GROK_CLAUDE_RULES_ENABLED',
+                     'GROK_CURSOR_AGENTS_ENABLED','GROK_CURSOR_RULES_ENABLED',
+                     'GROK_CLAUDE_HOOKS_ENABLED','GROK_CURSOR_MCPS_ENABLED'):
+            self.assertEqual(env.get(scan),'0',scan)
+        self.assertEqual(env.get('GROK_HOME'),json.loads((self.d/'leg.record.json').read_text())['home'])
 
     def test_model_upgrade_changes_only_config_for_both_modes(self):
         (self.bin/'grok-model').write_text('grok-4.7\n')
