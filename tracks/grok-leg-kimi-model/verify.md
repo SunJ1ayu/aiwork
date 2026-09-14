@@ -102,10 +102,18 @@ runlog: mutation-grok-before-oracle rc=1 commit=cdd1cc4 dirty=yes at=2026-09-14T
 runlog: mutation-grok-after-oracle rc=0 commit=cdd1cc4 dirty=yes at=2026-09-14T06:26:43Z file=tracks/grok-leg-kimi-model/evidence/20260914T062643Z-01-mutation-grok-after-oracle.txt
 ```
 
-全量回归(最终,跑前树干净,26 组;收据里 `skip` 出现 0 次):
+全量回归(第一轮外审前,跑前树干净,26 组;收据里 `skip` 出现 0 次)—— **P1 修复之后已过期,见下方第二遍**:
 
 ```
 runlog: full-regression rc=0 commit=78de17d dirty=no final=yes at=2026-09-14T06:36:05Z file=tracks/grok-leg-kimi-model/evidence/20260914T063605Z-01-full-regression.txt
+```
+
+P1(调用方 `GROK_*` 环境变量漏进 CLI)判据先红后绿,变异在修复后重放:
+
+```
+runlog: subgrok-env-sweep-red rc=1 commit=17263f4 dirty=yes at=2026-09-14T07:00:24Z file=tracks/grok-leg-kimi-model/evidence/20260914T070024Z-01-subgrok-env-sweep-red.txt
+runlog: subgrok-env-sweep-green rc=0 commit=b7ff89f dirty=no at=2026-09-14T07:01:26Z file=tracks/grok-leg-kimi-model/evidence/20260914T070126Z-01-subgrok-env-sweep-green.txt
+runlog: mutation-grok-after-env-sweep rc=0 commit=b7ff89f dirty=yes at=2026-09-14T07:01:35Z file=tracks/grok-leg-kimi-model/evidence/20260914T070135Z-01-mutation-grok-after-env-sweep.txt
 ```
 
 R1 判据先红后绿:
@@ -117,22 +125,33 @@ runlog: delegate-entry-redcheck-longout-green rc=0 commit=9e1bed1 dirty=no at=20
 
 ## Review
 
-- 规格自查(读任何 panel 输出之前先答):<如果规格本身就是错的,会错成什么样、我怎么发现?
-  panel 只验"实现合不合规格",验不了"规格对不对" —— 全池一致 PASS 也不等于题是对的。>
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
-  > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
-  > **控制器没活到收尾时它压根不存在** —— 那时跑 `panel-roster <日志前缀>` 从盘上重建,
-  > 与控制器自己写的**归一化后一致**(判据 R5b 守着;抬头有渲染时间戳,不是字面逐字节)。**一轮零记录的评审也粘得出这一行**,
-  > 所以"那轮被砍了所以没有花名册"不再是理由(2026-08-23,track panel-roster-from-disk)。
-  > 08-06 立这条的理由:08-05 我在这里手写了"三条腿一致 PASS",而 Kimi 根本没出结论
-  > (同一页第 90 行我自己还写着它没出报告)—— 手抄一份终端上的东西,抄错那次没人会发现。
-- findings:
-  - <...>
-  > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
-  > 花名册在上一格,查工件不查自述。
-- arbitrated verdict (主裁): <...>
-  > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
-  > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
+- 规格自查(读任何 panel 输出之前先答):规格=「业主要的:Grok 能当评审/规划腿、换模型只改一处」。若规格本身错,
+  最可能错在「只改一处」被理解成只管名字 —— 已查实就是这样(K2),Kimi 的能力声明没跟上;
+  panel 验不出这种错(V40⑦ 把 1M 断言成常量,测试照绿),只有对照服务端 `/models` 才发现。另一个规格盲区:
+  「Grok 能用」的定义里没有登录寿命(G1),离线全绿照样几天后自己死 —— 业主暂不登录,测不了,如实记。
+- 腿的花名册(第一轮,subject `6fe7d0d`):
+  submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=PASS) subglm=SKIP(health:dead:FAIL:3) subkimi=SKIP(health:dead:FAIL:3) subgemini=SKIP(health:dead:FAIL:6) subgrok=off
+- findings(第一轮,逐条对代码/二进制核实):
+  - **P1 成立但原话不成立 ⇒ 顺藤摸出真洞,已修。** 两腿都指 `bin/subgrok` 的 `env -u` 只清 3 个变量。
+    DeepSeek 点名 `GROK_AUTH_FILE`/`GROK_LEADER_SOCKET`/`GROK_SESSION`,MiMo 点名 `GROK_API_KEY`/`GROK_LOG_DIR`
+    —— **这五个名字在 `grok-native` 二进制里出现 0 次**,CLI 根本不读,原话的后果不会发生。
+    但二进制自带文档里有真的:`GROK_FOLDER_TRUST=0`「ungates project hooks along with MCP/LSP」
+    (叠加 `--always-approve` = 被审仓代码执行)、`GROK_CODE_XAI_API_KEY`/`GROK_AUTH_PROVIDER_*`(绕过登录副本)、
+    `compat.claude.agents/rules`、`compat.cursor.agents/rules`(扫 CLAUDE.md 与规则文件;GPT 只关了 hooks/mcps/skills)。
+    本机 `env` 与 profile 里 `GROK_*` 为 0 个 ⇒ **当下不可利用**;沙箱边界 + 高代价 + 改动小 ⇒ 本单修:
+    判据 `17263f4` 注入调用方变量、要求到不了 CLI 且四项扫描为 0,红(收据)→ 修 `b7ff89f` 清掉所有继承的 `GROK_*` → 绿。
+  - **P2 AGENTS.md 会进 Grok 上下文(DeepSeek 应修)⇒ 部分采纳。** 二进制文档确认读 `<repo-root>/AGENTS.md`、`<cwd>/AGENTS.md`,
+    没找到关断开关;CLAUDE.md/规则扫描已随 P1 关掉。DeepSeek 说「codex 不同」属实(`project_doc_max_bytes=0`),
+    但 subdeepseek 自己的底座腿 `bin/subagent:450` 用 `--setting-sources project`、MiMo/GLM 的 opencode 系也读 AGENTS.md
+    ⇒ 除 codex 外是共有姿态,归 S1,不在本单。
+  - **P3 `num_turns` 收了不用(DeepSeek info)⇒ 接受,记 Grok 上线清单。** CLI 撞轮次时报什么 subtype 离线无法证实;
+    假 CLI 用的 `error_max_turns` 是 Claude 兼容 schema 的写法。真登录后跑一次 `GROK_MAX_TURNS=1` 就知道。
+  - **P4 here-string 对空行敏感模式(DeepSeek info)⇒ 接受。** `$OUT` 为空时 `^$` 由不中变中;`--must-fail` 空匹配本身无意义,仓内无此用法。
+  - **P5 `set -- "${GATE_ARGS[@]}"` 未守护(DeepSeek info)⇒ 接受。** bash 5.2 无碍;仅 bash<4.4 且空参数时崩。
+  - **P6 KIMI_MODEL 正则对显式 home 也生效(DeepSeek info)⇒ 有意收紧,接受。**
+  - 两腿对 Q1(假 complete)、Q2(c)(只读覆盖整棵进程树)、Q3(渲染旧路径)均无发现,与我自审一致。
+    MiMo 表格里「cancelled 用例 is_error=True」写错了(实为 is_error=False、stop_reason=cancelled),不影响结论。
+- arbitrated verdict (主裁): 第一轮后改了交付(P1),第一轮覆盖不再对应归档的树 ⇒ 需第二轮 high 复核同一 subject 后再裁。
 
 ## Accepted deviations
 
