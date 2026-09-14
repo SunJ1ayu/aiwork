@@ -64,7 +64,10 @@ RATE_LIMIT_RE = re.compile(r"rate.?limit|too many requests|\b429\b", re.I)
 QUOTA_FAILURE_RE = re.compile(r"quota|额度|balance|billing", re.I)
 # 会自己恢复的窗口限额(Kimi 09-09 原话 "403 You've reached your 5-hour usage limit. Your quota will
 # reset …")。它带着 403 和 quota 两个词,按旧顺序先被 auth 认走;真实含义是「等窗口过去」,归 rate_limit。
-WINDOW_LIMIT_RE = re.compile(r"usage limit|quota will reset", re.I)
+WINDOW_LIMIT_RE = re.compile(r"usage limit", re.I)
+# 同一句里有付费/余额措辞就不算窗口:「402 payment required. Your quota will reset on the next billing
+# cycle」要人充值,得留在 quota 继续计连败(外审第一轮 Kimi F2)。
+BILLING_FAILURE_RE = re.compile(r"billing|payment|balance|\b402\b", re.I)
 
 TOP_KEYS = (
     "schema_version",
@@ -542,11 +545,17 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
         if process_state == "timed_out":
             failure_kind = "timeout"
         elif process_state != "exited" or args.exit_code != 0:
-            if WINDOW_LIMIT_RE.search(failure_text):
+            # 窗口限额只认**我们自己的诊断**里的原话:回落到模型正文时,正文里谈到 "usage limit"
+            # (比如正在审这段代码)不许把一次崩溃变成「会自己恢复、不计连败」(外审第一轮 Kimi F1)。
+            # rate_limit 在健康池里意味着「只冷却、不计连败」,所以它**只能**来自我们自己的诊断;
+            # 正文回落时连原有的 `rate.?limit` 也不认(否则审到这段代码的腿一崩就被豁免)。
+            diagnostic_backed = bool(diagnostic_text.strip())
+            if (diagnostic_backed and WINDOW_LIMIT_RE.search(failure_text)
+                    and not BILLING_FAILURE_RE.search(failure_text)):
                 failure_kind = "rate_limit"
             elif AUTH_FAILURE_RE.search(failure_text):
                 failure_kind = "auth"
-            elif RATE_LIMIT_RE.search(failure_text):
+            elif diagnostic_backed and RATE_LIMIT_RE.search(failure_text):
                 failure_kind = "rate_limit"
             elif QUOTA_FAILURE_RE.search(failure_text):
                 failure_kind = "quota"

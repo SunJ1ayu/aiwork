@@ -897,7 +897,7 @@ record_health() {  # record_health <leg>
   IFS=$'\t' read -r state exit_code verdict degraded failure eligible <<<"$typed"
   if [[ "$state" != exited || "$exit_code" -ne 0 ]]; then
     status="FAIL"
-    case "$failure" in quota|rate_limit) status="quota" ;; auth) status="auth" ;; esac
+    case "$failure" in quota) status="quota" ;; rate_limit) status="rate_limit" ;; auth) status="auth" ;; esac
   elif [[ "$degraded" == true ]]; then
     if [[ "$verdict" == "UNKNOWN" ]]; then status="DEGRADED_INCOMPLETE"
     else status="DEGRADED"; fi
