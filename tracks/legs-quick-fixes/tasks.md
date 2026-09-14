@@ -12,4 +12,4 @@
 - [x] T5 A4 opencode `continue_loop_on_deny`;A5 OpenCode Go 会话头
 - [x] T6 判据转绿 + 全量回归 `runlog --final`
 - [x] T7 真跑冒烟:GLM 底座腿、GLM 聊天回落腿、Kimi 各一次(在使用现场验证)
-- [ ] T8 预跑归档闸 → high 外审 → 主裁 → 归档
+- [x] T8 预跑归档闸 → high 外审 → 主裁 → 归档

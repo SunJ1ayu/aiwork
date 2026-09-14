@@ -111,8 +111,25 @@ runlog: full-regression-r2 rc=0 commit=99a94ae dirty=no final=yes at=2026-09-14T
     (09-07 `结论：通过 (PASS)` 之后第二次)⇒ 设计里「不先放宽解析器」的前提被证伪:题面位置不够,中文值本身要认。
     判据先红:独占一行的 `通过/不通过/阻断/需要更多信息` 认;括号英文须一致;`通过但有疑问`/`基本通过`/行内提及/`通过 | 阻断` 仍 UNKNOWN。
   - MiMo PASS:与自审一致,无新发现。
-- arbitrated verdict (主裁): 第二轮后又改了交付(F1、中文裁决)⇒ 第三轮 high 复核后再裁。
+- 腿的花名册(第三轮,subject `9fd6702`):
+  submimo=PASS(verdict=PASS) subdeepseek=PASS(verdict=PASS) subglm=SKIP(health:cooldown:FAIL) subkimi=SKIP(rotation) subgemini=SKIP(health:dead:FAIL:6) subgrok=off
+- findings(第三轮,逐条核实):
+  - DeepSeek F1(MEDIUM)成立但**非本单引入**:`**结论**：通过`(只加粗标签)、`## 结论：通过`、`> 结论：通过`、`- 结论：通过`、`结论：通过（通过）` 仍 UNKNOWN。
+    英文同样不认列表/标题/引用形态(09-03 Kimi 写成 `- Conclusion: PASS` / `• Conclusion: PASS` 整份被丢,见 memory panel-timeout-should-be-liveness)。
+    本单 A6 覆盖的是 GLM **实际写出**的两种形态;其余形态进后续账,不阻断。
+  - DeepSeek F2(LOW)成立、既有设计:「最后一行独立裁决算数」⇒ 真结论之后再引用别人的独立裁决行会覆盖(英文同理)。进后续账。
+  - DeepSeek F3(LOW)成立:判据只锁「英文在后覆盖中文」,没锁反向;一个「有英文就优先英文」的错误实现能全绿。进后续账(补一条反向用例)。
+  - DeepSeek INFO:中文「余额不足」不命中 `QUOTA_FAILURE_RE`(既有盲区,同句 429 兜底)。进后续账。
+  - DeepSeek/MiMo 对 Q2(缩窄否决词后有无真实欠费文案翻成 rate_limit)各自搜 logs/refs 后都答**没有**,与我一致。
+  - MiMo 表格里 Zhipu「1113 余额不足」「归 runtime」的推理有误(同句常有 429,归 rate_limit),不影响本单结论。
+- arbitrated verdict (主裁): **PASS**。第三轮同一 subject 下 MiMo、DeepSeek 两个家族合格覆盖(high=2),无冲突。
+  三轮外审里成立的发现:Kimi F1~F3、DeepSeek R2 F1/F2/F4 已修并先红后绿;其余为既有局限,列入下面的后续账。
 
 ## Accepted deviations
 
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
+- **停滞检测(单 B)不做**:业主 09-14 定「先不做,观察一段时间」。墙钟上限照旧,大题仍可能被砍。
+- **后续账(下一次动裁决/归类时一起做)**:① 裁决行认列表符号/标题/引用/只加粗标签(中英文同);② 判据补「中文在后覆盖英文」;
+  ③ 中文「余额不足」归 quota;④ agent 腿与 submimo 非零退出写死 runtime ⇒ 需像 subkimi 那样只抽供应商错误行才能让 A2/A3 惠及它们;
+  ⑤ 「最后一行算数」被正文引用覆盖(既有设计,要改需先定规则)。
+- A2b 只认 kimi-code 0.36.1 两种已见措辞的 `error: failed to run prompt:` 前缀;CLI 改措辞 ⇒ 退回 runtime(归类变粗,不假绿)。
+- A5 「继承的 MIMO_SESSION_HEADER 被清」不可从外部观测,只靠代码亲读。
