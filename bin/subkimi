@@ -56,6 +56,8 @@ read-only and direct write tools stay blocked in an isolated KIMI_CODE_HOME.
 
 Environment:
   KIMI_MODEL        optional, kimi-code/<model-id> (default from bin/kimi-model)
+                    (the seed config declares 1M context + effort=max for ANY model;
+                    check the server's /models before switching)
   KIMI_TIMEOUT      optional, seconds before timeout (default 1500; 07-27 取证:
                     900 不够,时间花在长推理而非自读仓库)
   KIMI_REVIEW_HOME  optional, default $HOME/.cache/aiwork/kimi-review-home

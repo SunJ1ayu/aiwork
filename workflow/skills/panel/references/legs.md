@@ -114,6 +114,12 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - **认证**：复用 `~/.grok/auth.json` 的登录，`GROK_AUTH_FILE` 可另指凭证文件；
   设置 `XAI_API_KEY` 则用 API 计费。每次调用复制凭证到独立的临时 Grok home，
   不共享会话、记忆或 leader，结束后连同副本一起清理。
+  **未验证的风险(09-14,track grok-leg-kimi-model G1)**：刷新后的新凭证只落在临时副本里、
+  跑完随副本删掉，**从不回写** `~/.grok/auth.json`。若 xAI 轮换刷新令牌，登录会被这条腿自己耗掉
+  (09-14 实测刷新令牌已被拒 `invalid_grant`，原因未分辨)。重新登录后先比对跑前/跑后刷新令牌哈希再下结论。
+  进程被 SIGKILL 时清理不执行，凭证副本会留在 workspace 目录里。
+- **没登录也在轮换池里**：`panel-review` 只看可执行文件在不在；未登录时被轮到会 1 秒内失败、
+  冷却并追加备用腿，连败 3 次停轮换。确定暂不登录时，派发显式带 `PANEL_GROK_LEG=off`。
 - **隔离**：复用 `_review-workspace.sh` 与 `ro-repo-exec`，原仓物理只读，
   工具可在可丢弃副本里读文件、搜索、跑本地测试。关闭编辑、联网工具与子代理。
   不拿 Grok 自带 Plan 模式当只读边界，也不等待它的交互审批。
@@ -130,8 +136,12 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - `subkimi review TASK LOG REPO`,裁决 gate 为 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。
   默认模型只读 `bin/kimi-model`（一行 `kimi-code/<model-id>`），升级只改这一行；
   单次调用用 `KIMI_MODEL` 覆盖。CLI 参数、日志与运行期模型配置都由所选模型派生，
-  文档和测试不复制默认版本号。评审配置为 1M 上下文、effort=max；供应商协议或能力
-  变化才需调整配置模板。超时 `KIMI_TIMEOUT`(默认 1500s)。
+  文档和测试不复制默认版本号。超时 `KIMI_TIMEOUT`(默认 1500s)。
+  **只有名字是单源的，能力声明不是**:种子模板对**任何**模型都声明 `max_context_size = 1048576`、
+  `support_efforts = ["max"]`。这只对 `kimi-for-coding` 成立(09-14 服务端 `/models` 回显
+  `display_name=K2.8 Preview`、`context_length=1048576`);同一份回显里本账号 `k3` 只有 262144、
+  highspeed 也是 262144 —— 换成它们只改模型文件,配置照样声明 1M/max,测试照样绿。
+  **换模型前先核对服务端 `/models`**;让声明自动跟随服务端是修腿单的活。
 - **隔离**:跑在 `KIMI_CODE_HOME=/root/aiwork/kimi-review-home`(绝不碰全局 `~/.kimi-code`)。
   该 home 的配置带一个 PreToolUse 守卫 hook(`hooks/guard.mjs`,**默认 DENY**):只放行
   Read/Glob/Grep/todo 类工具 + 不含元字符的只读 git;Write/Edit/Agent/AgentSwarm/Skill/

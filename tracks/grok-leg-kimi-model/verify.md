@@ -43,6 +43,21 @@
 - **T 亲读判据改动(闸① 的补偿,因为判据是 GPT 自己写的)**:现有测试**无删断言、无 skip**;
   唯一改写的断言是 V36 `== 'kimi-code/k3'` → `== <bin/kimi-model 的内容>`,默认值从字面量变成配置,等价泛化。
   其余是给新腿补 env 清洗、桩模型名、金样多一格 `subgrok=SKIP(rotation)`。
+- **M 变异(补偿「判据不是我写的」)**:7 个手工变异里 GPT 的测试**漏 3 个** —— 删 `--disable-web-search`、
+  删 `stop_reason == end_turn`、删 `is_error is False`(后两者在现有场景里被 `subtype` 顺带挡住,
+  删联网搜索开关则完全无人问)。我补判据(`cdd1cc4`:假 CLI 断言联网开关;新增 `cancelled`/`is_error`
+  两个「subtype 说 success 但没正常结束」的场景),`mutation-grok.sh` 回放 7 个变异并指名该红的测试:
+  补强前 rc=1(3 漏),补强后 rc=0(7 咬)。收据见下。
+- **R1 redcheck 自己的 bug(本单顺手修,判卷工具)**:Kimi 那次红检报 rc=5「没红在该红的地方」,
+  而目标断言就在输出第 179 行。`printf "$OUT" | grep -qE` 在 `pipefail` 下:grep 命中即退,printf 吃 SIGPIPE,
+  管道 rc=141 ⇒ 命中读成没命中。**我第一次单跑复现没复现出来就判「猜测推翻」—— 错的**:竞态单次赢了不证明没有;
+  连跑 40 次:管道写法错 11~19 次(`PIPESTATUS=141 0`),here-string 0 次。判据 E1⑦b 先提交(`cdd1cc4`,
+  命中后再塞 ~1MB 让竞态变确定)并红,再修(`9e1bed1`)。方向:只误报不假绿;但误报会让人不信红检。
+  - 同型排查(不在本单修,记账):`bin/` 下 `| grep -q` 共 18 处。开 pipefail 且方向是**假绿**的只有
+    `track-commit-msg` 查版本号 bump 的 4 处(`git diff -U0 -- <版本文件> | grep -qE`,输出通常很小,概率低);
+    `_evidence.sh` 3 处只会误报且调用方未开 pipefail;其余是误匹配或输出很小。
+- **G3 凭证副本在强杀后残留(info)**:subgrok 的清理靠 EXIT trap,SIGKILL(`timeout -k`)时不跑 ⇒ 临时 home 里的
+  auth.json 副本(600)留在 workspace 根。workspace 根本身就没有过期清扫(现存 392 个残留快照,约 83M,各腿都有)。
 
 > Panel hook — 软判断(correctness/security/edge/spec-drift)走 panel-review:
 > 主 agent 先独立审并落 findings,再按 impact-risk 预算跑 panel-review；只有特殊控制面
@@ -61,11 +76,29 @@
 runlog -t grok-leg-kimi-model -- <判据命令>
 ```
 
+红检(实现真退回判据提交 `6734a29`):
+
 ```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
+runlog: redcheck-grok-roster rc=0 commit=2e4ed24 dirty=no at=2026-09-14T06:15:49Z file=tracks/grok-leg-kimi-model/evidence/20260914T061549Z-01-redcheck-grok-roster.txt
+runlog: redcheck-kimi-model rc=5 commit=2e4ed24 dirty=yes at=2026-09-14T06:16:15Z file=tracks/grok-leg-kimi-model/evidence/20260914T061615Z-01-redcheck-kimi-model.txt
+runlog: redcheck-kimi-model-rerun rc=0 commit=9e1bed1 dirty=yes at=2026-09-14T06:29:22Z file=tracks/grok-leg-kimi-model/evidence/20260914T062922Z-01-redcheck-kimi-model-rerun.txt
+```
+
+- `redcheck-kimi-model rc=5` 是 R1 那个 bug 的误报(目标断言在输出里),不是判据红错地方;修好后重跑 `rerun rc=0`。
+- `dirty=yes` 均为同目录未提交的前一份收据/observations,实现与判据文件在跑前已提交。
+
+变异(before 跑在 `2e4ed24` 的独立 worktree 上,脚本同一份;after 跑在主树):
+
+```
+runlog: mutation-grok-before-oracle rc=1 commit=cdd1cc4 dirty=yes at=2026-09-14T06:25:51Z file=tracks/grok-leg-kimi-model/evidence/20260914T062551Z-01-mutation-grok-before-oracle.txt
+runlog: mutation-grok-after-oracle rc=0 commit=cdd1cc4 dirty=yes at=2026-09-14T06:26:43Z file=tracks/grok-leg-kimi-model/evidence/20260914T062643Z-01-mutation-grok-after-oracle.txt
+```
+
+R1 判据先红后绿:
+
+```
+runlog: delegate-entry-redcheck-longout-red rc=1 commit=cdd1cc4 dirty=yes at=2026-09-14T06:27:41Z file=tracks/grok-leg-kimi-model/evidence/20260914T062741Z-01-delegate-entry-redcheck-longout-red.txt
+runlog: delegate-entry-redcheck-longout-green rc=0 commit=9e1bed1 dirty=no at=2026-09-14T06:28:36Z file=tracks/grok-leg-kimi-model/evidence/20260914T062836Z-01-delegate-entry-redcheck-longout-green.txt
 ```
 
 ## Review
