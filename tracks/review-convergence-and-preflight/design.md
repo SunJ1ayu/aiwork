@@ -94,7 +94,7 @@ worktree 走 preflight 模式,移除/删分支/rmdir 的代码在该模式下不
 |---|---|---|---|
 | W1 | 09-16 查更新被限流,第 4~8 轮审的是我自己的判据措辞 | 每轮"再确认一下",八轮 | 措辞类发现 ⇒ **延期**或落在豁免文件就地改;预算 2 轮用完、无真实阻断 ⇒ 结束。第 3 轮起根本不派 |
 | W2 | 09-16 e2e 守卫后续单:回环检查被 `NODE_OPTIONS` 污染而放行(本单引入) | 按旧 ② "不是业主可见也不是假绿" ⇒ 记账不修,进下一单候选 | **本次引入的回归 ⇒ 本单必须修**,进第 1 轮修复清单,第 2 轮核验。其余 8 条「挡不住未来错误实现」⇒ **延期,不开单** |
-| W3 | 同一单:`design.md` 一行 `/tmp/…` 在第 1 轮之后被归档闸拦 | 改一行 ⇒ 绑定作废 ⇒ 白跑第 2 轮 | 派第 1 轮前 `track preflight` ⇒ ephemeral BLOCK ⇒ 先改 ⇒ 第 1 轮绑定的就是最终内容 |
+| W3 | 同一单:`design.md` 一行 `/tmp/…` 在第 1 轮之后被归档闸拦 | 改一行 ⇒ 绑定作废 ⇒ 白跑第 2 轮 | 派第 1 轮前 `track preflight` ⇒ ephemeral BLOCK ⇒ 先改 ⇒ 第 1 轮绑定的就是最终内容 (说的是写法样式,不是证据地址)[仓外不承重] |
 | W4 | 假想:第 2 轮新报一条成立的数据一致性风险(如归档写口丢档案) | —— | 属本单必须修;预算已用完 ⇒ **保持未完成**,修复后要追加一轮必须先在 verify.md 写明阻断与新预算;不能因"预算到了"放行 |
 | W5 | 09-15~16 e2e 卫生账:浏览器临时目录点名连修两单 | 第三单差点又开 | 第二次对"点名"打补丁时触发 **C**:先问点名这个抽象(按目录残留推断"没关干净")是否站得住 —— Kimi 报的带点目录误点名正是这层的问题 |
 
@@ -107,8 +107,8 @@ worktree 走 preflight 模式,移除/删分支/rmdir 的代码在该模式下不
 | id | 场景 | 断言 |
 |---|---|---|
 | P1 | typed high、dispatch 合法、verdict=null、无 observation、干净 | rc=3;有 PENDING(outcome.verdict);0 BLOCK 0 ERROR;ephemeral/receipts/destination/views 各有 OK;快照不变;没有新 observation |
-| P2 | design.md 引 `/tmp/…` | rc=1;BLOCK 点名 `design.md:行号`;**仍报** outcome PENDING(不短路);快照不变 |
-| P3 | decision 高危因子却 standard + proposal.md 引 scratchpad | rc=1;两条 BLOCK(`impact.high_factor` 与 `proposal.md`)同时出现 |
+| P2 | design.md 引 `/tmp/…` | rc=1;BLOCK 点名 `design.md:行号`;**仍报** outcome PENDING(不短路);快照不变 (说的是写法样式,不是证据地址)[仓外不承重] |
+| P3 | decision 高危因子却 standard + proposal.md 引 scratchpad | rc=1;两条 BLOCK(`impact.high_factor` 与 `proposal.md`)同时出现 (说的是写法样式,不是证据地址)[仓外不承重] |
 | P4a | evidence 有 rc=1 收据、verify.md 没引 | rc=3;PENDING 提到 5b;0 BLOCK |
 | P4b | verify.md 粘了一行 evidence 里没有的收据 | rc=1;BLOCK 提到 5a |
 | P5 | 仓根有未跟踪文件 | rc=1;BLOCK 点名该文件;文件仍未跟踪、index 不变 |
