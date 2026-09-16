@@ -266,14 +266,19 @@ PYOID
   #    的评审简报 ⇒ 把它们并进"其它"桶的话,**在我最常派评审的那个仓里"其它=0"永远不成立**,
   #    ①的触发条件就等于没有。它们又不能不报:没进过 commit 的新产品文件正是本机反复栽过的
   #    盲区。所以单列一栏,并说清这一栏答不了"是不是这一轮才出现的"。
+  # 🔴 **一律走 `-z`**(NUL 分隔)。不带 -z 时 git 会把非 ASCII 路径 C-quote 成
+  #    `"\344\270\255..."` —— 而这份文件名清单的**唯一用途就是给主 agent 看**,
+  #    转义了等于没打。仓里中文文件名是常态。本仓 `bin/track-guard` 早就这么躲
+  #    (它那段注释还实测过 `-z` 与 core.quotepath 无关),新读数是最后一处没跟上的地方。
+  #    2026-09-16 第 1 轮评审 subdeepseek 实测点名;判据 R-cn 钉住。
   local -a changed=() others=() untracked=()
   local pth t=0 k=0 o=0 shown=0
-  while IFS= read -r pth; do
+  while IFS= read -r -d '' pth; do
     [[ -n "$pth" ]] && changed+=("$pth")
-  done < <( git -C "$repo" diff --name-only "$base" 2>/dev/null | sort -u )
-  while IFS= read -r pth; do
+  done < <( git -C "$repo" diff --name-only -z "$base" 2>/dev/null | sort -zu )
+  while IFS= read -r -d '' pth; do
     [[ -n "$pth" ]] && untracked+=("$pth")
-  done < <( git -C "$repo" ls-files --others --exclude-standard 2>/dev/null | sort -u )
+  done < <( git -C "$repo" ls-files --others --exclude-standard -z 2>/dev/null | sort -zu )
   for pth in ${changed+"${changed[@]}"}; do
     case "$pth" in
       tests/*)  t=$((t + 1)) ;;
@@ -293,8 +298,9 @@ PYOID
       printf 'panel-review:     %s\n' "$pth" >&2; shown=$((shown + 1))
     done
   else
-    printf 'panel-review:   其它=0 ⇒ 产品代码自上一轮没动过,这一轮审的是我自己的考卷。\n' >&2
-    printf 'panel-review:   规矩(panel 抽屉「轮次纪律」):先别改,记进下一单。\n' >&2
+    printf 'panel-review:   其它=0 ⇒ 已跟踪的产品文件自上一轮没动过,这一轮审的多半是我自己的考卷。\n' >&2
+    printf 'panel-review:   规矩(panel 抽屉「4b. 轮次纪律」):先别改,记进下一单。\n' >&2
+    printf 'panel-review:   ⚠️ 「其它=0」≠「上一轮的绑定还有效」:tests/ 与未跟踪文件同样进交付指纹。\n' >&2
   fi
   if [[ "${#untracked[@]}" -gt 0 ]]; then
     printf 'panel-review:   未跟踪文件 %d 个 —— **不在上面的对比里**(从没进过 commit,看不出是不是这一轮才出现的):\n' \
