@@ -146,6 +146,11 @@ run_panel "$d" 2 --track current; rc2=$?
 out="$(cat "$OUTF")"
 grep -q "$MARK" <<<"$out";                          check "R2: 打印了轮次读数" $?
 grep -qE '第[[:space:]]*2[[:space:]]*轮' <<<"$out";  check "R2: 认出这是第 2 轮" $?
+# F1(track review-convergence-and-preflight 第 1 轮):这个 N 数的是 panel **派发**(基础设施重试也算),
+# 而 panel 抽屉 4b 的轮次预算数的是**实质评审**。同一个「轮」字两个集合 —— 那单亲历一次重试被印成「第 2 轮」,
+# 照字面读会以为预算用完了。读数必须当场说清它数的是什么、不是什么。
+grep -q '重试也算' <<<"$out";                        check "R2: 说清 N 把基础设施重试也数进去了" $?
+grep -q '实质评审' <<<"$out";                        check "R2: 说清它不是 4b 轮次预算里的实质评审轮" $?
 grep -qE 'tests/=1' <<<"$out";                      check "R2: tests/ 桶=1" $?
 grep -qE '其它=0' <<<"$out";                         check "R2: 其它桶=0 —— 这一轮在审我自己的考卷" $?
 grep -q "${C1:0:12}" <<<"$out";                     check "R2: 打印了上一轮的 commit" $?
