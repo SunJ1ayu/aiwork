@@ -217,6 +217,74 @@ if [[ -z "$TRACK_NAME" && "$NO_TRACK" -eq 0 && "${#_typed_active[@]}" -gt 0 ]]; 
   printf '  active: %s\n' "${_typed_active[*]}" >&2
   exit 2
 fi
+# 评审轮次读数(track panel-round-discipline,2026-09-16)—— 在派活当场回答两个问题:
+# **这是第几轮**,和**自上一轮以来到底改了什么**。
+# 由来:09-16「查更新被限流」单跑了八轮外审,4~8 轮审的是我自己的判据措辞(产品代码零改动),
+# 当天烧光 Kimi 与 GLM 的额度。没有哪一轮当时看起来是错的 —— 缺的就是这两个读数。
+#
+# 🔴 **它是读数不是闸**:只打印、不阻断、不改退出码。硬拦会在正当的第 4 轮(产品真改了)
+#    误伤,而误伤一次就会被绕过去,从此没人再看它。看到读数之后该干什么写在 panel 抽屉里。
+# 🔴 **打印事实,不打印结论**:什么算"产品代码"是仓库相关的,守卫不替我定义 —— 本机
+#    "守卫守错门"已经栽过三次。这里只给三桶计数 + 其它桶的文件名,结论我自己下。
+round_readout() {  # round_readout <track_dir> <repo>
+  local track_dir="$1" repo="$2" obs_dir="$1/observations"
+  local -a obs=()
+  while IFS= read -r -d '' f; do obs+=("$f"); done < <(
+    find "$obs_dir" -maxdepth 1 -name '*panel-review*.json' -print0 2>/dev/null | sort -z)
+  local n="${#obs[@]}"
+  [[ "$n" -gt 0 ]] || return 0   # 第一轮没有"上一轮"可比;打了就是噪音
+  printf 'panel-review: 轮次读数 —— 这是第 %d 轮(数的是这个 track 已落盘的 panel 轮次)\n' \
+    "$((n + 1))" >&2
+  # 基线:从最近一份往回找,取**第一个读得出 head_oid 的**轮次。
+  # 中间轮次可能整轮死光(腿没交卷 ⇒ subject.source=null),或是 0 腿的自审轮
+  # (整份 observation 哪儿都没有 commit)。那种轮次**不能把基线冲掉** ——
+  # 否则它之前的产品改动会被静默吞掉,读数反而骗我。(2026-09-16 实测三条前提,见判据抬头。)
+  local base="" i
+  for (( i = n - 1; i >= 0; i-- )); do
+    base="$(python3 - "${obs[$i]}" <<'PYOID' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+for leg in (d.get("actual") or {}).get("legs") or []:
+    oid = ((leg.get("subject") or {}).get("source") or {}).get("head_oid")
+    if oid:
+        print(oid)
+        break
+PYOID
+)"
+    [[ -n "$base" ]] && break
+  done
+  if [[ -z "$base" ]] || ! git -C "$repo" cat-file -e "${base}^{commit}" 2>/dev/null; then
+    printf 'panel-review:   上一轮的 commit 读不出来(没有腿交过卷,或它不是本仓的对象)⇒ 这次不做对比\n' >&2
+    return 0
+  fi
+  # 已跟踪的改动比到**工作区**(不是 HEAD):评审看的就是工作区那份。
+  # 未跟踪文件必须一起数 —— 本机反复栽在"working 有而 staged 没有"。
+  local -a changed=() others=()
+  local pth t=0 k=0 o=0
+  while IFS= read -r pth; do
+    [[ -n "$pth" ]] && changed+=("$pth")
+  done < <( { git -C "$repo" diff --name-only "$base" 2>/dev/null
+              git -C "$repo" ls-files --others --exclude-standard 2>/dev/null; } | sort -u )
+  for pth in ${changed+"${changed[@]}"}; do
+    case "$pth" in
+      tests/*)  t=$((t + 1)) ;;
+      tracks/*) k=$((k + 1)) ;;
+      *)        o=$((o + 1)); others+=("$pth") ;;
+    esac
+  done
+  printf 'panel-review:   上一轮 @ %s\n' "${base:0:12}" >&2
+  printf 'panel-review:   自上一轮以来改动:tests/=%d  tracks/=%d  其它=%d\n' "$t" "$k" "$o" >&2
+  if [[ "$o" -gt 0 ]]; then
+    printf 'panel-review:   其它改动的文件:%s\n' "${others[*]}" >&2
+  else
+    printf 'panel-review:   其它=0 ⇒ 产品代码自上一轮没动过,这一轮审的是我自己的考卷。\n' >&2
+    printf 'panel-review:   规矩(panel 抽屉「轮次纪律」):先别改,记进下一单。\n' >&2
+  fi
+}
+
 if [[ -n "$TRACK_NAME" ]]; then
   case "$TRACK_NAME" in
     */*|*..*|-*|.|archive) echo "panel-review: invalid --track '$TRACK_NAME'" >&2; exit 2 ;;
@@ -231,6 +299,7 @@ if [[ -n "$TRACK_NAME" ]]; then
     echo "panel-review: typed track budget=$REVIEW_BUDGET is below impact-risk=$IMPACT_RISK minimum=$RISK_BUDGET; no leg was started" >&2
     exit 2
   fi
+  round_readout "$TRACK_DIR" "$CONTROL_REPO" || true
 fi
 unset _decision _typed_active
 
