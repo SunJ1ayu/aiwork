@@ -107,6 +107,9 @@ EOF
 }
 
 commit_in() { git -C "$1/repo" add -A; git -C "$1/repo" commit -qm "$2"; }
+# 只提交点名的路径 —— R3c 要让 brief*.md **保持未跟踪**,`add -A` 会把它们一起吞掉
+# (第一版判据就栽在这里:夹具自己把"陈年未跟踪文件"变成了已跟踪)。
+commit_paths() { local d="$1" msg="$2"; shift 2; git -C "$d/repo" add "$@"; git -C "$d/repo" commit -qm "$msg"; }
 
 OUTF=""
 # 🔴 输出走文件、退出码走返回值:`out="$(run_panel ...)"` 会把函数塞进子 shell,
@@ -152,14 +155,34 @@ grep -qE '其它=1' <<<"$out";   check "R3: 其它桶=1" $?
 grep -q 'app.txt' <<<"$out";   check "R3: 列出了产品文件名(只给计数会漏掉搬进 tests/ 的产品逻辑)" $?
 grep -qE 'tests/=1' <<<"$out"; check "R3: tests/ 桶同时=1" $?
 
-echo "[R3b] **未跟踪**的产品文件也要算进去(本机反复栽在"working 有而 staged 没有")"
+echo "[R3b] **未跟踪**文件要看得见,但**单列一栏**、不进"其它"桶"
+# 🔴 为什么不进桶(2026-09-16 实测):`ls-files --others` 列的是"此刻所有未跟踪文件",
+#    不是"这一轮新增的"。/root/aiwork 常年躺着 51 个未跟踪的评审简报 ⇒ 并进"其它"桶
+#    就会让"其它=0"在那个仓里永远不成立,①的触发条件等于没有。
+#    但也不能不报:没进过 commit 的新产品文件正是本机反复栽过的盲区。
 rm -rf "$d"; d="$(mktemp -d)"; make_fixture "$d"; OUTF="$d/out.txt"
 run_panel "$d" 1 --track current
+# 真实 track 会把每轮的 observation 提交进去;夹具照做,未跟踪计数才有确定值。
+commit_paths "$d" "记录第 1 轮 observation" tracks/
 printf 'z\n' > "$d/repo/newfeature.py"      # 不 git add
 run_panel "$d" 2 --track current
 out="$(cat "$OUTF")"
-grep -q 'newfeature.py' <<<"$out"; check "R3b: 未跟踪的新产品文件出现在读数里" $?
-grep -qE '其它=1' <<<"$out";       check "R3b: 它算进"其它"桶" $?
+grep -q 'newfeature.py' <<<"$out";  check "R3b: 未跟踪的新产品文件出现在读数里(看得见)" $?
+grep -qE '其它=0' <<<"$out";         check "R3b: 它**不**污染"其它"桶(已跟踪的产品代码确实没动)" $?
+grep -q '未跟踪文件 1 个' <<<"$out"; check "R3b: 单列一栏并给出数量" $?
+grep -q '不在上面的对比里' <<<"$out"; check "R3b: 明说这一栏答不了"是不是这一轮才出现的"" $?
+
+echo "[R3c] 陈年未跟踪文件不许把"其它=0"顶掉(aiwork 51 个简报就是这个形状)"
+rm -rf "$d"; d="$(mktemp -d)"; make_fixture "$d"; OUTF="$d/out.txt"
+for i in 1 2 3; do printf 'old\n' > "$d/repo/brief$i.md"; done   # 第一轮之前就在,一直不 add
+run_panel "$d" 1 --track current
+commit_paths "$d" "记录第 1 轮 observation" tracks/
+printf 't2\n' >> "$d/repo/tests/t.txt"
+commit_paths "$d" "只改判据" tests/t.txt
+run_panel "$d" 2 --track current
+out="$(cat "$OUTF")"
+grep -qE '其它=0' <<<"$out";        check "R3c: 三个陈年未跟踪文件在场,其它仍=0 ⇒ ①的触发条件还活着" $?
+grep -q '未跟踪文件 3 个' <<<"$out"; check "R3c: 它们仍然被报出来(不是被藏起来)" $?
 
 echo "[R4] 上一轮的腿没交卷(subject.source=null)⇒ 明说读不出来,不静默、不改退出码"
 rm -rf "$d"; d="$(mktemp -d)"; make_fixture "$d"; OUTF="$d/out.txt"
