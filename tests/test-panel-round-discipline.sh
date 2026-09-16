@@ -120,6 +120,13 @@ run_panel() { # d 序号 extra-args...
     bash "$d/bin/panel-review" --risk standard --budget 1 --no-my-review \
     "$@" "$d/task.md" "$d/repo" "$d/raw/$n" > "$OUTF" 2>&1
 }
+# stdout / stderr 分开落盘 —— R6 要问"读数走的是哪一路"。
+run_panel_split() { # d 序号 extra-args... -> $OUTF.out / $OUTF.err
+  local d="$1" n="$2"; shift 2
+  PANEL_STATE_DIR="$d/state-$n" PANEL_STAGGER_MAX=0 \
+    bash "$d/bin/panel-review" --risk standard --budget 1 --no-my-review \
+    "$@" "$d/task.md" "$d/repo" "$d/raw/$n" > "$OUTF.out" 2> "$OUTF.err"
+}
 
 MARK='轮次读数'
 echo "=== 评审轮次读数 oracle ==="
@@ -220,6 +227,62 @@ run_panel "$d" 2 --no-track
 out="$(cat "$OUTF")"
 grep -q "$MARK" <<<"$out"
 check "R5: --no-track ⇒ 不打印" $([[ $? -ne 0 ]]; echo $?)
+
+
+echo "[R2b] 轮数只数 panel 轮次 —— 同目录里的 runlog observation 不许被数进去"
+# 🔴 第 1 轮评审(DeepSeek)用一个变异证明:把 glob 放宽成 `*.json` 后 26 条照样全绿 ⇒
+#    决定"第几轮"的那个 glob **原来完全没被判据问过**。真 track 的 observations/ 里
+#    runlog 的份数常常比 panel 的多(本单当时 4 份 runlog / 0 份 panel),读错就会虚报轮数。
+rm -rf "$d"; d="$(mktemp -d)"; make_fixture "$d"; OUTF="$d/out.txt"
+run_panel "$d" 1 --track current
+obs_dir="$d/repo/tracks/current/observations"
+real="$(find "$obs_dir" -name '*panel-review*.json' | head -1)"
+cp "$real" "$obs_dir/20260916T999999Z-runlog-execution_finished-001.json"   # 非 panel 的一份
+cp "$real" "$obs_dir/20260916T999998Z-delegate-codex-execution_finished-001.json"
+printf 't2\n' >> "$d/repo/tests/t.txt"; commit_paths "$d" "只改判据" tests/t.txt
+run_panel "$d" 2 --track current
+out="$(cat "$OUTF")"
+grep -qE '第[[:space:]]*2[[:space:]]*轮' <<<"$out"
+check "R2b: 两份非 panel observation 在场,轮数仍是 2(不是 4)" $?
+
+echo "[R3d] 已跟踪文件**改了但没提交**也要算 —— 评审看的就是工作区那份"
+# 🔴 同上,第 1 轮评审用变异证明:把 `diff --name-only \$base` 改成 `\$base HEAD` 后
+#    26 条照样全绿 —— 因为夹具每一处改动都先提交了,"脏工作区"这个最常见的状态没被问过。
+rm -rf "$d"; d="$(mktemp -d)"; make_fixture "$d"; OUTF="$d/out.txt"
+run_panel "$d" 1 --track current
+printf 'dirty\n' >> "$d/repo/app.txt"        # 只改,不 commit
+run_panel "$d" 2 --track current
+out="$(cat "$OUTF")"
+grep -qE '其它=1' <<<"$out";  check "R3d: 未提交的已跟踪产品改动进了其它桶" $?
+grep -q 'app.txt' <<<"$out";  check "R3d: 并列出它的文件名" $?
+
+echo "[R-cn] 中文 / 带空格的文件名必须原样可读(不许 C-quote 成八进制)"
+# 🔴 第 1 轮评审 DeepSeek 实测:不带 -z 的 git diff/ls-files 会把非 ASCII 名字转义成
+#    "\344\270\255…"。而这份文件名清单的**唯一用途**就是给主 agent 看。
+#    本仓 track-guard 早就用 -z 躲过这件事,新读数是唯一没跟上的地方。
+rm -rf "$d"; d="$(mktemp -d)"; make_fixture "$d"; OUTF="$d/out.txt"
+run_panel "$d" 1 --track current
+printf 'y\n' > "$d/repo/中文产品.py"
+printf 'y\n' > "$d/repo/有 空格.md"
+commit_paths "$d" "中文与空格文件名" 中文产品.py "有 空格.md"
+printf 'u\n' > "$d/repo/未跟踪中文.md"
+run_panel "$d" 2 --track current
+out="$(cat "$OUTF")"
+grep -q '中文产品.py' <<<"$out";     check "R-cn: 已跟踪的中文文件名原样可读" $?
+grep -q '有 空格.md' <<<"$out";       check "R-cn: 带空格的文件名完整成行(没被拆成两个)" $?
+grep -q '未跟踪中文.md' <<<"$out";    check "R-cn: 未跟踪的中文文件名也原样可读" $?
+grep -q '\\34' <<<"$out"
+check "R-cn: 输出里没有八进制转义残留" $([[ $? -ne 0 ]]; echo $?)
+
+echo "[R6] 读数走 stderr,不污染 stdout"
+rm -rf "$d"; d="$(mktemp -d)"; make_fixture "$d"; OUTF="$d/out.txt"
+run_panel "$d" 1 --track current
+printf 't2\n' >> "$d/repo/tests/t.txt"; commit_paths "$d" "只改判据" tests/t.txt
+run_panel_split "$d" 2 --track current; rc6=$?
+grep -q "$MARK" "$OUTF.err";  check "R6: 读数出现在 stderr" $?
+grep -q "$MARK" "$OUTF.out"
+check "R6: stdout 里没有读数(不污染下游管道)" $([[ $? -ne 0 ]]; echo $?)
+check "R6: 退出码仍是 0(rc=$rc6)" $([[ $rc6 -eq 0 ]]; echo $?)
 
 rm -rf "$d"
 echo
