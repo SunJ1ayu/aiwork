@@ -1451,6 +1451,9 @@ v15_anchor_leak_warning() {
   printf '# Verify\n- findings: M1 主审抓到的真问题\n' > "$repo/tracks/x/verify.md"
   bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/A2" >"$d/a2.out" 2>&1
   grep -qi "anchor\|锚定" "$d/a2.out"; check "V15: 仓里有 verify.md 时报锚定风险" $?
+  # G4(track review-convergence-and-preflight 第 2 轮后主审自扫):复审轮必然触发这条报警(处置表已落 verify.md),
+  # 而报警原文无条件说「先派发、后写 verify.md」,与 panel 抽屉 4b ②「处置先落盘再派复审」正面相反。
+  grep -q '初审' "$d/a2.out"; check "V15: 报警说清「先派发、后写 verify.md」管的是初审(复审轮见 4b ②)" $?
 
   # 已提交进被评 diff 的 verify.md(= 07-21 的真实踩法)
   ( cd "$repo"; git add -A; git commit -qm "verify" )
