@@ -235,10 +235,10 @@ round_readout() {  # round_readout <track_dir> <repo>
   [[ "$n" -gt 0 ]] || return 0   # 第一轮没有"上一轮"可比;打了就是噪音
   printf 'panel-review: 轮次读数 —— 这是第 %d 轮(数的是这个 track 已落盘的 panel 轮次)\n' \
     "$((n + 1))" >&2
-  # 🔴 这个 N 是**派发**次数,基础设施重试也算;panel 抽屉 4b 的轮次预算数的是**实质评审**。
+  # 🔴 这个 N 是**已落盘的派发**次数,基础设施重试也算;panel 抽屉 4b 的轮次预算数的是**实质评审**。
   #    同一个「轮」字两个集合 —— 2026-09-16 一次重试被印成「第 2 轮」,照字面读会以为预算用完了
   #    (track review-convergence-and-preflight 第 1 轮 F1)。当场说清,别让人自己猜。
-  printf 'panel-review:   ⚠️ 这个 N 数的是 panel 派发,基础设施重试也算;不是 4b 轮次预算里的「实质评审」轮 —— 用了几轮看 verify.md 的轮次记录。\n' >&2
+  printf 'panel-review:   ⚠️ 这个 N 数的是已落盘的 panel 派发(基础设施重试也算,控制器没活到收尾的那次不计);不是 4b 轮次预算里的「实质评审」轮 —— 用了几轮看 verify.md 的轮次记录。\n' >&2
   # 基线:从最近一份往回找,取**第一个读得出 head_oid 的**轮次。
   # 中间轮次可能整轮死光(腿没交卷 ⇒ subject.source=null),或是 0 腿的自审轮
   # (整份 observation 哪儿都没有 commit)。那种轮次**不能把基线冲掉** ——
@@ -303,7 +303,7 @@ PYOID
     done
   else
     printf 'panel-review:   其它=0 ⇒ 已跟踪的产品文件自上一轮没动过,这一轮审的多半是我自己的考卷。\n' >&2
-    printf 'panel-review:   规矩(panel 抽屉 4b):先别改;延期项留在 verify.md,不自动开下一单;这一轮算进开工写的轮次预算。\n' >&2
+    printf 'panel-review:   规矩(panel 抽屉 4b):先别改;延期项留在 verify.md,不自动开下一单;实质评审才算进开工写的轮次预算,基础设施重试不算(4b ④)。\n' >&2
     printf 'panel-review:   ⚠️ 「其它=0」≠「上一轮的绑定还有效」:tests/ 与未跟踪文件同样进交付指纹。\n' >&2
   fi
   if [[ "${#untracked[@]}" -gt 0 ]]; then
@@ -717,7 +717,7 @@ if [[ -n "$LEAK" ]]; then
   # 这行字 08-24 把我指错过一整轮:它说的"整份 diff"只在 chat 腿 + PANEL_DIFF_BASE
   # 设上时才成立,而本机默认形状下泄漏走的是"底座腿自己读树"。报警要说得出自己在报什么。
   echo "    (底座腿自己读树、未跟踪文件会被内联、chat 腿另看 diff —— 已提交的照样够得着;"
-  echo "     先派发、后写 verify.md;详见 skills/panel/SKILL.md 反锚定一节)"
+  echo "     初审要先派发、后写 verify.md;复审轮读到上一轮处置表是预期内的(4b ②);详见 skills/panel/SKILL.md 反锚定一节)"
 fi
 
 # 派发窗口的树是不是同一棵(2026-08-05 实事故):22:40 我趁 Kimi 还在跑提交了 80d2d23,
