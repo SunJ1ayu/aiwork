@@ -47,7 +47,11 @@ runlog -t review-convergence-and-preflight -- <判据命令>
   | 1 | 实质(Kimi+Grok 派出;两腿基础设施死,自动补 MiMo) | rc=3,BLOCK 0(再往前一次 dogfood 抓到 design.md 3 行,已修) | `logs/panel-review-convergence-and-preflight-review-r1-20260916-2143` | 0(MiMo) |
   | 1 | **重试**(内容零改动;Grok `Not signed in`、Kimi 周额度用光 ⇒ 显式关掉,派 MiMo+DeepSeek) | rc=3,BLOCK 0 | `logs/panel-review-convergence-and-preflight-review-r1-retry-20260916-2155` | 1(DeepSeek #4)+ 主审自查 1 |
 
-  > panel-review 当场把这次重试印成「这是第 2 轮」—— 正是修复清单 F1 要修的那个词义冲突。
+  | 2 | 实质(复审:核验 F1/F2;MiMo+DeepSeek) | rc=3,BLOCK 0 | `logs/panel-review-convergence-and-preflight-review-r2-20260916-2208` | 3(DeepSeek P1/P5/P6:F1、F2 没修完整);MiMo PASS 未见 |
+  | 3 | **追加**实质(见下方「追加评审声明」) | <派发前填> | <…> | <…> |
+
+  > panel-review 当场把第 1 轮那次重试印成「这是第 2 轮」—— 正是修复清单 F1 要修的那个词义冲突。
+  > 第 2 轮 F1 修复生效后,同一处印成「这是第 3 轮」并紧跟一句「这个 N 数的是 panel 派发……不是实质评审轮」。
 
 - findings(**先处置、后动手**;一轮一份修复清单,一次修完再复审 —— panel 抽屉 4b):
 
@@ -67,6 +71,25 @@ runlog -t review-convergence-and-preflight -- <判据命令>
   | X2 | [MiMo 重试] 「与 panel-review 打印没有矛盾」 | F1 亲历 | 驳回 | 与本单亲历的「重试印成第 2 轮」相反 |
 
   修复清单(第 1 轮 → 第 2 轮核验):**F1、F2**。延期项不施工、不开新单。
+
+  **第 2 轮(复审)处置**:
+
+  | # | 发现:触发条件与影响 | 核实证据 | 处置 | 理由 |
+  |---|---|---|---|---|
+  | G1 | [DeepSeek P1,孤腿 BLOCK] `bin/panel-review` 其它=0 那句「这一轮算进开工写的轮次预算」无条件打印;基础设施重试正是其它=0 ⇒ 等于说重试吃预算,与 4b ④ 正面冲突 | 读 `bin/panel-review:306`(本单 `38b2c84` 写入);本单第 1 轮重试就是其它=0 的形状 | **必须修** | F1 没修完整:与 F1 同一把尺子(验收边界 1),而且就是 F1 亲历的那个误读 |
+  | G2 | [DeepSeek P5] 反锚定一节两处(「正确节奏是先派发、后写 verify.md」「真干净只有一条路」)没限定初审;F2 只在 4b 里说清 | `workflow/skills/panel/SKILL.md:166,180-181` | **必须修** | F2 没修完整:只读反锚定那节的人拿到的节奏与 4b ② 相反(验收边界 1) |
+  | G3 | [DeepSeek P6] F1 新加那句说 N「数的是 panel 派发」,实际数的是**已落盘**的派发 —— 控制器没活到收尾那次不计 | `bin/panel-review` round_readout 数 `observations/*panel-review*.json` | **必须修** | F1 的修复句说大了一点;本抽屉「机制要说准,别说大」 |
+  | D9 | [DeepSeek P4] R2 新断言是子串匹配,措辞写反的实现(「N 数的是实质评审轮,重试也算」)也能绿 | `tests/test-panel-round-discipline.sh` R2 | 延期 | 挡不住假想的未来实现;当前实现正确。下一个使用者:有人把那句改反时判据不会红 |
+  | —  | [DeepSeek P2 / P3] 「删掉」药方对在写收据是错的 / PENDING 顶行措辞 | 同 D6 / D2 | 维持延期 | 两腿复审都认可 D6、D2 的延期理由;不因"顺手"施工 |
+  | —  | [MiMo] 「无新发现」 | G1 亲读成立 | 不采信 | 共同假阴性的实例:MiMo 两份报告都没看到 306 行 |
+
+  **追加评审声明(派发前写,4b ④)**:
+  - 具体阻断:G1(工具打印与 4b ④ 冲突)、G2(同一抽屉两处节奏与 4b ② 冲突)、G3(修复句说大)。
+  - 追加目的:**只**核验 G1~G3 的修复及其影响面(读数两行 + 反锚定两句 + 判据 R2 一条),其余实现自第 2 轮起零改动。
+  - 新的有限预算:**1 轮**(MiMo + DeepSeek,当前只有这两家健康)。**不再追加**:若这一轮再出「本单必须修」,
+    本单保持未完成(不归档、不写 PASS),把 `bin/panel-review` 读数文案这一块拆出本单,回头找业主。
+  - 为什么不缩范围代替追加:不管怎么缩,改了 panel-review/SKILL 任何一个字都要重新绑定评审;
+    归档 high 还要求同一次评审两家无冲突,第 2 轮 PASS/BLOCK 冲突那次本来就不能算覆盖。
 
   > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
   > 花名册在上一格,查工件不查自述。延期 = 留在这里,不自动开新单。
