@@ -1,0 +1,95 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    regress-test-worktree-sweep
+cmd:     bash tests/test-worktree-sweep.sh
+cwd:     /root/aiwork(仓根)
+commit:  efc18dc
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-16T13:31:53Z
+---------------- 输出开始 ----------------
+=== worktree-sweep oracle ===
+[S1] 干净 + 成果已在主线 ⇒ 归档时收树收分支,主仓一字未动
+  PASS: S1: 归档成功(rc=0)
+  PASS: S1: 那棵树**从盘上没了**(不看它自己怎么说)
+  PASS: S1: git 也不再认它
+  PASS: S1: 分支也收了
+  PASS: S1: track 真的归档了
+  PASS: S1: 清理没碰主仓(tracks/ 之外一个字节没变)
+  PASS: S1: 主仓 HEAD 没动
+  PASS: S1: 报告里说了收掉哪棵
+  PASS: S1: 收空之后连那个轮次目录也收掉(否则以后每次归档都点它一遍名)
+[S2] 树里有没保存的改动 ⇒ 拦住归档,树原封不动
+  PASS: S2: 归档被拦(rc≠0)
+  PASS: S2: **树还在**
+  PASS: S2: 树里那份唯一的东西一个字节没动
+  PASS: S2: track **没有**被归档(不留半截状态)
+  PASS: S2: 报告点名是哪棵树
+  PASS: S2: 说清卡在哪一条(树里有东西)
+[S3] 树干净、但它的提交还没进主线 ⇒ 不许删(这条最要命)
+  PASS: S3: 前置 —— 树确实是干净的
+  PASS: S3: 归档被拦(rc≠0)
+  PASS: S3: **树还在**(里面那个提交是唯一的一份)
+  PASS: S3: 那个提交还在
+  PASS: S3: 说清卡在「没合进主线」这一条
+  PASS: S3: 合进主线后 ⇒ 归档通过
+  PASS: S3: 这次树被收掉了
+[S4] 只收**这一轮自己**的树;别轮的、无主的一律不动,但要点名
+  PASS: S4: 归档成功
+  PASS: S4: 我这一轮的树收掉了
+  PASS: S4: **别轮的树一个字节没动**
+  PASS: S4: 别轮的分支也没被删
+  PASS: S4: 手工建的无主树也没动
+  PASS: S4: 挂在别的子目录下那棵也没动
+  PASS: S4: 但报告把它们**点名**了(不然又变成没人收的树)
+[S5] --keep-trees:脏树也照常归档,但一根手指头都不许碰,而且仍要点名
+  PASS: S5: 归档通过(rc=0)
+  PASS: S5: 树原封不动
+  PASS: S5: track 归档了
+  PASS: S5: 仍然点名(放行不等于闭嘴)
+  PASS: S5: --keep-trees 下连干净的树也不动
+[S6] 树属于**另一个仓** ⇒ 用它自己的仓判;主线判不出来 ⇒ fail closed
+  PASS: S6: 别的仓的树蹲在我的轮次目录里 ⇒ 不拦我归档
+  PASS: S6: 那棵树一个字节没动(它是别人的)
+  PASS: S6: 但要点名
+  PASS: S6: 别人仓里那个没合的提交还在
+  PASS: S6: 说不清主线是哪条 ⇒ 拒绝清理(fail closed,不许当它合过了)
+  PASS: S6: 那棵树也还在
+  PASS: S6: 说清是「主线判不出来」
+[S7] delegate-codex --track:树落进 <根>/<track>/,分支带轮次;不给就是老样子
+判卷面 1 个文件:tests/
+  PASS: S7: 带 --track 派活 rc=0
+  PASS: S7: 树落在 <根>/<track>/ 下面
+  PASS: S7: 回执记下 track,分支名带轮次
+  PASS: S7: 不给 --track 照样派得出去
+  PASS: S7: 不给 --track ⇒ 树还在根下(老样子)
+[S8] 树里只剩被 ignore 的东西 ⇒ 默认不删；显式 --discard-ignored 才收
+  PASS: S8: 有 ignored 文件且未确认丢弃 ⇒ 归档拒绝
+  PASS: S8: 默认拒绝时树和 ignored 文件都还在
+  PASS: S8: 报告给出显式丢弃开关
+  PASS: S8: 显式 --discard-ignored ⇒ 归档通过
+  PASS: S8: 显式确认后树被收掉
+[S9] 轮次目录里除了树还有别的东西 ⇒ 收完树照常归档,不许静默死掉
+  PASS: S9: 归档照常完成(rc=0)
+  PASS: S9: 树收掉了
+  PASS: S9: 那块石头没被删
+  PASS: S9: track 归档了
+[S10] 仓里有 active track 时,派活必须显式说归属(--track 或 --no-track)
+判卷面 1 个文件:tests/
+  PASS: S10: 有 active track 又没说归属 ⇒ 拒发
+  PASS: S10: 拒发时 codex 零调用
+  PASS: S10: 把候选的 track 列出来(别让我去猜名字)
+  PASS: S10: 告诉我怎么显式说「这单不挂轮次」
+  PASS: S10: --no-track ⇒ 照发
+  PASS: S10: --no-track 的树在根下(老路径)
+判卷面 1 个文件:tests/
+  PASS: S10: 仓里没有 active track ⇒ 不要求、照发(守卫不许变噪音)
+[S11] 任一树有 ignored 文件 ⇒ 删除任何树之前整体阻断并逐个列出
+  PASS: S11: ignored 文件使归档失败
+  PASS: S11: 预检整体阻断，排在前面的干净树也没被删
+  PASS: S11: ignored 文件的树原封不动
+  PASS: S11: 把会被带走的文件逐个列出来
+[S12] 明确的解释器/测试缓存可重建 ⇒ 不要求 --discard-ignored
+  PASS: S12: 只有白名单缓存 ⇒ 默认归档成功
+  PASS: S12: 缓存随冗余 worktree 清理
+=== total: 68 passed, 0 failed ===
+---------------- 输出结束 ----------------
+runlog: regress-test-worktree-sweep rc=0 commit=efc18dc dirty=yes at=2026-09-16T13:31:53Z file=tracks/review-convergence-and-preflight/evidence/20260916T133153Z-01-regress-test-worktree-sweep.txt

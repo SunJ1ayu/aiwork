@@ -299,7 +299,7 @@ PYOID
     done
   else
     printf 'panel-review:   其它=0 ⇒ 已跟踪的产品文件自上一轮没动过,这一轮审的多半是我自己的考卷。\n' >&2
-    printf 'panel-review:   规矩(panel 抽屉「4b. 轮次纪律」):先别改,记进下一单。\n' >&2
+    printf 'panel-review:   规矩(panel 抽屉 4b):先别改;延期项留在 verify.md,不自动开下一单;这一轮算进开工写的轮次预算。\n' >&2
     printf 'panel-review:   ⚠️ 「其它=0」≠「上一轮的绑定还有效」:tests/ 与未跟踪文件同样进交付指纹。\n' >&2
   fi
   if [[ "${#untracked[@]}" -gt 0 ]]; then

@@ -140,12 +140,36 @@ Bare `/tmp` with no trailing slash is not caught either. Fenced code blocks *are
 pasted terminal transcript containing a temp path needs a marker (which edits the transcript) —
 accepted for now, revisit with a block-level exemption if it actually bites.
 
+## Preflight — archive checks before the final review (2026-09-16)
+
+`track preflight <name> [project-dir]` runs the archive checks that can be judged **before** the
+final review, without changing anything, and sorts every item into one of four classes:
+
+| class | meaning | typical |
+|---|---|---|
+| `BLOCK` | fixable now, archive would refuse | temp-dir citation in design.md; pasted receipt line with no receipt (5a); working ≠ staged; dirty/unmerged worktree; typed decision invalid; PASS already written without execution evidence |
+| `PENDING` | only judgeable after the final review / arbitration / closeout records | `outcome.verdict` null; review coverage not yet bound to current content; receipts not yet cited (5b/5c) |
+| `OK` | passed | |
+| `ERROR` | the check itself did not run (helper missing, checker crashed) — never downgraded | |
+
+Exit code: `2` ERROR/usage > `1` BLOCK > `3` only PENDING > `0` all OK. All seven checks always run
+(decision / views / verify / receipts / ephemeral / destination / worktrees); one BLOCK does not hide
+the rest. Rule classification lives once, in `track-record validate --phase preflight`; unknown rules
+are BLOCK. **Zero persistent side effects** (no move, no worktree removal, no staging, no
+decision/observation write, `GIT_OPTIONAL_LOCKS=0`). **Not a credential**: it leaves no marker and
+`track archive` re-runs everything. Not covered: 5d (receipts committed) — that belongs to the
+archive commit. Why it exists: a BLOCK on a non-exempt file found only at archive time voids the
+review binding and costs a whole round (design-studio, 2026-09-16). What to do with review reports
+afterwards (disposition → fix list → re-review or finish, round budget, deferrals do not become new
+tracks) is the panel skill's 4b — one authoritative copy.
+
 ## Commands
 
 ```
 track new <name> [project-dir]      # scaffold tracks/<name>/ (default: cwd)
 track archive <name> [project-dir]  # -> tracks/archive/<name>/
 track list [project-dir]            # active + archived
+track preflight <name> [project-dir]  # read-only pre-check; run before every review round
 track-record validate --phase dispatch tracks/<name>
 runlog -t <name> -- <cmd>           # 跑判据并把收据落进 tracks/<name>/evidence/
 ```

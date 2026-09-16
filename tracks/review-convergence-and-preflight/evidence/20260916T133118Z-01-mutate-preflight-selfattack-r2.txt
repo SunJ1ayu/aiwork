@@ -1,0 +1,20 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    mutate-preflight-selfattack-r2
+cmd:     tracks/review-convergence-and-preflight/mutate-preflight.sh
+cwd:     /root/aiwork(仓根)
+commit:  efc18dc
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-16T13:31:18Z
+---------------- 输出开始 ----------------
+✅ [预检里 worktree 判完不返回、照走删除] 判据红
+✅ [检查崩溃降格成 PENDING] 判据红
+✅ [decision 一挡就短路退出] 判据红
+✅ [已写 PASS 缺执行收据也算 PENDING] 判据红
+✅ [5a 对不上也只算 PENDING] 判据红
+✅ [不假设 PASS、覆盖检查直接跳过] 判据红
+✅ [预检输出冒充归档凭据] 判据红
+✅ [未知规则也放成 PENDING] 判据红
+✅ [不关 git 的顺手刷新 index] 判据红
+== 已恢复(bin/track bin/track-record 与 HEAD 一致,git 说的)
+---------------- 输出结束 ----------------
+runlog: mutate-preflight-selfattack-r2 rc=0 commit=efc18dc dirty=yes at=2026-09-16T13:31:18Z file=tracks/review-convergence-and-preflight/evidence/20260916T133118Z-01-mutate-preflight-selfattack-r2.txt

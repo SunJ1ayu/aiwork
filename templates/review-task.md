@@ -1,6 +1,12 @@
 # Task
 Review the current change for risk.
 
+# Round
+- Round: <1 = full review | 2 = re-review> of a budget of <2>
+- Acceptance boundary: <what this change promises; findings are judged against it>
+- Re-review only — fixes to verify: <last round's fix list, with file:line>.
+  New findings are still welcome; blocking ones will be handled, not deferred.
+
 # Scope
 - Read-only review.
 - Do not modify files.
@@ -26,6 +32,7 @@ Findings:
 - Issue:
 - Evidence:
 - Is this introduced by the current change:
+- Does it break the current promise, or only fail to catch a hypothetical future implementation:
 - Suggested fix:
 
 Coverage:

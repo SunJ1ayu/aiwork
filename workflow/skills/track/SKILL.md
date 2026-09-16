@@ -19,6 +19,7 @@ CLI helper (assume `/root/aiwork/bin` is on PATH, else call by full path):
 track new <name> [project-dir]      # scaffold tracks/<name>/ from templates
 track archive <name> [project-dir]  # -> tracks/archive/<name>/
 track list [project-dir]            # active + archived
+track preflight <name> [project-dir] # read-only archive pre-check; run before EVERY review round
 track-record ledger --repo <project-dir> --format json|markdown
 ```
 
@@ -59,7 +60,8 @@ conversation history; reconstruct from the folder:
    run `track new <name>` (default project = cwd). This drops four Markdown artifacts
    plus `decision.json`, with date and git `base-ref` filled in.
 2. **proposal.md** — draft goal / motivation / scope / non-goals. Keep it light;
-   skip for trivial work.
+   skip for trivial work. If the track will be reviewed, write the **acceptance boundary and
+   round budget** here at kickoff (default 2 substantive rounds) — see panel skill 4b.
 3. **design.md (judgment branch).** Decide: is this a *genuine open architecture
    fork* (several defensible directions, risk = tunnel vision)?
    - **Yes** → commit your OWN direction first (anti-anchoring), then run
@@ -85,8 +87,14 @@ conversation history; reconstruct from the folder:
      alone does not.
    Record the planned Adapter/model there too (v1 Adapter enum:
    `main|submimo|delegate-codex|claude-worktree`); keep reasons and review findings in Markdown.
-   Main agent reviews first and commits findings BEFORE reading any panel output, then
-   arbitrates one outcome into `decision.json` (PASS / BLOCK / NEEDS_MORE_INFO or
+   **Before every review round run `track preflight <name>`** and fix its BLOCK items first
+   (a fix on a non-exempt file after the review voids the binding and costs a round).
+   Main agent reviews first and commits findings BEFORE reading any panel output. After the
+   reports: verify → disposition each finding (must-fix / defer / reject / unverified) in
+   verify.md → one fix list → re-review within the budget or finish. **Deferred findings stay
+   in verify.md; they do not become a new track by default.** The full protocol lives in
+   panel skill 4b/4c — not copied here. Then
+   arbitrate one outcome into `decision.json` (PASS / BLOCK / NEEDS_MORE_INFO or
    ARCHIVED-SUPERSEDED). A panel verdict never auto-advances anything — the main agent
    is sole arbiter. Never copy these enums into verify.md as a second machine source.
 6. **Archive.** On PASS, offer `track archive <name>`. Archive mechanically requires
