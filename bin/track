@@ -6,6 +6,7 @@
 #   track archive <name> [project-dir] [--keep-trees|--discard-ignored]
 #                                        move tracks/<name>/ -> tracks/archive/
 #   track list [project-dir]            list active + archived tracks
+#   track preflight <name> [project-dir] read-only archive pre-check before the final review
 #
 # project-dir defaults to the current directory. No phases are enforced — write
 # proposal/design/tasks/verify when they earn their keep; panel hooks live in
@@ -15,7 +16,7 @@ set -euo pipefail
 
 TEMPLATES="/root/aiwork/track/templates"
 
-usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 _wt_repo_from_gitfile() {  # _wt_repo_from_gitfile <tree>
   local tree="$1" line gitdir repo
@@ -63,8 +64,10 @@ _track_disposable_ignored() {  # 窄白名单:只有明确的解释器/测试缓
   return 1
 }
 
-_track_archive_sweep_worktrees() {  # <track> <keep:0|1> <discard-ignored:0|1> <proj>
-  local track="$1" keep="$2" discard_ignored="$3" proj_abs="$4"
+_track_archive_sweep_worktrees() {  # <track> <keep:0|1> <discard-ignored:0|1> <proj> [archive|preflight]
+  # preflight 模式(track review-convergence-and-preflight):判法与 archive 逐行相同,但判完就返回 ——
+  # 0 = 归档时不会挡 / 1 = 会挡 / 3 = 只差 --discard-ignored。移除树、删分支、rmdir 在这个模式下不可达。
+  local track="$1" keep="$2" discard_ignored="$3" proj_abs="$4" mode="${5:-archive}"
   local root track_dir tree entry base total=0 tree_repo
   root="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
   [[ -d "$root" ]] || return 0
@@ -161,6 +164,10 @@ _track_archive_sweep_worktrees() {  # <track> <keep:0|1> <discard-ignored:0|1> <
     return 0
   fi
   if [[ "$blocked" -ne 0 ]]; then
+    if [[ "$mode" == preflight ]]; then
+      echo "  预检:标 BLOCK 的树会让归档拒绝(预检不清理任何树)。"
+      return 1
+    fi
     echo "🔴 拒绝归档:本轮还有不能确认干净的 worktree。目录留在原地,没有半归档状态。" >&2
     echo "   处理后重跑 track archive；确实要保留这些树就显式加 --keep-trees。" >&2
     return 1
@@ -185,6 +192,14 @@ _track_archive_sweep_worktrees() {  # <track> <keep:0|1> <discard-ignored:0|1> <
       printf '%s\n' "$ignored_out" | sed 's/^/       /'
     fi
   done
+  if [[ "$mode" == preflight ]]; then
+    if [[ "$ignored_blocked" -ne 0 ]]; then
+      echo "  预检:归档时要显式确认 --discard-ignored 才会收这些树(预检不删)。"
+      return 3
+    fi
+    echo "  预检:标 OK 的树归档时会被收掉(预检不删)。"
+    return 0
+  fi
   if [[ "$ignored_blocked" -ne 0 && "$discard_ignored" -ne 1 ]]; then
     echo "🔴 拒绝归档:ignored 文件会随 worktree 删除。所有树仍在原地。" >&2
     echo "   确认这些文件可丢弃后，显式重跑: track archive ... --discard-ignored" >&2
@@ -365,6 +380,145 @@ sys.exit(0 if data.get("schema_version") == 2
     mkdir -p "$proj/tracks/archive"
     mv "$src" "$proj/tracks/archive/$name"
     echo "archived -> $proj/tracks/archive/$name"
+    ;;
+  preflight)
+    # 最终评审之前的只读预检(track review-convergence-and-preflight)。
+    # 由来:09-16 design-studio 一单第 1 轮评审 PASS 之后,归档的证据寿命闸才拦下 design.md 一行 `/tmp/…`;
+    # 补一个标注就作废评审绑定,白跑第 2 轮 —— 那一行派评审之前就在盘上,只是没人查。
+    # 七项全部跑完再汇总(一项挡住不短路其余);分类:
+    #   BLOCK   现在就能修、归档一定会挡的;
+    #   PENDING 要等最终评审 / 仲裁 / 收尾记录才判得了的(不是问题,是还没到时候);
+    #   ERROR   检查本身没跑成 —— 永不降格成 PENDING 或 OK。
+    # 退出码:2 = 有 ERROR 或用法错 > 1 = 有 BLOCK > 3 = 只剩 PENDING > 0 = 全部通过。
+    # 🔴 零持久副作用:不搬目录、不删树、不暂存、不写 decision/observation、不刷 index。
+    #    通过 ≠ 可归档:它不留任何标记,归档时全部检查照样重跑。
+    export GIT_OPTIONAL_LOCKS=0
+    name="${1:-}"; proj="${2:-$PWD}"
+    if [ -z "$name" ]; then
+      echo "ERROR: need a track name — usage: track preflight <name> [project-dir]" >&2; exit 2
+    fi
+    src="$proj/tracks/$name"
+    [ -d "$src" ] || { echo "ERROR: $src not found" >&2; exit 2; }
+    here="$(dirname "$0")"
+    n_ok=0; n_block=0; n_pending=0; n_error=0
+    pf_report() {  # <OK|BLOCK|PENDING|ERROR> <check> <message> [detail]
+      printf '  %-7s %s: %s\n' "$1" "$2" "$3"
+      if [ -n "${4:-}" ]; then printf '%s\n' "$4" | sed 's/^/      | /'; fi
+      case "$1" in
+        OK) n_ok=$((n_ok+1)) ;; BLOCK) n_block=$((n_block+1)) ;;
+        PENDING) n_pending=$((n_pending+1)) ;; *) n_error=$((n_error+1)) ;;
+      esac
+    }
+    echo "track preflight: $name ($proj) —— 只读预检,不改任何东西"
+
+    # ① decision:分类规则唯一一份在 track-record 里
+    rec_out="$("$here/track-record" validate --phase preflight "$src" 2>&1)" && rec_rc=0 || rec_rc=$?
+    if [ "$rec_rc" -eq 0 ]; then
+      pf_report OK decision "typed 事实能提前判的都过了" "$rec_out"
+    elif [ "$rec_rc" -eq 3 ] && printf '%s\n' "$rec_out" | grep -q 'verdict=PENDING'; then
+      pf_report PENDING decision "要等最终评审 / 主 agent 仲裁" "$rec_out"
+    elif [ "$rec_rc" -eq 1 ] && printf '%s\n' "$rec_out" | grep -q 'verdict=BLOCK'; then
+      pf_report BLOCK decision "typed 事实不合法,归档一定拒" "$rec_out"
+    else
+      pf_report ERROR decision "track-record 没按约定回答(rc=$rec_rc,缺裁决行)—— 检查本身没跑成" "$rec_out"
+    fi
+
+    # ② views:评审绑定的 working 视图 vs 归档 commit 校验的 staged 视图(与 archive 同一前提)
+    if [ ! -f "$src/decision.json" ]; then
+      pf_report OK views "不适用(legacy track 不绑定评审交付)"
+    elif ! views_scope="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+v = d["outcome"]["verdict"]
+if d.get("schema_version") != 2: print("legacy-unbound")
+elif d["impact"]["level"] == "self": print("self")
+elif v not in (None, "PASS"): print("verdict=" + str(v))
+else: print("bound")
+' "$src/decision.json" 2>&1)"; then
+      pf_report BLOCK views "decision.json 读不出 ⇒ 视图差异判不了(先修 decision)" "$views_scope"
+    elif [ "$views_scope" != bound ]; then
+      pf_report OK views "不适用($views_scope,归档不比两视图)"
+    elif ! repo_root="$(git -C "$proj" rev-parse --show-toplevel 2>/dev/null)"; then
+      pf_report OK views "不适用(不在 git 仓里)"
+    elif ! views="$(python3 "$here/_review_delivery.py" --repo "$repo_root" --track "$name" --explain-views 2>&1)"; then
+      # 交付工具**自己拒绝**(`review-delivery: …`,如同名活跃/归档 track 撞车、读不出视图)是仓库状态的问题,
+      # 归档同样会拒 ⇒ BLOCK;不是那一行(崩溃 traceback 等)才是检查本身没跑成 ⇒ ERROR。
+      if printf '%s\n' "$views" | grep -q '^review-delivery: '; then
+        pf_report BLOCK views "交付视图算不出来,归档同样会拒" "$views"
+      else
+        pf_report ERROR views "算不出两个交付视图 —— 检查本身没跑成" "$views"
+      fi
+    elif [ -n "$views" ]; then
+      pf_report BLOCK views "working 与 staged 不是同一份内容:git add / 删掉 / ignore 这些(不需要重审)" \
+        "$(printf '%s\n' "$views" | head -20)"
+    else
+      pf_report OK views "working 与 staged 是同一份交付内容"
+    fi
+
+    # ③ verify.md
+    v="$src/verify.md"
+    if [ ! -f "$v" ]; then
+      pf_report BLOCK verify "verify.md 不存在(归档 = 宣布做完了,没有它就没有结论)"
+    elif [ ! -f "$src/decision.json" ] && grep -qE '^-[[:space:]]*Verdict:[[:space:]]*<' "$v"; then
+      pf_report PENDING verify "legacy 结论栏还是占位符 —— 仲裁后填"
+    else
+      pf_report OK verify "在"
+    fi
+
+    # ④ receipts:5a(粘的收据行对不上)现在就挡;只差 5b/5c 是收尾记录,写进 verify.md 即可,不作废评审绑定
+    if [ ! -f "$v" ]; then
+      pf_report BLOCK receipts "没有 verify.md,收据引用判不了"
+    elif ! . "$here/_evidence.sh" 2>/dev/null; then
+      pf_report ERROR receipts "找不到 _evidence.sh —— 检查本身没跑成"
+    else
+      ev_out="$(ev_check "$src" "$v" always "track preflight" 2>&1)" && ev_rc=0 || ev_rc=$?
+      if [ "$ev_rc" -ne 0 ]; then
+        pf_report BLOCK receipts "verify.md 里粘的收据行与 evidence/ 对不上(5a)" "$ev_out"
+      else
+        ev_out="$(ev_check "$src" "$v" archive "track preflight" 2>&1)" && ev_rc=0 || ev_rc=$?
+        if [ "$ev_rc" -ne 0 ]; then
+          pf_report PENDING receipts "收尾时要在 verify.md 引用/认账(5b/5c;改 verify.md 不作废评审绑定)" "$ev_out"
+        else
+          pf_report OK receipts "收据引用齐"
+        fi
+      fi
+    fi
+
+    # ⑤ ephemeral:会话临时目录引用 —— proposal/design/tasks 上的改动会作废已有评审绑定,所以要在评审之前修
+    if ! . "$here/_ephemeral-refs.sh" 2>/dev/null; then
+      pf_report ERROR ephemeral "找不到 _ephemeral-refs.sh —— 检查本身没跑成"
+    else
+      eph_out="$(eph_check "$src" "track preflight" 2>&1)" && eph_rc=0 || eph_rc=$?
+      if [ "$eph_rc" -ne 0 ]; then
+        pf_report BLOCK ephemeral "工件引用了会话临时目录(评审之前修:改非豁免文件会作废评审绑定)" "$eph_out"
+      else
+        pf_report OK ephemeral "没有会话临时目录引用"
+      fi
+    fi
+
+    # ⑥ destination
+    if [ -e "$proj/tracks/archive/$name" ]; then
+      pf_report BLOCK destination "$proj/tracks/archive/$name 已存在(归档会拒,免得嵌套成 archive/<n>/<n>/)"
+    else
+      pf_report OK destination "归档目标空着"
+    fi
+
+    # ⑦ worktrees:与 archive 同一个判法,preflight 模式判完就返回,绝不删
+    wt_out="$(_track_archive_sweep_worktrees "$name" 0 0 "$proj" preflight 2>&1)" && wt_rc=0 || wt_rc=$?
+    case "$wt_rc" in
+      0) pf_report OK worktrees "$([ -n "$wt_out" ] && echo "归档时不会挡" || echo "本轮没有 worktree")" "$wt_out" ;;
+      1) pf_report BLOCK worktrees "有树会让归档拒绝" "$wt_out" ;;
+      3) pf_report PENDING worktrees "归档时要显式 --discard-ignored" "$wt_out" ;;
+      *) pf_report ERROR worktrees "worktree 判法没跑成(rc=$wt_rc)" "$wt_out" ;;
+    esac
+
+    if [ "$n_error" -gt 0 ]; then pf_rc=2
+    elif [ "$n_block" -gt 0 ]; then pf_rc=1
+    elif [ "$n_pending" -gt 0 ]; then pf_rc=3
+    else pf_rc=0; fi
+    echo "track preflight: BLOCK=$n_block PENDING=$n_pending ERROR=$n_error OK=$n_ok ⇒ rc=$pf_rc"
+    echo "  通过 ≠ 可归档:预检不留任何标记,归档时全部检查照样重跑。"
+    exit "$pf_rc"
     ;;
   list)
     proj="${1:-$PWD}"

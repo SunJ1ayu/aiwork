@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import datetime, timezone
 import json
 import math
@@ -568,6 +569,77 @@ def validate(track_dir: Path, phase: str, source: str, expected_impact: str | No
     binding = "required" if data["schema_version"] == 2 else "legacy-unbound"
     print(f"track-record: status=valid phase={phase} source={source} track={data['track']} delivery={binding}")
     return 0
+
+
+# ---- preflight:最终评审之前能提前判到哪一步(track review-convergence-and-preflight)----
+# 规则的「现在就挡 / 等最终评审」分类**只在这里有一份**,紧挨着规则本身 —— 放进 bin/track 按输出
+# 文本去分,规则名的语义就住在两处,迟早漂。archive / dispatch / shape 三个 phase 一字未动。
+#
+# 只有在 outcome.verdict **还是 null** 时才可能是 PENDING:在内存里假设 PASS 去跑归档的覆盖检查
+# (不写盘;交付指纹本来就把 verdict 归一化成 null,假设它不改指纹)。首条失败若是"执行收据/评审覆盖
+# 还没到"那一类 ⇒ PENDING;其余(重复事件、视图错位、归档漂移、读不出交付视图……)⇒ BLOCK。
+# verdict 已经写成 PASS ⇒ 与 archive 同判,缺什么都是 BLOCK —— 不许把"写早了的 PASS"读成"还没到时候"。
+# 未列入下表的规则一律 BLOCK:漏分类的方向只能是多挡,不能是放行。
+PREFLIGHT_PENDING = {
+    ("observation.required", "observations[].event"),
+    ("observation.success_required", "observations[].exit_code"),
+    ("observation.review_budget", "observations[].actual.legs[].family"),
+    ("observation.review_delivery", "observations[].actual.legs[].subject.delivery"),
+    ("observation.main_required", "observations[].controller"),
+    ("observation.delegate_required", "observations[].controller"),
+    ("observation.received_required", "observations[].event"),
+}
+
+
+def preflight_pending(error: DecisionError, note: str) -> None:
+    print(
+        "track-record: "
+        f"rule={error.rule} path={error.path} actual={rendered(error.actual)} "
+        f"expected={rendered(error.expected)} verdict=PENDING",
+        file=sys.stderr,
+    )
+    print(f"track-record: note={note}", file=sys.stderr)
+
+
+def preflight(track_dir: Path, source: str) -> int:
+    """rc 0 = 能提前判的都过了;1 = BLOCK;3 = 只剩要等最终评审/裁决的项。永不打印 status=valid。"""
+    try:
+        data = load_decision(track_dir, source)
+        if data is None:
+            print(f"track-record: status=legacy phase=preflight source={source} track={track_dir.name}")
+            return 0
+        validate_shape(data, track_dir)
+        load_observations(track_dir, data["track"], source)
+        validate_dispatch(data, track_dir, source)
+    except DecisionError as exc:
+        return block(exc)
+    verdict = data["outcome"]["verdict"]
+    if verdict is not None and verdict != "PASS":
+        # archive 对非 PASS 不查覆盖;预检也不查,免得比归档更严。
+        print(f"track-record: status=preflight-clear phase=preflight source={source} "
+              f"track={data['track']} verdict={verdict}")
+        return 0
+    assumed = verdict is None
+    probe = copy.deepcopy(data)
+    probe["outcome"]["verdict"] = "PASS"
+    rc = 0
+    try:
+        validate_archive_observations(probe, track_dir, source)
+    except DecisionError as exc:
+        if not assumed or (exc.rule, exc.path) not in PREFLIGHT_PENDING:
+            return block(exc)
+        preflight_pending(exc, "归档覆盖检查首条待定即停:同组其后的检查尚未评估")
+        rc = 3
+    if assumed:
+        preflight_pending(
+            DecisionError("field.decided", "outcome.verdict", None, "PASS|BLOCK|NEEDS_MORE_INFO|ARCHIVED-SUPERSEDED"),
+            "主 agent 仲裁后写入;覆盖检查按假设 PASS 预跑,不是归档凭据",
+        )
+        rc = 3
+    if rc == 0:
+        print(f"track-record: status=preflight-clear phase=preflight source={source} "
+              f"track={data['track']} verdict={verdict}")
+    return rc
 
 
 def safe_identifier(value: str, path: str, pattern: re.Pattern[str], limit: int = 200) -> str:
@@ -1608,7 +1680,7 @@ def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="track-record")
     commands = top.add_subparsers(dest="command", required=True)
     check = commands.add_parser("validate", help="validate a track decision")
-    check.add_argument("--phase", required=True, choices=("shape", "dispatch", "archive"))
+    check.add_argument("--phase", required=True, choices=("shape", "dispatch", "archive", "preflight"))
     check.add_argument("--source", default="working", choices=("working", "staged"))
     check.add_argument("--expected-impact", choices=IMPACT_LEVELS)
     check.add_argument("track_dir", type=Path)
@@ -1653,6 +1725,11 @@ def main() -> int:
     if args.command == "validate":
         if not args.track_dir.is_dir():
             return block(DecisionError("track.directory", "track_dir", os.fspath(args.track_dir), "existing directory"))
+        if args.phase == "preflight":
+            if args.expected_impact is not None:
+                return block(DecisionError("preflight.expected_impact", "--expected-impact",
+                                           args.expected_impact, "not used by preflight"))
+            return preflight(args.track_dir.resolve(), args.source)
         return validate(args.track_dir.resolve(), args.phase, args.source, args.expected_impact)
     if args.command == "observe":
         return observe(args)
