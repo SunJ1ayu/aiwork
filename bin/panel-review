@@ -261,13 +261,19 @@ PYOID
     return 0
   fi
   # 已跟踪的改动比到**工作区**(不是 HEAD):评审看的就是工作区那份。
-  # 未跟踪文件必须一起数 —— 本机反复栽在"working 有而 staged 没有"。
-  local -a changed=() others=()
-  local pth t=0 k=0 o=0
+  # 🔴 未跟踪文件**单独一栏,不进三桶**(2026-09-16 我自己审出来的):`ls-files --others`
+  #    列的是"此刻所有未跟踪文件",不是"这一轮新增的"。/root/aiwork 里常年躺着 51 个未跟踪
+  #    的评审简报 ⇒ 把它们并进"其它"桶的话,**在我最常派评审的那个仓里"其它=0"永远不成立**,
+  #    ①的触发条件就等于没有。它们又不能不报:没进过 commit 的新产品文件正是本机反复栽过的
+  #    盲区。所以单列一栏,并说清这一栏答不了"是不是这一轮才出现的"。
+  local -a changed=() others=() untracked=()
+  local pth t=0 k=0 o=0 shown=0
   while IFS= read -r pth; do
     [[ -n "$pth" ]] && changed+=("$pth")
-  done < <( { git -C "$repo" diff --name-only "$base" 2>/dev/null
-              git -C "$repo" ls-files --others --exclude-standard 2>/dev/null; } | sort -u )
+  done < <( git -C "$repo" diff --name-only "$base" 2>/dev/null | sort -u )
+  while IFS= read -r pth; do
+    [[ -n "$pth" ]] && untracked+=("$pth")
+  done < <( git -C "$repo" ls-files --others --exclude-standard 2>/dev/null | sort -u )
   for pth in ${changed+"${changed[@]}"}; do
     case "$pth" in
       tests/*)  t=$((t + 1)) ;;
@@ -276,12 +282,28 @@ PYOID
     esac
   done
   printf 'panel-review:   上一轮 @ %s\n' "${base:0:12}" >&2
-  printf 'panel-review:   自上一轮以来改动:tests/=%d  tracks/=%d  其它=%d\n' "$t" "$k" "$o" >&2
+  printf 'panel-review:   自上一轮以来改动(已跟踪):tests/=%d  tracks/=%d  其它=%d\n' \
+    "$t" "$k" "$o" >&2
   if [[ "$o" -gt 0 ]]; then
-    printf 'panel-review:   其它改动的文件:%s\n' "${others[*]}" >&2
+    # 一行一个:仓里中文文件名是常态,空格也不是没有,空格拼接会把两个名字读成一个。
+    printf 'panel-review:   其它改动的文件:\n' >&2
+    shown=0
+    for pth in "${others[@]}"; do
+      [[ "$shown" -ge 12 ]] && { printf 'panel-review:     …共 %d 个\n' "$o" >&2; break; }
+      printf 'panel-review:     %s\n' "$pth" >&2; shown=$((shown + 1))
+    done
   else
     printf 'panel-review:   其它=0 ⇒ 产品代码自上一轮没动过,这一轮审的是我自己的考卷。\n' >&2
     printf 'panel-review:   规矩(panel 抽屉「轮次纪律」):先别改,记进下一单。\n' >&2
+  fi
+  if [[ "${#untracked[@]}" -gt 0 ]]; then
+    printf 'panel-review:   未跟踪文件 %d 个 —— **不在上面的对比里**(从没进过 commit,看不出是不是这一轮才出现的):\n' \
+      "${#untracked[@]}" >&2
+    shown=0
+    for pth in "${untracked[@]}"; do
+      [[ "$shown" -ge 8 ]] && { printf 'panel-review:     …共 %d 个\n' "${#untracked[@]}" >&2; break; }
+      printf 'panel-review:     %s\n' "$pth" >&2; shown=$((shown + 1))
+    done
   fi
 }
 
