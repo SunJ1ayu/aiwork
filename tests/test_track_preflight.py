@@ -413,6 +413,44 @@ class PreflightTest(unittest.TestCase):
         self.assertHas(out, "BLOCK", "decision")
         self.assertNotIn("status=legacy", out)
 
+    # ------------------------------------------------------------------ P15
+    # 自攻变异「未知规则也放成 PENDING」第一轮活下来了:verdict 还是 null 时,观测组里的**结构**问题
+    # (重复事件)被读成"等最终评审就好" ⇒ 评审跑完归档照样拒,正是预检要防的那一轮白跑。
+    def write_runlog_event(self, filename):
+        obs = self.fx.track / "observations"
+        obs.mkdir(exist_ok=True)
+        event = {
+            "schema_version": 1, "track": self.fx.name, "run_id": "same-run",
+            "controller": "runlog", "event": "execution_finished", "label": "same-run",
+            "started_at": "2026-09-16T00:00:00Z", "finished_at": "2026-09-16T00:00:01Z",
+            "duration_ms": 1000, "exit_code": 0,
+            "actual": {"adapter": "runlog", "model": None, "risk": None,
+                       "degraded": False, "work_exit_code": 0, "legs": None},
+            "usage": {"input_tokens": None, "output_tokens": None, "total_tokens": None,
+                      "api_cost": None, "billing_mode": None},
+        }
+        (obs / filename).write_text(json.dumps(event))
+
+    def test_p15_structural_observation_problem_blocks_even_before_verdict(self):
+        self.write_runlog_event("a.json")
+        self.write_runlog_event("b.json")
+        rc, out = self.run_unchanged()
+        self.assertEqual(rc, 1, out)
+        self.assertHas(out, "BLOCK", "decision")
+        self.assertIn("observation.duplicate", out)
+
+    # ------------------------------------------------------------------ P16
+    # 自攻变异「去掉 GIT_OPTIONAL_LOCKS=0」第一轮活下来了:夹具里 stat 信息都是新鲜的,git 没理由刷 index。
+    # 这里把树里一个已跟踪文件的 mtime 挪走(内容不变)⇒ 普通 `git status` 会顺手重写那棵树的 index。
+    def test_p16_stale_stat_info_does_not_get_refreshed(self):
+        clean = self.fx.add_tree("job-clean", dirty=False)
+        for path in (clean / "source.py", self.fx.repo / "source.py"):
+            st = path.stat()
+            os.utime(path, (st.st_atime + 3600, st.st_mtime + 3600))
+        rc, out = self.run_unchanged()
+        self.assertEqual(rc, 3, out)
+        self.assertHas(out, "OK", "worktrees")
+
     # ------------------------------------------------------------------ P13
     def test_p13_usage_errors(self):
         rc, out = self.fx.preflight(name=False)
