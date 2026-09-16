@@ -389,15 +389,29 @@ class PreflightTest(unittest.TestCase):
         self.assertNone(out, "BLOCK")
 
     # ------------------------------------------------------------------ P12
+    # 🔴 第一版夹具写错了(实现之后才红出来):它把 **已提交过的** decision.json 删掉再提交,
+    #    那不是 legacy track,是「删 decision 退回 legacy」—— track-record 正确地 BLOCK 了。
+    #    结构上问不到「真 legacy track 的占位符算 PENDING」。改成从没有过 decision.json 的 track 问;
+    #    原来那个形状留下来,断言**更强**:删掉已跟踪的 decision 不许被预检当成 legacy 放过。
     def test_p12_legacy_track_placeholder_is_pending(self):
-        (self.fx.track / "decision.json").unlink()
-        (self.fx.track / "verify.md").write_text("# Verify\n\n- Verdict: <PASS|BLOCK>\n- 无机器证据:判据夹具。\n")
-        self.fx.commit_all("legacy")
-        rc, out = self.run_unchanged()
+        legacy = self.fx.repo / "tracks" / "old-style"
+        legacy.mkdir()
+        (legacy / "verify.md").write_text("# Verify\n\n- Verdict: <PASS|BLOCK>\n- 无机器证据:判据夹具。\n")
+        self.fx.commit_all("legacy track that never had a decision")
+        rc, out = self.run_unchanged(name="old-style")
         self.assertEqual(rc, 3, out)
         self.assertHas(out, "OK", "decision")
+        self.assertIn("status=legacy", out)
         self.assertHas(out, "PENDING", "verify")
         self.assertNone(out, "BLOCK")
+
+    def test_p12b_deleting_a_tracked_decision_is_not_legacy(self):
+        (self.fx.track / "decision.json").unlink()
+        self.fx.commit_all("try to downgrade to legacy")
+        rc, out = self.run_unchanged()
+        self.assertEqual(rc, 1, out)
+        self.assertHas(out, "BLOCK", "decision")
+        self.assertNotIn("status=legacy", out)
 
     # ------------------------------------------------------------------ P13
     def test_p13_usage_errors(self):
