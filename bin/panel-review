@@ -235,6 +235,10 @@ round_readout() {  # round_readout <track_dir> <repo>
   [[ "$n" -gt 0 ]] || return 0   # 第一轮没有"上一轮"可比;打了就是噪音
   printf 'panel-review: 轮次读数 —— 这是第 %d 轮(数的是这个 track 已落盘的 panel 轮次)\n' \
     "$((n + 1))" >&2
+  # 🔴 这个 N 是**派发**次数,基础设施重试也算;panel 抽屉 4b 的轮次预算数的是**实质评审**。
+  #    同一个「轮」字两个集合 —— 2026-09-16 一次重试被印成「第 2 轮」,照字面读会以为预算用完了
+  #    (track review-convergence-and-preflight 第 1 轮 F1)。当场说清,别让人自己猜。
+  printf 'panel-review:   ⚠️ 这个 N 数的是 panel 派发,基础设施重试也算;不是 4b 轮次预算里的「实质评审」轮 —— 用了几轮看 verify.md 的轮次记录。\n' >&2
   # 基线:从最近一份往回找,取**第一个读得出 head_oid 的**轮次。
   # 中间轮次可能整轮死光(腿没交卷 ⇒ subject.source=null),或是 0 腿的自审轮
   # (整份 observation 哪儿都没有 commit)。那种轮次**不能把基线冲掉** ——
