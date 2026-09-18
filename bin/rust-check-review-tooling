@@ -16,6 +16,7 @@ SUITES=(
   "review-delivery|python3|/root/aiwork/tests/test_review_delivery.py"
   "review-result|python3|/root/aiwork/tests/test_review_result.py"
   "subgrok|python3|/root/aiwork/tests/test_subgrok.py"
+  "subcursor|python3|/root/aiwork/tests/test_subcursor.py"
   "leg-quick-fixes|python3|/root/aiwork/tests/test_leg_quick_fixes.py"
   "review-tooling|bash|/root/aiwork/tests/test-review-tooling.sh"
   "panel-observation|bash|/root/aiwork/tests/test-panel-observation.sh"

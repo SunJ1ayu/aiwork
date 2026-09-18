@@ -99,6 +99,32 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 - 轮次上限在配置的 `steps` 字段(opencode 没有命令行开关,schema 里 `maxSteps` 已废弃),
   取供应商表里那个历史值 40 —— 换底座不许把上限弄丢。
 
+## subcursor (Cursor CLI) — 评审与发散
+
+`bin/subcursor <review|explore> TASK LOG REPO`，两个调度器默认接入，`PANEL_CURSOR_LEG=off` 关闭。
+换模型只改 `bin/cursor-model` 一行（默认 `cursor-grok-4.6-high`）；`CURSOR_MODEL` 单次覆盖。
+支持明确的 Composer / Claude / GPT / Gemini / Grok / Kimi / DeepSeek / GLM 模型 ID；
+以 `cursor-agent models` 中可用的 ID 为准。自动路由和未知家族拒跑。
+花名册、typed coverage 按所选模型家族计数；预算轮换去重，`--all` 仍派全部启用通道。
+
+- Linux 登录：`cursor-agent login`，凭证默认 `~/.config/cursor/auth.json`，可用 `CURSOR_AUTH_FILE` 指定。
+  每轮只读取 accessToken，经 CLI 的 CURSOR_AUTH_TOKEN 注入，不复制/刷新 refreshToken，不改用户登录；令牌过期先由正常 CLI 刷新登录。
+  `CURSOR_API_KEY` 是显式 API-key 认证通道，不自动启用付费或更改计费设置。
+- 原仓由 ro-repo-exec 挂只读。Cursor 从独立空 workspace 启动，以 add-dir 读取完整脏仓快照。
+  只提供 read/grep/glob/ls，不能跑测试；启动前生成完整 snapshot diff 供读取，包含未跟踪文件。
+  每轮独立 HOME/config/data 与 PID namespace，CLI 退出/超时结束所有子进程后清理。--trust 只标记本次临时工作目录及副本，不自动批准工具。
+- `.stream.jsonl` 留原始事件，`.stream-summary.json` 留完成/模型/usage 事实，`.log` 只留助手正文。
+  requested/invoked 记录 --model 的实际 ID；init 仅报告显示名，检查其家族并保留原文，reported ID 为 unknown。支持目录中的 cursor-grok-* ID，不把别名当精确身份。
+  超时、截断、空回答、家族不符不能计成功；review 需要裁决，explore 需要七个方向段落。
+- timeout 默认 900 秒，`CURSOR_TIMEOUT` 覆盖。无 fix、无聊天回落。
+- 当前使用本机 CLI 支持的隐藏工具白名单/配置隔离参数；升级 CLI 后重跑真实探针。
+  --exclude-workspace-context 被当前服务端拒绝，未启用；不承诺排除所有仓库规则上下文。
+  同其他腿一样，原仓只读不等于整个主机不可读；账户级 team hooks 由 Cursor 管理。
+- family 反映现有模型系/供应商口径，不证明统计独立（Composer 与 Kimi 存在共同底座来源）。
+
+参考：[输出事件协议](https://cursor.com/docs/cli/reference/output-format)、
+[CLI 参数](https://cursor.com/docs/cli/reference/parameters)。
+
 ## subgrok (Grok Build) — 评审与规划
 
 `/root/aiwork/bin/subgrok <review|explore> TASK LOG REPO`。

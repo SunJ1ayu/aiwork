@@ -119,6 +119,25 @@ ADAPTER_IDENTITIES = {
 }
 
 
+def cursor_model_family(model: str | None) -> str | None:
+    """Cursor is a transport; coverage follows the explicitly selected model."""
+    if not isinstance(model, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", model):
+        return None
+    for family, prefixes in (
+        ("cursor", ("composer-",)),
+        ("anthropic", ("claude-", "opus-", "sonnet-", "haiku-")),
+        ("openai", ("gpt-", "codex-", "o1-", "o3-", "o4-")),
+        ("google", ("gemini-",)),
+        ("xai", ("grok-", "cursor-grok-")),
+        ("moonshot", ("kimi-",)),
+        ("deepseek", ("deepseek-",)),
+        ("zhipu", ("glm-",)),
+    ):
+        if model.startswith(prefixes):
+            return family
+    return None
+
+
 class ReviewResultError(ValueError):
     """A stable contract or integrity rule was violated."""
 
@@ -630,6 +649,9 @@ def eligibility_reasons(value: dict[str, Any], *, verify_evidence: bool = True) 
     requested = result["model"]["requested"]
     invoked = result["model"]["invoked"]
     reported = result["model"]["reported"]
+    if result["adapter"] == "subcursor":
+        family = cursor_model_family(requested)
+        identity = (family, requested) if family is not None else None
     if identity is None or result["family"] != identity[0]:
         reasons.append("adapter_family_unknown")
     if requested is None or invoked is None or requested != invoked:
@@ -699,6 +721,8 @@ def _error(error: ReviewResultError) -> int:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="_review_result.py")
     commands = top.add_subparsers(dest="command", required=True)
+    family = commands.add_parser("cursor-family", help="resolve a Cursor model's coverage family")
+    family.add_argument("model")
     normalize = commands.add_parser("normalize", help="normalize a raw reviewer log")
     normalize.add_argument("log", type=Path)
     validate = commands.add_parser("validate", help="validate a ReviewLegResult v2 file")
@@ -763,6 +787,13 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
+        if args.command == "cursor-family":
+            family = cursor_model_family(args.model)
+            if family is None:
+                print("review-result: unknown/automatic Cursor model; select an explicit model ID", file=sys.stderr)
+                return 1
+            print(family)
+            return 0
         if args.command == "normalize":
             print(normalize_verdict(args.log.read_text(encoding="utf-8", errors="replace")))
             return 0

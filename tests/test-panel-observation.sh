@@ -15,12 +15,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 本机为"判据里飘着的全局 export"记过账(08-18,一天五条假绿)。
 if [[ "${PANEL_OBS_ENV_SCRUBBED:-}" != "1" ]]; then
   exec env -u PANEL_MIMO_LEG -u PANEL_DEEPSEEK_LEG -u PANEL_GLM_LEG \
-    -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG \
+    -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG -u PANEL_CURSOR_LEG -u CURSOR_MODEL \
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
     -u PANEL_DIFF_BASE -u PANEL_INCLUDE -u PANEL_ORACLE_CMD \
     PANEL_OBS_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
+
+# Test fixtures use a stable model independently of the operator's model choice.
+export CURSOR_MODEL=composer-2.5
 # 腿名单的**唯一源**。判据自己也不许抄第二份 —— 抄了就会像 08-26 那样:
 # 名单上五条腿,判据只问得出四条。
 . "$ROOT/bin/_panel-roster-lib.sh"
@@ -61,6 +64,7 @@ case "${AIWORK_REVIEW_ADAPTER:?}" in
   subkimi) model=kimi-code/k2.5 ;;
   subgemini) model=gemini-2.5-pro ;;
     subgrok) model=grok-fixture ;;
+    subcursor) model=composer-2.5 ;;
 esac
 object_format="$(git -C "$4" rev-parse --show-object-format)"
 head_oid="$(git -C "$4" rev-parse HEAD)"
@@ -82,7 +86,7 @@ make_fixture() { # root
   local d="$1" b="$1/bin" repo="$1/repo"
   mkdir -p "$b" "$repo/tracks/current" "$d/raw" "$d/state"
   cp "$ROOT/bin/panel-review" "$b/panel-review"
-  cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/_review_result.py" "$b/"
+  cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/cursor-model" "$ROOT/bin/_review_result.py" "$b/"
   cp "$ROOT/bin/track-record" "$b/track-record"
   # 🔴 桩腿名单**从唯一源长出来**,不在这里再抄一份(2026-08-26 subgemini 四审 F8)。
   # 这里原本硬编码 `for leg in submimo subdeepseek subglm subkimi`,是全仓第五份腿名单:

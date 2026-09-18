@@ -86,9 +86,12 @@ if [[ "${REVIEW_TOOLING_ENV_SCRUBBED:-}" != "1" ]]; then
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
     -u PANEL_ORACLE_CMD -u PANEL_GLM_LEG -u PANEL_DEEPSEEK_LEG \
-    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG \
+    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG -u PANEL_CURSOR_LEG -u CURSOR_MODEL \
     REVIEW_TOOLING_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
+# Test fixtures use a stable model independently of the operator's model choice.
+export CURSOR_MODEL=composer-2.5
+
 
 # 短路探针：正常套件会在下面用污染的 PANEL_* 环境重进本文件。
 # 它不得递归跑全套，只检查重进后这些控制变量是否已清理。
@@ -96,7 +99,7 @@ if [[ "${REVIEW_TOOLING_ENV_PROBE:-}" == "1" ]]; then
   for _v in PANEL_DIFF_BASE PANEL_INCLUDE ZHIPU_INCLUDE DEEPSEEK_INCLUDE \
     PANEL_HEALTH_OVERRIDE PANEL_SELECTION_START PANEL_STATE_DIR PANEL_STAGGER_MAX \
     PANEL_IMPACT_RISK PANEL_REVIEW_BUDGET PANEL_ORACLE_CMD PANEL_GLM_LEG \
-    PANEL_DEEPSEEK_LEG PANEL_MIMO_LEG PANEL_KIMI_LEG PANEL_GEMINI_LEG PANEL_GROK_LEG; do
+    PANEL_DEEPSEEK_LEG PANEL_MIMO_LEG PANEL_KIMI_LEG PANEL_GEMINI_LEG PANEL_GROK_LEG PANEL_CURSOR_LEG; do
     [[ -z "${!_v+x}" ]] || exit 1
   done
   exit 0
@@ -401,7 +404,7 @@ v3_panel_sidecar() {
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$b/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# t\n' > "$d/t.md"
 
   # scenario A: all three fail -> each .err non-empty with reason, exit 1
@@ -937,7 +940,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   # panel-review leg selection: default=agent, PANEL_GLM_LEG=agent/chat, missing agent
   local pb="$d/panelbin"; mkdir -p "$pb"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for stubname in submimo subdeepseek; do
     cat > "$pb/$stubname" <<'EOF'
 #!/usr/bin/env bash
@@ -1013,7 +1016,7 @@ v11_panel_gates() {
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"
     chmod +x "$pb/$leg"
@@ -1072,7 +1075,7 @@ v12_gate_default_on() {
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo" "$d/tasks"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
   done
@@ -1243,7 +1246,7 @@ PY
   # --- panel-review 4th-leg selection
   local pb="$d/panelbin"; mkdir -p "$pb"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for stubname in submimo subdeepseek subglm; do
     cat > "$pb/$stubname" <<'EOF'
 #!/usr/bin/env bash
@@ -1329,7 +1332,7 @@ v14_leg_fallback_and_include() {
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# review\n' > "$d/t.md"
   # 中立的两条腿(不参与本组断言)
   for leg in submimo subkimi; do
@@ -1434,7 +1437,7 @@ v15_anchor_leak_warning() {
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm subkimi; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
   done
@@ -1552,7 +1555,7 @@ EOF
     git checkout -qb feature; echo "真正要审的实现" >> impl.py
     git add -A; git commit -qm work )
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm subkimi; do
     printf '#!/bin/bash\necho "DIFF_BASE=${PANEL_DIFF_BASE:-unset}" > "$3"\nexit 0\n' \
       > "$pb/$leg"; chmod +x "$pb/$leg"
@@ -1791,7 +1794,7 @@ v19_degradation_travels_with_conclusion() {
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   # 三腿:mimo 正常;deepseek 底座腿必死 + 聊天腿成功(这就是要验的回落路径);glm 关掉
   for n in submimo subglm subkimi; do
     printf '#!/usr/bin/env bash\nprintf "%%s\\n" "Conclusion: PASS" > "$3"\n' > "$pb/$n"
@@ -1928,7 +1931,7 @@ v22_head_moved_during_review() {
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb" "$repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
@@ -1999,7 +2002,7 @@ v22_anchor_leak_sees_committed_track() {
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm subkimi; do
     # 桩把自己看见的 PANEL_DIFF_BASE 记进日志:V22d 要的就是"腿到底拿到了什么"。
     printf '#!/bin/bash\necho "STUB PASS diffbase=${PANEL_DIFF_BASE:-UNSET}" > "$3"\nexit 0\n' \
@@ -2044,7 +2047,7 @@ v22_roster_file() {
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb" "$repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
@@ -2099,7 +2102,7 @@ v25_legs_run_in_their_own_session() {
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$b/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# t\n' > "$d/t.md"
 
   # 假腿:把自己的 SID 写进它那份日志(第 3 个参数)
@@ -4249,7 +4252,7 @@ v44_dead_leg_stops_rotating() {
   d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; state="$d/state"
   mkdir -p "$pb" "$repo" "$state"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
@@ -4571,7 +4574,7 @@ v43_health_aware_rotating_budget() {
   d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; state="$d/state"
   mkdir -p "$pb" "$repo" "$state"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/cursor-model" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
@@ -4606,6 +4609,8 @@ if [[ "${STUB_INELIGIBLE:-}" != "$name" ]]; then
     subglm) model=glm-4.5 ;;
     subkimi) model=kimi-code/k2.5 ;;
     subgemini) model=gemini-2.5-pro ;;
+    subgrok) model=grok-fixture ;;
+    subcursor) model="$CURSOR_MODEL" ;;
   esac
   object_format="$(git -C "$4" rev-parse --show-object-format)"
   head_oid="$(git -C "$4" rev-parse HEAD)"

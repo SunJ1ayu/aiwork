@@ -45,6 +45,11 @@ instructions; this README only maps the machinery.
 - `bin/subgemini` — Gemini membership-backed, review-only Antigravity CLI leg with
   no chat fallback. `bin/subgemini-diag` extracts denied tools/commands from its
   local conversation database.
+- `bin/subcursor <review|explore>` — Cursor CLI with read/search/list tools in an
+  isolated workspace. Both modes read [`bin/cursor-model`](bin/cursor-model);
+  change that one model ID (or set `CURSOR_MODEL`) to switch models. Coverage
+  follows the model family, not the Cursor transport. `PANEL_CURSOR_LEG=off`
+  disables it in both dispatchers. Authenticate with `cursor-agent login`.
 - `bin/subgrok` — Grok Build CLI, `review` and `explore`; both read their default
   model from [`bin/grok-model`](bin/grok-model). A model upgrade changes that one
   configuration line, not the adapter or panel; `GROK_MODEL` overrides one run.

@@ -41,6 +41,14 @@
 #   subdeepseek `PANEL_DEEPSEEK_LEG`:同形状,chat 强制走官方 chat API(空 diff 会瞎)。
 #   submimo `PANEL_MIMO_LEG` / subkimi `PANEL_KIMI_LEG` / subgemini `PANEL_GEMINI_LEG`:
 #           只有底座腿,没有聊天腿回落 —— 关掉就是少一条腿,不是降级。
+# Freeze the Cursor model for this dispatcher and all its children. Changing the
+# config during a run cannot silently change the model behind the chosen family.
+_panel_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${CURSOR_MODEL:-}" && -f "$_panel_bin/cursor-model" ]]; then
+  CURSOR_MODEL="$(cat "$_panel_bin/cursor-model")"
+fi
+export CURSOR_MODEL
+_cursor_family="$(python3 "$_panel_bin/_review_result.py" cursor-family "${CURSOR_MODEL:-}" 2>/dev/null)" || _cursor_family=unknown
 PANEL_LEG_SPECS=(
   "submimo|xiaomi|submimo||PANEL_MIMO_LEG"
   "subdeepseek|deepseek|subdeepseek-agent|subdeepseek|PANEL_DEEPSEEK_LEG"
@@ -48,7 +56,9 @@ PANEL_LEG_SPECS=(
   "subkimi|moonshot|subkimi||PANEL_KIMI_LEG"
   "subgemini|google|subgemini||PANEL_GEMINI_LEG"
   "subgrok|xai|subgrok||PANEL_GROK_LEG"
+  "subcursor|$_cursor_family|subcursor||PANEL_CURSOR_LEG"
 )
+unset _panel_bin _cursor_family
 
 # ── 角色腿表:同一格式,但**不进**普通轮换池 ─────────────────────────────
 # 只由 panel-slice 以 `panel-review --scoped-review --pin-leg <腿>` 钉住派发(track sliced-panel-review)。

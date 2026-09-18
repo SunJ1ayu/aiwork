@@ -1,0 +1,26 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    cursor-worker-final2
+cmd:     bash -c python3\ tests/test_subcursor.py\ \&\&\ python3\ tests/test_review_result.py
+cwd:     /root/aiwork(仓根)
+commit:  dc6f735
+dirty:   yes(跑之前采的;含未跟踪文件)
+head-before: dc6f735204d76e0952a67c8902a54a4b00966504
+source-view-before: sha256:90d867cfe2d0e3c98768fb92cf14cb0401f3f4b76fbef6f04507f7a452e93897
+started: 2026-09-18T13:14:31Z
+---------------- 输出开始 ----------------
+...................
+----------------------------------------------------------------------
+Ran 19 tests in 44.177s
+
+OK
+....................
+----------------------------------------------------------------------
+Ran 20 tests in 0.891s
+
+OK
+command-rc: 0
+head-after: dc6f735204d76e0952a67c8902a54a4b00966504
+source-view-after:  sha256:90d867cfe2d0e3c98768fb92cf14cb0401f3f4b76fbef6f04507f7a452e93897
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: cursor-worker-final2 rc=0 commit=dc6f735 dirty=yes final=yes at=2026-09-18T13:14:31Z file=tracks/cursor-review-explore/evidence/20260918T131431Z-01-cursor-worker-final2.txt

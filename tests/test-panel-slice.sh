@@ -24,12 +24,15 @@ if [[ "${PANEL_SLICE_ENV_SCRUBBED:-}" != "1" ]]; then
   for _spec in "${PANEL_LEG_SPECS[@]}" ${PANEL_ROLE_LEG_SPECS[@]+"${PANEL_ROLE_LEG_SPECS[@]}"}; do
     _unset+=(-u "${_spec##*|}")
   done
-  exec env "${_unset[@]}" -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
+  exec env "${_unset[@]}" -u CURSOR_MODEL -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET -u PANEL_DIFF_BASE \
     -u PANEL_INCLUDE -u PANEL_ORACLE_CMD -u PANEL_SLICE_ASSIGN_START -u PANEL_SLICE_RUN_ROOT \
     -u REVIEW_MY_REVIEW -u REVIEW_NO_MY_REVIEW -u AIWORK_REVIEW_TRACK \
     PANEL_SLICE_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
+
+# Test fixtures use a stable model independently of the operator's model choice.
+export CURSOR_MODEL=composer-2.5
 . "$ROOT/bin/_panel-roster-lib.sh"
 
 PASS=0; FAIL=0
@@ -88,11 +91,11 @@ esac
 if [[ -n "$verdict" ]]; then printf 'stub report %s %s\n%s\n' "$self" "$item" "$verdict" > "$log"; fi
 if [[ "$rc" -eq 0 ]]; then
   model="$(python3 - "$AIWORK_REVIEW_RESULT_BIN" "$AIWORK_REVIEW_ADAPTER" <<'PY'
-import importlib.util, sys
+import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("rr", sys.argv[1])
 rr = importlib.util.module_from_spec(spec); spec.loader.exec_module(rr)
 ident = rr.ADAPTER_IDENTITIES.get(sys.argv[2])
-print(ident[1] + "fixture" if ident else "unknown-fixture")
+print(os.environ['CURSOR_MODEL'] if sys.argv[2] == 'subcursor' else ident[1] + "fixture" if ident else "unknown-fixture")
 PY
 )"
   tree="$(git -C "$repo" rev-parse 'HEAD^{tree}')"
@@ -110,7 +113,7 @@ chmod +x "$STUB"
 make_fixture() {  # make_fixture <root>
   local d="$1" b="$1/bin" spec name family agent chat switch f
   mkdir -p "$b" "$d/repo/tracks/current" "$d/state" "$d/tasks" "$d/modes" "$d/runs"
-  for f in panel-slice _panel_slice.py panel-review _panel-roster-lib.sh _review_result.py track-record; do
+  for f in panel-slice _panel_slice.py panel-review _panel-roster-lib.sh cursor-model _review_result.py track-record; do
     [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$b/"
   done
   # 桩名单从两张表长出来(底座腿 + 聊天腿两种二进制都铺)。

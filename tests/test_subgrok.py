@@ -86,7 +86,7 @@ class GrokTest(unittest.TestCase):
         self.bin = self.d/'bin'; self.bin.mkdir()
         for name in ('subgrok','grok-model','_grok-stream.py','_review-workspace.sh',
                      '_review_result.py','_review_delivery.py','_my-review-gate.sh',
-                     'ro-repo-exec','panel-explore','panel-review','_panel-roster-lib.sh'):
+                     'ro-repo-exec','panel-explore','panel-review','_panel-roster-lib.sh','cursor-model'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         self.fake = self.d/'fake'; self.fake.mkdir()
         (self.fake/'grok').write_text(FAKE); (self.fake/'grok').chmod(0o755)
@@ -106,7 +106,7 @@ class GrokTest(unittest.TestCase):
             REVIEW_WORKSPACE_BASE=str(self.d/'workspaces'),
             AIWORK_REVIEW_RESULT_BIN=str(self.bin/'_review_result.py'),
             FAKE_SOURCE=str(self.repo), FAKE_RECORD=str(self.d/'record.json'),
-            PANEL_STAGGER_MAX='0', PANEL_STATE_DIR=str(self.d/'state'))
+            PANEL_STAGGER_MAX='0', PANEL_CURSOR_LEG='off', PANEL_STATE_DIR=str(self.d/'state'))
 
     def git(self, *args):
         return subprocess.check_output(['git','-C',str(self.repo),*args],stderr=subprocess.DEVNULL).decode()

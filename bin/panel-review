@@ -551,11 +551,21 @@ else
   SELECT_START=$((RANDOM % ${#LEGS[@]}))
 fi
 
+selected_family() { # A transport may now serve the same family as another leg.
+  local family="$1" leg
+  for leg in "${LEGS[@]}"; do
+    [[ "${LEG_SELECTED[$leg]}" -eq 1 ]] || continue
+    [[ "$(panel_leg_family "$leg")" == "$family" ]] && return 0
+  done
+  return 1
+}
+
 SELECTED_COUNT=0
 for ((_off=0; _off<${#LEGS[@]} && SELECTED_COUNT<REVIEW_BUDGET; _off++)); do
   _idx=$(((SELECT_START + _off) % ${#LEGS[@]})); _leg="${LEGS[$_idx]}"
   [[ "${LEG_AVAILABLE[$_leg]}" -eq 1 ]] || continue
   if [[ "$FORCE_ALL" -ne 1 && "${LEG_HEALTH[$_leg]}" != "healthy" ]]; then continue; fi
+  if [[ "$FORCE_ALL" -ne 1 ]] && selected_family "$(panel_leg_family "$_leg")"; then continue; fi
   LEG_SELECTED[$_leg]=1
   SELECTED_COUNT=$((SELECTED_COUNT + 1))
 done
@@ -976,6 +986,7 @@ if [[ "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]
       _idx=$(((SELECT_START + _off) % ${#LEGS[@]})); _leg="${LEGS[$_idx]}"
       [[ "${LEG_SELECTED[$_leg]}" -eq 0 && "${LEG_AVAILABLE[$_leg]}" -eq 1 \
          && "${LEG_HEALTH[$_leg]}" == "healthy" ]] || continue
+      selected_family "$(panel_leg_family "$_leg")" && continue
       _spare="$_leg"; break
     done
     if [[ -n "$_spare" ]]; then

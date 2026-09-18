@@ -24,12 +24,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # PANEL_*_LEG=off 就能把判卷防线悄悄关掉(08-26 subkimi 实证)。
 if [[ "${PANEL_ROUND_ENV_SCRUBBED:-}" != "1" ]]; then
   exec env -u PANEL_MIMO_LEG -u PANEL_DEEPSEEK_LEG -u PANEL_GLM_LEG \
-    -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG \
+    -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG -u PANEL_CURSOR_LEG -u CURSOR_MODEL \
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
     -u PANEL_DIFF_BASE -u PANEL_INCLUDE -u PANEL_ORACLE_CMD \
     PANEL_ROUND_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
+
+# Test fixtures use a stable model independently of the operator's model choice.
+export CURSOR_MODEL=composer-2.5
 . "$ROOT/bin/_panel-roster-lib.sh"
 
 PASS=0; FAIL=0
@@ -54,6 +57,7 @@ case "${AIWORK_REVIEW_ADAPTER:?}" in
   subglm-agent) model=go/glm-4.5 ;;  subglm) model=glm-4.5 ;;
   subkimi) model=kimi-code/k2.5 ;;   subgemini) model=gemini-2.5-pro ;;
   subgrok) model=grok-fixture ;;
+    subcursor) model=composer-2.5 ;;
 esac
 object_format="$(git -C "$4" rev-parse --show-object-format)"
 head_oid="$(git -C "$4" rev-parse HEAD)"
@@ -84,7 +88,7 @@ make_fixture() { # root
   local d="$1" b="$1/bin" repo="$1/repo"
   mkdir -p "$b" "$repo/tracks/current" "$repo/tests" "$d/raw" "$d/state"
   cp "$ROOT/bin/panel-review" "$ROOT/bin/_panel-roster-lib.sh" \
-     "$ROOT/bin/_review_result.py" "$ROOT/bin/track-record" "$b/"
+     "$ROOT/bin/_review_result.py" "$ROOT/bin/cursor-model" "$ROOT/bin/track-record" "$b/"
   make_healthy_stubs "$b"
   printf '# PANEL_PROMPT_SENTINEL\n' > "$d/task.md"
   cat > "$repo/tracks/current/decision.json" <<'EOF'

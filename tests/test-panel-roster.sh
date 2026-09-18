@@ -25,9 +25,12 @@ if [[ "${PANEL_ROSTER_ENV_SCRUBBED:-}" != "1" ]]; then
     -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
     -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
     -u PANEL_ORACLE_CMD -u PANEL_GLM_LEG -u PANEL_DEEPSEEK_LEG \
-    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG \
+    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG -u PANEL_CURSOR_LEG -u CURSOR_MODEL \
     PANEL_ROSTER_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
+
+# Test fixtures use a stable model independently of the operator's model choice.
+export CURSOR_MODEL=composer-2.5
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -49,6 +52,7 @@ if [[ "$3" -eq 0 ]]; then
     subkimi) model=kimi-code/k2.5 ;;
     subgemini) model=gemini-2.5-pro ;;
     subgrok) model=grok-fixture ;;
+    subcursor) model=composer-2.5 ;;
   esac
   object_format="\$(git -C "\$4" rev-parse --show-object-format)"
   head_oid="\$(git -C "\$4" rev-parse HEAD)"
@@ -76,7 +80,7 @@ make_fixture() { # make_fixture <dir> <sleep> <rc>
   # 花名册渲染的共享库:panel-review 和 panel-roster 都 source 它(只许有一份)。
   # 真实 bin/ 里本来就在,夹具得跟上 —— 这是管线,不是断言。
   if [[ -f "$ROOT/bin/_panel-roster-lib.sh" ]]; then
-    cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/_review_result.py" "$b/"
+    cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/cursor-model" "$ROOT/bin/_review_result.py" "$b/"
   fi
   # panel-roster 是本单要造的东西;现在还不存在 ⇒ 判据必须因此红。
   [[ -x "$ROOT/bin/panel-roster" ]] && cp "$ROOT/bin/panel-roster" "$b/panel-roster"
@@ -249,7 +253,7 @@ echo "[R9] 升级追加的增补腿不许隐身(评审腿 subdeepseek F1 抓到�
 # **正是这个功能存在要防的那种数据丢失**,而且改动前的老代码是对的。
 # 原则:**盘上有 state = 它真的跑过**,plan 只说明"原本打算派谁"。
 d9="$(mktemp -d)"; mkdir -p "$d9/bin" "$d9/raw"
-cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/_review_result.py" "$ROOT/bin/panel-roster" "$d9/bin/"
+cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/cursor-model" "$ROOT/bin/_review_result.py" "$ROOT/bin/panel-roster" "$d9/bin/"
 cat > "$d9/raw/esc.plan" <<'PLAN'
 task=t
 impact-risk=high
@@ -277,7 +281,7 @@ check "R9c: 没派也没 state 的腿仍然照实印 off" \
 # ---------------------------------------------------------------- R10
 echo "[R10] 一条腿都没派(全 off)也要照实印,不许炸(评审腿 F4 的覆盖缺口)"
 d10="$(mktemp -d)"; mkdir -p "$d10/bin" "$d10/raw"
-cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/_review_result.py" "$ROOT/bin/panel-roster" "$d10/bin/"
+cp "$ROOT/bin/_panel-roster-lib.sh" "$ROOT/bin/cursor-model" "$ROOT/bin/_review_result.py" "$ROOT/bin/panel-roster" "$d10/bin/"
 {
   printf '%s\n' 'task=t' 'impact-risk=self' 'requested-budget=0' \
     'selected-count=0' 'selected=none' 'snapshot-head=abc123'
