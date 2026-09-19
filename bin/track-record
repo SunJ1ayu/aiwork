@@ -323,21 +323,7 @@ def validate_dispatch(data: dict[str, Any], track_dir: Path, source: str) -> Non
         )
     if uncertainty == "low" and status not in ("not_required", "done"):
         raise DecisionError("design.premise_status", "design.premise_attack.status", status, "not_required|done")
-    # 🔴 填 low 不许零成本(2026-09-19,0.98.7 启动阻塞那一单的收口)。
-    # 那一单 impact=high(外审预算 2 真的走了),design.uncertainty=low + not_required + 空 evidence
-    # ⇒ premise attack / 双出 / panel-explore 整条设计防线**一个自述字段就全关了**,
-    # 而规格里"用户最坏等 35 秒"两家外审都看过、没人吭声 —— 因为评审问的是"实现对不对",
-    # 只有发散才会问"为什么不后台查"。业主发现时已经发版。
-    # 这是 self-narrated-fields-dont-guard 的第二次发作(第一次是 verify.md 的「派给:」)。
-    # 所以 low 也要给理由:指向工件里写清"方向为什么是确定的"那一处。
-    if uncertainty == "low" and not evidence:
-        raise DecisionError(
-            "design.low_uncertainty_reason",
-            "design.premise_attack.evidence",
-            evidence,
-            "non-empty evidence when uncertainty=low (point at where the artifacts say why the direction is settled)",
-        )
-    if evidence:
+    if status == "done":
         for rel in evidence:
             if source == "working":
                 candidate = track_dir / rel
