@@ -1,0 +1,24 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    low-uncertainty-reason-gate
+cmd:     bash tests/test-low-uncertainty-reason.sh
+cwd:     /root/aiwork(仓根)
+commit:  ffb73b5
+dirty:   yes(跑之前采的;含未跟踪文件)
+head-before: ffb73b537529e2ca926d72834c6526f13c462c40
+source-view-before: sha256:80fda81097723662b5a1e921583783fb6b7c8a945df0aac3b82f5e3a811106f5
+started: 2026-09-19T15:05:54Z
+---------------- 输出开始 ----------------
+== 填 low 不许零成本 ==
+  [PASS] low + 零理由 ⇒ 必须 BLOCK
+  [PASS] low + 指向工件 ⇒ 放行
+  [PASS] low + 指向不存在的文件 ⇒ BLOCK
+  [PASS] 回归:high + 证据齐 ⇒ 放行
+  [PASS] 回归:high + 空证据 ⇒ 仍 BLOCK
+  [PASS] 回归:high 但没做攻击 ⇒ 仍 BLOCK
+全过
+command-rc: 0
+head-after: ffb73b537529e2ca926d72834c6526f13c462c40
+source-view-after:  sha256:80fda81097723662b5a1e921583783fb6b7c8a945df0aac3b82f5e3a811106f5
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: low-uncertainty-reason-gate rc=0 commit=ffb73b5 dirty=yes final=yes at=2026-09-19T15:05:54Z file=tracks/design-uncertainty-low-needs-reason/evidence/20260919T150554Z-01-low-uncertainty-reason-gate.txt
