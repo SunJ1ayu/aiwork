@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "track": "design-uncertainty-low-needs-reason",
+  "run_id": "20260919-230940-584912-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "low-uncertainty-reason-task",
+  "started_at": "2026-09-19T15:09:40Z",
+  "finished_at": "2026-09-19T15:09:49Z",
+  "duration_ms": 8707,
+  "exit_code": 1,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "standard",
+    "degraded": true,
+    "work_exit_code": 1,
+    "legs": [
+      {
+        "adapter": "subglm",
+        "degraded": true,
+        "duration_ms": 711,
+        "evidence": {
+          "completeness": "none",
+          "digest": null,
+          "ref": null
+        },
+        "failure_kind": "auth",
+        "family": "zhipu",
+        "model": {
+          "invoked": "glm-5.3-flash",
+          "reported": null,
+          "requested": "glm-5.3-flash"
+        },
+        "name": "subglm",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 1,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260919-230940-584912-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "digest": null,
+          "manifest_version": 1,
+          "source": null,
+          "task_sha256": "sha256:430c363e2db66ff001be47a2bcbc98aa6b7f5480bcdffd73bcbbb2d2cabb6baf"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "api",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "UNKNOWN",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "diff_bundle"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
