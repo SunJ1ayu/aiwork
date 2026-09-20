@@ -23,6 +23,6 @@
     "model": "gpt-6-astra"
   },
   "outcome": {
-    "verdict": null
+    "verdict": "PASS"
   }
 }

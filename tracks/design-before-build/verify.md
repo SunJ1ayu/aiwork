@@ -90,4 +90,18 @@ Conclusion: PASS
 
 
 主 agent 核实:三项均已修,复审无新阻断。设计探索为MiMo+Grok两家,实现评审为Grok两轮,均不拿模型意见自动裁决。
-部署与实际建单验证尚待完成,此刻outcome仍为空。
+复审时部署与实际建单验证尚待完成,outcome仍为空;下节记录完成后的最终裁决。
+
+
+## 现场部署与最终裁决
+
+主仓已 fast-forward 到 b0e02e2,执行 `bin/sync-workflow-docs --force` 同步主指令及 track/panel/delegate 三份 skill。
+`bin/sync-workflow-docs --check` 确认部署副本与唯一源字节一致。
+
+runlog: live-workflow-and-scaffold rc=0 commit=b0e02e2 dirty=no final=yes at=2026-09-20T08:29:26Z file=tracks/design-before-build/evidence/20260920T082926Z-01-live-workflow-and-scaffold.txt
+
+现场37项文档检查通过;实际调用 `bin/track new` 新建临时 track,生成的 design 与模板替换结果逐字节一致,typed shape 校验通过。临时建单目录已清理,完整输出见 receipt;source-stable=yes。
+
+主 agent 最终裁决:PASS。初始兼容性检查138项通过,修复后文档检查37项通过,现场文档检查37项及实际建单通过。
+独立方案探索为两个外部模型家族,实现评审首轮BLOCK的三项均有修复与处置,第二轮PASS;无未解决阻断。
+这次交付是工作流协议和模板调整,没有新增语义机器闸、Jev调用或切片覆盖资格。是否减少返工仍待约5个自然任务观察,不得把本次检查通过解释成效果已验证。
