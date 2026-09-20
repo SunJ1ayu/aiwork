@@ -37,3 +37,10 @@ submimo=off subdeepseek=off subglm=off subkimi=off subgemini=off subgrok=off sub
 | R1-3 | submimo explore 禁所有工具,却被描述成可读实现/调用方 | 成立,亲读bin/submimo:223。必须修:默认代码相关挑战用可读快照的subcursor;MiMo只在事实完整、无需查仓的题面探索使用,不得冒充源码核查 |
 
 一次修复清单为上述三项。第2轮核修复及影响面;当前不写最终PASS。
+
+## 修复后的检查
+
+runlog: workflow-docs-r2 rc=0 commit=32caeda dirty=no final=yes at=2026-09-20T08:23:23Z file=tracks/design-before-build/evidence/20260920T082323Z-01-workflow-docs-r2.txt
+
+37条workflow文档检查通过,source-stable=yes。只改文字入口,旧typed82+preflight19的机器实现未变,
+不为同一结论无意义重复全套。修复清单三项已完成,第2轮只核修复及影响面。
