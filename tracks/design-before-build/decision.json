@@ -2,19 +2,25 @@
   "schema_version": 2,
   "track": "design-before-build",
   "impact": {
-    "level": null,
-    "factors": null
+    "level": "standard",
+    "factors": []
   },
   "design": {
-    "uncertainty": null,
+    "uncertainty": "high",
     "premise_attack": {
-      "status": null,
-      "evidence": []
+      "status": "done",
+      "evidence": [
+        "design.md",
+        "evidence/independent-brief.md",
+        "evidence/mimo-direction.txt",
+        "evidence/cursor-direction.txt",
+        "evidence/walkthrough.md"
+      ]
     }
   },
   "execution_plan": {
-    "adapter": null,
-    "model": null
+    "adapter": "main",
+    "model": "gpt-6-astra"
   },
   "outcome": {
     "verdict": null

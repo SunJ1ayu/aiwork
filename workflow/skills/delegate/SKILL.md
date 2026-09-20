@@ -58,17 +58,18 @@ fork 把它判成"评审腿篡改",恢复了文件并 kill 掉主 agent 的判�
 由只读 ledger 当场汇总。拿不到就是 null，不能把订阅额度或现金费用猜成 0。旧 track
 明确标 legacy/unknown，不从 `verify.md` 自由文本回填。
 
-## 规划:什么时候花"双出方案"
+## 规划:先检查方案,再决定是否双出
 
-**只在新写面 / 开放方向**用「主 agent 与 `gpt-5.6-sol` 各自独立对同一 brief 出方案
-(主 agent 先落盘后读)」。验证过一次,它抓到的三条全在"我以为理所当然"的地方
-—— 那正是"我先出方案再让它审"抓不到的(审查只会在我的框子里挑毛病)。
-
-**方向已定的实现活不要花这个钱**,走「我出 → 它审 → 它执行」。
+按 **panel skill 4c** 判断,不是按「我要不要外包」判断;主 agent 自己实现也一样。
+新增关键行为、改变契约或选错后难以撤回的方案,先由不同家族从用户原话独立挑战,
+关键未知先实验;有真实方向分叉才扩大为独立双出/panel-explore。沿用已验证契约的局部修改保持轻量。
+先落主 agent 的方向,不把自审/结论喂给独立腿;核实与取舍留在 design/evidence。
+**「方向已定」必须来自这次检查,不能因为用户需求清楚、自己填 low 或 Jev 低分就跳过。**
+委托前 `--attack-log` 的 oracle 攻击仍要做:它问考卷能否被坏实现骗过,不能顶替目标/方案检查。
 
 ## 流水线(PR 级 track)
 
-1. **oracle 先行,且先 commit 进 main 再开 worktree**(让执行腿从基线继承,别让它自己往里
+1. 先完成上面的设计检查,再 **oracle 先行,且先 commit 进 main 再开 worktree**(让执行腿从基线继承,别让它自己往里
    copy)。**oracle 必须先红检**——没红过的 oracle 不算 oracle。
 2. **派活 prompt 必带三件**:
    ① oracle 逐字节 off-limits;② 自检清单(oracle + 回归 + build 全绿才交);
@@ -89,7 +90,7 @@ fork 把它判成"评审腿篡改",恢复了文件并 kill 掉主 agent 的判�
 4. **`decision.json` 的 `impact-risk` 硬规矩:新写口/权限/auth/钱/数据一致性面 = high，针孔再薄
    也不打折。** 默认预算 self=0、standard=1、high=2；high 取两条健康跨家族腿，失败/
    降级/冲突才追加。判卷、沙箱、权限控制面才显式 `panel-review --all`。
-   `design-uncertainty` 另判 low/high，只决定是否需要 premise attack / 双出，不拿人数代替。
+   `design-uncertainty` 按 panel 4c 检查后另判 low/high,不拿人数或自报 low 代替方案检查。
    切记 **oracle 是主 agent 写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
    (07-18 实锤:错误编码进 oracle,当时的单腿评审对着错考卷判 PASS,双漏。)
 5. 主 agent 仲裁 → 修(自己或回派)→ merge → e2e → push → 归档。

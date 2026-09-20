@@ -1,0 +1,190 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    workflow-compatibility
+cmd:     bash /root/panel-my-reviews/design-before-build-checks.sh
+cwd:     /root/aiwork-design-first(仓根)
+commit:  65ec3fa
+dirty:   yes(跑之前采的;含未跟踪文件)
+head-before: 65ec3fafe48fe765de7b069a63cb97ab78dbbafe
+source-view-before: sha256:a5aa619bf54649a520623a4ecd9be22322e4708aa79825b1a8c1d0c8348bee99
+started: 2026-09-20T08:09:50Z
+---------------- 输出开始 ----------------
+MISSING CLAUDE.md
+MISSING .claude/skills/track/SKILL.md
+MISSING .claude/skills/panel/SKILL.md
+MISSING .claude/skills/panel/references/legs.md
+MISSING .claude/skills/delegate/SKILL.md
+SYNCED CLAUDE.md
+SYNCED .claude/skills/track/SKILL.md
+SYNCED .claude/skills/panel/SKILL.md
+SYNCED .claude/skills/panel/references/legs.md
+SYNCED .claude/skills/delegate/SKILL.md
+=== workflow docs oracle ===
+[W1] Git 内唯一源与当前部署副本逐字节一致
+  PASS: W1: CLAUDE.md == 部署 CLAUDE.md
+  PASS: W1: skills/track/SKILL.md == 部署 .claude/skills/track/SKILL.md
+  PASS: W1: skills/panel/SKILL.md == 部署 .claude/skills/panel/SKILL.md
+  PASS: W1: skills/panel/references/legs.md == 部署 .claude/skills/panel/references/legs.md
+  PASS: W1: skills/delegate/SKILL.md == 部署 .claude/skills/delegate/SKILL.md
+[W2] 同步器只管固定清单，漂移默认拒绝、显式 force 才覆盖
+  PASS: W2: 空部署根 --check 必须报漂移
+  PASS: W2: 缺失的受管文件可安全首次安装
+  PASS: W2: 首次安装后所有受管文件逐字节一致
+  PASS: W2: 已有副本漂移时默认拒绝覆盖
+  PASS: W2: 拒绝后现场改动仍在
+  PASS: W2: 显式 --force 才更新已漂移受管文件
+  PASS: W2: force 后回到唯一源字节
+  PASS: W2: settings 等非清单现场零触碰
+  PASS: W2: 同步后的 --check 通过
+  PASS: W2: 受管目标是符号链接时即使 force 也拒绝
+  PASS: W2: 不会沿链接覆盖清单外文件
+[W3] 文档说的默认预算、模型和 agent 档与实现一致
+  PASS: W3: README 公开 self/standard/high 风险档
+  PASS: W3: README/panel skill 把 --all 表述为全池语义，不绑定四审或五审
+  PASS: W3: CLAUDE.md 使用两个正交轴且 high=2
+  PASS: W3: skills/track/SKILL.md 使用两个正交轴且 high=2
+  PASS: W3: skills/panel/SKILL.md 使用两个正交轴且 high=2
+  PASS: W3: gemini 腿的默认档,文档(gemini-3.8-flash-high)与 bin/subgemini 一致
+  PASS: W3: GLM 默认是 5.3 Flash，agent 没有第二模型源
+  PASS: W3: GLM 当前默认路径是 opencode agent，文档端点与实现一致
+  PASS: W3: 活文档和承重注释不再把聊天腿或 Claude 壳写成当前默认
+  PASS: W3: README 列出默认 agent wrapper，帮助文本标清休眠变量
+  PASS: W3: 主工作流员工枚举包含 Gemini
+  PASS: W3: DeepSeek 唯一源与实现都是 200 turns
+  PASS: W3: Kimi 唯一源与实现都是 1500s
+  PASS: W3: MiMo 唯一源与实现模型一致
+[W4] 唯一源与同步器本身属于 judging surface
+  PASS: W4: 同步写口受 track 归属守卫保护
+  PASS: W4: 唯一规范源受 track 归属守卫保护
+[W5] typed decision 是新 track 唯一机器事实源，旧 lane 不再混进现行模板
+  PASS: W5: decision 模板本身通过 shape validator
+  PASS: W5: 新 verify 模板不复制 verdict/lane/派给
+  PASS: W5: convention/design 现行语义只讲双轴
+  PASS: W5: workflow 要求 dispatch 前填 decision 并机械校验
+  PASS: W5: delegate 不再要求手工返工账或 verify 第二事实源
+=== total: 37 passed, 0 failed ===
+=== typed track record oracle ===
+[R1] track new 生成唯一机器事实源；null 不冒充 false/空值
+  PASS: R1: track new 成功
+  PASS: R1: decision.json 被生成
+  PASS: R1: 初态字段精确、unknown=null 且不等于 false/[]
+  PASS: R1: archived 名称全生命周期唯一，不能新建同名 active 污染迟到回执
+  PASS: R1: 同名拒绝时 archived 现场原样保留
+[R2] shape 只查结构/类型/枚举，并给可审计 rule trace
+  PASS: R2: 合法 null 初态通过 shape
+  PASS: R2: 缺字段 fail closed
+  PASS: R2: trace 同时给 rule/path/actual/expected
+  PASS: R2: 非法 impact 枚举被挡
+  PASS: R2: 非法枚举 trace 点名实际值与合法集合
+  PASS: R2: execution adapter 拼错不能作为任意 token 混过去
+  PASS: R2: adapter enum trace 点名实际拼错值
+  PASS: R2: working decision.json 不许是指向仓外可变事实的 symlink
+  PASS: R2: decision symlink 边界 trace 明确
+[R3] dispatch 才要求决策完整，并执行手写跨字段规则
+  PASS: R3: null 不能在 dispatch 默认为 false/self
+  PASS: R3: null 的 BLOCK trace 明确
+  PASS: R3: 完整 low/self 计划可 dispatch
+  PASS: R3: low uncertainty 也不许把无 evidence 的 premise 标成 done
+  PASS: R3: done 无 evidence 的 trace 明确
+  PASS: R3: 高危因子不许降成 standard
+  PASS: R3: 降档 trace 点名手写规则
+  PASS: R3: high uncertainty 没完成 premise attack 被挡
+  PASS: R3: premise 规则可审计
+  PASS: R3: 只写一个不存在的 evidence 路径仍然被挡
+  PASS: R3: high uncertainty + 持久 evidence 后可 dispatch
+[R3b] staged dispatch 的 premise evidence 只认 index，不让 working 文件替提交应试
+  PASS: R3b: 仅 working/untracked 的 premise evidence 不能冒充 staged
+  PASS: R3b: 未 staged evidence 的 trace 明确
+  PASS: R3b: evidence 已 staged、working 已删仍按 index 放行
+[R4] archive 要求真实 outcome，保留 superseded 而不伪造 PASS
+  PASS: R4: outcome=null 时拒绝归档
+  PASS: R4: outcome 缺失 trace 明确
+  PASS: R4: PASS 但没有 execution observation 时拒绝归档
+  PASS: R4: 缺覆盖的 rule trace 明确
+  PASS: R4: PASS 且 execution coverage 完整才可归档
+  PASS: R4: observation 顶层夹带 transcript/额外字段时 archive fail closed
+  PASS: R4: observation 白名单违规给结构化 rule trace
+  PASS: R4: 拒绝 secret/transcript 时 trace 只报字段、不回显内容
+  PASS: R4: 单 observation 超过 64 KiB 即使只是合法 JSON whitespace 也拒绝
+  PASS: R4: 超限 trace 只报字节数
+  PASS: R4: observation 的 Infinity/NaN 非有限成本被拒绝
+  PASS: R4: observations 目录夹带非 JSON transcript 时拒绝归档
+  PASS: R4: malformed panel leg 被干净阻断而不是让 ledger 崩溃
+  PASS: R4: malformed leg trace 点名类型错误
+  PASS: R4: 当前花名册全池可写进 compact observation，容量只由字节上限约束
+  PASS: R4: ARCHIVED-SUPERSEDED 可归档且无需冒充 PASS
+  PASS: R4: 自造 verdict 枚举被挡
+[R4b] PASS archive 机械核对 impact-risk 的 0/1/2 外审家族预算
+  PASS: R4b: high PASS 只有 runlog、零外审腿 ⇒ archive BLOCK
+  PASS: R4b: 外审缺口 trace 点名 required=2
+  PASS: R4b: high PASS 有成功 panel + 两个不同模型家族才可归档
+  PASS: R4b: high 的两腿来自同一 family 仍不算双家族
+  PASS: R4b: 失败 panel 的第二 family 不能与成功单家族拼成 high 双家族
+  PASS: R4b: 成功 panel event 内的失败腿也不能补足第二家证据
+[R5] legacy 明示兼容；曾跟踪过的 decision 删除后不能降级逃闸
+  PASS: R5: 真 legacy track 不误伤
+  PASS: R5: legacy 状态明确，不从 Markdown 猜字段
+  PASS: R5: 删除已跟踪 decision 不会伪装成 legacy
+  PASS: R5: 删除逃闸有明确 rule trace
+[R6] track archive 在任何 sweep/mv 前校验 typed facts；旧 track 仍走旧路
+  PASS: R6: typed facts 未完成时 archive 被挡
+  PASS: R6: 被挡时目录原地不动
+  PASS: R6: typed PASS 缺 observation 时仍在 sweep/mv 前被挡
+  PASS: R6: 缺 observation 被挡时目录原地不动
+  PASS: R6: typed outcome/coverage 完整后无需在 Markdown 复制 Verdict 即可归档
+  PASS: R6: typed track 确实移入 archive
+  PASS: R6: 无 decision 的旧 track 仍按 legacy 规则归档
+[R7] delegate receive 可失败后重试；execution 仍不许重复计费
+  PASS: R7: 同 run_id 的 received fail→pass 合法，任一成功即可收货
+  PASS: R7: 同 execution_finished 重复导入仍拒绝双计
+  PASS: R7: 重复 execution trace 明确
+[R8] observation writer 自己不制造 reader 随后会拒绝的记录
+  PASS: R8: controller/adapter mismatch 在写盘前拒绝
+  PASS: R8: adapter mismatch 不留下 observation
+  PASS: R8: writer 接受运行时花名册全池，不另设固定腿数上限
+  PASS: R8: 全池 observation 已真实落盘
+  PASS: R8: 非 panel controller 带 --leg-result 给结构化 BLOCK、不是 traceback
+  PASS: R8: v1 --leg writer 已关闭，旧 observation 只读
+[R9] ReviewLegResult v2 reader 保持严格兼容
+  PASS: R9: ledger 严格读取 v2 leg，且旧 consumer 不因嵌套 process 形状崩溃
+  PASS: R9: 未知未来 observation schema fail closed，不猜成 v2
+[R10] archive/ledger 共用 v2 coverage predicate；跨对象/跨 run/v1 都不拼放行
+  PASS: R10: rc=0 + UNKNOWN 不是 coverage
+  PASS: R10: degraded 的明确结论仍不算 coverage
+  PASS: R10: timeout 保留 PASS 也不能提升成 coverage
+  PASS: R10: 同一 run 的不同 subject 不能拼双家族
+  PASS: R10: 同 subject 跨 run 双家族只能 shadow、不能 archive
+  PASS: R10: 同 family 的重试次数不冒充家族数
+  PASS: R10: 同 run 同 subject 的 PASS/BLOCK 冲突阻断资格
+  PASS: R10: v1 observation 可读但不再产生 authoritative coverage
+  PASS: R10: ledger 分列 process/substantive/eligible，并把跨 run 家族只报 shadow
+=== total: 82 passed, 0 failed ===
+test_p10_decided_pass_without_execution_is_block_not_pending (__main__.PreflightTest.test_p10_decided_pass_without_execution_is_block_not_pending) ... ok
+test_p11_bound_review_leaves_only_outcome_then_drift_is_pending_review (__main__.PreflightTest.test_p11_bound_review_leaves_only_outcome_then_drift_is_pending_review) ... ok
+test_p12_legacy_track_placeholder_is_pending (__main__.PreflightTest.test_p12_legacy_track_placeholder_is_pending) ... ok
+test_p12b_deleting_a_tracked_decision_is_not_legacy (__main__.PreflightTest.test_p12b_deleting_a_tracked_decision_is_not_legacy) ... ok
+test_p13_usage_errors (__main__.PreflightTest.test_p13_usage_errors) ... ok
+test_p14_new_phase_does_not_leak_into_old_phases (__main__.PreflightTest.test_p14_new_phase_does_not_leak_into_old_phases) ... ok
+test_p15_structural_observation_problem_blocks_even_before_verdict (__main__.PreflightTest.test_p15_structural_observation_problem_blocks_even_before_verdict) ... ok
+test_p16_stale_stat_info_does_not_get_refreshed (__main__.PreflightTest.test_p16_stale_stat_info_does_not_get_refreshed) ... ok
+test_p1_before_final_review_is_pending_not_blocked (__main__.PreflightTest.test_p1_before_final_review_is_pending_not_blocked) ... ok
+test_p2_ephemeral_ref_blocks_and_does_not_short_circuit (__main__.PreflightTest.test_p2_ephemeral_ref_blocks_and_does_not_short_circuit) ... ok
+test_p3_decision_block_and_other_block_both_reported (__main__.PreflightTest.test_p3_decision_block_and_other_block_both_reported) ... ok
+test_p4a_uncited_red_receipt_is_pending (__main__.PreflightTest.test_p4a_uncited_red_receipt_is_pending) ... ok
+test_p4b_pasted_receipt_without_evidence_blocks (__main__.PreflightTest.test_p4b_pasted_receipt_without_evidence_blocks) ... ok
+test_p5_view_difference_blocks_and_file_stays_untracked (__main__.PreflightTest.test_p5_view_difference_blocks_and_file_stays_untracked) ... ok
+test_p6_existing_archive_destination_blocks (__main__.PreflightTest.test_p6_existing_archive_destination_blocks) ... ok
+test_p7_checker_crash_is_error_not_pending (__main__.PreflightTest.test_p7_checker_crash_is_error_not_pending) ... ok
+test_p8_worktree_checks_never_remove_trees (__main__.PreflightTest.test_p8_worktree_checks_never_remove_trees) ... ok
+test_p8b_clean_merged_tree_is_ok_and_still_there (__main__.PreflightTest.test_p8b_clean_merged_tree_is_ok_and_still_there) ... ok
+test_p9_archive_still_refuses_after_preflight (__main__.PreflightTest.test_p9_archive_still_refuses_after_preflight) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 5.166s
+
+OK
+command-rc: 0
+head-after: 65ec3fafe48fe765de7b069a63cb97ab78dbbafe
+source-view-after:  sha256:a5aa619bf54649a520623a4ecd9be22322e4708aa79825b1a8c1d0c8348bee99
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: workflow-compatibility rc=0 commit=65ec3fa dirty=yes final=yes at=2026-09-20T08:09:50Z file=tracks/design-before-build/evidence/20260920T080950Z-01-workflow-compatibility.txt

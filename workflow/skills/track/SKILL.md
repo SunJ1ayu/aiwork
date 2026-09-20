@@ -62,13 +62,17 @@ conversation history; reconstruct from the folder:
 2. **proposal.md** — draft goal / motivation / scope / non-goals. Keep it light;
    skip for trivial work. If the track will be reviewed, write the **acceptance boundary and
    round budget** here at kickoff (default 2 substantive rounds) — see panel skill 4b.
-3. **design.md (judgment branch).** Decide: is this a *genuine open architecture
-   fork* (several defensible directions, risk = tunnel vision)?
-   - **Yes** → commit your OWN direction first (anti-anchoring), then run
-     `panel-explore` (brief under `/root/aiwork/tasks/`), fold the spread into
-     design.md, converge with the user. Do not collapse the spread prematurely.
-   - **No** → just write the chosen direction. Do not spend a panel.
-   Always capture the **test strategy (oracle)** here — the main agent owns it.
+3. **design.md — check the plan before building it.** Apply panel skill **4c**,
+   the single detailed protocol: start with the user's actual goal, observed behavior,
+   proposed behavior change, and assumptions. Novel required steps/default actions/failure
+   paths, contract changes or costly reversal require an independent different-family
+   challenge even if there is only one proposed design. Resolve critical unknowns with
+   the smallest useful experiment. Local reversible changes under a verified contract
+   stay lightweight; genuine direction forks may use `panel-explore`.
+   Save your OWN direction before reading outside reports; keep it out of their input.
+   Record findings, fact checks and unresolved assumptions in design/evidence. Then write
+   the implementation **test strategy (oracle)** — the main agent owns it. An oracle attack
+   about bad implementations is not a substitute for challenging the goal-to-design translation.
 4. **tasks.md** — break the work down. For bounded sub-tasks you may delegate to
    `submimo fix`: main agent writes the failing test (oracle) and commits it
    first, then hands the narrow file scope to submimo; oracle/test files are
@@ -82,9 +86,10 @@ conversation history; reconstruct from the folder:
      families; failure/degradation/conflict/NEEDS_MORE_INFO adds a spare.
      Use explicit `panel-review --all` only for exceptional judging/sandbox/
      permission-control surfaces, not as the default meaning of high.
-   - `design-uncertainty`: low / high. High uncertainty triggers premise attack,
-     independent dual planning or `panel-explore`; high implementation impact
-     alone does not.
+   - `design-uncertainty`: low / high, judged after step 3, not permission to skip it.
+     High requires completed premise checks and durable evidence; low also permits
+     `premise_attack.status=done` when a check was performed. Lightweight work can retain
+     `not_required`. High implementation impact alone does not require full-pool planning.
    Record the planned Adapter/model there too (v1 Adapter enum:
    `main|submimo|delegate-codex|claude-worktree`); keep reasons and review findings in Markdown.
    **Before every review round run `track preflight <name>`** and fix its BLOCK items first

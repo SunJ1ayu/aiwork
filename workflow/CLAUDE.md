@@ -38,8 +38,11 @@ commit,闸①就退化成翻执行腿日志人工找补,而且 git 历史里再�
 新写口 / 权限 / auth / 钱 / 数据一致性默认 high。high 从健康池轮换两个不同模型家族，
 失败、降级、冲突、NEEDS_MORE_INFO 或我仍不确定才追加第三腿；判卷/沙箱/权限边界等
 特殊控制面才显式 `panel-review --all`。绑定 typed track 时，`--budget` 只能加证据，不能低于
-该 risk 的 0/1/2 预算绕闸。`design-uncertainty`:low / high，只决定是否做
-premise attack / 双出 / panel-explore，不因实现风险高就自动花一次规划双出。
+该 risk 的 0/1/2 预算绕闸。**先查方案,再写实现判据或动手**:新增/改变用户必经步骤、
+默认自动动作、失败退路或数据/权限/跨模块契约,以及选错需跨模块/迁移/部署撤回的方案,
+先做不同家族的独立方案挑战;关键未知先用最小实验验证。局部可逆且沿用已验证契约的修改保持轻量。
+`design-uncertainty`:low / high 是检查后的判断;需求明确、自报 low 或 Jev 低分都不是免检凭据,
+也不因实现风险高就自动全池规划。触发、独立输入、证据与预算的唯一详细协议在 panel skill **4c**。
 新 track 的机器字段只写同目录 `decision.json`，unknown 用 null，不在 verify.md 复制
 `Verdict:` / `lane:` / `派给:`。真实 controller dispatch 前先跑
 `track-record validate --phase dispatch tracks/<name>`；缺字段、高危因子降档、high uncertainty

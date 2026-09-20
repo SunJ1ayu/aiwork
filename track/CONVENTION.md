@@ -16,7 +16,7 @@ rejected: otherwise a late delegate receipt for the old run could be imported in
 | File | What | When to write |
 |---|---|---|
 | `proposal.md` | what & why: goal, motivation, scope, non-goals | at the start of a non-trivial track |
-| `design.md` | how: approach, trade-offs, alternatives, test strategy (oracle) | when there's a real design choice; **panel-explore hook** here |
+| `design.md` | goal-to-design check, assumptions/evidence, approach, trade-offs, oracle | before implementation; panel skill **4c** chooses check depth |
 | `tasks.md` | task checklist + `base-ref` | when breaking the work down |
 | `decision.json` | typed machine facts: impact, uncertainty, premise evidence, execution plan, outcome | scaffolded as null; fill before a real dispatch and at final arbitration |
 | `verify.md` | what was checked + arbitrated verdict | before calling it done; **panel-review hook** here |
@@ -189,9 +189,16 @@ runlog -t <name> -- <cmd>           # 跑判据并把收据落进 tracks/<name>/
 
 ## Where the panels attach (the only two stations)
 
-- **design.md → panel-explore**, *conditionally*: only a genuine open architecture
-  fork (several defensible directions, risk = tunnel vision). Main agent commits
-  its own direction first, then folds the spread in. Otherwise just write it.
+- **design.md → design checks before implementation**, per **panel skill 4c** (the single
+  detailed protocol). Novel required steps/default actions/failure paths, contract changes
+  or costly reversal require an independent different-family challenge; critical unknowns
+  need an experiment. Genuine direction forks may expand to `panel-explore`. Local,
+  reversible changes under verified contracts stay lightweight. A self-assigned low or Jev
+  score cannot waive triggered checks. Main agent records its direction before outside
+  reports, keeps that record out of their input, and records factual resolutions afterwards.
+  Existing `premise_attack.status=done` + evidence can represent a completed check even
+  with low uncertainty; no new schema or low-evidence gate is introduced. Evidence existence
+  does not prove a sound design, and unresolved critical assumptions still need resolution.
 - **verify.md → panel-review**, with the budget from `decision.json.impact.level`:
   `self=0`, `standard=1`, `high=2` external review legs. High rotates healthy,
   cross-family legs; failure/degradation/conflict may add one spare. `--all` is explicit
