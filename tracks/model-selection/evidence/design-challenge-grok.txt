@@ -1,0 +1,45 @@
+I'll read the snapshot diff and the roster/review/explore code the brief points at, then ground one concrete direction in what those files actually do.
+The diff is mostly excluded task notes. Next I’ll inspect the roster, review, explore, and subcursor code the brief names.
+Roster freeze and one global `CURSOR_MODEL` are confirmed. Next I’ll read dispatch, coverage, health, and identity-validation paths.
+**Direction:** Bind at most two **explicit Cursor model IDs per run** as plan-local slots (`subcursor` + optional `subcursor2`), each with its own child `CURSOR_MODEL` and `cursor-family`, instead of a second transport roster or opening `--pin-leg` on normal review.
+
+**Core bet:** Coverage already counts **validated families in one run / one subject**, not the `subcursor` transport name. The thing that makes “two Cursor models in one run” impossible today is the **process-tree singleton** (`export CURSOR_MODEL` in `_panel-roster-lib.sh`) plus a **single roster row**. If the main arbiter binds two IDs whose `cursor-family` values are distinct **and unused by other selected legs**, existing eligibility, roster, and archive paths can record two families without rewriting ReviewLegResult v2. Fulfilling the request can still miss the goal: two different Cursor IDs are often **one family**, and “task-appropriate” picks are not coverage picks.
+
+**How it works:**
+
+Verified facts this hangs on:
+
+- Roster freeze is a singleton. `_panel-roster-lib.sh` reads `bin/cursor-model` once, `export`s `CURSOR_MODEL`, then stamps **one** pool row: `subcursor|$_cursor_family|subcursor||PANEL_CURSOR_LEG`. Default file is `cursor-grok-4.6-high`, which `cursor_model_family()` maps to **`xai`** (same family as `subgrok`).
+- Normal review rotates **legs**, then skips a second selected leg of the **same family** (`selected_family` in `panel-review`). `--all` still launches both transports; `tests/test_subcursor.py::test_duplicate_families_do_not_fill_budget_or_spare_but_all_runs_both` already nails `grok-4.6` via Cursor + native `subgrok`: budget 2 does not fill, `--all` runs both.
+- `--pin-leg` is refused unless `--scoped-review`. Health.tsv is keyed by **leg name**. `panel-explore` hardcodes **one** `subcursor explore` to `<prefix>.subcursor.log`.
+- Coverage: `coverage_eligible` for `adapter==subcursor` uses `cursor_model_family(requested)`, requires `family` match, `requested==invoked`, same subject, contract v1, decisive verdict. `summarize_results` / `panel_review_coverage` count **unique families in one `run_id` + subject digest**. Stream decoder records `reported_model: None` and only checks that the init **display name** maps to the same family.
+- Archive: `render_roster` walks today’s `PANEL_LEGS_ORDER`, then prints **role legs only if they appear in that run’s `.plan`**. Golden roster is exactly those pool names (`tests/fixtures/panel-roster-format.golden`). Old `.subcursor.state` / `.subcursor.result.json` stay the stable prefix.
+
+Concrete mechanics (not built; this is the design):
+
+1. Stop exporting `CURSOR_MODEL` from the roster lib. Freeze the ID **per slot at plan-write**, pass it only into that child (`env CURSOR_MODEL=<id>` around `session_run`), matching how `subcursor` already unsets inherited `CURSOR_*` before the CLI.
+2. Arbiter input is `PANEL_CURSOR_MODELS=id1[,id2]` (explicit IDs only; `cursor-family` fail-closed, same as today’s adapter). Duplicate families among the two IDs: refuse before launch. Do **not** probe `cursor-agent models` for quota.
+3. Slot 0 keeps the name `subcursor` (archive-stable). Slot 1 is `subcursor2`, adapter still `subcursor`, **not** appended to `PANEL_LEGS_ORDER`. Put it on the existing “print only if in `.plan`” path (same idea as `PANEL_ROLE_LEGS_ORDER`), but **merge it into `LEGS` for a normal review** when bound. That is the one table extension; `panel_leg_family` stays fail-closed.
+4. `launch_leg` already takes family from `panel_leg_family(label)` into `AIWORK_REVIEW_FAMILY`. If the child actually ran a different ID, eligibility already fails (`family` ≠ `cursor_model_family(requested)`). Keep that; add a plan line `cursor-model=<id>` per slot so roster reconstruction can show ID, not only `subcursor(xai/subcursor)`.
+5. Leave `selected_family` as the coverage gate: a second Cursor slot whose family is already taken (native `subgrok` vs `cursor-grok-*`, `subgemini` vs `gemini-*`, etc.) is not dispatched except `--all`.
+6. Health: keep per-slot rows, but on `quota` / `rate_limit` / `auth` copy the cooldown onto **every Cursor slot** (shared account). `INELIGIBLE` / `INCOMPLETE` stay per-slot, same reason they do not cooldown natives today.
+7. `panel-explore` launches the same bound slots to `<prefix>.subcursor.log` and `<prefix>.subcursor2.log`. Explore still has no verdict, so it still never becomes archive coverage.
+8. `--pin-leg` stays scoped-only. Slice family uniqueness (`_panel_slice.py`) already consumes dumped `name|family`; a bound `subcursor2` with family `anthropic` is just another family owner.
+
+**Best at:** One high review (or one explore) where the arbiter actually needs **two Cursor-only families the native pool does not provide** — in this tree that is **`composer-*` (`cursor`) + `opus-*`/`claude-*` (`anthropic`)**. Native pool already owns xiaomi, deepseek, zhipu, moonshot, google, xai; GPT is role-only. Identity stays the existing predicate (requested/invoked + family), not a new schema.
+
+**Sacrifices:** No automatic “task-appropriate” ranker. Two Composer IDs still count as **one** family. No live quota signal. Explore spread ≠ release coverage. Shared Cursor auth means correlated 429s. A new `subcursor2` name in **this** run’s plan/logs; old runs stay `subcursor` only. `--all` can still burn both transports of the same family, as today.
+
+**Blind spots in the brief:**
+
+- “Two different Cursor models in one run” is **not** the same as “two coverage families.” `composer-2.5` and `composer-2.7` are both `cursor`. Default `cursor-grok-4.6-high` is `xai` and **already collides** with `subgrok` on the budget path (verified in `test_duplicate_families_*`).
+- Listing CLI models is not remaining quota (and this design must not pretend it is).
+- Family labels are vendor prefixes, not independence. `workflow/skills/panel/references/legs.md` already says Composer and Kimi can share a base; do not infer independence from “Anthropic” vs “xAI” on the ID.
+- Cursor identity is weaker than native legs: `_cursor-stream.py` never records a precise reported ID (`reported_model` is always `None`); it only checks that the init **label** maps to the requested family. Two parallel Cursor slots increase the value of the env-isolation already tested (`test_concurrent_legs_do_not_share_home_or_clone`), but they do not add a stronger identity proof.
+- Main-arbiter “inspection of pools” is not in the dispatchers today: review rotates a **fixed** `PANEL_LEG_SPECS`; explore **hardcodes** five binaries. If the arbiter only chooses quality-similar Cursor IDs, rotation/coverage still see one family and the archive gate still BLOCKS on `eligible_family_count`.
+- Adding a second name to `PANEL_LEGS_ORDER` would make `panel-roster` reprint old prefixes as `subcursor2=SKIP(health:unknown)` — a sentence the disk does not support. The role-leg print rule exists because of that class of lie.
+- Scoped slice reviews are contract v2 and **never** archive coverage; using `--pin-leg` to place two Cursor models would not satisfy the coverage goal even if it launched them.
+
+**Smallest first step:** Remove the roster-lib `export CURSOR_MODEL`. Launch the existing `subcursor` slot with child-only `env CURSOR_MODEL=<id>`. Then, with natives off, run two **adapter** invocations (not yet a second roster row) with `composer-2.7` and `opus-4.6` and check the two `.result.json` files: families `cursor` vs `anthropic`, both `coverage_eligible` when the rest of the contract is intact, requested IDs distinct. If a single panel-review `--budget 2` still cannot emit two result files without a second **name**, that is the proof `subcursor2` is required — and the first roster change should be plan-local extra + role-style render, not a new `PANEL_LEGS_ORDER` member.
+
+Assumption: the arbiter will bind IDs by hand from a checked-in ID→family map plus `health.tsv`, not from a live model list. Tradeoff: one extra name and a shared-account cooldown rule, in exchange for not turning Cursor into a fake second independence axis and not breaking reconstructable `.subcursor.*` evidence.

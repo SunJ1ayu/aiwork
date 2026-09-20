@@ -9,10 +9,15 @@
     ]
   },
   "design": {
-    "uncertainty": null,
+    "uncertainty": "high",
     "premise_attack": {
-      "status": null,
-      "evidence": []
+      "status": "done",
+      "evidence": [
+        "design.md",
+        "evidence/design-brief.md",
+        "evidence/design-challenge-grok.txt",
+        "evidence/result-contract-probe.json"
+      ]
     }
   },
   "execution_plan": {
