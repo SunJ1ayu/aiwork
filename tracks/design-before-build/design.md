@@ -70,3 +70,11 @@ evidence/walkthrough.md 的八例先于外部探索全部结束而写定。逐�
 回到主工作树,那里尚无本 track,所以记录 OBSERVATION_WRITE_FAILED。保留原收据,不把它说成
 完整执行覆盖。后续用包含同一实现的独立本地 clone 完成正式收据与评审,避免污染其他会话的主树;
 不为此改动观察/隔离工具。
+
+## 第1轮修正
+
+独立实现审查三项成立,处置在 verify.md,原文 evidence/review-r1.txt。统一 panel 顶部/§2、
+主说明导航、convention 的轻量工件解释,避免旧入口绕过4c。亲读 adapter 后确认:
+MiMo explore 只看题面,所以仅适用于事实完整且无需查仓的方向探索;需查源码的单次挑战用
+Cursor explore(可读快照,不能跑测试),模型输出后的事实实验仍由主 agent 负责。
+没有修改 adapter 行为、没有加新模式或语义机器闸。

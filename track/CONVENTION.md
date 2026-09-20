@@ -180,12 +180,12 @@ runlog -t <name> -- <cmd>           # 跑判据并把收据落进 tracks/<name>/
   typed dispatch requires complete decisions; archiving requires a filled-in outcome
   (legacy tracks keep the old Markdown verdict check) and machine evidence that
   matches byte-for-byte (2026-08-08, see above). Both guard the *content of the
-  last field*, not the *order of the phases* — you can still skip
-  proposal/design/tasks entirely.
+  last field*, not the *order of the phases*. The machine does not require every
+  prose artifact; that is not a waiver of the agent's design-check protocol (panel 4c).
 - No blocking user-decision points at every transition.
-- No "brainstorming cannot be skipped" rule. Small/obvious → just do it, skip the
-  artifacts entirely (consistent with the main workflow's "don't spend a panel"
-  rule). Write artifacts only when they earn their keep.
+- No "brainstorming cannot be skipped" rule. Work classified as lightweight under
+  panel 4c can skip planning calls and elaborate artifacts. A single proposed direction
+  or a small diff does not by itself establish that classification.
 
 ## Where the panels attach (the only two stations)
 

@@ -1,70 +1,39 @@
 # Verify: design-before-build
 
-- Date: 2026-09-20
+## 机械检查与真实限制
 
-> 机器消费的 impact / uncertainty / execution plan / outcome 只写在同目录
-> `decision.json`；这里保留检查、理由、发现与主 Agent 仲裁说明，不复制枚举。
+- workflow-docs:37 条通过;typed track:82 条通过;preflight:19 条通过。bin/tests/schema 未修改。
+- 第一次 linked worktree 的判据绿,但 observe 回主树找不到 track;该收据不冒充完整 execution coverage。
+- 独立 clone 的第一次运行被沙箱禁止 unshare(rc=78),没有跑判据;在宿主保留判据断网隔离后重跑全部通过。
+- 这些是兼容与部署机制检查,不是方案正确率或返工收益证明。
 
-> Panel hook — 软判断(correctness/security/edge/spec-drift)走 panel-review:
-> 主 agent 先独立审并落 findings,再按 impact-risk 预算跑 panel-review；只有特殊控制面
-> 才显式 `--all` 做全池评审。最后仍由主 agent 主裁。
-> build/test 跑通是机械检查。
+runlog: workflow-compatibility rc=0 commit=65ec3fa dirty=yes final=yes at=2026-09-20T08:09:50Z file=tracks/design-before-build/evidence/20260920T080950Z-01-workflow-compatibility.txt
+runlog: workflow-compatibility-clone rc=78 commit=db7eb70 dirty=no final=yes at=2026-09-20T08:13:19Z file=tracks/design-before-build/evidence/20260920T081319Z-01-workflow-compatibility-clone.txt
+runlog: workflow-compatibility-host rc=0 commit=db7eb70 dirty=yes final=yes at=2026-09-20T08:13:51Z file=tracks/design-before-build/evidence/20260920T081351Z-01-workflow-compatibility-host.txt
 
-## Mechanical checks
+## 第1轮独立实现审查
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+主 agent 自审在仓外 /root/panel-my-reviews/design-before-build-review-my-review.md,先于派发。
+派发前 preflight:rc=3,BLOCK=0,PENDING=2,ERROR=0;本轮初审时 verify 只有脚手架。
+工具反锚定警告点名 verify 模板和占位 track verify;没有喂给主 agent 的自审结论。
+本轮 standard=1,实际 Cursor/Grok xai 家族;原报告 evidence/review-r1.txt。
 
-**机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
+```text
+# panel-review 花名册(2026-09-20 16:21:02)task=design-before-build-review
+# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。
+# impact-risk=standard requested-budget=1 selected-count=1
+# selected=subcursor(xai/subcursor)
+# escalation=none
+# snapshot=head:e1cd009
+# 日志:/root/aiwork/logs/panel-design-before-build-r1.*.log
+submimo=off subdeepseek=off subglm=off subkimi=off subgemini=off subgrok=off subcursor=PASS(verdict=BLOCK)
 
 ```
-runlog -t design-before-build -- <判据命令>
-```
 
-```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
-```
+| # | 发现/触发与影响 | 核实与处置 |
+|---|---|---|
+| R1-1 | panel §2 仍让 uncertainty 决定是否检查,可按 low 跳过新协议 | 成立,主 agent 也在终稿走读发现。必须修:改成先4c事实检查再记录轴 |
+| R1-2 | panel 顶部旧路由把非开放分叉直接做,用户可能读不到4c | 成立,必须修:明确实施前入口,轻量路径以4c为准;主CLAUDE同类导航同步;convention澄清机器不强制工件不等于流程免检 |
+| R1-3 | submimo explore 禁所有工具,却被描述成可读实现/调用方 | 成立,亲读bin/submimo:223。必须修:默认代码相关挑战用可读快照的subcursor;MiMo只在事实完整、无需查仓的题面探索使用,不得冒充源码核查 |
 
-## Review
-
-- 规格自查(读任何 panel 输出之前先答):<如果规格本身就是错的,会错成什么样、我怎么发现?
-  panel 只验"实现合不合规格",验不了"规格对不对" —— 全池一致 PASS 也不等于题是对的。>
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
-  > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
-  > **控制器没活到收尾时它压根不存在** —— 那时跑 `panel-roster <日志前缀>` 从盘上重建,
-  > 与控制器自己写的**归一化后一致**(判据 R5b 守着;抬头有渲染时间戳,不是字面逐字节)。**一轮零记录的评审也粘得出这一行**,
-  > 所以"那轮被砍了所以没有花名册"不再是理由(2026-08-23,track panel-roster-from-disk)。
-  > 08-06 立这条的理由:08-05 我在这里手写了"三条腿一致 PASS",而 Kimi 根本没出结论
-  > (同一页第 90 行我自己还写着它没出报告)—— 手抄一份终端上的东西,抄错那次没人会发现。
-- 轮次记录(每次派发一行;实质评审与基础设施重试分开,重试不算轮但次数与耗时照记):
-
-  | 轮 | 类型(实质 / 重试) | 派发前 `track preflight` | 日志前缀 | 新增有效阻断 |
-  |---|---|---|---|---|
-  | 1 | 实质 | <rc,BLOCK 数> | <…> | <n> |
-
-- findings(**先处置、后动手**;一轮一份修复清单,一次修完再复审 —— panel 抽屉 4b):
-
-  | # | 发现:触发条件与影响 | 核实证据 | 处置 | 理由 |
-  |---|---|---|---|---|
-  | 1 | <…> | <file:line / 复现收据> | 必须修 / 延期 / 驳回 / 尚未核实 | <延期必写:它在业主或下一个使用者那边会长成什么样> |
-
-  > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
-  > 花名册在上一格,查工件不查自述。延期 = 留在这里,不自动开新单。
-- arbitrated verdict (主裁): <...>
-  > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
-  > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
-
-## Accepted deviations
-
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
-
-## 试行记录(review-convergence 试行,约五单;拿不到的写 unknown,别补 0)
-
-- 总交付历时:<开工 commit 时刻 → 归档 commit 时刻>
-- 每轮新增有效阻断:<第 1 轮 n / 第 2 轮 n>
-- 基础设施等待:<重试次数;observations 里 panel-review 的 duration_ms 求和>
-- 交付后返工:<归档后因本单再改过几次;不知道写 unknown>
+一次修复清单为上述三项。第2轮核修复及影响面;当前不写最终PASS。
