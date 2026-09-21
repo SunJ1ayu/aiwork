@@ -40,3 +40,12 @@
 
 主 agent 编写端到端桩测试:一个panel两个Cursor模型且相同subject/不同family、实际model不串、只选这些成员不轮换/补人、失败不替换、关停/坏选择派前拒绝、同族预算不虚增、explore隔离review覆盖、历史roster不依赖当前配置、只读目录不污染状态、未知quota不伪造、伪造同家族model事实不能计数。结合既有Cursor隔离、roster断线、observation/track/slice兼容判据。
 完整runner当前基线已有test-low-uncertainty-reason.sh孤儿失败(旧撤回单);本单不伪造全绿、不顺带恢复旧闸,新套件正常注册。
+
+## 接手核实(2026-09-21)
+
+第一批判据在断线前已写,接手复跑确认8项预期红;判据先独立提交42e33fc。
+补充当前验收:绑定 typed track 后能落 observation/delivery;正常发散无裁决不污染健康。
+原用户要求涵盖 Cursor 整个模型池,不是固定 Composer/Grok 组合。2026-09-21 再次明确 GPT、Claude、GLM 等也可选;实现支持这些精确 ID 与 --adapter subcursor 单通道目录。桩测试覆盖同轮四种 Cursor 家族。
+共享模型默认值沿用 bin/*-model 约定,将 MiMo/GLM/Gemini 的脚本内默认值移入同名配置,避免目录与实际调用两处维护。
+真实双 Cursor 冒烟先暴露自动 diff 基线使用分支名在隔离快照不存在;默认分支现在解析为固定提交 ID。随后沙箱挂载权限拒绝,宿主保留只读隔离重试,两模型均rc=0。见 evidence/two-cursor-live.json(记录的是发散事实,不是实现评审)。
+实现评审仍用主仓旧调度器,不靠候选实现自证。主仓健康记录中 GLM 鉴权、原生 Grok/Gemini 连败及 Kimi 窗口限额明确存在,全池评审关闭这些已知不可用通道,派当前可用 MiMo、DeepSeek、Cursor/Grok;满足不同家族high下限。

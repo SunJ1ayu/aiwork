@@ -86,11 +86,11 @@ done
 # 「文档说的默认档 == 代码里的默认档」,**唯独 gemini 没钉** ⇒ 3.7→3.8 那天
 # `workflow/skills/panel/references/legs.md` 还写着 3.7、还引着 3.7 的选型实测,
 # 而 W3 照样 36/36 全绿。文档是代码的第二份拷贝,没有闸盯着它就一定会过期。
-_gem_model="$(grep -oP '^DEFAULT_MODEL="\K[^"]+' "$ROOT/bin/subgemini" | head -1)"
+_gem_model="$(cat "$ROOT/bin/gemini-model")"
 grep -q "默认模型 \`$_gem_model\`" "$SOURCE/skills/panel/references/legs.md"
 check "W3: gemini 腿的默认档,文档($_gem_model)与 bin/subgemini 一致" $?
 
-grep -q 'DEFAULT_MODEL="glm-5.3-flash"' "$ROOT/bin/subagent" \
+grep -qx 'glm-5.3-flash' "$ROOT/bin/glm-model" \
   && ! grep -q 'OC_MODEL_ID=' "$ROOT/bin/subagent" \
   && grep -q '默认模型 `glm-5.3-flash`' "$SOURCE/skills/panel/references/legs.md"
 check "W3: GLM 默认是 5.3 Flash，agent 没有第二模型源" $?
@@ -121,7 +121,7 @@ check "W3: DeepSeek 唯一源与实现都是 200 turns" $?
 grep -q 'KIMI_TIMEOUT:-1500' "$ROOT/bin/subkimi" \
   && grep -q 'KIMI_TIMEOUT.*默认 1500' "$SOURCE/skills/panel/references/legs.md"
 check "W3: Kimi 唯一源与实现都是 1500s" $?
-grep -q 'DEFAULT_MODEL="xiaomi/mimo-v2.5-pro"' "$ROOT/bin/submimo" \
+grep -qx 'xiaomi/mimo-v2.5-pro' "$ROOT/bin/mimo-model" \
   && grep -q 'xiaomi/mimo-v2.5-pro' "$SOURCE/skills/panel/references/legs.md"
 check "W3: MiMo 唯一源与实现模型一致" $?
 

@@ -55,6 +55,7 @@ Args:
   LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
 
 Options / env:
+  --members ID[,ID...]        select exactly these candidates (see panel-candidates); no spare/fallback
   --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
   --budget N                 explicit initial budget, 0..current pool size
   --all                      explicit full-pool review (special high risk)
@@ -93,6 +94,8 @@ not voters. A failure in one reviewer does not block the others.
 EOF
 }
 
+MEMBERS=""
+PANEL_MODE=review
 MY_REVIEW=""
 NO_MY_REVIEW=0
 SCOPED_REVIEW=0
@@ -119,6 +122,11 @@ while [[ $# -gt 0 ]]; do
       REVIEW_BUDGET="${2:-}"
       [[ -n "$REVIEW_BUDGET" ]] || { echo "panel-review: --budget needs a non-negative integer" >&2; exit 2; }
       shift 2 ;;
+    --members)
+      MEMBERS="${2:-}"
+      [[ -n "$MEMBERS" ]] || { echo 'panel-review: --members needs a comma-separated list' >&2; exit 2; }
+      shift 2 ;;
+    --explore-members) PANEL_MODE=explore; shift ;;
     --all) ALL_REVIEWERS=1; shift ;;
     --track)
       TRACK_NAME="${2:-}"
@@ -142,6 +150,15 @@ case "$IMPACT_RISK" in
   high) RISK_BUDGET=2 ;;
   *) echo "panel-review: invalid --risk '$IMPACT_RISK' (need self|standard|high)" >&2; exit 2 ;;
 esac
+if [[ -n "$MEMBERS" && ( -n "$REVIEW_BUDGET" || "$ALL_REVIEWERS" -eq 1 || "$SCOPED_REVIEW" -eq 1 || -n "$PIN_LEG" ) ]]; then
+  echo 'panel-review: --members conflicts with budget/all/scoped/pin-leg' >&2; exit 2
+fi
+if [[ "$PANEL_MODE" == explore ]]; then
+  [[ -n "$MEMBERS" && -z "$TRACK_NAME" && "$SCOPED_REVIEW" -eq 0 ]] || {
+    echo 'panel-review: exploration needs explicit members and cannot bind a track or scoped review' >&2; exit 2;
+  }
+  NO_TRACK=1; NO_MY_REVIEW=1; RISK_BUDGET=0
+fi
 [[ -n "$REVIEW_BUDGET" ]] || REVIEW_BUDGET="$RISK_BUDGET"
 POOL_SIZE="${#PANEL_LEGS_ORDER[@]}"
 if [[ ! "$REVIEW_BUDGET" =~ ^(0|[1-9][0-9]*)$ ]] || (( REVIEW_BUDGET > POOL_SIZE )); then
@@ -183,6 +200,26 @@ if [[ "$SCOPED_REVIEW" -eq 1 ]]; then
   fi
   # 钉住单腿时「预算=池大小」不是「全池评审」:健康/冷却照常生效。
   FORCE_ALL=0
+fi
+
+# Resolve once before side effects. Only data, never eval-generated shell.
+declare -A MEMBER_ENV MEMBER_VALUE MEMBER_MODEL
+if [[ -n "$MEMBERS" ]]; then
+  _members_rows="$(python3 "$BIN/_panel_candidates.py" --mode "$PANEL_MODE" --members "$MEMBERS")" || exit 2
+  PANEL_LEG_SPECS=(); PANEL_LEGS_ORDER=()
+  declare -A _member_families
+  while IFS='|' read -r _name _family _adapter _switch _env _value _model; do
+    PANEL_LEG_SPECS+=("$_name|$_family|$_adapter||$_switch")
+    PANEL_LEGS_ORDER+=("$_name")
+    MEMBER_ENV[$_name]="$_env"; MEMBER_VALUE[$_name]="$_value"; MEMBER_MODEL[$_name]="$_model"
+    _member_families[$_family]=1
+  done <<< "$_members_rows"
+  if (( ${#_member_families[@]} < RISK_BUDGET )); then
+    echo "panel-review: selected families=${#_member_families[@]} below risk minimum=$RISK_BUDGET" >&2; exit 2
+  fi
+  REVIEW_BUDGET=${#PANEL_LEGS_ORDER[@]}; FORCE_ALL=0
+  [[ "$PANEL_MODE" != explore ]] || REVIEW_CONTRACT_VERSION=3
+  unset _members_rows _member_families _name _family _adapter _switch _env _value _model
 fi
 
 TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
@@ -561,6 +598,15 @@ selected_family() { # A transport may now serve the same family as another leg.
 }
 
 SELECTED_COUNT=0
+if [[ -n "$MEMBERS" ]]; then
+  for _leg in "${LEGS[@]}"; do
+    if [[ "${LEG_AVAILABLE[$_leg]}" -ne 1 || "${LEG_HEALTH[$_leg]}" != healthy ]]; then
+      echo "panel-review: requested member $_leg unavailable (${LEG_HEALTH[$_leg]}); no leg started" >&2; exit 2
+    fi
+    LEG_SELECTED[$_leg]=1
+    SELECTED_COUNT=$((SELECTED_COUNT + 1))
+  done
+fi
 for ((_off=0; _off<${#LEGS[@]} && SELECTED_COUNT<REVIEW_BUDGET; _off++)); do
   _idx=$(((SELECT_START + _off) % ${#LEGS[@]})); _leg="${LEGS[$_idx]}"
   [[ "${LEG_AVAILABLE[$_leg]}" -eq 1 ]] || continue
@@ -570,7 +616,7 @@ for ((_off=0; _off<${#LEGS[@]} && SELECTED_COUNT<REVIEW_BUDGET; _off++)); do
   SELECTED_COUNT=$((SELECTED_COUNT + 1))
 done
 # scoped(钉腿)派发不推游标:panel-slice 一轮就要调好几次,推了会扰乱普通评审的轮换公平。
-if [[ "$FORCE_ALL" -ne 1 && "$SCOPED_REVIEW" -eq 0 ]]; then
+if [[ "$FORCE_ALL" -ne 1 && "$SCOPED_REVIEW" -eq 0 && -z "$MEMBERS" ]]; then
   _cursor_tmp="$CURSOR_FILE.tmp.$$"
   printf '%s\n' "$(((SELECT_START + 1) % ${#LEGS[@]}))" > "$_cursor_tmp" && mv -f "$_cursor_tmp" "$CURSOR_FILE"
 fi
@@ -611,7 +657,7 @@ if [[ -z "${PANEL_DIFF_BASE:-}" ]]; then
     if git -C "$REPO_DIR" rev-parse --verify --quiet "$_b" >/dev/null 2>&1 \
        && [[ "$(git -C "$REPO_DIR" rev-parse "$_b" 2>/dev/null)" \
              != "$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)" ]]; then
-      export PANEL_DIFF_BASE="$_b"
+      export PANEL_DIFF_BASE="$(git -C "$REPO_DIR" rev-parse "$_b")"
       echo "  NOTE: PANEL_DIFF_BASE 未给,自动用 '$_b' 作 diff 基线(chat 腿否则只看未提交改动)"
       break
     fi
@@ -776,7 +822,7 @@ run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
   # 任何按 $3 取日志路径的调用方(判据里的假腿全是这么写的)当场就坏。08-06 实测。
   session_run "$base.state" "$base.result.json" "$failed_state" "$failed_result" \
     "$log" "$failed_log" "$base.evidence.log" "$agent_facts" "$err" "$PANEL_RUN_ID" "$label" "$family" "$(basename "$agent")" false \
-    "$agent" review "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
+    "$agent" "$PANEL_MODE" "$TASK_FILE" "$log" "$REPO_DIR" --panel-dispatch >/dev/null 2>"$err"; rc=$?
   if [[ $rc -eq 0 || "$agent" == "$chat" ]]; then return $rc; fi
   # agent leg died and a distinct chat leg exists -> keep the evidence, then retry
   # Detached supervisor 已把失败腿的 log/state/result 原子落到 .agent.*；主路径
@@ -841,12 +887,15 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
   else
     leg_env+=(-u AIWORK_REVIEW_TRACK)
   fi
+  if [[ -n "$MEMBERS" ]]; then
+    leg_env+=("${MEMBER_ENV[$name]}=${MEMBER_VALUE[$name]}")
+  fi
   "${leg_env[@]}" setsid --wait bash -c '
     st="$1"; result="$2"; failed_st="$3"; failed_result="$4"; log="$5"; failed_log="$6"; evidence_log="$7"
     facts="$8"; diagnostic="$9"; shift 9
     helper="$1"; shift
     run_id="$1"; shift
-    name="$1"; family="$2"; adapter="$3"; degraded="$4"; task_sha="$5"; contract="$6"; shift 6
+    name="$1"; family="$2"; adapter="$3"; degraded="$4"; task_sha="$5"; contract="$6"; expected_model="$7"; shift 7
     started="$(date -u +%FT%TZ)"
     started_ns="$(date +%s%N)"
     export AIWORK_REVIEW_FACTS_PATH="$facts" AIWORK_REVIEW_RESULT_BIN="$helper"
@@ -862,6 +911,7 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
     finished_ns="$(date +%s%N)"
     duration_ms=$(( (finished_ns - started_ns) / 1000000 ))
     facts_args=(); [[ ! -f "$facts" ]] || facts_args=(--facts "$facts")
+    [[ -z "$expected_model" ]] || facts_args+=(--expected-model "$expected_model")
     if python3 "$helper" emit --result "$result" "${facts_args[@]}" --run-id "$run_id" --name "$name" \
         --family "$family" --adapter "$adapter" --exit-code "$rc" --task-sha256 "$task_sha" \
         --degraded "$degraded" --log "$evidence_log" --diagnostic "$diagnostic" --duration-ms "$duration_ms" \
@@ -875,7 +925,7 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
     printf "rc=%s\nstarted=%s\nfinished=%s\n" "$rc" "$started" "$(date -u +%FT%TZ)" > "$st.tmp" && mv -f "$st.tmp" "$st"
     exit $rc
   ' _ "$state" "$result" "$failed_state" "$failed_result" "$log" "$failed_log" "$evidence_log" \
-    "$facts" "$diagnostic" "$REVIEW_RESULT_BIN" "$run_id" "$name" "$family" "$adapter" "$degraded" "$PANEL_TASK_SHA256" "$REVIEW_CONTRACT_VERSION" "$@"
+    "$facts" "$diagnostic" "$REVIEW_RESULT_BIN" "$run_id" "$name" "$family" "$adapter" "$degraded" "$PANEL_TASK_SHA256" "$REVIEW_CONTRACT_VERSION" "${MEMBER_MODEL[$name]:-}" "$@"
 }
 
 # Every controller decision below consumes the validated terminal sidecar. Raw
@@ -929,6 +979,8 @@ selected_identities() {
 PLAN_FILE="${LOG_PREFIX}.plan"
 {
   printf 'task=%s\n' "$TASKNAME"
+  printf 'mode=%s\n' "$PANEL_MODE"
+  [[ -z "$MEMBERS" ]] || printf 'members-format=1\n'
   printf 'impact-risk=%s\n' "$IMPACT_RISK"
   printf 'requested-budget=%s\n' "$REVIEW_BUDGET"
   printf 'selected-count=%s\n' "$SELECTED_COUNT"
@@ -936,6 +988,7 @@ PLAN_FILE="${LOG_PREFIX}.plan"
   printf 'snapshot-head=%s\n' "$HEAD_BEFORE"
   for _leg in "${LEGS[@]}"; do
     printf 'leg\t%s\t%s\t%s\n' "$_leg" "${LEG_SELECTED[$_leg]}" "${LEG_HEALTH[$_leg]}"
+    [[ -z "$MEMBERS" ]] || printf 'member\t%s\t%s\t%s\t%s\n' "$_leg" "$(panel_leg_family "$_leg")" "$(panel_leg_agent "$_leg")" "${MEMBER_MODEL[$_leg]}"
   done
 } > "$PLAN_FILE"
 
@@ -954,7 +1007,7 @@ done
 # Default high lane starts with two. Only evidence problems add one spare; we do
 # not turn a single provider failure into a mandatory all-four wait.
 ESCALATION_REASON="none"
-if [[ "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]; then
+if [[ -z "$MEMBERS" && "$REVIEW_BUDGET" -eq 2 && "$FORCE_ALL" -ne 1 && "$SELECTED_COUNT" -gt 0 ]]; then
   _seen_verdict=""; _has_failure=0; _has_degraded=0; _has_incomplete=0; _has_need_more=0; _has_ineligible=0; _has_conflict=0
   for _leg in "${LEGS[@]}"; do
     [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
@@ -1010,6 +1063,8 @@ record_health() {  # record_health <leg>
   if [[ "$state" != exited || "$exit_code" -ne 0 ]]; then
     status="FAIL"
     case "$failure" in quota) status="quota" ;; rate_limit) status="rate_limit" ;; auth) status="auth" ;; esac
+  elif [[ "$PANEL_MODE" == explore ]]; then
+    status="healthy"
   elif [[ "$degraded" == true ]]; then
     if [[ "$verdict" == "UNKNOWN" ]]; then status="DEGRADED_INCOMPLETE"
     else status="DEGRADED"; fi

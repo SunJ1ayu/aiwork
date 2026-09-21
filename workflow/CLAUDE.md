@@ -35,7 +35,7 @@ commit,闸①就退化成翻执行腿日志人工找补,而且 git 历史里再�
 
 **风险和方向不确定性是两个轴，别再让 lane 一词兼任两件事。**
 `impact-risk`:self / standard / high，外部评审预算分别是 self=0、standard=1、high=2；
-新写口 / 权限 / auth / 钱 / 数据一致性默认 high。high 从健康池轮换两个不同模型家族，
+新写口 / 权限 / auth / 钱 / 数据一致性默认 high。新任务先用 `panel-candidates` 查看候选,由主裁以 `--members` 显式选择;high 至少两个不同模型家族。旧入口保留轮换，
 失败、降级、冲突、NEEDS_MORE_INFO 或我仍不确定才追加第三腿；判卷/沙箱/权限边界等
 特殊控制面才显式 `panel-review --all`。绑定 typed track 时，`--budget` 只能加证据，不能低于
 该 risk 的 0/1/2 预算绕闸。**先查方案,再写实现判据或动手**:新增/改变用户必经步骤、

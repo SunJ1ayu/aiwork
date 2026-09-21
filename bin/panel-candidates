@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from _panel_candidates import main
+
+raise SystemExit(main())

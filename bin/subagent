@@ -124,7 +124,7 @@ case "$PROVIDER" in
     # 模型只解析一次:下面的公共查表把 DEFAULT_MODEL / ZHIPU_MODEL 收敛成 MODEL，
     # opencode 与将来可能切回的 claude 底座都只消费 MODEL。不要再给 opencode 另立
     # 一份模型字段——那会让环境变量看似支持、实际主路径继续跑硬编码旧模型。
-    DEFAULT_MODEL="glm-5.3-flash"
+    DEFAULT_MODEL="$(cat "$BIN_DIR/glm-model")" || die "cannot read glm-model"
     # **不带尾部 /v1**:claude CLI 自己会补 `/v1/messages`。写成 .../go/v1 会发到
     # /zen/go/v1/v1/messages(实测 404),而 CLI 把 404 报成"模型不存在",
     # 于是看起来像模型名错了 —— 实际是地址多了一层。

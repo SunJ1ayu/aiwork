@@ -17,8 +17,6 @@ _RHG="$(dirname "$0")/_review-home-guard.sh"
 [ -f "$_RHG" ] || { echo "submimo: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_RHG"
 
-DEFAULT_MODEL="xiaomi/mimo-v2.5-pro"
-
 usage() {
   cat >&2 <<'EOF'
 Usage:
@@ -98,7 +96,6 @@ BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
 TIMEOUT_SECONDS="${MIMO_CLI_TIMEOUT:-900}"
-MODEL="${MIMO_CLI_MODEL:-$DEFAULT_MODEL}"
 
 if [[ -n "$ORACLE_CMD" || ${#PROTECT[@]} -gt 0 ]]; then
   [[ "$MODE" == "fix" ]] || die "--oracle/--protect are only valid in fix mode"
@@ -125,6 +122,7 @@ fi
 # fast lane 走的就是这条命令 —— 此前只有 panel-review 那条路有闸。
 # shellcheck source=_my-review-gate.sh
 my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "submimo" || exit 1
+MODEL="${MIMO_CLI_MODEL:-$(cat "$BIN_DIR/mimo-model")}" || die "cannot read mimo-model"
 
 # ── 原仓只读 + review 副本可写 ─────────────────────────────────────────────
 # review 的模型 --dir 指向独立 clone；mount namespace 只保护 SOURCE_REPO。

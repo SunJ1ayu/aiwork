@@ -26,7 +26,7 @@ p.with_suffix('.called').write_text(json.dumps({'adapter': adapter, 'mode': mode
 if os.environ.get('FAIL_MODEL') == model:
     print('quota exhausted', file=sys.stderr)
     sys.exit(9)
-p.write_text('Direction: a bounded design\nConclusion: PASS\n')
+p.write_text('Direction: a bounded design\n' + ('Conclusion: PASS\n' if mode == 'review' or os.environ.get('EXPLORE_PASS') else ''))
 actual = os.environ.get('WRONG_MODEL', model)
 helper = os.environ['AIWORK_REVIEW_RESULT_BIN']
 def git(*a): return subprocess.check_output(['git', '-C', repo, *a], text=True).strip()
@@ -40,7 +40,7 @@ args = [sys.executable, helper, 'facts', '--output', os.environ['AIWORK_REVIEW_F
 track = os.environ.get('AIWORK_REVIEW_TRACK')
 if track:
     digest = subprocess.check_output([sys.executable, str(pathlib.Path(helper).with_name('_review_delivery.py')),
-       '--repo', repo, '--track', track, '--view', 'working'], text=True).strip()
+       '--repo', repo, '--track', track, '--source', 'working'], text=True).strip()
     args += ['--delivery-track', track, '--delivery-digest', digest]
 subprocess.check_call(args)
 '''
@@ -115,6 +115,25 @@ class CandidateTest(unittest.TestCase):
         self.assertEqual(len(self.results(p)), 2)
         self.assertEqual(summarize_results(self.results(p))['eligible_family_count'], 1)
 
+    def test_cursor_pool_supports_gpt_claude_glm_and_composer(self):
+        models = ['gpt-5.6-sol-high', 'claude-opus-5-thinking-high', 'glm-5.2-high', 'composer-2.5']
+        r, p = self.run_panel(','.join('subcursor@' + m for m in models))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        data = self.results(p)
+        self.assertEqual({x['model']['requested'] for x in data}, set(models))
+        self.assertEqual({x['family'] for x in data}, {'openai', 'anthropic', 'zhipu', 'cursor'})
+        self.assertTrue(all(x['adapter'] == 'subcursor' for x in data))
+        self.assertEqual(summarize_results(data)['eligible_family_count'], 4)
+
+    def test_catalog_can_show_just_the_cursor_transport_pool(self):
+        p = self.fake / 'cursor-agent'
+        p.write_text('#!/bin/sh\nprintf "%s\\n" "gpt-5.6-sol-high - GPT" "claude-opus-5-thinking-high - Claude" "glm-5.2-high - GLM"\n')
+        data = json.loads(subprocess.check_output([str(self.bin / 'panel-candidates'),
+            '--adapter', 'subcursor', '--discover-cursor'], env=self.env, text=True))
+        self.assertTrue(all(x['adapter'] == 'subcursor' for x in data['candidates']))
+        self.assertTrue({'gpt-5.6-sol-high', 'claude-opus-5-thinking-high', 'glm-5.2-high'} <=
+                        {x['model'] for x in data['candidates']})
+
     def test_same_family_does_not_fill_high_budget_but_can_add_evidence(self):
         members = 'subcursor@composer-2.5,subcursor@composer-2.6'
         r, p = self.run_panel(members)
@@ -148,8 +167,36 @@ class CandidateTest(unittest.TestCase):
         self.assertEqual(data[0]['model']['requested'], 'composer-2.5')
         self.assertEqual(data[0]['model']['invoked'], 'composer-2.6')
 
+    def test_native_model_is_pinned_and_reported_mismatch_is_ineligible(self):
+        r, p = self.run_panel('submimo', risk='standard', env={'WRONG_MODEL': 'xiaomi/mimo-other'})
+        data = self.results(p)
+        self.assertEqual(len(data), 1, r.stdout + r.stderr)
+        self.assertEqual(data[0]['model']['requested'], 'xiaomi/mimo-v2.5-pro')
+        self.assertFalse(coverage_eligible(data[0]))
+
+    def test_typed_track_records_dynamic_members_and_delivery(self):
+        track = self.repo / 'tracks/choice'; track.mkdir(parents=True)
+        (track / 'decision.json').write_text(json.dumps({
+            'schema_version': 2, 'track': 'choice',
+            'impact': {'level': 'high', 'factors': ['judging_control']},
+            'design': {'uncertainty': 'low', 'premise_attack': {'status': 'not_required', 'evidence': []}},
+            'execution_plan': {'adapter': 'main', 'model': 'gpt-6-astra'},
+            'outcome': {'verdict': None}}))
+        prefix = self.d / 'bound'
+        r = subprocess.run([str(self.bin / 'panel-review'), '--members',
+            'subcursor@composer-2.5,subcursor@cursor-grok-4.6-high', '--track', 'choice',
+            '--no-my-review', str(self.task), str(self.repo), str(prefix)],
+            env=self.env, text=True, capture_output=True, timeout=35)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn('OBSERVATION_WRITE_FAILED', r.stderr)
+        events = list((track / 'observations').glob('*.json'))
+        self.assertEqual(len(events), 1)
+        legs = json.loads(events[0].read_text())['actual']['legs']
+        self.assertEqual(len(legs), 2)
+        self.assertTrue(all(x['subject']['delivery']['track'] == 'choice' for x in legs))
+
     def test_explore_shared_selection_cannot_supply_review_coverage(self):
-        r, p = self.run_panel('subcursor@cursor-grok-4.6-high,subcursor@composer-2.5', mode='explore')
+        r, p = self.run_panel('subcursor@cursor-grok-4.6-high,subcursor@composer-2.5', mode='explore', env={'EXPLORE_PASS': '1'})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         data = self.results(p)
         self.assertEqual(len(data), 2)
@@ -158,6 +205,16 @@ class CandidateTest(unittest.TestCase):
         calls = [json.loads(f.read_text()) for f in self.d.glob(p.name + '.*.called')]
         self.assertEqual({x['mode'] for x in calls}, {'explore'})
         r, p = self.run_panel('subkimi', mode='explore')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse(list(self.d.glob(p.name + '.*.called')))
+
+    def test_normal_explore_does_not_require_verdict_or_poison_health(self):
+        for _ in range(2):
+            r, p = self.run_panel('subcursor@composer-2.5', mode='explore')
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(self.results(p)[0]['failure_kind'], 'none')
+            self.assertIn('EXPLORE(rc=0,coverage=none)', Path(str(p) + '.roster').read_text())
+        r, p = self.run_panel('subcursor@composer-2.5', mode='explore', flags=['--track', 'choice'])
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse(list(self.d.glob(p.name + '.*.called')))
 

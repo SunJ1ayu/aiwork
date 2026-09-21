@@ -20,6 +20,36 @@ description: 多模型评审/发散的完整协议与工具用法。实施前按
 - **4c 确认为轻量的局部修改** → 主 agent 直接做相应验证,不为此花 panel。
   panel 是第二意见,**永远不能替代主 agent 自己的第一遍工作**。
 
+## 先看候选,再由主裁选人
+
+`panel-candidates --mode review` / `--mode explore` 输出同一目录按能力过滤的候选。
+`--discover-cursor` 可查询 Cursor CLI 的可选模型 ID;它不是余额查询或登录证明。
+候选含具体模型、通道、可读仓能力、启用状态与历史健康事实;quota 为 null 就是未知。
+MiMo 的 explore 只看题面,需要核实源码时选 `reads_repository=true` 的候选。
+
+主裁根据任务与这些事实选择,把理由写进任务的 design/verify,然后显式派发:
+
+```bash
+panel-candidates --adapter subcursor --discover-cursor --mode review
+panel-review --members submimo,subcursor@composer-2.5 --track NAME --risk high TASK REPO PREFIX
+panel-explore --members subcursor@cursor-grok-4.6-high,subcursor@composer-2.5 BRIEF REPO PREFIX
+```
+
+Cursor 池可以列出 GPT、Claude、GLM、Grok、Composer 等 CLI 提供的模型,不限于示例。
+每个成员冻结模型,同一 Cursor 通道可选多个模型;各自有日志、结果与健康记录。
+显式名单不轮换、不自动加人、不回落聊天模型;失败后由主裁决定是否重派并记账。
+禁用/不支持模式/冷却中的成员会在调用前拒绝,不会偷换。处理已知健康故障后,
+可用 `PANEL_HEALTH_OVERRIDE=subcursor.<model-id>=healthy` 明确重试该模型。
+旧 subcursor 通道历史无法追溯精确模型,只作提示,不复制成新模型的故障。
+所选家族必须达到 review 的风险下限;同家族两个会话仍只算一份家族覆盖。
+家族是粗粒度去重,不是统计独立性证明;公司、账户、额度池也不是家族。
+Cursor CLI 可验证请求/调用参数与返回的家族标签,没有返回精确模型 ID 时不能宣称已核实服务端版本。
+
+review/explore 共用选择与会话执行,但 explore 的结果契约为 3,永不提供 review 归档覆盖。
+本轮 plan 保存成员与模型,断线后 `panel-roster PREFIX` 按冻结名单重建。
+不带 `--members` 的旧入口保留轮换/全池兼容行为;新任务优先使用目录与显式名单。
+`--members` 不与 `--all`、`--budget`、切片内部参数混用。
+
 ## panel-review — 收敛合议
 
 触发条件同 `submimo review`:非平凡改动、安全/权限/auth/钱/订单/数据一致性/迁移/CI 风险、
@@ -309,12 +339,12 @@ brief 给用户原话、当前行为及证据、约束、拟改变的行为;区�
 
 题面只需问三件事:完全实现仍怎样失败?哪个前提若为假就要重做?有无更简单的方向,
 用什么最小实验分辨?不强制凑问题,不让它只核对规格条款。
-需要读代码的单次挑战用现有 `subcursor explore BRIEF LOG REPO`(读快照,不执行测试);
-仅当 brief 已含必要事实/相关片段、无需查仓库时,可用 `submimo explore BRIEF LOG REPO`:
+需要读代码的单次挑战先查 `panel-candidates --mode explore`,选择能读仓库的不同家族成员,
+用 `panel-explore --members ID BRIEF REPO PREFIX` 只派该成员;
+仅当 brief 已含必要事实/相关片段、无需查仓库时,可选 `submimo`:
 它**禁止工具、只读题面**,不能把给了仓库路径当成已经核查源码。上下文不足先补事实或换有能力的腿,
 不能据此宣布检查完成。先核对实际模型家族;这不是新增 review 模式,不要求 PASS/BLOCK。初始只派一条外部腿,
-有具体未解分歧再追加一条。真实方向分叉才选 panel-explore;它会派默认启用的多条腿,
-**不是预算为一的快捷入口**。派发前说明本次范围/调用上限,失败重试照记,不默认全池。
+有具体未解分歧再追加一条。真实方向分叉时可用 panel-explore 明确选择多个成员;旧入口不带 --members 会派默认启用的多条腿。派发前说明本次范围/调用上限,失败重试照记,不默认全池。
 模型不可用时可以继续收集事实,但不能把失败调用算成完成挑战;仍有触发事实的实现先不推进。
 
 **③ 核实后才定方案。** 在 design/evidence 留:被挑战的行为与前提、原始意见及出处、

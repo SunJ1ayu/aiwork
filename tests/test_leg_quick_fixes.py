@@ -95,7 +95,7 @@ class VerdictContract(LegCase):
     """A1: every agent review leg states the verdict contract where the model reads it last."""
 
     def test_opencode_leg_restates_contract_after_task_body(self):
-        self.copy("subglm-agent", "subdeepseek-agent", "deepseek-model", "subagent", "ro-repo-exec")
+        self.copy("subglm-agent", "subdeepseek-agent", "deepseek-model", "glm-model", "subagent", "ro-repo-exec")
         self.fake("opencode", ARGV_CAPTURE)
         cap = self.d / "oc.json"
         proc = self.run_cmd(["bash", str(self.bin / "subglm-agent"), "review", str(self.task),
@@ -108,7 +108,7 @@ class VerdictContract(LegCase):
                            "the last statement of the verdict contract must come after the task body")
 
     def test_mimo_leg_message_states_contract(self):
-        self.copy("submimo", "ro-repo-exec")
+        self.copy("submimo", "mimo-model", "ro-repo-exec")
         self.fake("mimo", ARGV_CAPTURE)
         cap = self.d / "mimo.json"
         proc = self.run_cmd(["bash", str(self.bin / "submimo"), "review", str(self.task),
@@ -277,7 +277,7 @@ class OpencodeDeny(LegCase):
     """A4: a denied tool call must not end the GLM round."""
 
     def test_rendered_config_continues_loop_on_deny(self):
-        self.copy("subglm-agent", "subdeepseek-agent", "deepseek-model", "subagent", "ro-repo-exec")
+        self.copy("subglm-agent", "subdeepseek-agent", "deepseek-model", "glm-model", "subagent", "ro-repo-exec")
         self.fake("opencode", ARGV_CAPTURE)
         home = self.d / "ochome"
         proc = self.run_cmd(["bash", str(self.bin / "subglm-agent"), "review", str(self.task),

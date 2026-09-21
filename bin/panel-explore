@@ -22,7 +22,7 @@ set -uo pipefail
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  panel-explore BRIEF_FILE [REPO_DIR] [LOG_PREFIX]
+  panel-explore [--members ID[,ID...]] BRIEF_FILE [REPO_DIR] [LOG_PREFIX]
 
 Runs the enabled exploration models in parallel on the SAME design brief:
   submimo explore -> <LOG_PREFIX>.submimo.log
@@ -45,6 +45,13 @@ The main agent reads ALL reports, then SYNTHESISES - it never averages them into
 verdict. A failure in one model does not block the others.
 EOF
 }
+
+# Explicit exploration shares member/session machinery, but has its own non-review contract.
+for _arg in "$@"; do
+  if [[ "$_arg" == --members ]]; then
+    exec "$(dirname "$0")/panel-review" --explore-members "$@"
+  fi
+done
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
 if [[ $# -lt 1 || $# -gt 3 ]]; then usage; exit 2; fi

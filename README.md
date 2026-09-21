@@ -116,6 +116,25 @@ agent to verify, never a verdict to adopt.
 
 ## Panel fan-out
 
+Use `bin/panel-candidates --mode review|explore` to inspect configured models,
+capabilities and past health (remaining quota stays unknown). Add
+`--discover-cursor` to list CLI model IDs. The arbiter chooses the members:
+
+```bash
+bin/panel-candidates --adapter subcursor --discover-cursor --mode review
+bin/panel-review --members submimo,subcursor@composer-2.5 --track NAME --risk high TASK REPO PREFIX
+bin/panel-explore --members subcursor@cursor-grok-4.6-high,subcursor@composer-2.5 BRIEF REPO PREFIX
+```
+
+The Cursor pool can include GPT, Claude, GLM, Grok, Composer and other
+explicit supported-family IDs returned by the CLI, not just the examples above.
+Explicit lists freeze each model, support several models through one adapter,
+and never rotate, add a spare or fall back. Review family minima still apply;
+exploration results never count as review coverage. Each run's plan preserves
+members and models for `panel-roster` recovery. Legacy commands remain compatible.
+Model defaults live in `bin/*-model`; environment overrides are frozen per member.
+
+
 - `bin/panel-review --track NAME --risk self|standard|high TASK [REPO] [LOG_PREFIX]` —
   convergent review. Default high rotates two healthy model families; standard
   uses one and self uses none. Failure/degradation/conflict can add one spare;

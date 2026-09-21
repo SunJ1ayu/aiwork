@@ -185,6 +185,9 @@ roster_entry_from_disk() {  # roster_entry_from_disk <prefix> <leg>
     if [[ "$rc" == "0" ]]; then state_txt="PASS(verdict=$verdict,降级:回落聊天腿,只看得见 diff)"
     else state_txt="FAIL(rc=$rc,降级:回落聊天腿也没成)"; fi
   fi
+  if [[ "$rc" == 0 && "$(_plan_kv "$plan" mode)" == explore ]]; then
+    state_txt="EXPLORE(rc=0,coverage=none)"
+  fi
   printf '%s=%s' "$name" "$state_txt"
 }
 
@@ -219,12 +222,18 @@ render_roster() {  # render_roster <prefix>
   echo "# snapshot=head:$head_before"
   echo "# 日志:${prefix}.*.log"
   line=""
+  if [[ "$(_plan_kv "$plan" members-format)" == 1 ]]; then
+    while IFS= read -r name; do
+      line+="${line:+ }$(roster_entry_from_disk "$prefix" "$name")"
+    done < <(awk -F '\t' '$1=="leg" {print $2}' "$plan")
+  else
   for name in "${PANEL_LEGS_ORDER[@]}"; do line+="${line:+ }$(roster_entry_from_disk "$prefix" "$name")"; done
   # 角色腿只在它真出现在这一轮 plan 里时才印(scoped 钉住派发);普通花名册格式一个字不变。
   for name in "${PANEL_ROLE_LEGS_ORDER[@]}"; do
     [[ -n "$(_plan_leg_field "$plan" "$name" 2)" ]] || continue
     line+="${line:+ }$(roster_entry_from_disk "$prefix" "$name")"
   done
+  fi
   echo "$line"
   if [[ -n "$head_before" && -n "$head_after" && "$head_before" != "$head_after" ]]; then
     echo "# ⚠️ 评审期间 HEAD 从 $head_before 移到 $head_after —— 各腿未必评的同一棵树。"

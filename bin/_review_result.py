@@ -27,7 +27,9 @@ REVIEW_CONTRACT_VERSION = 1
 # 不是契约 1 的「整任务全量评审」。它**故意不在** SUPPORTED_REVIEW_CONTRACTS 里 ⇒ 旧覆盖谓词
 # 一律 review_contract_unsupported。要让切片结果承担放行资格,得另立新策略,不是往这里加一个数。
 SCOPED_REVIEW_CONTRACT_VERSION = 2
-EMITTABLE_REVIEW_CONTRACTS = (REVIEW_CONTRACT_VERSION, SCOPED_REVIEW_CONTRACT_VERSION)
+# Exploration emits terminal facts, but can never supply review coverage.
+EXPLORE_CONTRACT_VERSION = 3
+EMITTABLE_REVIEW_CONTRACTS = (REVIEW_CONTRACT_VERSION, SCOPED_REVIEW_CONTRACT_VERSION, EXPLORE_CONTRACT_VERSION)
 SUPPORTED_REVIEW_CONTRACTS = frozenset({REVIEW_CONTRACT_VERSION})
 
 VERDICTS = frozenset({"PASS", "BLOCK", "NEEDS_MORE_INFO", "UNKNOWN"})
@@ -593,7 +595,7 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
                 failure_kind = "quota"
             else:
                 failure_kind = "runtime"
-        elif verdict == "UNKNOWN":
+        elif verdict == "UNKNOWN" and args.review_contract_version != EXPLORE_CONTRACT_VERSION:
             failure_kind = "no_verdict"
         else:
             failure_kind = "none"
@@ -606,6 +608,10 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
         "invoked": args.invoked_model,
         "reported": args.reported_model,
     }
+    if getattr(args, "expected_model", None) is not None:
+        model = dict(model, requested=args.expected_model)
+        if model["invoked"] != args.expected_model:
+            failure_kind = "identity_mismatch"
     billing_mode = facts["billing_mode"] if facts is not None else args.billing_mode
     return {
         "schema_version": SCHEMA_VERSION,
@@ -743,6 +749,7 @@ def parser() -> argparse.ArgumentParser:
     emit.add_argument("--process-state", choices=sorted(PROCESS_STATES), default="exited")
     emit.add_argument("--exit-code", type=int, required=True)
     emit.add_argument("--task-sha256", required=True)
+    emit.add_argument("--expected-model", help="controller-frozen choice; overrides adapter self-report of request")
     emit.add_argument("--requested-model")
     emit.add_argument("--invoked-model")
     emit.add_argument("--reported-model")

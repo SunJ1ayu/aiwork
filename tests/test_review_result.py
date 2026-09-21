@@ -453,7 +453,7 @@ class ReviewResultTest(unittest.TestCase):
              "--result", str(self.root / "bad.result.json"), "--run-id", "panel-bad",
              "--name", "subkimi", "--family", "moonshot", "--adapter", "subkimi",
              "--exit-code", "0", "--task-sha256", self.result["subject"]["task_sha256"],
-             "--review-contract-version", "3"],
+             "--review-contract-version", "99"],
             text=True, capture_output=True, check=False,
         )
         self.assertNotEqual(bad.returncode, 0)

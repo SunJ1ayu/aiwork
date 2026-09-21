@@ -82,8 +82,9 @@ conversation history; reconstruct from the folder:
    classify the two orthogonal axes in `decision.json` and run
    `track-record validate --phase dispatch tracks/<name>`:
    - `impact-risk`: self / standard / high, with external-review budgets
-     self=0, standard=1, high=2. High rotates two healthy, different model
-     families; failure/degradation/conflict/NEEDS_MORE_INFO adds a spare.
+     self=0, standard=1, high=2. Use `panel-candidates` then explicit `--members`; high requires at least two
+     different families. Explicit selections never add a spare or silently fall back;
+     legacy rotation remains available when no members are specified.
      Use explicit `panel-review --all` only for exceptional judging/sandbox/
      permission-control surfaces, not as the default meaning of high.
    - `design-uncertainty`: low / high, judged after step 3, not permission to skip it.

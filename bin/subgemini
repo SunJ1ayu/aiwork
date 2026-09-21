@@ -39,7 +39,7 @@ _RHG="$BIN_DIR/_review-home-guard.sh"
 . "$_RHG"
 
 REVIEW_HOME="${AGY_REVIEW_HOME:-$HOME/.cache/aiwork/agy-review-home}"
-DEFAULT_MODEL="gemini-3.8-flash-high"
+DEFAULT_MODEL="$(cat "$(dirname "$0")/gemini-model")" || exit 1
 OWNER_TOKEN="${AGY_OWNER_TOKEN:-$HOME/.gemini/antigravity-cli/antigravity-oauth-token}"
 TIMEOUT_SECONDS="${AGY_TIMEOUT:-1500}"
 
