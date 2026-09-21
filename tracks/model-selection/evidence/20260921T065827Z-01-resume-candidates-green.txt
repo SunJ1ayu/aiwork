@@ -1,0 +1,26 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    resume-candidates-green
+cmd:     python3 tests/test_panel_candidates.py
+cwd:     /root/aiwork-model-selection(仓根)
+commit:  72b82f6
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-21T06:58:27Z
+---------------- 输出开始 ----------------
+....F..........
+======================================================================
+FAIL: test_failure_before_model_facts_preserves_health_cause (__main__.CandidateTest.test_failure_before_model_facts_preserves_health_cause) (cause='auth')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 269, in test_failure_before_model_facts_preserves_health_cause
+    self.assertEqual(result['failure_kind'], expected)
+AssertionError: 'runtime' != 'auth'
+- runtime
++ auth
+
+
+----------------------------------------------------------------------
+Ran 15 tests in 15.113s
+
+FAILED (failures=1)
+---------------- 输出结束 ----------------
+runlog: resume-candidates-green rc=1 commit=72b82f6 dirty=yes at=2026-09-21T06:58:27Z file=tracks/model-selection/evidence/20260921T065827Z-01-resume-candidates-green.txt

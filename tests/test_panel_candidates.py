@@ -256,7 +256,7 @@ class CandidateTest(unittest.TestCase):
     def test_failure_before_model_facts_preserves_health_cause(self):
         for suffix, diagnostic, expected in (
                 ('quota', 'quota exhausted', 'quota'),
-                ('auth', 'authentication failed', 'auth'),
+                ('auth', '401 Unauthorized', 'auth'),
                 ('window', 'rate limit exceeded', 'rate_limit')):
             model = 'composer-' + suffix
             with self.subTest(cause=expected):

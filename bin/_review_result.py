@@ -610,7 +610,9 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
     }
     if getattr(args, "expected_model", None) is not None:
         model = dict(model, requested=args.expected_model)
-        if model["invoked"] != args.expected_model:
+        # A failure before invocation has no model facts; preserve its provider
+        # cause so a temporary rate limit cannot become a permanent dead leg.
+        if model["invoked"] is not None and model["invoked"] != args.expected_model:
             failure_kind = "identity_mismatch"
     billing_mode = facts["billing_mode"] if facts is not None else args.billing_mode
     return {
