@@ -24,7 +24,7 @@ model = os.environ.get('CURSOR_MODEL') if adapter == 'subcursor' else os.environ
 p = pathlib.Path(log)
 p.with_suffix('.called').write_text(json.dumps({'adapter': adapter, 'mode': mode, 'model': model}))
 if os.environ.get('FAIL_MODEL') == model:
-    print('quota exhausted', file=sys.stderr)
+    print(os.environ.get('FAIL_DIAGNOSTIC', 'quota exhausted'), file=sys.stderr)
     sys.exit(9)
 p.write_text('Direction: a bounded design\n' + ('Conclusion: PASS\n' if mode == 'review' or os.environ.get('EXPLORE_PASS') else ''))
 actual = os.environ.get('WRONG_MODEL', model)
@@ -252,6 +252,26 @@ class CandidateTest(unittest.TestCase):
         r, p = self.run_panel('subcursor@composer-2.5', risk='standard')
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse(list(self.d.glob(p.name + '.*.called')))
+
+    def test_failure_before_model_facts_preserves_health_cause(self):
+        for suffix, diagnostic, expected in (
+                ('quota', 'quota exhausted', 'quota'),
+                ('auth', 'authentication failed', 'auth'),
+                ('window', 'rate limit exceeded', 'rate_limit')):
+            model = 'composer-' + suffix
+            with self.subTest(cause=expected):
+                r, p = self.run_panel('subcursor@' + model, risk='standard', env={
+                    'FAIL_MODEL': model, 'FAIL_DIAGNOSTIC': diagnostic})
+                self.assertNotEqual(r.returncode, 0)
+                result = self.results(p)[0]
+                self.assertEqual(result['model']['requested'], model)
+                self.assertIsNone(result['model']['invoked'])
+                self.assertEqual(result['failure_kind'], expected)
+                rows = [line.split('\t') for line in (self.d / 'state/health.tsv').read_text().splitlines()]
+                row = next(row for row in rows if row[0] == 'subcursor.' + model)
+                self.assertEqual(row[1], expected)
+                if expected == 'rate_limit':
+                    self.assertEqual(row[3], '0', 'a window limit must not count as a hard failure')
 
 
 if __name__ == '__main__':

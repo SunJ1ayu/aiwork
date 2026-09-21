@@ -1,0 +1,23 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    full-regression
+cmd:     bin/rust-check-review-tooling
+cwd:     /root/aiwork(仓根)
+commit:  42e33fc
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-21T02:46:05Z
+---------------- 输出开始 ----------------
+ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**,没扫 tests/ 与 track/templates/;只报不拦):
+    check-gateway-version disk-watch openclaw-up rotate-mimo-key tmp-sweeper triage
+🔴 有判据套件不在 SUITES 里(写了没人跑 = 从此静默腐烂): test-low-uncertainty-reason.sh
+❌ 工具链防锈失败(外部漂移/环境升级?先跑本地判据复现):
+--- no-egress (rc=1) ---
+  FAIL: N3a: 每个判据套件都有一行**可执行的**守卫引入(缺: test-low-uncertainty-reason.sh)
+  FAIL: N3c: 隔离做不到时每个套件都当场拒跑(带着网跑起来的: test-low-uncertainty-reason.sh)
+=== total: 16 passed, 2 failed ===
+--- workflow-docs (rc=1) ---
+  FAIL: W1: CLAUDE.md == 部署 CLAUDE.md
+  FAIL: W1: skills/track/SKILL.md == 部署 .claude/skills/track/SKILL.md
+  FAIL: W1: skills/panel/SKILL.md == 部署 .claude/skills/panel/SKILL.md
+=== total: 34 passed, 3 failed ===
+---------------- 输出结束 ----------------
+runlog: full-regression rc=1 commit=42e33fc dirty=yes at=2026-09-21T02:46:05Z file=tracks/model-selection/evidence/20260921T024605Z-01-full-regression.txt
