@@ -42,7 +42,7 @@ Cursor 池可以列出 GPT、Claude、GLM、Grok、Composer 等 CLI 提供的模
 可用 `PANEL_HEALTH_OVERRIDE=subcursor.<model-id>=healthy` 明确重试该模型。
 冷却与连败按实际模型记:旧入口的 subcursor 腿也记在 `subcursor.<本轮模型>` 下,与显式成员共用,
 同一模型在哪个入口失败,另一个入口都会拒派;不同模型各自冷却,不整通道冷却。
-此前留下的无模型 `subcursor` 行追溯不到模型,只作 `transport_history` 提示。
+此前留下的无模型 `subcursor` 行追溯不到模型,不再参与判断。
 所选家族必须达到 review 的风险下限;同家族两个会话仍只算一份家族覆盖。
 家族是粗粒度去重,不是统计独立性证明;公司、账户、额度池也不是家族。
 Cursor CLI 可验证请求/调用参数与返回的家族标签,没有返回精确模型 ID 时不能宣称已核实服务端版本。

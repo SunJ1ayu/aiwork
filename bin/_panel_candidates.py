@@ -63,7 +63,6 @@ def describe(row, mode, cursor_model=None):
         'enabled': os.environ.get(switch, 'agent') == 'agent',
         'executable_available': os.access(BIN / adapter, os.X_OK),
         'health_history': rows.get(name),
-        'transport_history': rows.get('subcursor') if adapter == 'subcursor' else None,
         'quota_remaining': None,
         'account_scope': 'cursor-account' if adapter == 'subcursor' else adapter,
         'quota_pool': None,

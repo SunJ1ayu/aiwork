@@ -506,7 +506,7 @@ mkdir -p "$PANEL_STATE_DIR"
 # health.tsv 的行键。Cursor 是通道不是模型:旧轮换的 subcursor 腿本轮跑的是冻结的
 # $CURSOR_MODEL(_panel-roster-lib.sh 已 export),与显式成员 subcursor.<model> 共用同一行
 # ⇒ 同一个模型在哪个入口撞了额度,另一个入口都看得见;不同模型仍各自冷却。
-# 改之前留下的无模型 `subcursor` 行追溯不到模型,只由 panel-candidates 当 transport_history 提示。
+# 改之前留下的无模型 `subcursor` 行追溯不到模型,不再有任何代码读它。
 health_key() {  # health_key <leg>
   if [[ "$1" == subcursor ]]; then printf 'subcursor.%s\n' "${CURSOR_MODEL:-}"; else printf '%s\n' "$1"; fi
 }
