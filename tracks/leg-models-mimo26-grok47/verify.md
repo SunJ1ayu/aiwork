@@ -5,67 +5,52 @@
 > 机器消费的 impact / uncertainty / execution plan / outcome 只写在同目录
 > `decision.json`；这里保留检查、理由、发现与主 Agent 仲裁说明，不复制枚举。
 
-> Panel hook — 软判断(correctness/security/edge/spec-drift)走 panel-review:
-> 主 agent 先独立审并落 findings,再按 impact-risk 预算跑 panel-review；只有特殊控制面
-> 才显式 `--all` 做全池评审。最后仍由主 agent 主裁。
-> build/test 跑通是机械检查。
+## 为什么是 ARCHIVED-SUPERSEDED
 
-## Mechanical checks
+本单代码(`255c246` 判据先行 / `1ddd7a4` 换模型)早上提交后我断线(Claude 服务 529),
+GPT 接手把它合进了 `model-selection`(`6028c98`)。之后 `model-selection` 的外审题面
+**明确点名**审「MiMo xiaomi/mimo-v2.6-pro 的 provider-only 运行时登记、Cursor grok-4.7-high
+与目录选择的集成」,审的 delta 是 `003563c..HEAD`,完整包含本单两个提交;
+第 3 轮 Kimi + Grok 4.7 同一轮两家合格 PASS,主裁 PASS,已归档
+(`tracks/archive/model-selection/verify.md`)。本单不再单独花一轮 high 外审
+—— 那是同一份代码第二次被审,而本单的机器覆盖不能跨 track 借用,所以诚实的记法是被取代,不是 PASS。
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+## 验收(proposal 写的「用户可观察的成功」)
 
-**机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
+真跑时运行中的腿回报的是新模型 —— 今天 model-selection 的两次 panel 各真跑一次:
 
+- Cursor 服务端自报(`*.subcursor.stream-summary.json`):`Grok 4.7 256K High`,success=true,family_ok=true。
+- MiMo 日志抬头:`> aiwork-review · mimo-v2.6-pro`(评审锁档 + 新模型);typed result invoked=`xiaomi/mimo-v2.6-pro`;
+  重试轮交了完整报告(PASS),第 3 轮跑满 25 分钟超时(慢,不是认不出模型)。
+- 日志前缀:`/root/aiwork/logs/panel-model-selection-sep22-r2retry`、`/root/aiwork/logs/panel-model-selection-r3`。
+- 换模型只改一行:`bin/mimo-model` 由 `submimo` 与 `panel-candidates` 共读(model-selection 已验收)。
+
+## 机器收据
+
+```text
+runlog: bash rc=0 commit=1ddd7a4 dirty=yes at=2026-09-22T00:45:11Z file=tracks/leg-models-mimo26-grok47/evidence/20260922T004511Z-01-bash.txt
+runlog: bash rc=1 commit=1ddd7a4 dirty=yes at=2026-09-22T00:45:22Z file=tracks/leg-models-mimo26-grok47/evidence/20260922T004522Z-01-bash.txt
+runlog: live-probe rc=1 commit=1ddd7a4 dirty=yes at=2026-09-22T00:46:21Z file=tracks/leg-models-mimo26-grok47/evidence/20260922T004621Z-01-live-probe.txt
+runlog: resume-tooling rc=78 commit=1ddd7a4 dirty=yes at=2026-09-22T01:12:21Z file=tracks/leg-models-mimo26-grok47/evidence/20260922T011221Z-01-resume-tooling.txt
+runlog: resume-tooling rc=0 commit=1ddd7a4 dirty=yes at=2026-09-22T01:13:52Z file=tracks/leg-models-mimo26-grok47/evidence/20260922T011352Z-01-resume-tooling.txt
 ```
-runlog -t leg-models-mimo26-grok47 -- <判据命令>
-```
 
-```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
-```
+- `bash rc=0`(00:45:11):test-workflow-docs 全绿。
+- `bash rc=1`(00:45:22):review-tooling 561/1,唯一红是 V45「判据动了业主真实环境」——
+  `mimo/mimocode.json` 内容哈希不变、只有 mtime 在跑的期间变了。同代码串行重跑 562/0(最后一份),
+  model-selection 今天三次断网全量(含本单代码)V45 也都绿 ⇒ 不是判据写了它,是同时段别的进程碰了时间戳;是谁没查到。
+- `live-probe rc=1`:**探针自己坏了,结论是「没测成」不是「不通」**。L1/L2 两条腿连日志都没生成
+  (被拒的原因被探针 `2>&1 >/dev/null` 吞了),P3 那次 MiMo 无任何输出。真跑证据改看上面「验收」一节。
+- `resume-tooling rc=78`:GPT 接手时的沙箱不许 `unshare -n`,无出口守卫当场拒跑(守卫在正常工作)。
+- `resume-tooling rc=0`:宿主断网重跑,562/0。**这是最后一份。**
 
 ## Review
 
-- 规格自查(读任何 panel 输出之前先答):<回看 design 的用户成功条件、前提证据和未解决项。
-  实现符合规格不证明规格合理;实现评审也可质疑规格,但不能替代实施前 panel 4c 的方案检查。
-  本轮若暴露能推翻方向的前提,先回到设计;全池一致 PASS 也不等于题是对的。>
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
-  > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
-  > **控制器没活到收尾时它压根不存在** —— 那时跑 `panel-roster <日志前缀>` 从盘上重建,
-  > 与控制器自己写的**归一化后一致**(判据 R5b 守着;抬头有渲染时间戳,不是字面逐字节)。**一轮零记录的评审也粘得出这一行**,
-  > 所以"那轮被砍了所以没有花名册"不再是理由(2026-08-23,track panel-roster-from-disk)。
-  > 08-06 立这条的理由:08-05 我在这里手写了"三条腿一致 PASS",而 Kimi 根本没出结论
-  > (同一页第 90 行我自己还写着它没出报告)—— 手抄一份终端上的东西,抄错那次没人会发现。
-- 轮次记录(每次派发一行;实质评审与基础设施重试分开,重试不算轮但次数与耗时照记):
-
-  | 轮 | 类型(实质 / 重试) | 派发前 `track preflight` | 日志前缀 | 新增有效阻断 |
-  |---|---|---|---|---|
-  | 1 | 实质 | <rc,BLOCK 数> | <…> | <n> |
-
-- findings(**先处置、后动手**;一轮一份修复清单,一次修完再复审 —— panel 抽屉 4b):
-
-  | # | 发现:触发条件与影响 | 核实证据 | 处置 | 理由 |
-  |---|---|---|---|---|
-  | 1 | <…> | <file:line / 复现收据> | 必须修 / 延期 / 驳回 / 尚未核实 | <延期必写:它在业主或下一个使用者那边会长成什么样> |
-
-  > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
-  > 花名册在上一格,查工件不查自述。延期 = 留在这里,不自动开新单。
-- arbitrated verdict (主裁): <...>
-  > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
-  > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
+- 外审:见上,由 model-selection 第 3 轮覆盖;本 track 自己没有 panel 绑定。
+- 业主追问「换个模型为啥这么麻烦」(GPT 会话里):这次多改脚本是因为 MiMo CLI 0.1.1 的内置表不认当天发布的 2.6;
+  以后同类换模型只改 `bin/mimo-model` 一行。已记在 legs.md。
+- arbitrated verdict(主裁):**ARCHIVED-SUPERSEDED** —— 实现与验收成立,外审覆盖在 model-selection。
 
 ## Accepted deviations
 
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
-
-## 试行记录(review-convergence 试行,约五单;拿不到的写 unknown,别补 0)
-
-- 总交付历时:<开工 commit 时刻 → 归档 commit 时刻>
-- 每轮新增有效阻断:<第 1 轮 n / 第 2 轮 n>
-- 基础设施等待:<重试次数;observations 里 panel-review 的 duration_ms 求和>
-- 交付后返工:<归档后因本单再改过几次;不知道写 unknown>
+- 本 track 无独立 panel 覆盖(理由见第一节)。

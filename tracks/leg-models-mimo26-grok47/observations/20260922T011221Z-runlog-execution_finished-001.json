@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "leg-models-mimo26-grok47",
+  "run_id": "20260922T011221Z-01-resume-tooling",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "resume-tooling",
+  "started_at": "2026-09-22T01:12:21Z",
+  "finished_at": "2026-09-22T01:12:21Z",
+  "duration_ms": 30,
+  "exit_code": 78,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 78,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
