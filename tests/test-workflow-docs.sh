@@ -121,9 +121,11 @@ check "W3: DeepSeek 唯一源与实现都是 200 turns" $?
 grep -q 'KIMI_TIMEOUT:-1500' "$ROOT/bin/subkimi" \
   && grep -q 'KIMI_TIMEOUT.*默认 1500' "$SOURCE/skills/panel/references/legs.md"
 check "W3: Kimi 唯一源与实现都是 1500s" $?
-grep -q 'DEFAULT_MODEL="xiaomi/mimo-v2.5-pro"' "$ROOT/bin/submimo" \
-  && grep -q 'xiaomi/mimo-v2.5-pro' "$SOURCE/skills/panel/references/legs.md"
-check "W3: MiMo 唯一源与实现模型一致" $?
+_mimo_model="$(cat "$ROOT/bin/mimo-model" 2>/dev/null || true)"
+[[ -n "$_mimo_model" ]] && grep -q '/mimo-model' "$ROOT/bin/submimo" \
+  && ! grep -q 'DEFAULT_MODEL="xiaomi/' "$ROOT/bin/submimo" \
+  && grep -qF "$_mimo_model" "$SOURCE/skills/panel/references/legs.md"
+check "W3: MiMo 模型唯一源 bin/mimo-model 被实现读取、文档写的是同一个" $?
 
 echo "[W4] 唯一源与同步器本身属于 judging surface"
 . "$ROOT/bin/_tooling-paths.sh"
