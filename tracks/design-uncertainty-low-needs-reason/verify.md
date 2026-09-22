@@ -79,3 +79,14 @@ design-studio 侧 7 个带 design 字段的全部不受影响,7 个无该字段�
 4. 按发现 3 的五条路补强断言(至少:不同 impact level、查 rule 名、`high+done+缺文件`、`low+done`、被测树可注入)。
 5. 修正 design.md 的影响面。
 6. 全部做完跑一次**全套** review-tooling,再派第 2 轮复审。
+
+## 收尾(2026-09-22,业主定:先撤判据,不重做)
+
+- **结局:BLOCK,本单未交付。** 第 1 轮评审四条阻断成立,`bin/track-record` 的改动已在 `7497cfa` 撤回;
+  T2 的勾是撤回前打的,已取消。decision.json 里残留的 `verdict=PASS` 是评审**之前**写的,
+  BLOCK 之后忘了改 —— 散文改了裁决、typed 字段没跟 —— 现改为 BLOCK。
+- **洞还在**:`design.uncertainty=low` + `not_required` + 空 evidence 仍然零成本放行。
+  业主 09-22 定先不补:重做要先解决与既有锁定契约 R3 的冲突(见上面返工清单),不是小活。
+- **撤掉判据** `tests/test-low-uncertainty-reason.sh`:它测的是一个没有实现的行为,从 09-19 起一直红,
+  又没进总跑 SUITES ⇒ 每次全量都亮一盏已知红灯(09-22 一天被解释三次),会把真红灯淹掉。
+  重做时取回:`git show 4ff9b22:tests/test-low-uncertainty-reason.sh`,并记得这次进 SUITES、带断网守卫。
