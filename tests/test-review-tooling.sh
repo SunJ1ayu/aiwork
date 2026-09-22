@@ -3267,6 +3267,7 @@ touch "$target/PWNED_IN_WORKSPACE" 2>/dev/null && work=WROTE
 touch "$PWN_REPO/PWNED_IN_SOURCE" 2>/dev/null && source=WROTE
 printf 'repo=%s\ncwd=%s\nwork=%s\nsource=%s\n' "$target" "$PWD" "$work" "$source" > "$PWN_OUT"
 printf 'model=%s\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" >> "$PWN_OUT"
+printf 'mimocfg=%s\n' "${MIMOCODE_CONFIG_CONTENT:-}" >> "$PWN_OUT"
 # claude 壳要 stream-json;别的腿吃纯文本。两种都吐,谁读谁的。
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
 echo "Conclusion: PASS"
@@ -3354,14 +3355,30 @@ PY
     && [[ ! -e "$repo/PWNED_IN_SOURCE" ]]; local r2=$?
   local seen2; seen2="$(cat "$d/o2" 2>/dev/null || echo 没跑)"
   check "V36: submimo review 副本可写、原仓只读(双向试写:$seen2)" $r2
-  python3 - "$d/mimo.facts.json" <<'PY'
+  python3 - "$d/mimo.facts.json" "$BIN/mimo-model" <<'PY'
 import json,sys
 p=json.load(open(sys.argv[1]))
-assert p['model']['requested'] == p['model']['invoked'] == 'xiaomi/mimo-v2.5-pro'
+want=open(sys.argv[2]).read().strip()
+assert want.startswith('xiaomi/mimo-'), want
+assert p['model']['requested'] == p['model']['invoked'] == want
 assert p['source']['git_object_format'] in ('sha1','sha256')
 assert p['view'] == {'delivery_state':'complete','mode':'full_snapshot'}
 PY
-  check "V36: submimo 把实际模型与完整 snapshot 事实交给唯一 terminal producer" $?
+  check "V36: submimo 把 bin/mimo-model 的模型与完整 snapshot 事实交给唯一 terminal producer" $?
+  # MiMo CLI 自带模型表会落后于新模型(09-22:mimo-v2.6-pro 发布当天 CLI 报 Model not found)。
+  # submimo 必须在运行时把 bin/mimo-model 那个模型登记给 CLI,且登记**只含 provider 段**
+  # —— 带 agent/permission 段就可能盖掉评审档那把锁。
+  python3 - "$d/o2" "$BIN/mimo-model" <<'PY'
+import json,sys
+cfg=[l[len('mimocfg='):] for l in open(sys.argv[1]).read().splitlines() if l.startswith('mimocfg=')]
+assert len(cfg)==1 and cfg[0], cfg
+c=json.loads(cfg[0])
+provider,mid=open(sys.argv[2]).read().strip().split('/',1)
+assert set(c)=={'provider'}, sorted(c)
+m=c['provider'][provider]['models'][mid]
+assert m['tool_call'] is True and m['limit']['context']>0 and m['limit']['output']>0, m
+PY
+  check "V36: submimo 把 bin/mimo-model 的模型登记给 MiMo CLI(只含 provider 段)" $?
 
   # ── ③ subkimi
   # subkimi 要一份 review home 才肯派发(config.toml + 守卫 + 凭证),照 V13 的建法。

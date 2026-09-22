@@ -10,7 +10,8 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 
 ## submimo (MiMo) — 第一条腿,且是唯一的 fix 腿
 
-`/root/aiwork/bin/submimo`,默认模型 `xiaomi/mimo-v2.5-pro`。
+`/root/aiwork/bin/submimo`,默认模型 `xiaomi/mimo-v2.6-pro`;换模型只改 `bin/mimo-model` 一行,`MIMO_CLI_MODEL` 单次覆盖。
+MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not found`),submimo 运行时把 `xiaomi/` 模型登记给 CLI(只含 provider 段,不碰评审锁)。
 `submimo review TASK LOG REPO` 用于评审;`submimo fix` 的规矩见 **`delegate` skill**。
 
 ## subdeepseek (DeepSeek) — 第二条腿
@@ -102,7 +103,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 ## subcursor (Cursor CLI) — 评审与发散
 
 `bin/subcursor <review|explore> TASK LOG REPO`，两个调度器默认接入，`PANEL_CURSOR_LEG=off` 关闭。
-换模型只改 `bin/cursor-model` 一行（默认 `cursor-grok-4.6-high`）；`CURSOR_MODEL` 单次覆盖。
+换模型只改 `bin/cursor-model` 一行（默认 `grok-4.7-high`）；`CURSOR_MODEL` 单次覆盖。
 支持明确的 Composer / Claude / GPT / Gemini / Grok / Kimi / DeepSeek / GLM 模型 ID；
 以 `cursor-agent models` 中可用的 ID 为准。自动路由和未知家族拒跑。
 花名册、typed coverage 按所选模型家族计数；预算轮换去重，`--all` 仍派全部启用通道。
