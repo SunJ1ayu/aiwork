@@ -1,0 +1,50 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    sep22-merged-check
+cmd:     unshare -m -n -- bash /tmp/model-selection-sep22-check.sh
+cwd:     /root/aiwork-model-selection(仓根)
+commit:  6028c98
+dirty:   yes(跑之前采的;含未跟踪文件)
+head-before: 6028c98c3908ff75350ad18e704a48d12b41b644
+source-view-before: sha256:d38f0d1c1960bcae4d35e16cfa1726bb54729505a738347be27eec71c8711d44
+started: 2026-09-22T01:23:03Z
+---------------- 输出开始 ----------------
+MISSING CLAUDE.md
+MISSING .claude/skills/track/SKILL.md
+MISSING .claude/skills/panel/SKILL.md
+MISSING .claude/skills/panel/references/legs.md
+MISSING .claude/skills/delegate/SKILL.md
+SYNCED CLAUDE.md
+SYNCED .claude/skills/track/SKILL.md
+SYNCED .claude/skills/panel/SKILL.md
+SYNCED .claude/skills/panel/references/legs.md
+SYNCED .claude/skills/delegate/SKILL.md
+test_panel_candidates.py: passed
+Ran 15 tests in 15.009s
+
+OK
+test_review_result.py: passed
+Ran 20 tests in 0.884s
+
+OK
+test_leg_quick_fixes.py: passed
+Ran 17 tests in 9.188s
+
+OK
+test-review-tooling.sh: passed
+V45: 判卷工具自己不许碰业主的真实评审环境
+  PASS: V45: 整套判据跑完后业主的凭证目录 / kimi home / mimo home / agy 登录原封不动
+=== total: 562 passed, 0 failed ===
+test-review-workspace.sh: passed
+  PASS: RW7: mutation direct-source makes the write-boundary oracle red
+  PASS: RW7: mutation shared-clone makes the parallel-isolation oracle red
+=== total: 31 passed, 0 failed ===
+test-workflow-docs.sh: passed
+  PASS: W5: workflow 要求 dispatch 前填 decision 并机械校验
+  PASS: W5: delegate 不再要求手工返工账或 verify 第二事实源
+=== total: 37 passed, 0 failed ===
+command-rc: 0
+head-after: 6028c98c3908ff75350ad18e704a48d12b41b644
+source-view-after:  sha256:d38f0d1c1960bcae4d35e16cfa1726bb54729505a738347be27eec71c8711d44
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: sep22-merged-check rc=0 commit=6028c98 dirty=yes final=yes at=2026-09-22T01:23:03Z file=tracks/model-selection/evidence/20260922T012303Z-01-sep22-merged-check.txt

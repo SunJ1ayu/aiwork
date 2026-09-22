@@ -75,3 +75,15 @@ runlog: resume-final-check rc=0 commit=f34cfb5 dirty=no final=yes at=2026-09-21T
 # 日志:/root/aiwork/logs/panel-model-selection-resume-r1-20260921.*.log
 submimo=PASS(verdict=UNKNOWN) subdeepseek=FAIL(rc=1,降级:回落聊天腿也没成) subglm=off subkimi=off subgemini=off subgrok=off subcursor=PASS(verdict=PASS)
 ```
+
+## 2026-09-22 接续与合并验收
+
+- 6028c98 合入主仓 1ddd7a4。MiMo 2.6 Pro 与 Cursor Grok 4.7 默认值保留；MiMo 包装器采用今日主仓原样实现，新目录与包装器读取同一个模型文件。
+- 合并后串行检查：候选 15、结果 20、适配器 17、评审工具 562、工作区隔离 31、规范部署 37，全部通过；最终收据 source-stable=yes。最初沙箱不允许 unshare，失败收据保留；宿主保留断网与隔离后重跑通过。
+- 主 agent 重新审过选择、冻结参数、结果身份、发散不可计覆盖、健康隔离和合并冲突；未发现新增阻断。自审原文在仓外 model-selection-sep22.md，先于本轮报告。
+- 第 2 轮实质评审：源内容因合并今日默认值变化，按完整增量重新审查。使用主仓旧调度器避免新实现自证；选 MiMo 2.6 Pro 与 Cursor/Composer 2.5，两种家族、两个通道。保留昨天其他通道失败证据，不为补覆盖反复探活。昨天准备的覆盖重试未实际派出，本次为接续后的第二轮。
+
+```text
+runlog: sep22-merged-check rc=1 commit=6028c98 dirty=no final=yes at=2026-09-22T01:21:42Z file=tracks/model-selection/evidence/20260922T012142Z-01-sep22-merged-check.txt
+runlog: sep22-merged-check rc=0 commit=6028c98 dirty=yes final=yes at=2026-09-22T01:23:03Z file=tracks/model-selection/evidence/20260922T012303Z-01-sep22-merged-check.txt
+```
