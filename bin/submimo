@@ -17,7 +17,11 @@ _RHG="$(dirname "$0")/_review-home-guard.sh"
 [ -f "$_RHG" ] || { echo "submimo: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_RHG"
 
-DEFAULT_MODEL="xiaomi/mimo-v2.5-pro"
+# 换模型只改 bin/mimo-model 一行(和 kimi/cursor/grok/deepseek 腿同一约定);MIMO_CLI_MODEL 单次覆盖。
+_MODEL_FILE="$(dirname "$0")/mimo-model"
+[ -f "$_MODEL_FILE" ] || _MODEL_FILE=/root/aiwork/bin/mimo-model   # 脚本被拷到别处跑时的家
+DEFAULT_MODEL="$(head -n1 "$_MODEL_FILE")" && [ -n "$DEFAULT_MODEL" ] \
+  || { echo "submimo: 读不到模型名 $_MODEL_FILE" >&2; exit 1; }
 
 usage() {
   cat >&2 <<'EOF'
@@ -51,7 +55,7 @@ Fix-only options (goal-based bounded loop; oracle is DEFAULT-ON):
 
 Environment:
   MIMO_CLI_MODEL     optional, provider/model passed to `mimo run -m`
-                     default: xiaomi/mimo-v2.5-pro
+                     default: the line in bin/mimo-model
   MIMO_CLI_TIMEOUT   optional, seconds before timeout, default 900
 
 Examples:
@@ -99,6 +103,16 @@ REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
 TIMEOUT_SECONDS="${MIMO_CLI_TIMEOUT:-900}"
 MODEL="${MIMO_CLI_MODEL:-$DEFAULT_MODEL}"
+
+# MiMo CLI 自带的模型表会落后于新模型:2026-09-22 mimo-v2.6-pro 发布当天,服务端 /v1/models
+# 已列出它,CLI 0.1.1 却报 "Model not found"。所以 xiaomi/ 下的模型每次都按官方
+# provider.<id>.models 写法在运行时登记一份 ⇒ 换模型仍只改 bin/mimo-model 一行。
+# **只含 provider 段**:评审档那把锁在 XDG_CONFIG_HOME 的 agent 段里;实测加/不加这段,
+# `mimo debug agent aiwork-review` 排序后逐字节一致。能力值照抄 CLI 表里的 mimo-v2.5-pro。
+MIMO_MODEL_CFG=""
+if [[ "$MODEL" == xiaomi/* ]]; then
+  MIMO_MODEL_CFG="$(printf '{"provider":{"xiaomi":{"models":{"%s":{"name":"%s","reasoning":true,"tool_call":true,"interleaved":{"field":"reasoning_content"},"temperature":true,"limit":{"context":1048576,"output":131072}}}}}}' "${MODEL#xiaomi/}" "${MODEL#xiaomi/}")"
+fi
 
 if [[ -n "$ORACLE_CMD" || ${#PROTECT[@]} -gt 0 ]]; then
   [[ "$MODE" == "fix" ]] || die "--oracle/--protect are only valid in fix mode"
@@ -281,6 +295,9 @@ case "$TASK_REAL" in
 esac
 
 CMD=(mimo run --agent "$AGENT" --dir "$REPO_DIR" --format default -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
+if [[ -n "$MIMO_MODEL_CFG" ]]; then
+  CMD=(env "MIMOCODE_CONFIG_CONTENT=$MIMO_MODEL_CFG" "${CMD[@]}")
+fi
 # 只读模式下把配置指向隔离目录(fix 用真配置,它是执行腿)
 if [[ "$MODE" != "fix" ]]; then
   CMD=(env "XDG_CONFIG_HOME=$MIMO_CFG_HOME" "${CMD[@]}")
