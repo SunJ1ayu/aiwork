@@ -253,6 +253,37 @@ class CandidateTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse(list(self.d.glob(p.name + '.*.called')))
 
+    def run_legacy_cursor(self, model, env=None):
+        # 旧入口(不带 --members)只开 Cursor 一条腿:它本轮跑的就是 CURSOR_MODEL。
+        self.n += 1; prefix = self.d / f'run{self.n}'
+        off = {k: 'off' for k in ('PANEL_MIMO_LEG', 'PANEL_DEEPSEEK_LEG', 'PANEL_GLM_LEG',
+                                  'PANEL_KIMI_LEG', 'PANEL_GEMINI_LEG', 'PANEL_GROK_LEG')}
+        result = subprocess.run([str(self.bin / 'panel-review'), '--no-track', '--no-my-review',
+                                 '--risk', 'standard', str(self.task), str(self.repo), str(prefix)],
+                                env=dict(self.env, **off, CURSOR_MODEL=model, **(env or {})),
+                                capture_output=True, text=True, timeout=35)
+        return result, prefix
+
+    def test_legacy_cursor_leg_and_explicit_member_share_model_health(self):
+        # 第 2 轮重试 Grok 的 BLOCK:旧轮换把 Cursor 失败记在通道名 subcursor 下、显式成员记在
+        # subcursor.<model> 下 ⇒ 同一个模型在一边撞了额度,另一边照派。冷却/连败要按实际模型共用。
+        r, p = self.run_legacy_cursor('composer-2.5', env={'FAIL_MODEL': 'composer-2.5'})
+        self.assertTrue(list(self.d.glob(p.name + '.subcursor.called')), r.stdout + r.stderr)
+        r, p = self.run_panel('subcursor@composer-2.5', risk='standard')
+        self.assertNotEqual(r.returncode, 0, 'legacy quota on this model must cool the explicit member')
+        self.assertFalse(list(self.d.glob(p.name + '.*.called')))
+        # 反方向:显式成员撞额度,旧轮换跑同一个模型时要跳过它。
+        r, p = self.run_panel('subcursor@composer-2.6', risk='standard', env={'FAIL_MODEL': 'composer-2.6'})
+        self.assertTrue(list(self.d.glob(p.name + '.*.called')), r.stdout + r.stderr)
+        r, p = self.run_legacy_cursor('composer-2.6')
+        self.assertFalse(list(self.d.glob(p.name + '.*.called')),
+                         'explicit quota on this model must cool the legacy leg running it')
+        # 对照:没失败过的模型两边都照派 —— 不许修成「整个 Cursor 通道一起冷却」。
+        r, p = self.run_legacy_cursor('composer-2.7')
+        self.assertTrue(list(self.d.glob(p.name + '.subcursor.called')), r.stdout + r.stderr)
+        r, p = self.run_panel('subcursor@composer-2.8', risk='standard')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_failure_before_model_facts_preserves_health_cause(self):
         for suffix, diagnostic, expected in (
                 ('quota', 'quota exhausted', 'quota'),
