@@ -503,6 +503,14 @@ if [[ ! "$HEALTH_DEAD_STREAK" =~ ^(0|[1-9][0-9]*)$ ]]; then
 fi
 mkdir -p "$PANEL_STATE_DIR"
 
+# health.tsv 的行键。Cursor 是通道不是模型:旧轮换的 subcursor 腿本轮跑的是冻结的
+# $CURSOR_MODEL(_panel-roster-lib.sh 已 export),与显式成员 subcursor.<model> 共用同一行
+# ⇒ 同一个模型在哪个入口撞了额度,另一个入口都看得见;不同模型仍各自冷却。
+# 改之前留下的无模型 `subcursor` 行追溯不到模型,只由 panel-candidates 当 transport_history 提示。
+health_key() {  # health_key <leg>
+  if [[ "$1" == subcursor ]]; then printf 'subcursor.%s\n' "${CURSOR_MODEL:-}"; else printf '%s\n' "$1"; fi
+}
+
 override_health() {  # override_health <leg>; prints explicit status or nothing
   local leg="$1" pair key value
   IFS=',' read -r -a _pairs <<< "${PANEL_HEALTH_OVERRIDE:-}"
@@ -516,7 +524,7 @@ override_health() {  # override_health <leg>; prints explicit status or nothing
 recent_health() {  # recent_health <leg>; prints status if still cooling down
   local leg="$1" row status at now
   [[ -f "$HEALTH_FILE" ]] || return 1
-  row="$(awk -F '\t' -v n="$leg" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
+  row="$(awk -F '\t' -v n="$(health_key "$leg")" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
   [[ -n "$row" ]] || return 1
   # 🔴 **按列取,不许用 `read` 吞字段**(2026-08-25,panel subglm 抓到、我亲手复现):
   # health.tsv 从 3 列长到 5 列之后,`IFS=$'\t' read -r _ status at` 会把**多余字段
@@ -543,7 +551,7 @@ dead_health() {  # dead_health <leg>; 连续硬失败到阈值就打印 dead:<st
   local leg="$1" row status streak
   [[ "$HEALTH_DEAD_STREAK" =~ ^[0-9]+$ && "$HEALTH_DEAD_STREAK" -gt 0 ]] || return 1
   [[ -f "$HEALTH_FILE" ]] || return 1
-  row="$(awk -F '\t' -v n="$leg" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
+  row="$(awk -F '\t' -v n="$(health_key "$leg")" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
   [[ -n "$row" ]] || return 1
   status="$(printf '%s' "$row" | cut -f2)"
   streak="$(printf '%s' "$row" | cut -f4)"
@@ -675,8 +683,8 @@ for _leg in "${LEGS[@]}"; do
     # `--all` 恰恰是最该知道"其实只有 3 条腿"的场合,原来它信息最少。判据 V44p。
     _dinfo="$(dead_health "$_leg")"; _dstatus="${_dinfo#dead:}"
     _dstreak="${_dstatus##*:}"; _dstatus="${_dstatus%:*}"
-    _dfirst="$(awk -F '\t' -v n="$_leg" '$1==n {f=$5} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
-    _dlog="$(awk -F '\t' -v n="$_leg" '$1==n {f=$6} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
+    _dfirst="$(awk -F '\t' -v n="$(health_key "$_leg")" '$1==n {f=$5} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
+    _dlog="$(awk -F '\t' -v n="$(health_key "$_leg")" '$1==n {f=$6} END{print f}' "$HEALTH_FILE" 2>/dev/null)"
     if [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]]; then
       echo "  $_leg -> ${LEG_LOG[$_leg]} (leg: $(basename "${LEG_CMD[$_leg]}") family: $(panel_leg_family "$_leg"))"
     else
@@ -1057,6 +1065,7 @@ unset _launched _leg _seen_verdict _has_failure _has_degraded _has_incomplete _h
 # Parent process records only actual review outcomes; no extra provider probe.
 record_health() {  # record_health <leg>
   local name="$1" status tmp now rc="${LEG_RC[$1]}" log="${LEG_LOG[$1]}" typed state exit_code verdict degraded failure eligible
+  local key; key="$(health_key "$name")"
   now="$(date +%s)"; status="PASS"
   typed="$(leg_result_fields "$name" 2>/dev/null)" || typed=$'lost\t1\tUNKNOWN\tfalse\tunknown\tfalse'
   IFS=$'\t' read -r state exit_code verdict degraded failure eligible <<<"$typed"
@@ -1081,7 +1090,7 @@ record_health() {  # record_health <leg>
   prior_streak=0; prior_first=""
   if [[ -f "$HEALTH_FILE" ]]; then
     local prow
-    prow="$(awk -F '\t' -v n="$name" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
+    prow="$(awk -F '\t' -v n="$key" '$1==n {row=$0} END{print row}' "$HEALTH_FILE")"
     if [[ -n "$prow" ]]; then
       prior_streak="$(printf '%s' "$prow" | cut -f4)"
       prior_first="$(printf '%s' "$prow" | cut -f5)"
@@ -1120,8 +1129,8 @@ record_health() {  # record_health <leg>
     streak=0; first=""; lastlog=""
   fi
   tmp="$HEALTH_FILE.tmp.$$"
-  { [[ -f "$HEALTH_FILE" ]] && awk -F '\t' -v n="$name" '$1!=n' "$HEALTH_FILE"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$now" "$streak" "$first" "$lastlog"
+  { [[ -f "$HEALTH_FILE" ]] && awk -F '\t' -v n="$key" '$1!=n' "$HEALTH_FILE"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$status" "$now" "$streak" "$first" "$lastlog"
   } > "$tmp" && mv -f "$tmp" "$HEALTH_FILE"
 }
 for _leg in "${LEGS[@]}"; do
