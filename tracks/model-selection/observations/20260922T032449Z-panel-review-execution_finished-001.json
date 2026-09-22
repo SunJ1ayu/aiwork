@@ -1,0 +1,190 @@
+{
+  "schema_version": 2,
+  "track": "model-selection",
+  "run_id": "20260922-105947-1209102-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "model-selection-r3-review",
+  "started_at": "2026-09-22T02:59:47Z",
+  "finished_at": "2026-09-22T03:24:49Z",
+  "duration_ms": 1502541,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "high",
+    "degraded": false,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "adapter": "submimo",
+        "degraded": false,
+        "duration_ms": 1501718,
+        "evidence": {
+          "completeness": "partial",
+          "digest": "sha256:c4dd46b9e99ee3ebd7f7d2e1a55c6cea19e2693861b31e7f0180a85aeac2ebbe",
+          "ref": "file:///root/aiwork/logs/panel-model-selection-r3.submimo.evidence.log"
+        },
+        "failure_kind": "timeout",
+        "family": "xiaomi",
+        "model": {
+          "invoked": "xiaomi/mimo-v2.6-pro",
+          "reported": null,
+          "requested": "xiaomi/mimo-v2.6-pro"
+        },
+        "name": "submimo",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 124,
+          "state": "timed_out"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260922-105947-1209102-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:0a6b409a5d9a3fa3ccd961738ca27253eb8eb8a9fa570425d40af9f7e02b1d1a",
+            "policy_version": 1,
+            "track": "model-selection"
+          },
+          "digest": "sha256:2d223b50ce7081b0ebd9e0c1e9f7696e3adf141d013c18fa88bde69ff1816001",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "537b43894a3fc2be0f6d11242b896772bf79df87",
+            "index_tree_oid": "abc9c4c4a52bdec612ef5ebebbb1fe83a421214c",
+            "worktree_tree_oid": "81ec3f71f316c140365f8ed0d91244a064c1ca62"
+          },
+          "task_sha256": "sha256:edc0c45b719b591d31ba6176f7b0839750a8433d2de59b7f67e8190d64e6bcc4"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "UNKNOWN",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subkimi",
+        "degraded": false,
+        "duration_ms": 451441,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:a0a527f289a3a902ce33c467ca2125c04286cab742cec6a0ef285d676be22568",
+          "ref": "file:///root/aiwork/logs/panel-model-selection-r3.subkimi.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "moonshot",
+        "model": {
+          "invoked": "kimi-code/kimi-for-coding",
+          "reported": null,
+          "requested": "kimi-code/kimi-for-coding"
+        },
+        "name": "subkimi",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260922-105947-1209102-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:0a6b409a5d9a3fa3ccd961738ca27253eb8eb8a9fa570425d40af9f7e02b1d1a",
+            "policy_version": 1,
+            "track": "model-selection"
+          },
+          "digest": "sha256:2d223b50ce7081b0ebd9e0c1e9f7696e3adf141d013c18fa88bde69ff1816001",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "537b43894a3fc2be0f6d11242b896772bf79df87",
+            "index_tree_oid": "abc9c4c4a52bdec612ef5ebebbb1fe83a421214c",
+            "worktree_tree_oid": "81ec3f71f316c140365f8ed0d91244a064c1ca62"
+          },
+          "task_sha256": "sha256:edc0c45b719b591d31ba6176f7b0839750a8433d2de59b7f67e8190d64e6bcc4"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subcursor",
+        "degraded": false,
+        "duration_ms": 567459,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:1e4bb58e608391d90b5d876ddb6aa58d660edef02f6d1754c9da3b31746ae580",
+          "ref": "file:///root/aiwork/logs/panel-model-selection-r3.subcursor.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xai",
+        "model": {
+          "invoked": "grok-4.7-high",
+          "reported": null,
+          "requested": "grok-4.7-high"
+        },
+        "name": "subcursor",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260922-105947-1209102-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:0a6b409a5d9a3fa3ccd961738ca27253eb8eb8a9fa570425d40af9f7e02b1d1a",
+            "policy_version": 1,
+            "track": "model-selection"
+          },
+          "digest": "sha256:2d223b50ce7081b0ebd9e0c1e9f7696e3adf141d013c18fa88bde69ff1816001",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "537b43894a3fc2be0f6d11242b896772bf79df87",
+            "index_tree_oid": "abc9c4c4a52bdec612ef5ebebbb1fe83a421214c",
+            "worktree_tree_oid": "81ec3f71f316c140365f8ed0d91244a064c1ca62"
+          },
+          "task_sha256": "sha256:edc0c45b719b591d31ba6176f7b0839750a8433d2de59b7f67e8190d64e6bcc4"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

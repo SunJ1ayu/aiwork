@@ -87,3 +87,98 @@ submimo=PASS(verdict=UNKNOWN) subdeepseek=FAIL(rc=1,降级:回落聊天腿也没
 runlog: sep22-merged-check rc=1 commit=6028c98 dirty=no final=yes at=2026-09-22T01:21:42Z file=tracks/model-selection/evidence/20260922T012142Z-01-sep22-merged-check.txt
 runlog: sep22-merged-check rc=0 commit=6028c98 dirty=yes final=yes at=2026-09-22T01:23:03Z file=tracks/model-selection/evidence/20260922T012303Z-01-sep22-merged-check.txt
 ```
+
+## 2026-09-22 Claude 接手(GPT 09:41 额度用光,停在第 2 轮等 MiMo)
+
+对我来说 GPT 是执行腿,它的自述与自审不作数;本单判据也是它写的,所以补偿控制是
+我亲跑全量 + 基线对照 + 变异测试,不读它的汇总。自审原文在仓外
+`/root/panel-my-reviews/model-selection-claude-takeover.md`,写于派重试之前(读过第 2 轮
+Composer 报告与 MiMo 半截日志,两份都无具体发现,已在自审里交代)。
+
+- 全量总跑 31 套(断网 + 私有挂载):唯一的红是孤儿套件 `test-low-uncertainty-reason.sh`
+  及其缺断网守卫的 no-egress N3a/N3c;**在基线 003563c 上红得一模一样** ⇒ 本单零新增失败。
+  这个孤儿是 09-19 我自己那单 revert 后留下的判据,不在本单范围。
+- 变异 19 个:15 个被咬住(红在对的用例上);存活 4 个(M6/M7/M16/M18)逐个核过都有第二道挡,
+  是「挡不住任意未来错误实现」,延期。明细在自审里。
+
+```text
+runlog: claude-takeover-full rc=1 commit=1a68bf1 dirty=yes final=yes at=2026-09-22T02:09:21Z file=tracks/model-selection/evidence/20260922T020921Z-01-claude-takeover-full.txt
+runlog: baseline-orphan-same-red rc=0 commit=1a68bf1 dirty=yes at=2026-09-22T02:19:37Z file=tracks/model-selection/evidence/20260922T021937Z-01-baseline-orphan-same-red.txt
+runlog: shared-health-oracle-red rc=1 commit=1a68bf1 dirty=yes at=2026-09-22T02:45:25Z file=tracks/model-selection/evidence/20260922T024525Z-01-shared-health-oracle-red.txt
+runlog: shared-health-full rc=143 commit=0e6b8ae dirty=yes final=yes at=2026-09-22T02:47:03Z file=tracks/model-selection/evidence/20260922T024703Z-01-shared-health-full.txt
+```
+
+- `claude-takeover-full rc=1`:红只在上面那个基线同款孤儿上,见基线对照那份。
+- `baseline-orphan-same-red rc=0`:脚本末条是 echo;实际内容是基线上 coverage-only rc=1、no-egress 16/2。
+- `shared-health-oracle-red rc=1`:新判据先行、按预期红,16 条里只红新加的那条(红在「旧入口撞额度后显式成员没被拦」)。
+- `shared-health-full rc=143`:**我主动中断的**,不算数 —— 跑到一半想起 transport_history 失去写入方,
+  要先删掉它再跑最终那遍(否则那遍审的不是最终内容)。
+
+### 轮次记录(接续)
+
+| 轮 | 类型 | 派发前 `track preflight` | 日志前缀 | 新增有效阻断 |
+|---|---|---|---|---|
+| 2 | 基础设施重试(MiMo 上次 GPT 把时限压到 600s 被砍;本次 1500s) | BLOCK=0 PENDING=2 | `/root/aiwork/logs/panel-model-selection-sep22-r2retry` | 1(Grok F1) |
+
+```text
+submimo=PASS(verdict=PASS) subdeepseek=off subglm=off subkimi=PASS(verdict=PASS) subgemini=off subgrok=off subcursor=PASS(verdict=BLOCK)
+```
+
+三家都 coverage-eligible,但 PASS/BLOCK 冲突 ⇒ 这一轮不能满足归档。选腿:业主要求加 MiMo 2.6 Pro;
+另选 Kimi 与 Cursor/Grok 4.7(能读仓、最近成功过);不选 GPT 家族(作者)与 Claude 家族(主裁)。
+用主仓旧调度器派发,不用候选的新入口给自己打分。
+
+### 第 2 轮重试的发现与处置
+
+| # | 发现:触发条件与影响 | 核实证据 | 处置 | 理由 |
+|---|---|---|---|---|
+| G1 | Grok(High):旧轮换把 Cursor 失败记在 `subcursor`、显式成员记在 `subcursor.<model>`,同一模型一边撞额度另一边照派;`--members subcursor` 是旧入口别名却不看旧入口冷却 | 已核 `panel-review` recent_health/dead_health/record_health 都按腿名取行;我写判据复现两个方向都红(`shared-health-oracle-red`) | **本单必须修** → `f6aa79a` 判据 / `0e6b8ae` 修 / `537b438` 清理 | 本单文档自己承诺「冷却中的成员会在调用前拒绝」;Cursor 掉登录这类整账号故障会让每个模型各白打一次,连败停用机制当初正是为治这个。修法按根因:同一件事只留一个键 `subcursor.<本轮模型>`,不整通道冷却(判据对照组钉住) |
+| K1 | Kimi(Low):同 G1,另提 `PANEL_HEALTH_OVERRIDE=subcursor=healthy` 够不着显式成员 | 已核 override 按腿名精确匹配 | 同模型部分随 G1 修;override 按成员名 **驳回** | 显式成员就用 `subcursor.<model>=healthy`,文档写着;按通道一键放回会把不同模型一起放回,违背「各模型各自冷却」 |
+| K2 | Kimi(Low):没有 GLM 显式成员的端到端;`go/` 前缀在 CAPABILITIES 与 subagent OC_PROVIDER 两处各写一份,今天一致 | 已核 `_panel_candidates.py:21` 与 `subagent` OC_PROVIDER="go";我自审第 4 条同一处 | 延期 | 会长成:以后有人改 GLM 的 opencode provider 前缀而没改目录,显式选 GLM 的评审会一直被判 INELIGIBLE(花名册上看得见),方向是漏计不是误计 |
+| M1 | MiMo:PASS,无具体发现 | — | — | — |
+| 清理 | 修完 G1 后 `transport_history` 失去写入方,会永远显示一条过期记录 | 修复后全仓只剩它读无模型 `subcursor` 行 | 已删(`537b438`) | 没人维护的字段伪装成有内容,是当年「当前状态」字段永久摆设的同一种病 |
+
+### 追加一轮(派发前写明)
+
+- 具体阻断:G1(已修)。旧的两轮实质评审 + 本次重试都审的是修复之前的内容,且重试有冲突,归档条件不可能满足。
+- 追加目的:核验 G1 修复及其影响面(旧入口健康/冷却/连败的原有判据),并在无冲突的同一轮拿到 ≥2 家族覆盖。
+- 新的有限预算:**只加 1 轮实质评审**(即第 3 轮)。仍用 MiMo + Kimi + Cursor/Grok,用主仓旧调度器。
+  这一轮若再出「本单必须修」:停下,本单保持未完成,向业主报告,不再续轮。基础设施重试照记。
+
+第 3 轮派发前,最终内容(537b438)全量总跑:红只在基线同款孤儿上,其余 30 套全绿(含旧入口健康/冷却/连败的 V44 系列),source-stable=yes。
+
+```text
+runlog: shared-health-final rc=1 commit=537b438 dirty=yes final=yes at=2026-09-22T02:49:43Z file=tracks/model-selection/evidence/20260922T024943Z-01-shared-health-final.txt
+```
+
+### 第 3 轮(实质,追加的最后一轮)
+
+| 轮 | 类型 | 派发前 `track preflight` | 日志前缀 | 新增有效阻断 |
+|---|---|---|---|---|
+| 3 | 实质(核验 G1 修复 + 全量 delta) | BLOCK=0 PENDING=1 | `/root/aiwork/logs/panel-model-selection-r3` | 0 |
+
+```text
+submimo=FAIL(rc=124) subdeepseek=off subglm=off subkimi=PASS(verdict=PASS) subgemini=off subgrok=off subcursor=PASS(verdict=PASS)
+```
+
+| # | 发现:触发条件与影响 | 核实证据 | 处置 | 理由 |
+|---|---|---|---|---|
+| R3-Grok | 逐处确认 health_key 接进四处读、一处写;override 仍按腿名;scoped 与 --all 同键;新判据两个方向 + 对照组都在;无缺陷 | 与我自审第 3 轮补充一致 | — | — |
+| R3-K1 | Kimi(nit):修复前留下的无模型 `subcursor` 行永远留在 health.tsv 里 | 已核:修复后全仓无读者 | 延期 | 会长成:业主翻 `logs/.panel-state/health.tsv` 时看到一条永不更新的 subcursor 行,纯噪音;那是仓外运行状态,不值得为它写迁移 |
+| R3-K2 | Kimi(nit):cursor-model 缺失且 CURSOR_MODEL 未设时键退化成 `subcursor.` | 已核 `subcursor:40` 此时直接 die('cannot read bin/cursor-model'),roster 家族记 unknown | 驳回 | 那种状态下 Cursor 腿本来就跑不起来,退化键只记下这次失败,不影响别的模型 |
+| R3-K3 | Kimi(note):MiMo 运行时登记离线验证不了 | 今天 MiMo 真跑 3 次,typed result 的 invoked 都是 `xiaomi/mimo-v2.6-pro`,重试轮交了完整报告 | 驳回(已有线上实证) | 离线判据只管「submimo 传没传、只含 provider 段」,「CLI 认不认」由真跑回答,今天回答了 3 次 |
+| R3-MiMo | 1501s 超时,无报告 | 半截日志:只写了开头一句,29 条命令全在查修复相关的读写点,无任何疑点 | 不计覆盖;不补派(业主定) | 慢不是坏:平均近 1 分钟一步。以后派 MiMo 2.6 Pro 审大单,时限给 35 分钟或拆小题面 |
+
+## 主裁(Claude,2026-09-22)
+
+**PASS。**
+
+- 目标达成:主裁可用 `panel-candidates` 看候选,`--members` 点名派发,同一轮可放多个 Cursor 模型;
+  显式名单不轮换、不偷换、不回落;发散结果永不计评审覆盖;花名册断线可按冻结名单重建。
+- 证据链不依赖执行腿自述:我亲跑的最终全量(537b438)只红基线同款孤儿;19 个变异 15 个咬住、4 个核过有第二道挡;
+  G1 由我写判据先红后修。
+- 覆盖:第 3 轮同一次 panel、同一 subject,Kimi(moonshot)+ Grok 4.7(xai)两家合格 PASS、无冲突;
+  预算 2 轮 + 声明过的追加 1 轮,用完即止。
+- 留下的边界(都已在上面各表写明):一个 Cursor 账号可单独凑满两个家族(外壳同一套,主裁选人时自己权衡);
+  K2 GLM 前缀两处各写一份;变异存活的 4 条与「原生成员失败不回落聊天腿」无专门用例。都是延期,不自动开新单。
+- 没有做到/不承诺:孤儿套件 `test-low-uncertainty-reason.sh` 仍红(09-19 那单的遗留,不在本单范围)。
