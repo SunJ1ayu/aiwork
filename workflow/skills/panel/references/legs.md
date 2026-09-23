@@ -305,7 +305,7 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
 登记在 `_panel-roster-lib.sh` 的 `PANEL_ROLE_LEG_SPECS`。**不进普通池**:GPT 同时是默认执行腿
 (delegate-codex),进池会轮到它审自家代码;订阅额度也会被普通 high 评审悄悄吃掉。
 
-- 模型单源 `bin/codex-model`(现 `gpt-6-astra`),`SUBCODEX_MODEL` 单次覆盖。
+- 模型单源 `bin/codex-model`(现 `gpt-6-sol`,09-23 业主定;之前 `gpt-6-astra`),`SUBCODEX_MODEL` 单次覆盖。
 - 源仓 `ro-repo-exec` 物理只读,codex 在可丢弃副本里读、跑测试(`-s workspace-write`);任务书走 stdin。
 - `-c project_doc_max_bytes=0`(被评审仓里有 AGENTS.md 时它会自动吞)、`--ignore-user-config --ignore-rules --ephemeral`。
 - **子 agent 与联网 —— 09-13 真跑证伪过第一版(codex 0.154)**:`--disable multi_agent/multi_agent_v2`
