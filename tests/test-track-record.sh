@@ -788,6 +788,24 @@ assert any(m.startswith("review_budget") for m in t["q1"]["missing"])
 PY
 assert_rc=$?
 check "R11: ledger 公开标出主裁裁过的分裂;不完整的记录不补预算" $([[ $rc -eq 0 && $assert_rc -eq 0 ]]; echo $?)
+LEDGER="$ledger" python3 - <<'PY'
+import json,os
+t={x["track"]:x for x in json.loads(os.environ["LEDGER"])["tracks"]}
+# 第 1 轮 Grok:裁决记录写错时归档会挡(split.*);ledger 不能因为别的组够数就报「可归档」
+for name in ("n1", "q1", "e6"):
+    assert any(m.startswith("split_resolution:split.") for m in t[name]["missing"]), (name, t[name]["missing"])
+assert not any(m.startswith("split_resolution") for m in t["ok"]["missing"])
+PY
+check "R11: 裁决记录写错 ⇒ ledger 也报缺口(与归档同口径)" $?
+LEDGER="$ledger" python3 - <<'PY'
+import json,os
+t={x["track"]:x for x in json.loads(os.environ["LEDGER"])["tracks"]}
+# 第 1 轮 DeepSeek:只靠一份已裁分裂覆盖的单,authoritative_* 不能报「没有覆盖」
+q=t["ok"]["quality"]
+assert q["authoritative_run_id"] == "panel-1" and q["authoritative_family_count"] == 2, q
+assert t["none"]["quality"]["authoritative_family_count"] == 0
+PY
+check "R11: ledger 的 authoritative_* 认主裁裁过的分裂(未裁的仍不认)" $?
 rm -rf "$d"
 
 echo "[R11c] 归档后(tracks/archive/<t>)重验:裁决里写的是归档前路径 tracks/<t>/…,仍须认得"
