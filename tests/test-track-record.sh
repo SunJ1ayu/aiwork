@@ -790,6 +790,40 @@ assert_rc=$?
 check "R11: ledger 公开标出主裁裁过的分裂;不完整的记录不补预算" $([[ $rc -eq 0 && $assert_rc -eq 0 ]]; echo $?)
 rm -rf "$d"
 
+echo "[R11c] 归档后(tracks/archive/<t>)重验:裁决里写的是归档前路径 tracks/<t>/…,仍须认得"
+d="$(mktemp -d)"; ( cd "$d"; git init -q; git config user.email t@t; git config user.name t )
+mkdir -p "$d/tracks" "$d/bin"; printf 'line1\nline2\nline3\n' > "$d/bin/code.py"
+split_case moved
+# 真实的腿日志在仓外 logs/,归档不挪它;夹具默认放在 track 里,这里先搬出去再写裁决
+python3 - "$ROOT" "$d" <<'PY'
+import json, pathlib, shutil, sys
+root, d = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]); sys.path.insert(0, str(root / "bin"))
+from _review_result import evidence_ref
+(d / "logs").mkdir(exist_ok=True)
+p = d / "tracks/moved/observations/panel-1-panel.json"; o = json.loads(p.read_text())
+for leg in o["actual"]["legs"]:
+    src = d / "tracks/moved/review-evidence" / f"panel-1-{leg['name']}.log"
+    dst = d / "logs" / src.name; shutil.move(src, dst); leg["evidence"]["ref"] = evidence_ref(dst)
+p.write_text(json.dumps(o), encoding="utf-8")
+PY
+printf 'logs/\n' > "$d/.gitignore"
+resolve moved ''
+out="$($RECORD validate --phase archive "$d/tracks/moved" 2>&1)"; rc=$?
+check "R11c: 夹具自检 —— 日志搬到仓外后,归档前照样放行" $([[ $rc -eq 0 ]]; echo $?)
+( cd "$d"; git add -A; git commit -qm pre; mkdir -p tracks/archive; git mv tracks/moved tracks/archive/moved; git commit -qm archive )
+out="$($RECORD validate --phase archive "$d/tracks/archive/moved" 2>&1)"; rc=$?
+check "R11c: 归档后重验,归档前路径的证据(收据)照样认" $([[ $rc -eq 0 ]]; echo $?)
+[[ $rc -eq 0 ]] || echo "    got: ${out:0:300}"
+ledger="$($RECORD ledger --repo "$d" --format json)"
+LEDGER="$ledger" python3 - <<'PY'
+import json,os
+t={x["track"]:x for x in json.loads(os.environ["LEDGER"])["tracks"]}
+assert t["moved"]["quality"]["resolved_split_groups"] == 1, t["moved"]["quality"]
+assert not any(m.startswith("review_budget") for m in t["moved"]["missing"]), t["moved"]["missing"]
+PY
+check "R11c: ledger 对已归档的单也认这份裁决" $?
+rm -rf "$d"
+
 echo "[R11b] 裁决记录免指纹:没这个键的旧记录指纹一字不变;评审后加它不作废绑定;改别的照变"
 fp="$(python3 - "$ROOT" <<'PY'
 import json, pathlib, subprocess, sys, tempfile
