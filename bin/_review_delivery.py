@@ -76,7 +76,12 @@ def _rows(repo: Path, track: str, tree: str, env=None, scope: str = "repo") -> l
                         decision = json.loads(blob)
                         if not isinstance(decision, dict) or not isinstance(decision.get("outcome"), dict):
                             raise ValueError("invalid decision")
-                        decision["outcome"] = {**decision["outcome"], "verdict": None}
+                        outcome = {**decision["outcome"], "verdict": None}
+                        # 主裁对分裂评审的裁决记录与 verdict 同类:评审之后才写,写它不许作废这次评审。
+                        # 删键而不是置空 —— 没有这个键的旧记录字节不变,进行中的绑定都不受影响
+                        # (track arbiter-resolves-split-review,判据 R11b 钉着改动前的指纹)。
+                        outcome.pop("split_resolutions", None)
+                        decision["outcome"] = outcome
                         blob = json.dumps(decision, sort_keys=True, separators=(",", ":"),
                                           ensure_ascii=True, allow_nan=False).encode()
                     except (ValueError, TypeError, UnicodeError) as exc:

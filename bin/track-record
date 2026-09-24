@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
@@ -18,6 +18,7 @@ from typing import Any
 from _review_result import (
     ReviewResultError,
     coverage_eligible,
+    evidence_path as review_evidence_path,
     summarize_results,
     validate_result as validate_review_result,
 )
@@ -57,6 +58,11 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CONTROLLERS = ("runlog", "panel-review", "delegate-codex")
+# 分裂评审(同 run 同 subject 合格腿一 PASS 一 BLOCK)的主裁裁决记录(track arbiter-resolves-split-review)
+SPLIT_DISPOSITIONS = ("rejected", "deferred")
+SPLIT_LOCATION_RE = re.compile(r"(?P<path>[^:]+?)(?::(?P<start>[1-9][0-9]*)(?:-(?P<end>[1-9][0-9]*))?)?")
+SPLIT_CLOSEOUT_RECORDS = ("verify.md", "decision.json", "tasks.md")
+SPLIT_RECEIPT_RE = re.compile(r"evidence/([0-9]{8}T[0-9]{6}Z-[0-9]{2}-[A-Za-z0-9._-]+)\.txt")
 EVENTS = ("execution_finished", "received")
 BILLING_MODES = ("subscription", "api", "local")
 EXECUTION_ADAPTERS = ("main", "submimo", "delegate-codex", "claude-worktree")
@@ -284,8 +290,44 @@ def validate_shape(data: dict[str, Any], track_dir: Path) -> None:
     execution = exact_object(required(root, "execution_plan", ""), "execution_plan", ("adapter", "model"))
     nullable_enum(required(execution, "adapter", "execution_plan"), "execution_plan.adapter", EXECUTION_ADAPTERS)
     nullable_token(required(execution, "model", "execution_plan"), "execution_plan.model")
-    outcome = exact_object(required(root, "outcome", ""), "outcome", ("verdict",))
+    outcome_value = required(root, "outcome", "")
+    optional = ("split_resolutions",) if isinstance(outcome_value, dict) and "split_resolutions" in outcome_value else ()
+    outcome = exact_object(outcome_value, "outcome", ("verdict",) + optional)
     nullable_enum(required(outcome, "verdict", "outcome"), "outcome.verdict", VERDICTS)
+    if optional:
+        validate_split_shape(outcome["split_resolutions"])
+
+
+def validate_split_shape(value: Any) -> None:
+    """只查形状;内容(摘录/证据/腿)在归档时对着评审记录核,见 resolved_split_groups。"""
+    path = "outcome.split_resolutions"
+    if not isinstance(value, list):
+        raise DecisionError("field.type", path, value, "array")
+    for i, item in enumerate(value):
+        item_path = f"{path}[{i}]"
+        item = exact_object(item, item_path, ("run_id", "subject_digest", "legs"))
+        for key in ("run_id", "subject_digest"):
+            if not isinstance(item[key], str) or not item[key]:
+                raise DecisionError("field.type", f"{item_path}.{key}", item[key], "non-empty string")
+        if not isinstance(item["legs"], list):
+            raise DecisionError("field.type", f"{item_path}.legs", item["legs"], "array")
+        for j, leg in enumerate(item["legs"]):
+            leg_path = f"{item_path}.legs[{j}]"
+            leg = exact_object(leg, leg_path, ("name", "log_digest", "rebuttals"))
+            for key in ("name", "log_digest"):
+                if not isinstance(leg[key], str) or not leg[key]:
+                    raise DecisionError("field.type", f"{leg_path}.{key}", leg[key], "non-empty string")
+            if not isinstance(leg["rebuttals"], list):
+                raise DecisionError("field.type", f"{leg_path}.rebuttals", leg["rebuttals"], "array")
+            for k, rebuttal in enumerate(leg["rebuttals"]):
+                rebuttal_path = f"{leg_path}.rebuttals[{k}]"
+                rebuttal = exact_object(rebuttal, rebuttal_path, ("quote", "disposition", "reason", "evidence"))
+                for key in ("quote", "disposition", "reason"):
+                    if not isinstance(rebuttal[key], str):
+                        raise DecisionError("field.type", f"{rebuttal_path}.{key}", rebuttal[key], "string")
+                evidence = rebuttal["evidence"]
+                if not isinstance(evidence, list) or any(not isinstance(entry, str) for entry in evidence):
+                    raise DecisionError("field.type", f"{rebuttal_path}.evidence", evidence, "array of strings")
 
 
 def require_value(data: dict[str, Any], path: tuple[str, ...], expected: str) -> Any:
@@ -394,14 +436,16 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
             "at least one execution_finished with exit_code=0 before PASS archive",
         )
     required_reviews = REVIEW_BUDGETS[data["impact"]["level"]]
+    panel_runs = [
+        item
+        for item in executions
+        if item["controller"] == "panel-review" and item["exit_code"] == 0
+    ]
+    review_coverage = panel_review_coverage(panel_runs)
+    # 裁决记录写了就必须全对,不论预算是几 —— 写在 decision.json 里的就是主张
+    resolved = resolved_split_groups(data, track_dir, source, panel_runs, observations, review_coverage)
     if required_reviews:
-        panel_runs = [
-            item
-            for item in executions
-            if item["controller"] == "panel-review" and item["exit_code"] == 0
-        ]
-        review_coverage = panel_review_coverage(panel_runs)
-        qualifying = qualifying_review_groups(review_coverage, required_reviews)
+        qualifying = qualifying_review_groups(review_coverage, required_reviews, resolved)
         if not qualifying:
             raise DecisionError(
                 "observation.review_budget",
@@ -413,7 +457,8 @@ def validate_archive_observations(data: dict[str, Any], track_dir: Path, source:
                     "authoritative_groups": review_coverage["authoritative_groups"],
                     "same_subject_shadow": review_coverage["same_subject_shadow"],
                 },
-                f">= {required_reviews} coverage-eligible families in one successful panel run for one subject, without verdict conflict",
+                f">= {required_reviews} coverage-eligible families in one successful panel run for one subject, "
+                "without an unresolved PASS/BLOCK conflict (outcome.split_resolutions)",
             )
         validate_review_delivery(data, track_dir, source, panel_runs, qualifying)
     if data["execution_plan"]["adapter"] == "main" and not any(
@@ -1237,12 +1282,165 @@ def panel_review_coverage(successful_panel_runs: list[dict[str, Any]]) -> dict[s
     }
 
 
-def qualifying_review_groups(coverage: dict[str, Any], required_families: int) -> list[dict[str, Any]]:
+def qualifying_review_groups(
+    coverage: dict[str, Any],
+    required_families: int,
+    resolved: frozenset[tuple[str, str]] | set[tuple[str, str]] = frozenset(),
+) -> list[dict[str, Any]]:
+    """分裂组只有主裁裁决记录核过(resolved)才算;两家都 BLOCK 从来不算分裂,由 verdict 定。"""
     return [
         item
         for item in coverage["authoritative_groups"]
-        if not item["conflict"] and item["eligible_family_count"] >= required_families
+        if (not item["conflict"] or (item["run_id"], item["subject_digest"]) in resolved)
+        and item["eligible_family_count"] >= required_families
     ]
+
+
+def _eligible_legs_by_group(panel_runs: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in panel_runs:
+        for leg in item["actual"].get("legs") or []:
+            if leg.get("schema_version") != 2 or leg["subject"]["digest"] is None:
+                continue
+            if coverage_eligible(leg):
+                groups.setdefault((leg["run_id"], leg["subject"]["digest"]), []).append(leg)
+    return groups
+
+
+def _is_runlog_receipt(blob: bytes) -> bool:
+    # 与 _review_delivery 豁免收据的判法同形:文件名 + 抬头 + 收据行
+    return blob.startswith(b"# runlog receipt ") and any(line.startswith(b"runlog: ") for line in blob.splitlines())
+
+
+def _split_evidence(
+    entry: str,
+    path: str,
+    repo: Path | None,
+    track_dir: Path,
+    source: str,
+    runlog_runs: set[str],
+) -> None:
+    """证据必须是被这次评审绑定的交付文件:仓内、在该视图里、不是评审后才写的收尾记录。"""
+    def refuse(expected: str) -> DecisionError:
+        return DecisionError("split.evidence", path, entry, expected)
+
+    match = SPLIT_LOCATION_RE.fullmatch(entry)
+    rel = match["path"] if match else ""
+    if repo is None:
+        raise refuse("track inside a git repository")
+    if (not rel or rel.startswith("/") or "\\" in rel or ".." in PurePosixPath(rel).parts
+            or PurePosixPath(rel).as_posix() != rel):
+        raise refuse("repo-relative path without '..' (optionally :line or :start-end)")
+    try:
+        track_rel = track_dir.resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError as exc:
+        raise refuse("track inside the repository") from exc
+    inner = rel[len(track_rel) + 1:] if rel.startswith(track_rel + "/") else None
+    if inner is not None and (inner in SPLIT_CLOSEOUT_RECORDS or inner.startswith("observations/")):
+        raise refuse("file bound by the review, not this track's closeout records (writable after review)")
+
+    git = ["git", "--literal-pathspecs", "-C", os.fspath(repo)]
+    if source == "working":
+        listed = subprocess.run(git + ["ls-files", "-co", "--exclude-standard", "-z", "--", rel],
+                                capture_output=True, check=False)
+        candidate = repo / rel
+        if (listed.returncode != 0 or rel.encode() not in listed.stdout.split(b"\0")
+                or candidate.is_symlink() or not candidate.is_file()):
+            raise refuse("existing non-ignored regular file in the working delivery view")
+        blob = candidate.read_bytes()
+    else:
+        listed = subprocess.run(git + ["ls-files", "--stage", "-z", "--", rel], capture_output=True, check=False)
+        entries = [item for item in listed.stdout.split(b"\0") if item]
+        # 代码证据常在 bin/ 下、是可执行文件(100755);符号链接(120000)与子模块不收
+        if listed.returncode != 0 or len(entries) != 1 or not entries[0].startswith((b"100644 ", b"100755 ")) \
+                or entries[0].split(b"\t", 1)[-1] != rel.encode():
+            raise refuse("exact staged regular blob (100644|100755)")
+        shown = subprocess.run(git + ["cat-file", "blob", f":{rel}"], capture_output=True, check=False)
+        if shown.returncode != 0:
+            raise refuse("readable staged blob")
+        blob = shown.stdout
+
+    receipt = SPLIT_RECEIPT_RE.fullmatch(inner) if inner is not None else None
+    if receipt is not None and _is_runlog_receipt(blob) and receipt.group(1) not in runlog_runs:
+        # 收据免指纹,评审后手写一份也不会作废绑定 ⇒ 只认有同名 runlog 记录的那种
+        raise refuse("runlog receipt with a matching runlog execution_finished observation")
+    if match and match["start"]:
+        lines = blob.count(b"\n") + (1 if blob and not blob.endswith(b"\n") else 0)
+        start = int(match["start"])
+        end = int(match["end"]) if match["end"] else start
+        if not start <= end <= lines:
+            raise refuse(f"line range within 1..{lines}")
+
+
+def resolved_split_groups(
+    data: dict[str, Any],
+    track_dir: Path,
+    source: str,
+    panel_runs: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    coverage: dict[str, Any],
+) -> set[tuple[str, str]]:
+    """业主 09-24:「一家通过一家不通过需要你来判断 你觉得可以过就写清理由和证据」。
+
+    机器查不了理由好坏(腿的结论只有 verdict 一个字段);它查的是:裁决绑着一个真分裂组、
+    逐条 BLOCK 腿都写了、每条驳回摘的是那家被指纹锁住的日志原话、证据是这次评审绑定的交付文件。
+    任何一条不成立就整份不认(DecisionError),不静默跳过 —— 写在 decision.json 里的就是主张。"""
+    resolutions = data["outcome"].get("split_resolutions") or []
+    if not resolutions:
+        return set()
+    conflicting = {(item["run_id"], item["subject_digest"]) for item in coverage["authoritative_groups"]
+                   if item["conflict"]}
+    eligible = _eligible_legs_by_group(panel_runs)
+    runlog_runs = {item["run_id"] for item in observations
+                   if item["controller"] == "runlog" and item["event"] == "execution_finished"}
+    repo = git_root(track_dir)
+    resolved: set[tuple[str, str]] = set()
+    for i, resolution in enumerate(resolutions):
+        path = f"outcome.split_resolutions[{i}]"
+        key = (resolution["run_id"], resolution["subject_digest"])
+        if key not in conflicting or key in resolved:
+            raise DecisionError(
+                "split.target", path, {"run_id": key[0], "subject_digest": key[1]},
+                "one resolution per PASS/BLOCK-conflicting (run_id, subject_digest) group of this track",
+            )
+        blocks = {leg["name"]: leg for leg in eligible.get(key, []) if leg["verdict"] == "BLOCK"}
+        names = [leg["name"] for leg in resolution["legs"]]
+        if sorted(names) != sorted(blocks):
+            raise DecisionError("split.legs", f"{path}.legs[].name", sorted(names),
+                                f"exactly the eligible BLOCK legs {sorted(blocks)}")
+        for j, entry in enumerate(resolution["legs"]):
+            leg_path = f"{path}.legs[{j}]"
+            leg = blocks[entry["name"]]
+            if entry["log_digest"] != leg["evidence"]["digest"]:
+                raise DecisionError("split.log_digest", f"{leg_path}.log_digest", entry["log_digest"],
+                                    leg["evidence"]["digest"])
+            try:
+                text = review_evidence_path(leg["evidence"]["ref"]).read_bytes().decode("utf-8", "replace")
+            except (OSError, ReviewResultError) as exc:
+                raise DecisionError("split.log_digest", f"{leg_path}.log_digest", leg["evidence"]["ref"],
+                                    "readable pinned review log") from exc
+            if not entry["rebuttals"]:
+                raise DecisionError("split.rebuttal", f"{leg_path}.rebuttals", [],
+                                    "at least one rebuttal per BLOCK leg")
+            for k, rebuttal in enumerate(entry["rebuttals"]):
+                rebuttal_path = f"{leg_path}.rebuttals[{k}]"
+                quote = rebuttal["quote"].strip()
+                if not quote or quote not in text:
+                    raise DecisionError("split.quote", f"{rebuttal_path}.quote", rebuttal["quote"][:120],
+                                        "literal excerpt of this leg's pinned review log")
+                if rebuttal["disposition"] not in SPLIT_DISPOSITIONS:
+                    raise DecisionError("split.rebuttal", f"{rebuttal_path}.disposition", rebuttal["disposition"],
+                                        "|".join(SPLIT_DISPOSITIONS))
+                if not rebuttal["reason"].strip():
+                    raise DecisionError("split.rebuttal", f"{rebuttal_path}.reason", rebuttal["reason"],
+                                        "non-empty reason")
+                if not rebuttal["evidence"]:
+                    raise DecisionError("split.evidence", f"{rebuttal_path}.evidence", [],
+                                        "at least one evidence location")
+                for m, evidence in enumerate(rebuttal["evidence"]):
+                    _split_evidence(evidence, f"{rebuttal_path}.evidence[{m}]", repo, track_dir, source, runlog_runs)
+        resolved.add(key)
+    return resolved
 
 
 def observation_text(text: str, track: str, source: str) -> dict[str, Any]:
@@ -1422,6 +1620,13 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
         if item["controller"] == "panel-review" and item["exit_code"] == 0
     ]
     review_coverage = panel_review_coverage(panel_runs)
+    resolved_splits: set[tuple[str, str]] = set()
+    if decision is not None:
+        try:
+            resolved_splits = resolved_split_groups(decision, track_dir, "working", panel_runs, observations,
+                                                    review_coverage)
+        except DecisionError:
+            resolved_splits = set()          # 记录不全 ⇒ 一组都不认(fail closed),归档时再报具体哪条
     authoritative = review_coverage["best_authoritative"]
     shadow = review_coverage["same_subject_shadow"]
     panel_families = authoritative["eligible_families"] if authoritative is not None else []
@@ -1494,7 +1699,7 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
         if planned["adapter"] in ("submimo", "claude-worktree"):
             missing.append(f"planned_adapter_observation:{planned['adapter']}")
         required_reviews = REVIEW_BUDGETS[impact]
-        if required_reviews and not qualifying_review_groups(review_coverage, required_reviews):
+        if required_reviews and not qualifying_review_groups(review_coverage, required_reviews, resolved_splits):
             missing.append(f"review_budget:{required_reviews}")
         received_ok = {
             item["run_id"]
@@ -1533,6 +1738,7 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
             "authoritative_subject_digest": authoritative["subject_digest"] if authoritative is not None else None,
             "authoritative_family_count": authoritative["eligible_family_count"] if authoritative is not None else 0,
             "authoritative_conflicting_groups": review_coverage["conflicting_groups"],
+            "resolved_split_groups": len(resolved_splits),
             "same_subject_shadow_families": shadow["eligible_families"] if shadow is not None else [],
             "same_subject_shadow_family_count": shadow["eligible_family_count"] if shadow is not None else 0,
             "fallback_dispatches": fallback_dispatches,
