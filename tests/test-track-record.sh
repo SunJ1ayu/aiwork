@@ -630,5 +630,179 @@ check "R10: ledger 分列 process/substantive/eligible，并把跨 run 家族只
   $([[ $rc -eq 0 && $assert_rc -eq 0 ]]; echo $?)
 rm -rf "$d"
 
+echo "[R11] 分裂(同 run 同 subject 一 PASS 一 BLOCK)由主裁裁决记录放行;记录不全照挡(业主 09-24)"
+d="$(mktemp -d)"; ( cd "$d"; git init -q; git config user.email t@t; git config user.name t )
+mkdir -p "$d/tracks" "$d/bin"; printf 'line1\nline2\nline3\n' > "$d/bin/code.py"
+
+split_case() { # name [both-block]
+  local t="$d/tracks/$1"
+  write_decision "$t" "$1" '"high"' '["judging_control"]' '"low"' '"not_required"' '[]' '"main"' null '"PASS"'
+  write_observation "$t" "$1" runlog-1 runlog execution_finished 0
+  mkdir -p "$t/evidence"; printf '# runlog receipt\nrunlog: runlog-1 rc=0\n' > "$t/evidence/runlog-1.txt"
+  printf '# verify\n' > "$t/verify.md"
+  write_panel_observation "$t" "$1" panel-1 xiaomi deepseek
+  python3 - "$ROOT" "$t" "${2:-}" <<'PY'
+import json, pathlib, sys
+root, t, both = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+sys.path.insert(0, str(root / "bin"))
+from _review_result import sha256_file
+p = t / "observations/panel-1-panel.json"; o = json.loads(p.read_text())
+for i, leg in enumerate(o["actual"]["legs"], 1):
+    if i == 1 or both:
+        log = t / f"review-evidence/panel-1-leg{i}.log"
+        log.write_text(f"F1 测试挡不住一种假想改法(leg{i})\nConclusion: BLOCK\n", encoding="utf-8")
+        leg["verdict"] = "BLOCK"; leg["evidence"]["digest"] = sha256_file(log)
+p.write_text(json.dumps(o), encoding="utf-8")
+PY
+}
+
+resolve() { # name python-mutation(可空);写一份完整裁决,再按 mutation 改
+  python3 - "$d/tracks/$1" "$1" "${2:-}" <<'PY'
+import json, pathlib, sys
+t, name, mutation = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+o = json.loads((t / "observations/panel-1-panel.json").read_text())
+leg = o["actual"]["legs"][0]
+r = {"run_id": "panel-1", "subject_digest": leg["subject"]["digest"],
+     "legs": [{"name": "leg1", "log_digest": leg["evidence"]["digest"],
+               "rebuttals": [{"quote": "测试挡不住一种假想改法", "disposition": "deferred",
+                              "reason": "出货代码对,属挡不住未来错误实现一类(4b 默认延期)",
+                              "evidence": ["bin/code.py:2", f"tracks/{name}/evidence/runlog-1.txt"]}]}]}
+res = [r]; reb = r["legs"][0]["rebuttals"][0]
+exec(mutation)
+p = t / "decision.json"; dec = json.loads(p.read_text())
+dec["outcome"]["split_resolutions"] = res
+p.write_text(json.dumps(dec, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+  ( cd "$d"; git add -A )
+}
+
+split_rule() { # name expected-rule label
+  local out rc; out="$($RECORD validate --phase archive "$d/tracks/$1" 2>&1)"; rc=$?
+  check "R11: $3" $([[ $rc -ne 0 && "$out" == *"rule=$2"* ]]; echo $?)
+  [[ $rc -ne 0 && "$out" == *"rule=$2"* ]] || echo "    got rc=$rc: ${out:0:300}"
+}
+
+split_case ok; resolve ok
+out="$($RECORD validate --phase archive "$d/tracks/ok" 2>&1)"; rc=$?
+check "R11: 分裂 + 完整裁决(摘录是那家日志原话、证据在被审交付里)⇒ 算覆盖" $([[ $rc -eq 0 ]]; echo $?)
+[[ $rc -eq 0 ]] || echo "    got: ${out:0:300}"
+out="$($RECORD validate --phase archive --source staged "$d/tracks/ok" 2>&1)"; rc=$?
+check "R11: staged 视图同样放行(证据都已跟踪)" $([[ $rc -eq 0 ]]; echo $?)
+
+split_case none
+out="$($RECORD validate --phase archive "$d/tracks/none" 2>&1)"; rc=$?
+check "R11: 分裂不写裁决 ⇒ 照旧挡(review_budget)" $([[ $rc -ne 0 && "$out" == *'rule=observation.review_budget'* ]]; echo $?)
+
+split_case q1; resolve q1 'reb["quote"]="日志里没有这句"';          split_rule q1 split.quote "摘录不是那家日志的原话 ⇒ 挡"
+split_case q2; resolve q2 'reb["quote"]="   "';                     split_rule q2 split.quote "空摘录 ⇒ 挡"
+split_case q3; resolve q3 'reb["quote"]="leg2"';                    split_rule q3 split.quote "摘录只在别的腿日志里 ⇒ 挡"
+split_case l1; resolve l1 'r["legs"]=[]';                            split_rule l1 split.legs "漏写 BLOCK 腿 ⇒ 挡"
+split_case l2; resolve l2 'r["legs"].append(dict(r["legs"][0], name="leg2"))'; split_rule l2 split.legs "多写一条(PASS 的)腿 ⇒ 挡"
+split_case l3; resolve l3 'r["legs"][0]["log_digest"]="sha256:"+"0"*64'; split_rule l3 split.log_digest "log_digest 对不上那家日志 ⇒ 挡"
+split_case t1; resolve t1 'r["run_id"]="panel-9"';                   split_rule t1 split.target "指向不存在的 run ⇒ 挡"
+split_case t2; resolve t2 'r["subject_digest"]="sha256:"+"0"*64';    split_rule t2 split.target "指向别的交付内容 ⇒ 挡"
+split_case t3; resolve t3 'res.append(dict(r))';                     split_rule t3 split.target "同一组写两份裁决 ⇒ 挡"
+split_case b1; resolve b1 'reb["reason"]=" "';                       split_rule b1 split.rebuttal "理由为空 ⇒ 挡"
+split_case b2; resolve b2 'reb["disposition"]="ignored"';            split_rule b2 split.rebuttal "处置不是驳回/延期 ⇒ 挡"
+split_case b3; resolve b3 'r["legs"][0]["rebuttals"]=[]';            split_rule b3 split.rebuttal "一条驳回都没有 ⇒ 挡"
+split_case e1; resolve e1 'reb["evidence"]=[]';                      split_rule e1 split.evidence "没有证据 ⇒ 挡"
+split_case e2; resolve e2 'reb["evidence"]=["bin/nope.py"]';          split_rule e2 split.evidence "证据文件不存在 ⇒ 挡"
+split_case e3; resolve e3 'reb["evidence"]=["/etc/hostname"]';        split_rule e3 split.evidence "证据是绝对路径 ⇒ 挡"
+split_case e4; resolve e4 'reb["evidence"]=["bin/../bin/code.py"]';   split_rule e4 split.evidence "证据带 .. ⇒ 挡"
+split_case e5; resolve e5 'reb["evidence"]=["bin/code.py:9"]';        split_rule e5 split.evidence "行号越出文件 ⇒ 挡"
+split_case e6; resolve e6 'reb["evidence"]=[f"tracks/{name}/verify.md"]';     split_rule e6 split.evidence "证据指向本单 verify.md(评审后可写)⇒ 挡"
+split_case e7; resolve e7 'reb["evidence"]=[f"tracks/{name}/decision.json"]'; split_rule e7 split.evidence "证据指向本单 decision.json ⇒ 挡"
+split_case e8; printf '# runlog receipt\n' > "$d/tracks/e8/evidence/runlog-9.txt"
+resolve e8 'reb["evidence"]=[f"tracks/{name}/evidence/runlog-9.txt"]'; split_rule e8 split.evidence "收据没有对应的 runlog 记录 ⇒ 挡"
+split_case e9; resolve e9 ''; printf 'x\n' > "$d/bin/untracked.py"
+python3 - "$d/tracks/e9/decision.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["outcome"]["split_resolutions"][0]["legs"][0]["rebuttals"][0]["evidence"]=["bin/untracked.py"]
+json.dump(d,open(p,"w"),ensure_ascii=False); 
+PY
+( cd "$d"; git add "tracks/e9/decision.json" )
+out="$($RECORD validate --phase archive --source staged "$d/tracks/e9" 2>&1)"; rc=$?
+check "R11: staged 视图下证据文件没被跟踪 ⇒ 挡" $([[ $rc -ne 0 && "$out" == *'rule=split.evidence'* ]]; echo $?)
+rm -f "$d/bin/untracked.py"
+
+split_case n1; resolve n1 ''
+python3 - "$ROOT" "$d/tracks/n1" <<'PY'
+import json, pathlib, sys
+root, t = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]); sys.path.insert(0, str(root / "bin"))
+from _review_result import sha256_file
+p = t / "observations/panel-1-panel.json"; o = json.loads(p.read_text())
+leg = o["actual"]["legs"][0]; log = t / "review-evidence/panel-1-leg1.log"
+log.write_text("Conclusion: PASS\n", encoding="utf-8"); leg["verdict"] = "PASS"; leg["evidence"]["digest"] = sha256_file(log)
+p.write_text(json.dumps(o), encoding="utf-8")
+PY
+split_rule n1 split.target "不分裂的组也写裁决(拿记录混)⇒ 挡"
+split_case n2; resolve n2 ''
+printf 'tampered\nConclusion: BLOCK\n' > "$d/tracks/n2/review-evidence/panel-1-leg1.log"
+out="$($RECORD validate --phase archive "$d/tracks/n2" 2>&1)"; rc=$?
+check "R11: 评审后改那家日志 ⇒ 该腿失格,裁决救不回来" $([[ $rc -ne 0 ]]; echo $?)
+
+split_case both both
+out="$($RECORD validate --phase archive "$d/tracks/both" 2>&1)"; rc=$?
+check "R11: 两家都 BLOCK 不写裁决 ⇒ 行为不变(由主裁 verdict 定)" $([[ $rc -eq 0 ]]; echo $?)
+
+split_case s1
+python3 - "$d/tracks/s1/decision.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["outcome"]["split_resolutions"]="x"; json.dump(d,open(p,"w"))
+PY
+out="$($RECORD validate --phase shape "$d/tracks/s1" 2>&1)"; rc=$?
+check "R11: split_resolutions 形状错 ⇒ shape 阶段就报 field.type" \
+  $([[ $rc -ne 0 && "$out" == *'rule=field.type'* && "$out" == *'outcome.split_resolutions'* ]]; echo $?)
+python3 - "$d/tracks/s1/decision.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["outcome"]["surprise"]=1; d["outcome"].pop("split_resolutions"); json.dump(d,open(p,"w"))
+PY
+out="$($RECORD validate --phase shape "$d/tracks/s1" 2>&1)"; rc=$?
+check "R11: outcome 里别的未知键仍被拒(只放开这一个)" $([[ $rc -ne 0 ]]; echo $?)
+
+ledger="$($RECORD ledger --repo "$d" --format json)"; rc=$?
+LEDGER="$ledger" python3 - <<'PY'
+import json,os
+t={x["track"]:x for x in json.loads(os.environ["LEDGER"])["tracks"]}
+assert t["ok"]["quality"]["resolved_split_groups"] == 1, t["ok"]["quality"]
+assert not any(m.startswith("review_budget") for m in t["ok"]["missing"]), t["ok"]["missing"]
+assert t["none"]["quality"]["resolved_split_groups"] == 0
+assert any(m.startswith("review_budget") for m in t["none"]["missing"])
+assert any(m.startswith("review_budget") for m in t["q1"]["missing"])
+PY
+assert_rc=$?
+check "R11: ledger 公开标出主裁裁过的分裂;不完整的记录不补预算" $([[ $rc -eq 0 && $assert_rc -eq 0 ]]; echo $?)
+rm -rf "$d"
+
+echo "[R11b] 裁决记录免指纹:没这个键的旧记录指纹一字不变;评审后加它不作废绑定;改别的照变"
+fp="$(python3 - "$ROOT" <<'PY'
+import json, pathlib, subprocess, sys, tempfile
+root = pathlib.Path(sys.argv[1]); sys.path.insert(0, str(root / "bin"))
+from _review_delivery import delivery_fingerprint
+def build(outcome, factors=("judging_control",)):
+    d = pathlib.Path(tempfile.mkdtemp())
+    subprocess.run(["git", "init", "-q", str(d)], check=True)
+    (d / "bin").mkdir(); (d / "bin/a.py").write_text("print(1)\n", encoding="utf-8")
+    t = d / "tracks/t"; t.mkdir(parents=True)
+    dec = {"schema_version": 2, "track": "t",
+           "impact": {"level": "high", "factors": list(factors)},
+           "design": {"uncertainty": "low", "premise_attack": {"status": "not_required", "evidence": []}},
+           "execution_plan": {"adapter": "main", "model": None}, "outcome": outcome}
+    (t / "decision.json").write_text(json.dumps(dec, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(d), "add", "-A"], check=True)
+    return d
+fp = lambda *a, **k: delivery_fingerprint(build(*a, **k), "t", source="working")
+print(fp({"verdict": None}))
+print(fp({"verdict": "PASS", "split_resolutions": [{"run_id": "r", "subject_digest": "sha256:" + "1" * 64, "legs": []}]}))
+print(fp({"verdict": None}, factors=("judging_control", "money")))
+PY
+)"
+old="$(sed -n 1p <<<"$fp")"; added="$(sed -n 2p <<<"$fp")"; other="$(sed -n 3p <<<"$fp")"
+# 常量 = 本单改动前的实现对同一夹具算出的指纹(09-24 实跑两次一致);变了 ⇒ 所有进行中的评审绑定都会失效
+check "R11b: 没有裁决键的 decision 指纹与改动前逐字节相同" \
+  $([[ "$old" == "sha256:7a9c0aabbfc403c7894a958e88e5f6c387825a5885f9400e71977f815829bba3" ]]; echo $?)
+check "R11b: 评审后补写裁决记录不改指纹" $([[ -n "$added" && "$added" == "$old" ]]; echo $?)
+check "R11b: 改 decision 其它字段照样改指纹" $([[ -n "$other" && "$other" != "$old" ]]; echo $?)
+
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
