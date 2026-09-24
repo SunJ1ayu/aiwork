@@ -12,9 +12,9 @@
 
 ## Mechanical checks
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+- [x] build passes(纯脚本仓)
+- [x] tests pass(断网离线总闸 31 套件全绿,track-record 125)
+- [x] no secrets / unsafe ops
 
 **机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
 
@@ -23,11 +23,9 @@ runlog -t drop-dead-best-authoritative -- <判据命令>
 ```
 
 ```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
+runlog: tooling-total rc=0 commit=f33f6dc dirty=no final=yes at=2026-09-24T06:25:15Z file=tracks/drop-dead-best-authoritative/evidence/20260924T062515Z-01-tooling-total.txt
 ```
+- 删除前核实零读者:`grep -rn best_authoritative`(aiwork 除 logs/ 与归档记录、design-studio bin/tests、skills)只剩定义与返回键两处。
 
 ## Review
 
@@ -55,7 +53,7 @@ runlog -t drop-dead-best-authoritative -- <判据命令>
 
   > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
   > 花名册在上一格,查工件不查自述。延期 = 留在这里,不自动开新单。
-- arbitrated verdict (主裁): <...>
+- arbitrated verdict (主裁): **PASS**。impact=self(行为不变的删除,外部评审预算 0);证据 = 零读者 + 删后离线总闸全绿。
   > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
   > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
 
