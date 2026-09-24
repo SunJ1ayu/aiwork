@@ -23,18 +23,27 @@ runlog -t arbiter-resolves-split-review -- <判据命令>
 ```
 
 ```
-<粘收据行,逐字节,别改数。**每次提交**都会跟 evidence/ 里的收据逐字节比对(5a);
- **归档时**还要求:最后跑的那一遍必须在这儿、跑红的那几遍一份都不许藏(5b)、
- 收据得进 git(5d)。一份收据都没有的话,写一行
- 「- 无机器证据:<理由>」认账 —— 沉默不算理由(5c)。>
+runlog: r11-criteria-red rc=1 commit=3b916e7 dirty=yes at=2026-09-24T04:52:03Z file=tracks/arbiter-resolves-split-review/evidence/20260924T045203Z-01-r11-criteria-red.txt
+runlog: r11-criteria-red-2 rc=1 commit=2b39065 dirty=yes at=2026-09-24T04:53:39Z file=tracks/arbiter-resolves-split-review/evidence/20260924T045339Z-01-r11-criteria-red-2.txt
+runlog: split-mutants rc=2 commit=e9aedfa dirty=yes at=2026-09-24T04:56:29Z file=tracks/arbiter-resolves-split-review/evidence/20260924T045629Z-01-split-mutants.txt
+runlog: split-mutants-2 rc=0 commit=2936d7f dirty=yes at=2026-09-24T05:02:47Z file=tracks/arbiter-resolves-split-review/evidence/20260924T050247Z-01-split-mutants-2.txt
+runlog: tooling-total rc=0 commit=0bb1665 dirty=yes final=yes at=2026-09-24T05:10:10Z file=tracks/arbiter-resolves-split-review/evidence/20260924T051010Z-01-tooling-total.txt
+runlog: split-mutants-3 rc=0 commit=e551efe dirty=yes at=2026-09-24T05:22:25Z file=tracks/arbiter-resolves-split-review/evidence/20260924T052225Z-01-split-mutants-3.txt
+runlog: tooling-total-2 rc=0 commit=3a47e27 dirty=yes final=yes at=2026-09-24T05:26:40Z file=tracks/arbiter-resolves-split-review/evidence/20260924T052640Z-01-tooling-total-2.txt
+runlog: split-mutants-r1 rc=0 commit=10ed62e dirty=no at=2026-09-24T05:48:55Z file=tracks/arbiter-resolves-split-review/evidence/20260924T054855Z-01-split-mutants-r1.txt
 ```
+- r11-criteria-red / -2:判据先行,未改实现上红(27 → 夹具改用真实收据形状后 29)。
+- split-mutants rc=2:第一次变异自检 **2 条存活**(M3 摘录可在别的腿日志里 —— q3 夹具测不到;M14 staged 放行未跟踪 —— 被后一道挡兜住,
+  顺查出 staged 视图拒收 100755 可执行脚本的真 bug)⇒ 先补判据(`2936d7f`)再修;split-mutants-2 全杀。
+- 写自审时自己想到、R11c 复现:已归档的单重验找不到归档前路径的证据 ⇒ 判据 `dbf1bb3`(红)→ 修 `e551efe`;split-mutants-3 18 全杀。
+- tooling-total-2 = 第 1 轮派发前 final 离线总跑,31 套件全绿。split-mutants-r1 = 第 1 轮修复后 20 变异全杀。
+
 
 ## Review
 
-- 规格自查(读任何 panel 输出之前先答):<回看 design 的用户成功条件、前提证据和未解决项。
-  实现符合规格不证明规格合理;实现评审也可质疑规格,但不能替代实施前 panel 4c 的方案检查。
-  本轮若暴露能推翻方向的前提,先回到设计;全池一致 PASS 也不等于题是对的。>
-- 腿的花名册: <把 `<日志前缀>.roster` 里那一行**原样粘过来**,别手写>
+- 规格自查(读 panel 输出之前,自审原文在 /root/panel-my-reviews/arbiter-resolves-split-review-r1-my-review.md [仓外不承重]):
+  用户成功条件 = 分裂时主裁写清理由证据即可归档、写不全照挡;最担心的是 ledger 吞错(③)—— 第 1 轮 Grok 正好点中。
+- 腿的花名册(第 1 轮): subdeepseek=PASS(verdict=BLOCK) subcursor.grok-4.7-high=PASS(verdict=BLOCK)(日志 /root/aiwork/logs/panel-arbiter-split-r1-20260924-133814.* [仓外不承重])
   > panel-review 收尾自己写这个文件(off / FAIL(rc) / 降级 都在里面)。
   > **控制器没活到收尾时它压根不存在** —— 那时跑 `panel-roster <日志前缀>` 从盘上重建,
   > 与控制器自己写的**归一化后一致**(判据 R5b 守着;抬头有渲染时间戳,不是字面逐字节)。**一轮零记录的评审也粘得出这一行**,
@@ -45,16 +54,24 @@ runlog -t arbiter-resolves-split-review -- <判据命令>
 
   | 轮 | 类型(实质 / 重试) | 派发前 `track preflight` | 日志前缀 | 新增有效阻断 |
   |---|---|---|---|---|
-  | 1 | 实质 | <rc,BLOCK 数> | <…> | <n> |
+  | 1 | 实质 | rc=3,BLOCK=0(先修过一次 views BLOCK:tasks/ 未提交题面,`80641ee`) | panel-arbiter-split-r1-20260924-133814 | 2(#1 #2) |
 
 - findings(**先处置、后动手**;一轮一份修复清单,一次修完再复审 —— panel 抽屉 4b):
 
   | # | 发现:触发条件与影响 | 核实证据 | 处置 | 理由 |
   |---|---|---|---|---|
-  | 1 | <…> | <file:line / 复现收据> | 必须修 / 延期 / 驳回 / 尚未核实 | <延期必写:它在业主或下一个使用者那边会长成什么样> |
+  | 1 | (DeepSeek BLOCK)文档说分裂「不加腿不重派」,而不带 `--members` 的旧轮换入口遇冲突仍自动补一条 spare | 读 `bin/panel-review:1018-1056`(只在 `-z $MEMBERS` 时升级)、`:32` 帮助原文;判据 V43④ 钉着这行为 | 必须修(文档) | 文档与实现不一致会误导主裁。改文档说准两种入口;不改 panel-review(proposal 非目标)|
+  | 2 | (Grok)裁决记录写错时归档挡(split.*),ledger 吞掉错误、另一组够数时仍报可归档 | 读 `bin/track-record` ledger 段属实;判据「裁决记录写错 ⇒ ledger 也报缺口」在 `a72f679` 红 | 必须修 | 承诺 4/5(ledger 与归档同口径);修:missing 加 `split_resolution:<rule>` |
+  | 3 | (DeepSeek LOW2)只靠已裁分裂覆盖的单,ledger `authoritative_*` 报 null/0 | 同一判据提交里红 | 必须修(顺手) | 同一段代码、字段自相矛盾;权威组候选 = 不冲突组 + 已裁分裂 |
+  | 4 | (Grok BLOCK)runlog 收据与同名 observation 都免指纹,评审后手写一对(或改已有收据)就能当证据 | 读 `_review_delivery.py:66-93`、`track-record` 收据判定,属实 | **驳回为缺陷**,文档写明边界 | 这需要**手工伪造**机器收据 + 观测记录 —— runlog 自己的强度声明就是「挡顺手凑数,不挡蓄意伪造」,本闸同一威胁模型(防主裁偷懒)。评审后跑复现留收据正是驳回最好的证据,不能禁。我在第 1 轮题面写「证据不在被审交付里 ⇒ BLOCK」说大了,设计原文本就把收据列为例外 |
+  | 5 | (DeepSeek LOW3)文件名带冒号(`bin/a:b.py`)不能当证据 | 实测属实 | 延期 | 下一个使用者只有在要引用带冒号的文件时才碰到,改引同目录别的文件或 runlog 收据即可 |
+  | 6 | (DeepSeek)R11 夹具是 schema 1(legacy-unbound),没走真实交付绑定 | 属实;DeepSeek 用 schema 2 夹具实跑:完整裁决 rc=0、评审后新加文件当证据被 `observation.review_delivery` 挡 | 延期 | 出货实现在真实路径上已被探针证实;属「挡不住将来改写」类 |
+  | 7 | (DeepSeek)摘录可以极短(如 "o") | 属实 | 延期(设计已承认的 G1 剩余面) | 机器不判断摘录是否就是那条阻断 |
 
   > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
   > 花名册在上一格,查工件不查自述。延期 = 留在这里,不自动开新单。
+- **第 2 轮(派发前写)**:核验 #1~#3 修法与文档改动;成员不变(DeepSeek + Grok,不换腿找 PASS);预算最后一轮。
+  题面仍按 4b:闸对承诺的违背 / 误拒 / 文档误导才算 BLOCK;挡不住假想改写、蓄意伪造、G1/G4 照报不算。有真阻断 ⇒ 停下交业主。
 - arbitrated verdict (主裁): <...>
   > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
   > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
