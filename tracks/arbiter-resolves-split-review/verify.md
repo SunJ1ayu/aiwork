@@ -31,6 +31,7 @@ runlog: tooling-total rc=0 commit=0bb1665 dirty=yes final=yes at=2026-09-24T05:1
 runlog: split-mutants-3 rc=0 commit=e551efe dirty=yes at=2026-09-24T05:22:25Z file=tracks/arbiter-resolves-split-review/evidence/20260924T052225Z-01-split-mutants-3.txt
 runlog: tooling-total-2 rc=0 commit=3a47e27 dirty=yes final=yes at=2026-09-24T05:26:40Z file=tracks/arbiter-resolves-split-review/evidence/20260924T052640Z-01-tooling-total-2.txt
 runlog: split-mutants-r1 rc=0 commit=10ed62e dirty=no at=2026-09-24T05:48:55Z file=tracks/arbiter-resolves-split-review/evidence/20260924T054855Z-01-split-mutants-r1.txt
+runlog: tooling-total-r2 rc=0 commit=db220ac dirty=yes final=yes at=2026-09-24T05:54:25Z file=tracks/arbiter-resolves-split-review/evidence/20260924T055425Z-01-tooling-total-r2.txt
 ```
 - r11-criteria-red / -2:判据先行,未改实现上红(27 → 夹具改用真实收据形状后 29)。
 - split-mutants rc=2:第一次变异自检 **2 条存活**(M3 摘录可在别的腿日志里 —— q3 夹具测不到;M14 staged 放行未跟踪 —— 被后一道挡兜住,
