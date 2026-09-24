@@ -697,7 +697,7 @@ check "R11: 分裂不写裁决 ⇒ 照旧挡(review_budget)" $([[ $rc -ne 0 && "
 
 split_case q1; resolve q1 'reb["quote"]="日志里没有这句"';          split_rule q1 split.quote "摘录不是那家日志的原话 ⇒ 挡"
 split_case q2; resolve q2 'reb["quote"]="   "';                     split_rule q2 split.quote "空摘录 ⇒ 挡"
-split_case q3; resolve q3 'reb["quote"]="leg2"';                    split_rule q3 split.quote "摘录只在别的腿日志里 ⇒ 挡"
+split_case q3; resolve q3 'reb["quote"]="Conclusion: PASS"';        split_rule q3 split.quote "摘录只在另一家(PASS 那家)日志里 ⇒ 挡"
 split_case l1; resolve l1 'r["legs"]=[]';                            split_rule l1 split.legs "漏写 BLOCK 腿 ⇒ 挡"
 split_case l2; resolve l2 'r["legs"].append(dict(r["legs"][0], name="leg2"))'; split_rule l2 split.legs "多写一条(PASS 的)腿 ⇒ 挡"
 split_case l3; resolve l3 'r["legs"][0]["log_digest"]="sha256:"+"0"*64'; split_rule l3 split.log_digest "log_digest 对不上那家日志 ⇒ 挡"
@@ -730,6 +730,16 @@ PY
 out="$($RECORD validate --phase archive --source staged "$d/tracks/e9" 2>&1)"; rc=$?
 check "R11: staged 视图下证据文件没被跟踪 ⇒ 挡" $([[ $rc -ne 0 && "$out" == *'rule=split.evidence'* ]]; echo $?)
 rm -f "$d/bin/untracked.py"
+split_case e12; ln -s code.py "$d/bin/link.py"; ( cd "$d"; git add bin/link.py )
+resolve e12 'reb["evidence"]=["bin/link.py:1"]'; split_rule e12 split.evidence "证据是符号链接(working)⇒ 挡"
+out="$($RECORD validate --phase archive --source staged "$d/tracks/e12" 2>&1)"; rc=$?
+check "R11: 证据是已跟踪的符号链接(staged)⇒ 挡" $([[ $rc -ne 0 && "$out" == *'rule=split.evidence'* ]]; echo $?)
+rm -f "$d/bin/link.py"; ( cd "$d"; git rm -q --cached bin/link.py )
+split_case e13; printf '#!/bin/sh\necho hi\n' > "$d/bin/tool"; chmod +x "$d/bin/tool"
+resolve e13 'reb["evidence"]=["bin/tool:2"]'
+out="$($RECORD validate --phase archive --source staged "$d/tracks/e13" 2>&1)"; rc=$?
+check "R11: 证据是可执行脚本(100755,bin/ 下常见)⇒ 放行" $([[ $rc -eq 0 ]]; echo $?)
+[[ $rc -eq 0 ]] || echo "    got: ${out:0:300}"
 
 split_case n1; resolve n1 ''
 python3 - "$ROOT" "$d/tracks/n1" <<'PY'
