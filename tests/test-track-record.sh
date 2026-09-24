@@ -637,8 +637,10 @@ mkdir -p "$d/tracks" "$d/bin"; printf 'line1\nline2\nline3\n' > "$d/bin/code.py"
 split_case() { # name [both-block]
   local t="$d/tracks/$1"
   write_decision "$t" "$1" '"high"' '["judging_control"]' '"low"' '"not_required"' '[]' '"main"' null '"PASS"'
-  write_observation "$t" "$1" runlog-1 runlog execution_finished 0
-  mkdir -p "$t/evidence"; printf '# runlog receipt\nrunlog: runlog-1 rc=0\n' > "$t/evidence/runlog-1.txt"
+  # 收据用 runlog 真实的文件名与抬头(交付投影只把这种形状当收据豁免,见 _review_delivery.RECEIPT)
+  write_observation "$t" "$1" 20260924T010203Z-01-probe runlog execution_finished 0
+  mkdir -p "$t/evidence"
+  printf '# runlog receipt —— 机器写的\nrunlog: probe rc=0 commit=x dirty=no at=x file=x\n' > "$t/evidence/20260924T010203Z-01-probe.txt"
   printf '# verify\n' > "$t/verify.md"
   write_panel_observation "$t" "$1" panel-1 xiaomi deepseek
   python3 - "$ROOT" "$t" "${2:-}" <<'PY'
@@ -666,7 +668,7 @@ r = {"run_id": "panel-1", "subject_digest": leg["subject"]["digest"],
      "legs": [{"name": "leg1", "log_digest": leg["evidence"]["digest"],
                "rebuttals": [{"quote": "测试挡不住一种假想改法", "disposition": "deferred",
                               "reason": "出货代码对,属挡不住未来错误实现一类(4b 默认延期)",
-                              "evidence": ["bin/code.py:2", f"tracks/{name}/evidence/runlog-1.txt"]}]}]}
+                              "evidence": ["bin/code.py:2", f"tracks/{name}/evidence/20260924T010203Z-01-probe.txt"]}]}]}
 res = [r]; reb = r["legs"][0]["rebuttals"][0]
 exec(mutation)
 p = t / "decision.json"; dec = json.loads(p.read_text())
@@ -712,8 +714,12 @@ split_case e4; resolve e4 'reb["evidence"]=["bin/../bin/code.py"]';   split_rule
 split_case e5; resolve e5 'reb["evidence"]=["bin/code.py:9"]';        split_rule e5 split.evidence "行号越出文件 ⇒ 挡"
 split_case e6; resolve e6 'reb["evidence"]=[f"tracks/{name}/verify.md"]';     split_rule e6 split.evidence "证据指向本单 verify.md(评审后可写)⇒ 挡"
 split_case e7; resolve e7 'reb["evidence"]=[f"tracks/{name}/decision.json"]'; split_rule e7 split.evidence "证据指向本单 decision.json ⇒ 挡"
-split_case e8; printf '# runlog receipt\n' > "$d/tracks/e8/evidence/runlog-9.txt"
-resolve e8 'reb["evidence"]=[f"tracks/{name}/evidence/runlog-9.txt"]'; split_rule e8 split.evidence "收据没有对应的 runlog 记录 ⇒ 挡"
+split_case e8
+printf '# runlog receipt —— 机器写的\nrunlog: ghost rc=0 commit=x dirty=no at=x file=x\n' > "$d/tracks/e8/evidence/20260924T010203Z-02-ghost.txt"
+resolve e8 'reb["evidence"]=[f"tracks/{name}/evidence/20260924T010203Z-02-ghost.txt"]'; split_rule e8 split.evidence "收据没有对应的 runlog 记录(评审后手写的)⇒ 挡"
+split_case e10; resolve e10 'reb["evidence"]=[f"tracks/{name}/observations/panel-1-panel.json"]'; split_rule e10 split.evidence "证据指向本单 observations ⇒ 挡"
+split_case e11; printf 'ignored\n' > "$d/tracks/e11/local.log"; printf 'local.log\n' > "$d/tracks/e11/.gitignore"
+resolve e11 'reb["evidence"]=[f"tracks/{name}/local.log"]'; split_rule e11 split.evidence "证据是被 gitignore 的文件(不在交付里)⇒ 挡"
 split_case e9; resolve e9 ''; printf 'x\n' > "$d/bin/untracked.py"
 python3 - "$d/tracks/e9/decision.json" <<'PY'
 import json,sys
