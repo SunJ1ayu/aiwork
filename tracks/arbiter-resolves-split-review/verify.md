@@ -12,9 +12,9 @@
 
 ## Mechanical checks
 
-- [ ] build passes
-- [ ] tests pass
-- [ ] no secrets / unsafe ops
+- [x] build passes(纯脚本仓,无构建;`sync-workflow-docs --check` rc=0)
+- [x] tests pass(tooling-total-r2:断网离线总闸 31 套件全绿,track-record 125 / ledger 20)
+- [x] no secrets / unsafe ops(runlog 秘密扫描;纯本地仓不 push)
 
 **机器打印的**(不是我的转述)—— 判据用 `runlog` 跑,把它打印的收据行原样粘进来:
 
@@ -56,6 +56,7 @@ runlog: tooling-total-r2 rc=0 commit=db220ac dirty=yes final=yes at=2026-09-24T0
   | 轮 | 类型(实质 / 重试) | 派发前 `track preflight` | 日志前缀 | 新增有效阻断 |
   |---|---|---|---|---|
   | 1 | 实质 | rc=3,BLOCK=0(先修过一次 views BLOCK:tasks/ 未提交题面,`80641ee`) | panel-arbiter-split-r1-20260924-133814 | 2(#1 #2) |
+  | 2 | 实质(预算最后一轮) | rc=3,BLOCK=0 | panel-arbiter-split-r2-20260924-140450 | 0 |
 
 - findings(**先处置、后动手**;一轮一份修复清单,一次修完再复审 —— panel 抽屉 4b):
 
@@ -71,19 +72,32 @@ runlog: tooling-total-r2 rc=0 commit=db220ac dirty=yes final=yes at=2026-09-24T0
 
   > 只写发现。腿的身份/降级不在这儿抄第二遍:日志自带身份牌(降级横幅 + 视野边界),
   > 花名册在上一格,查工件不查自述。延期 = 留在这里,不自动开新单。
+- 腿的花名册(第 2 轮): subdeepseek=PASS(verdict=PASS) subcursor.grok-4.7-high=PASS(verdict=PASS)(日志 /root/aiwork/logs/panel-arbiter-split-r2-20260924-140450.* [仓外不承重])
+  两家都核了 #1~#3 修法与文档、认可 #4 驳回与 #5~#7 延期;DeepSeek 用 TRACK_RECORD_BIN 指向变异副本独立验证 M19/M20 会红。照报(非阻断):
+
+  | # | 发现 | 核实 | 处置 | 理由 |
+  |---|---|---|---|---|
+  | 8 | (DeepSeek)`panel_review_coverage` 的 `best_authoritative` 在 #3 修法后已无读者 = 死代码 | grep 只剩 `bin/track-record:1279` 的定义处 | 延期(**本单造出的**) | 评审后删它会作废这轮绑定、要再审一轮;下一个动 track-record 的人顺手删(连同 1241-1250 的计算)。下一个使用者那边:无行为影响,只是多一段没人读的计算 |
+  | 9 | (DeepSeek)ledger 不核 `observation.review_delivery` 绑定,schema 2 单可能 ledger 无缺口而归档因绑定挡 | 本单之前就如此,与分裂无关 | 延期(既有) | 下一个使用者那边:看 ledger 以为能归档,归档时才被绑定检查挡并被告知原因 |
+  | 10 | (DeepSeek)panel 抽屉第 2 节升级原因列举漏了代码里的 `ineligible` | 既有文档小瑕疵 | 延期(既有) | 不影响判断 |
+
 - **第 2 轮(派发前写)**:核验 #1~#3 修法与文档改动;成员不变(DeepSeek + Grok,不换腿找 PASS);预算最后一轮。
   题面仍按 4b:闸对承诺的违背 / 误拒 / 文档误导才算 BLOCK;挡不住假想改写、蓄意伪造、G1/G4 照报不算。有真阻断 ⇒ 停下交业主。
-- arbitrated verdict (主裁): <...>
+- arbitrated verdict (主裁): **PASS**。两轮评审:第 1 轮两家 BLOCK 的三条真问题(#1~#3)先补判据再修、第 2 轮两家 PASS 核过;
+  #4 驳回(需蓄意伪造,闸的威胁模型是防偷懒);#5~#10 延期各写了使用者那边的样子。承诺 1~5 兑现:R11/R11b/R11c 125 条 + 20 变异全杀 + 离线总闸 31 套件。
+  #8 是本单自己留下的死代码 —— 业主说过「不要留下屎山」,收尾汇报里点名,问要不要开个小单删。
   > 这里写理由；最终枚举写进 `decision.json.outcome.verdict`。归档时仍为空会被
   > `track-record validate --phase archive` 挡住，`track list` 也会打 ⚠️。
 
 ## Accepted deviations
 
-- <接受的非关键偏差 + 原因 + 影响范围,或 None>
+- G1:机器不判断理由好坏、不判断摘录是否就是那条阻断(设计已承认;靠 ledger 公开 + 业主读 verify.md)。
+- G4:之后另派一轮全 PASS 仍可单独成组归档(今天就如此,非本单引入)。
+- 收据例外(#4):评审后留的 runlog 收据可作证据,蓄意伪造不防(与 runlog 同一边界)。
 
 ## 试行记录(review-convergence 试行,约五单;拿不到的写 unknown,别补 0)
 
-- 总交付历时:<开工 commit 时刻 → 归档 commit 时刻>
-- 每轮新增有效阻断:<第 1 轮 n / 第 2 轮 n>
-- 基础设施等待:<重试次数;observations 里 panel-review 的 duration_ms 求和>
-- 交付后返工:<归档后因本单再改过几次;不知道写 unknown>
+- 总交付历时:09-24 12:4x(`3b916e7` 开单)→ 14:2x 归档,约 1 小时 40 分(含 4c 挑战 4 分钟、两轮评审各约 7~8 分钟)
+- 每轮新增有效阻断:第 1 轮 2(#1 #2;#3 是顺手修的 LOW)/ 第 2 轮 0
+- 基础设施等待:重试 0;第 1 轮先被 views BLOCK 与「自审在仓内」各挡一次(未起腿);observations 里 panel-review duration_ms 合计约 13.1 分钟(含 4c 挑战那次)
+- 交付后返工:unknown(刚归档)

@@ -1,0 +1,136 @@
+{
+  "schema_version": 2,
+  "track": "arbiter-resolves-split-review",
+  "run_id": "20260924-140450-3799504-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "arbiter-resolves-split-review-r2",
+  "started_at": "2026-09-24T06:04:50Z",
+  "finished_at": "2026-09-24T06:10:13Z",
+  "duration_ms": 322741,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "high",
+    "degraded": false,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "adapter": "subdeepseek-agent",
+        "degraded": false,
+        "duration_ms": 322062,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:72f09f9d974ec8f793631cfd0b00bebd720cd4ee7b8b28fa1fbb2aad24113c12",
+          "ref": "file:///root/aiwork/logs/panel-arbiter-split-r2-20260924-140450.subdeepseek.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "deepseek",
+        "model": {
+          "invoked": "deepseek-flash",
+          "reported": null,
+          "requested": "deepseek-flash"
+        },
+        "name": "subdeepseek",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260924-140450-3799504-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:53bd3be267f17be8df6bb5906dbebe0512f0489ec8d26a4383f4e464a3cf15e2",
+            "policy_version": 1,
+            "track": "arbiter-resolves-split-review"
+          },
+          "digest": "sha256:8534232d5e4b46791a3cfc054cb4b5ba1873d9805242f4e9187302179a9578e5",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "658caa828b63990b7f1748a12b0b2e81605c282e",
+            "index_tree_oid": "05348cb8a4f5dc5d266ac2ee90117d49df877975",
+            "worktree_tree_oid": "05348cb8a4f5dc5d266ac2ee90117d49df877975"
+          },
+          "task_sha256": "sha256:c9614c6a79f48461203c1f6b11115498ee41e6c2edcf82d3ec571cbfbe5930e6"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "api",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subcursor",
+        "degraded": false,
+        "duration_ms": 252249,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:44ccdde950f3631f7b9bebcf0adadde352b556bc3f8f866e823329d74ed07df2",
+          "ref": "file:///root/aiwork/logs/panel-arbiter-split-r2-20260924-140450.subcursor.grok-4.7-high.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xai",
+        "model": {
+          "invoked": "grok-4.7-high",
+          "reported": null,
+          "requested": "grok-4.7-high"
+        },
+        "name": "subcursor.grok-4.7-high",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260924-140450-3799504-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:53bd3be267f17be8df6bb5906dbebe0512f0489ec8d26a4383f4e464a3cf15e2",
+            "policy_version": 1,
+            "track": "arbiter-resolves-split-review"
+          },
+          "digest": "sha256:8534232d5e4b46791a3cfc054cb4b5ba1873d9805242f4e9187302179a9578e5",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "658caa828b63990b7f1748a12b0b2e81605c282e",
+            "index_tree_oid": "05348cb8a4f5dc5d266ac2ee90117d49df877975",
+            "worktree_tree_oid": "05348cb8a4f5dc5d266ac2ee90117d49df877975"
+          },
+          "task_sha256": "sha256:c9614c6a79f48461203c1f6b11115498ee41e6c2edcf82d3ec571cbfbe5930e6"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
