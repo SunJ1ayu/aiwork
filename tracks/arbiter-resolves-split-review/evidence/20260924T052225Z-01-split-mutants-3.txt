@@ -1,0 +1,29 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    split-mutants-3
+cmd:     tracks/arbiter-resolves-split-review/mut_split.sh
+cwd:     /root/aiwork(仓根)
+commit:  e551efe
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-24T05:22:25Z
+---------------- 输出开始 ----------------
+killed   M1-resolved-never-counts
+killed   M2-no-quote-check
+killed   M3-quote-any-log
+killed   M4-legs-subset
+killed   M5-no-log-digest
+killed   M6-closeout-allowed
+killed   M7-receipt-no-observation
+killed   M8-no-line-bounds
+killed   M9-ignored-file-ok
+killed   M10-null-not-pop
+killed   M11-no-exemption
+killed   M12-ledger-ignores
+killed   M13-any-group
+killed   M14-staged-symlink-ok
+killed   M17-working-symlink-ok
+killed   M15-empty-reason-ok
+killed   M16-disposition-free
+killed   M18-no-archive-mapping
+survived=0
+---------------- 输出结束 ----------------
+runlog: split-mutants-3 rc=0 commit=e551efe dirty=yes at=2026-09-24T05:22:25Z file=tracks/arbiter-resolves-split-review/evidence/20260924T052225Z-01-split-mutants-3.txt
