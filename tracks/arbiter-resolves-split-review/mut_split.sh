@@ -37,4 +37,8 @@ mut M17-working-symlink-ok $R 'or candidate.is_symlink() or not candidate.is_fil
 mut M15-empty-reason-ok $R 'if not rebuttal["reason"].strip():' 'if False:'
 mut M16-disposition-free $R 'if rebuttal["disposition"] not in SPLIT_DISPOSITIONS:' 'if False:'
 mut M18-no-archive-mapping $R 'if track_rel == f"tracks/archive/{track_dir.name}" and rel.startswith(active_prefix):' 'if False:'
+mut M19-ledger-hides-bad-record $R 'if split_error is not None:
+            missing.append(f"split_resolution:{split_error}")' 'if False:
+            pass'
+mut M20-authoritative-ignores-resolved $R 'if not item["conflict"] or (item["run_id"], item["subject_digest"]) in resolved_splits),' 'if not item["conflict"]),'
 echo "survived=$survived"; exit $survived

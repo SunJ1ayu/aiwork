@@ -1625,13 +1625,21 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
     ]
     review_coverage = panel_review_coverage(panel_runs)
     resolved_splits: set[tuple[str, str]] = set()
+    split_error: str | None = None
     if decision is not None:
         try:
             resolved_splits = resolved_split_groups(decision, track_dir, "working", panel_runs, observations,
                                                     review_coverage)
-        except DecisionError:
-            resolved_splits = set()          # 记录不全 ⇒ 一组都不认(fail closed),归档时再报具体哪条
-    authoritative = review_coverage["best_authoritative"]
+        except DecisionError as exc:
+            # 记录写错 ⇒ 一组都不认(fail closed),并在 missing 里点名 —— 与归档同口径(第 1 轮 Grok)
+            resolved_splits, split_error = set(), exc.rule
+    # 主裁裁过的分裂与不冲突组一样可当权威组;未裁的仍不算(第 1 轮 DeepSeek LOW2)
+    authoritative = max(
+        (item for item in review_coverage["authoritative_groups"]
+         if not item["conflict"] or (item["run_id"], item["subject_digest"]) in resolved_splits),
+        key=lambda item: (item["eligible_family_count"], item["eligible_count"], item["run_id"], item["subject_digest"]),
+        default=None,
+    )
     shadow = review_coverage["same_subject_shadow"]
     panel_families = authoritative["eligible_families"] if authoritative is not None else []
     process_successful_legs = sum(1 for leg in panel_legs if observation_leg_exit_code(leg) == 0)
@@ -1703,6 +1711,8 @@ def ledger_track(track_dir: Path, location: str) -> tuple[dict[str, Any], list[d
         if planned["adapter"] in ("submimo", "claude-worktree"):
             missing.append(f"planned_adapter_observation:{planned['adapter']}")
         required_reviews = REVIEW_BUDGETS[impact]
+        if split_error is not None:
+            missing.append(f"split_resolution:{split_error}")
         if required_reviews and not qualifying_review_groups(review_coverage, required_reviews, resolved_splits):
             missing.append(f"review_budget:{required_reviews}")
         received_ok = {

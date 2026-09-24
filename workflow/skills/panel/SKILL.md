@@ -87,8 +87,8 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 `impact-risk` 决定实现评审预算(self=0、standard=1、high=2),`design-uncertainty` 记录检查后的判断。
 自报 low 不能免掉 4c 命中的检查,high impact 也不自动要求全池规划;两轴不能互相代替。
 `panel-review --track NAME --risk self|standard|high TASK_FILE [REPO_DIR] [LOG_PREFIX]` 默认 high=2，
-从健康池轮换不同模型家族。失败、降级、没有裁决或 NEEDS_MORE_INFO 时只追加
-一个健康 spare(一家 PASS 一家 BLOCK 的分裂**不**追加:同组多一腿仍分裂,见第 4 节由主裁裁)；`--all` 才是显式**全池评审**，从唯一花名册派出当前全部已启用且可执行的腿，
+从健康池轮换不同模型家族。失败、降级、没有裁决、NEEDS_MORE_INFO 或裁决冲突时只追加
+一个健康 spare(只有不带 `--members` 的旧轮换入口会自动补;冲突补的那条在同组,多一条意见但分裂照旧,见第 4 节由主裁裁)；`--all` 才是显式**全池评审**，从唯一花名册派出当前全部已启用且可执行的腿，
 留给判卷、沙箱、权限边界或预算评审无法收敛的特殊面。池大小不是契约，增删腿不改这句话。
 **连续硬失败的腿会被停止轮换(2026-08-25 起)**:`health.tsv` 每条腿多记一个
 **连续硬失败次数**;连续 `PANEL_HEALTH_DEAD_STREAK`(默认 3)轮 rc≠0 ⇒ 那条腿
@@ -234,12 +234,15 @@ PASS / BLOCK / NEEDS_MORE_INFO + 存活的发现。**绝不能只凭评审员的
 的结论取平均,绝不能因为一致 PASS 就降低自己的标准**——共同假阴性正是 panel 抓不到的失败
 形态,多加一条腿也堵不上。主 agent 独立的、代码级验证过的判断压过所有腿。
 
-**一家 PASS 一家 BLOCK(分裂)由主裁裁,不加腿、不重派**(业主 2026-09-24:「一家通过一家不通过需要你来判断
+**一家 PASS 一家 BLOCK(分裂)由主裁裁,不靠加腿或重派解决**(业主 2026-09-24:「一家通过一家不通过需要你来判断
 你觉得可以过就写清理由和证据」;此前闸把分裂一律作废,一条总挑边角的腿就握着否决权,Kimi/GLM 单因此空转三次派发)。
 判能过 ⇒ 在 `decision.json` 写 `outcome.split_resolutions`,逐条合格 BLOCK 腿:`log_digest`(那家日志的指纹),
 每条驳回 `quote`(**那家日志的原话**,机器核字面子串)+ `disposition`(rejected|deferred)+ `reason`
 + `evidence`(被这次评审绑定的交付文件,可带 `:行`;或有同名 runlog 记录的收据;本单 verify.md / decision.json /
-tasks.md / observations 不算 —— 那些评审后还能写)。归档闸只查结构与证据在不在,**不查理由好坏**;
+tasks.md / observations 不算 —— 那些评审后还能写)。**收据是唯一例外**:评审后跑复现留下的 runlog 收据正是驳回最好的证据,
+而收据与同名 observation 都免指纹 ⇒ 手写一对骗得过闸 —— 这道闸挡偷懒、不挡蓄意伪造(与 runlog 自己的强度声明同一边界)。
+旧轮换入口遇冲突仍会自动补一条同组 spare(`bin/panel-review` 的 escalation=conflict),它是多一份意见,不解决分裂。
+归档闸只查结构与证据在不在,**不查理由好坏**;
 理由照旧进 verify.md 发现表。写这份记录不作废评审绑定(与 `outcome.verdict` 同类豁免)。判不能过 ⇒ 照 4b 修。
 两家都 BLOCK 从来不算分裂,照旧由主裁 verdict 定。机制与判据:track `arbiter-resolves-split-review`,
 `tests/test-track-record.sh` R11/R11b。
