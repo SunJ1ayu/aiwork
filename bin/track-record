@@ -1335,6 +1335,10 @@ def _split_evidence(
         track_rel = track_dir.resolve().relative_to(repo.resolve()).as_posix()
     except ValueError as exc:
         raise refuse("track inside the repository") from exc
+    # 裁决写在归档前(tracks/<t>/…),归档把整单挪到 tracks/archive/<t>;之后重验(ledger、再归档)按新位置找
+    active_prefix = f"tracks/{track_dir.name}/"
+    if track_rel == f"tracks/archive/{track_dir.name}" and rel.startswith(active_prefix):
+        rel = f"{track_rel}/{rel[len(active_prefix):]}"
     inner = rel[len(track_rel) + 1:] if rel.startswith(track_rel + "/") else None
     if inner is not None and (inner in SPLIT_CLOSEOUT_RECORDS or inner.startswith("observations/")):
         raise refuse("file bound by the review, not this track's closeout records (writable after review)")

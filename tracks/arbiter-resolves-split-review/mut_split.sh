@@ -36,4 +36,5 @@ mut M14-staged-symlink-ok $R 'startswith((b"100644 ", b"100755 "))' 'startswith(
 mut M17-working-symlink-ok $R 'or candidate.is_symlink() or not candidate.is_file()):' 'or not candidate.is_file()):'
 mut M15-empty-reason-ok $R 'if not rebuttal["reason"].strip():' 'if False:'
 mut M16-disposition-free $R 'if rebuttal["disposition"] not in SPLIT_DISPOSITIONS:' 'if False:'
+mut M18-no-archive-mapping $R 'if track_rel == f"tracks/archive/{track_dir.name}" and rel.startswith(active_prefix):' 'if False:'
 echo "survived=$survived"; exit $survived
