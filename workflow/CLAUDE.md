@@ -36,7 +36,8 @@ commit,闸①就退化成翻执行腿日志人工找补,而且 git 历史里再�
 **风险和方向不确定性是两个轴，别再让 lane 一词兼任两件事。**
 `impact-risk`:self / standard / high，外部评审预算分别是 self=0、standard=1、high=2；
 新写口 / 权限 / auth / 钱 / 数据一致性默认 high。新任务先用 `panel-candidates` 查看候选,由主裁以 `--members` 显式选择;high 至少两个不同模型家族。旧入口保留轮换，
-失败、降级、冲突、NEEDS_MORE_INFO 或我仍不确定才追加第三腿；判卷/沙箱/权限边界等
+失败、降级、NEEDS_MORE_INFO 或我仍不确定才追加第三腿;**一家 PASS 一家 BLOCK(分裂)不加腿不重派,由我裁**
+(panel skill 第 4 节;挡不住假想实现 / 手改才有 / 老版本就有的「锤子砸墙」类当场驳回或延期)；判卷/沙箱/权限边界等
 特殊控制面才显式 `panel-review --all`。绑定 typed track 时，`--budget` 只能加证据，不能低于
 该 risk 的 0/1/2 预算绕闸。**先查方案,再写实现判据或动手**:新增/改变用户必经步骤、
 默认自动动作、失败退路或数据/权限/跨模块契约,以及选错需跨模块/迁移/部署撤回的方案,
@@ -50,7 +51,7 @@ commit,闸①就退化成翻执行腿日志人工找补,而且 git 历史里再�
 不从旧自由文本猜新字段。PASS 归档还会从 compact panel observation 机械核对
 self/standard/high 是否由同一次成功 panel、同一 subject digest 下 0/1/2 个
 coverage-eligible 的不同模型家族腿满足；v1、UNKNOWN/NMI、timeout、降级、证据不完整、
-跨 run 拼接或 eligible PASS/BLOCK 冲突都不能补预算。缺腿时 archive 与成功成本聚合都 BLOCK。
+跨 run 拼接或**未经裁决记录**的 PASS/BLOCK 分裂都不能补预算。缺腿时 archive 与成功成本聚合都 BLOCK。
 **oracle 是我写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
 
 **bump 版本号、或动判卷防线的 commit,必须挂在一个 track 下**(归进现成 track 也算)。

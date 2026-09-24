@@ -87,8 +87,8 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 `impact-risk` 决定实现评审预算(self=0、standard=1、high=2),`design-uncertainty` 记录检查后的判断。
 自报 low 不能免掉 4c 命中的检查,high impact 也不自动要求全池规划;两轴不能互相代替。
 `panel-review --track NAME --risk self|standard|high TASK_FILE [REPO_DIR] [LOG_PREFIX]` 默认 high=2，
-从健康池轮换不同模型家族。失败、降级、没有裁决、NEEDS_MORE_INFO 或裁决冲突时只追加
-一个健康 spare；`--all` 才是显式**全池评审**，从唯一花名册派出当前全部已启用且可执行的腿，
+从健康池轮换不同模型家族。失败、降级、没有裁决或 NEEDS_MORE_INFO 时只追加
+一个健康 spare(一家 PASS 一家 BLOCK 的分裂**不**追加:同组多一腿仍分裂,见第 4 节由主裁裁)；`--all` 才是显式**全池评审**，从唯一花名册派出当前全部已启用且可执行的腿，
 留给判卷、沙箱、权限边界或预算评审无法收敛的特殊面。池大小不是契约，增删腿不改这句话。
 **连续硬失败的腿会被停止轮换(2026-08-25 起)**:`health.tsv` 每条腿多记一个
 **连续硬失败次数**;连续 `PANEL_HEALTH_DEAD_STREAK`(默认 3)轮 rc≠0 ⇒ 那条腿
@@ -148,7 +148,7 @@ prompt,仓内自审 = 喂给评审员 = 反锚定作废。
 0/1/2 机械预算；要做无归属实验必须明确 `--no-track`，但无归属事件不能满足 typed track 的
 PASS 归档。归档会再核对同一次成功 panel、同一 subject digest 下是否有 0/1/2 个由共享
 predicate 判定为 coverage-eligible 的不同外部模型家族腿；v1、UNKNOWN/NMI、timeout、降级、
-证据不完整、跨 run 拼接和 eligible PASS/BLOCK 冲突均不能补预算。
+证据不完整、跨 run 拼接和**没有裁决记录**的 eligible PASS/BLOCK 分裂均不能补预算(第 4 节)。
 仓里有 typed active track 时，派发前必须显式给 `--track NAME` 或 `--no-track`；前者会在
 任何腿启动前校验 decision 已满足 dispatch 且 `impact.level == --risk`。实际腿、回落降级、
 总耗时、rc 与真实可得 usage 在全部腿结束后写回主仓 track 的紧凑 observation；prompt 和
@@ -233,6 +233,18 @@ panel-roster <日志前缀>        # 事后重建;与驱动自己写的 .roster 
 PASS / BLOCK / NEEDS_MORE_INFO + 存活的发现。**绝不能只凭评审员的说法定案,绝不能把他们
 的结论取平均,绝不能因为一致 PASS 就降低自己的标准**——共同假阴性正是 panel 抓不到的失败
 形态,多加一条腿也堵不上。主 agent 独立的、代码级验证过的判断压过所有腿。
+
+**一家 PASS 一家 BLOCK(分裂)由主裁裁,不加腿、不重派**(业主 2026-09-24:「一家通过一家不通过需要你来判断
+你觉得可以过就写清理由和证据」;此前闸把分裂一律作废,一条总挑边角的腿就握着否决权,Kimi/GLM 单因此空转三次派发)。
+判能过 ⇒ 在 `decision.json` 写 `outcome.split_resolutions`,逐条合格 BLOCK 腿:`log_digest`(那家日志的指纹),
+每条驳回 `quote`(**那家日志的原话**,机器核字面子串)+ `disposition`(rejected|deferred)+ `reason`
++ `evidence`(被这次评审绑定的交付文件,可带 `:行`;或有同名 runlog 记录的收据;本单 verify.md / decision.json /
+tasks.md / observations 不算 —— 那些评审后还能写)。归档闸只查结构与证据在不在,**不查理由好坏**;
+理由照旧进 verify.md 发现表。写这份记录不作废评审绑定(与 `outcome.verdict` 同类豁免)。判不能过 ⇒ 照 4b 修。
+两家都 BLOCK 从来不算分裂,照旧由主裁 verdict 定。机制与判据:track `arbiter-resolves-split-review`,
+`tests/test-track-record.sh` R11/R11b。
+> 「有人拿锤子砸墙墙会不会裂」类(业主原话)—— 判据挡不住假想的错误实现、只有手改配置才有、老版本就有 ——
+> 主裁当场驳回或延期,**不因腿判 BLOCK 就续轮**(4b 判准本来就这么写;09-24 我没照做,空转到业主点破)。
 
 ### 4b. 收到报告之后:核实 → 处置 → 修复清单 → 复审或结束(本节是唯一权威)
 
