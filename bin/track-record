@@ -1237,18 +1237,6 @@ def panel_review_coverage(successful_panel_runs: list[dict[str, Any]]) -> dict[s
         summary = summarize_results(values, run_id=run_id, subject=subject)
         authoritative_groups.append({"run_id": run_id, "subject_digest": subject, **summary})
 
-    nonconflicting = [item for item in authoritative_groups if not item["conflict"]]
-    best_authoritative = max(
-        nonconflicting,
-        key=lambda item: (
-            item["eligible_family_count"],
-            item["eligible_count"],
-            item["run_id"],
-            item["subject_digest"],
-        ),
-        default=None,
-    )
-
     by_subject: dict[str, list[dict[str, Any]]] = {}
     subject_runs: dict[str, set[str]] = {}
     for result in results:
@@ -1276,7 +1264,6 @@ def panel_review_coverage(successful_panel_runs: list[dict[str, Any]]) -> dict[s
     )
     return {
         "authoritative_groups": authoritative_groups,
-        "best_authoritative": best_authoritative,
         "same_subject_shadow": same_subject_shadow,
         "conflicting_groups": sum(1 for item in authoritative_groups if item["conflict"]),
     }
