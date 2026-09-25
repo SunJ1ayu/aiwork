@@ -22,7 +22,7 @@ description: 把实现工作派给执行腿的完整规矩(分层选档:主 agen
 |---|---|
 | 小而明显的活 | **主 agent 直接干**(切碎反而更贵) |
 | 1-3 个文件的小修、测试、lint/类型修复 | **`submimo fix`**(微档,见下) |
-| PR 级实现 | **codex 腿 `-m gpt-5.5`**(默认档) |
+| PR 级实现 | **codex 腿**(默认模型 = `bin/codex-model`,现为 `gpt-6-sol`;与评审腿 subcodex 同一处) |
 | 架构敏感 / 跨模块判断 | 升 **`gpt-5.6-sol`** |
 | **考卷需要开网络端口** | GPT 照派,**主 agent 当测试机**(有界 2 轮);或给 Claude 腿。见下"网络"一节 |
 | 需求不清 / 大架构没定 | **先 plan 或 panel-explore,不派活** |
@@ -136,7 +136,7 @@ delegate-codex --print-oracle-hash --repo <仓> --protect <判卷路径> ... >> 
 #    **默认在独立 worktree 里跑**;要回老行为(腿直接写主工作树)才加 --no-isolate
 #    仓里有开着的 track 时,**必须亲口说这单归谁**:--track <轮次名> 或 --no-track
 delegate-codex --task <任务书> --repo <仓> --attack-log <仓外的攻题记录> \
-               --protect <判卷路径> [--protect ...] [--model gpt-5.5] \
+               --protect <判卷路径> [--protect ...] [--model gpt-<id>] \
                (--track <轮次名> | --no-track) [--no-isolate]
 # ③ 收货闸①(机械版:四条臂跑在那棵树上,并顺带查主树有没有没提交的判卷动静)
 delegate-codex --receive <回执.json>
@@ -202,7 +202,7 @@ Codex 退出后，仓外 receipt 先补齐 `run_id/started_at/finished_at/durati
 > 08-05 实证:手写桩红检 ⇒ 恒真前置是绿的,洞没露出来;真退回 build ⇒ 当场抓到。
 > **桩红不算数。**
 
-- **模型要显式给 `-m`**:执行 `gpt-5.5`,架构敏感升 `gpt-5.6-sol`。
+- **模型默认读 `bin/codex-model`**(现为 `gpt-6-sol`,业主 09-25 定;评审腿 subcodex 同一处);要单次换就给 `--model gpt-<id>`。
   `~/.codex/config.toml` 里的默认值是 `gpt-5.6-sol`,**别依赖它**——依赖默认值就等于
   以后改了配置这里会静默升档。`model_reasoning_effort=high`,可按活的难度调低省额度。
 - **要求它用中文回答**,否则默认英文。
