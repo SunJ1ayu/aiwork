@@ -1,425 +1,180 @@
-# aiwork 工作流改造计划 · 第 3 版
+# aiwork 工作流改造 · 第 4 版(最小实施方案)
 
-> 状态:讨论稿,待 GPT 复核。
-> 整合自:第 1 版 → 第 2 版 → 补充一(混合作者、发版角色)→ 补充二(通用流程与项目插槽)→ 补充三(作者身份、重算触发链等)。
-> 参与讨论:业主、Claude、GPT。日期:2026-09-28。
-> ⚠️ 本文件目前只在 GitHub 镜像仓库里,本机 `/root/aiwork` 还没有。下次从本机同步镜像时,先把它拉回本机,别被覆盖掉。
-
----
-
-## 0. 一句话目标
-
-aiwork 是**独立的证据判定核心**;受信任的收集器通过 GitHub API 取事实喂给它;**判卷面受保护**;GitHub 强制执行最新判定结果;OpenClaw 按 gate 给出的缺项清单派活、自己不存规则;仲裁者与 Builder 按会话隔离;人工例外只由 agent 拿不到的身份签发。
-
-核心性质:**OpenClaw 挂掉只会让流程停住,不会让未经验证的代码合入。** 安全性由 GitHub + gate 负责,推进由 OpenClaw 负责。
+> 状态:待 GPT 复核。日期:2026-09-28。
+> 由第 3 版按 GPT"第一性原理收敛"的意见缩减而来;第 3 版全文见本文件的上一个 commit(`087cabf`)。
+> ⚠️ 本文件目前只在 GitHub 镜像仓库里,本机 `/root/aiwork` 还没有。同步镜像前先把它拉回本机。
 
 ---
 
-## 1. 为什么改:已核实的现状
+## 0. 只证明三件事
 
-| 事实 | 来源 |
+| | 要证明的事 | 现状(反例) |
+|---|---|---|
+| **P1** | CI 确实测了最终要合入的代码 | OpenDesign 的 PR 上没有 CI;PR #6 check runs = 0,测试结果靠 Builder 在评论里自述 |
+| **P2** | 独立评审确实审了这份代码 | PR #6 的 `563eef7`、`8dd3efe` 是提意见的本地 Codex 自己修的,没有经过任何独立评审就进了 main |
+| **P3** | Builder 不能给自己放行 | 所有 agent 共用 SunJ1ayu 身份;发版提交直接推 main;reviewer 能改 Builder 的分支并合并 |
+
+**纪律**:每条规则、每个模块都要写明"防的是哪个具体的误放行"和"删掉会发生什么"(第 2 节)。说不出来的不做。每完成一个阶段,就删掉被它取代的旧逻辑(第 4 节)。复杂的推断一律不做:**无法可靠确认时,标为 UNKNOWN,停止自动放行,交业主批准。**
+
+---
+
+## 1. 最小形态
+
+| 环节 | 由谁做 |
 |---|---|
-| 现行流程(规划→实现→收货→评审→修复→再评审→归档)墙钟长;简单任务改走"云端 Claude 写 → PR → 本地 Codex 审 → 修 → 合并"后明显更快 | 业主实际使用;OpenDesign PR #1–#6 |
-| 审查只证明"合乎规格",规格本身错了时查不出来:09-19 启动更新事故两家实现评审都通过,真实使用仍卡住 | `workflow/skills/panel/SKILL.md` 4c |
-| 代价最大的几笔欠账多出在自建状态层:D8 控制器一死整轮作废、D12 交接件把"打算改"写成"改了"、D13 放行的评审审的是旧树、D14–D16 归档与未跟踪文件、D4/D9 花名册说假话 | `WORKFLOW-DEBT.md` |
-| OpenDesign 的 PR 上**没有 CI**:5 个 workflow 都是手动或推 `ci-*/**` 分支才跑;PR #6 的 check runs 为 0,Builder 在评论里说"全过"属于自述 | OpenDesign `.github/workflows/*.yml` |
-| **所有 agent 共用 SunJ1ayu 身份**:PR #6 上云端 Claude 的回复和本地 Codex 的审查意见都署名 SunJ1ayu;PR 上没有正式 review 对象 | PR #6 |
-| 发版提交直接推 main(`ad8ce62`、`feb20df`、`8986c7a`) | OpenDesign git log |
-| PR #6 的 `563eef7`、`8dd3efe` 是本地 Codex 应业主"合并后给我一个能检测到更新的包"的要求推的:它提出第二条意见后自己修复、合并、打包,**这两个修复没有经过任何独立评审就进了 main**,且署名 SunJ1ayu | 业主确认 |
-| QA 试点:QA 设计每腿 0.8–4.3 分钟,QA 执行 2.7–4.5 分钟,代码评审每轮 12–26 分钟、共 3 轮;两类发现几乎不重叠;修 QA 问题时引入的新错误由代码评审抓回;三方共同盲区是**前置状态组合** | OpenDesign `tracks/archive/opendesign-zcode-model-settings/verify.md` 第 160–174 行 |
-| 默认 `git patch-id` 忽略空白:把 Python 的 `return 1` 缩进进 `if` 前后,算出同一个 id;加 `--verbatim` 才能区分 | 本地实测(git 2.43) |
-| 已装机客户端的更新地址写死为 `github.com/SunJ1ayu/OpenDesign/releases/...` | OpenDesign `desktop/package.json:61`、`desktop/scripts/release-feed.mjs`、`web/src/update.ts` |
-| 一条腿的信息散在 4 处:`bin/<腿>-model`、`bin/_panel-roster-lib.sh`、`bin/_panel_candidates.py`、`bin/_review_result.py` | aiwork `bin/` |
+| 写代码(可自动放行) | **只有**云端 Claude,用机器账号推送。本机 agent 暂不当 Builder |
+| 评审 | 本机评审腿先只接 `subcodex`,通过 `aiwork-review` App 发结构化评审;这个 App **没有推代码权限** |
+| 判定 | `aiwork-gate`:代码随 OpenDesign 的 main 固定,只读 GitHub API,不执行 PR 代码 |
+| 合并 | gate 为 success 时 GitHub 自动合并;UNKNOWN、判卷面、high、有争议的 PR 需业主在当前 commit 上点 Approve |
+| 发版 | 业主触发的 release workflow,只在 main 上跑,需业主在 GitHub 上批准后才执行 |
 
 ---
 
-## 2. 业主已拍板的决定
+## 2. 规则与模块(每条都说明防什么、删掉会怎样)
 
-1. **暂不迁到组织名下**,用"合并前必须与 main 同步"代替合并队列。阶段 6 时如果同步排队成为常见瓶颈再议。迁移前要先做两件事:发一版把更新地址改成新地址,等客户端升级上来;让 gate 支持 `merge_group`。
-2. 每单**实质评审 2 轮**;**返工最多 3 轮**,超出交业主。
-3. **不设谱系字段和规则**;每条确认成立的问题记录由哪个家族发现,留作以后分析。
-4. 工作流**对所有项目通用**;交付(发包/部署)是可选插槽,不是每个项目都要。
-5. 身份:`SunJ1ayu` 只给人用;云端 Claude 改连机器账号;本地各角色用 GitHub App,按角色分,不按腿或家族分。
-6. 旧流程**先冻结**,达到写死的条件再删代码;`tracks/archive` 保留。
-7. 强制拦截先在公开的 OpenDesign 上验证。
+| 编号 | 规则 / 模块 | 证明 | 防的具体误放行 | 删掉会怎样 |
+|---|---|---|---|---|
+| R1 | **分支规则**:main 禁止直推和强推、必须走 PR、合并前必须与 main 同步;必过检查只有 `aiwork-gate`,并限定只认 `aiwork-gate` App 发出的结果 | P1 P3 | 发版提交直推 main(`ad8ce62` 等);PR #6 修复后未审即合并 | 任何有写权限的身份都能绕过全部检查 |
+| R2 | **CI workflow**:`pull_request` 触发,不给 secrets,不做路径过滤,跑 `tests/run-all.sh` 与 `tests/e2e/run-all.sh` | P1 | 未经测试的代码合入;Builder 自述"全过" | 回到 PR #6 的状态 |
+| G1 | gate 核对 CI:结果针对当前 head、来自 `.github/workflows/ci.yml`、结论为 success | P1 | CI 被跳过或结论为 neutral 却被当成通过(GitHub 默认如此);PR 新增一个同名的假 job 冒充 CI | skipped 被当成通过;假 job 能冒充 |
+| G2 | **判卷面**:PR 改动 `.github/**`、`.aiwork/**`、`tests/run-all.sh`、`tests/e2e/run-all.sh` 及测试配置 → 需业主批准 | P1 P3 | Builder 改 CI 或测试入口,让自己变绿 | 改一行 workflow 就能放行 |
+| G3 | **评审**:需要一条评审,由 `aiwork-review` 发出、针对当前 head、结论 PASS、完整、上下文非空、家族与作者家族不同 | P2 | 未审就合、审的是旧代码(D13)、自己审自己、没看代码就给 PASS | 独立评审变成可有可无 |
+| G4 | **作者**:PR 分支上的每次推送都来自机器账号 → 作者是 Claude;否则判为 UNKNOWN → 需业主批准,且当前 head 上仍须有至少一条 PASS | P3 | reviewer、本机 agent 或泄露的凭证追加未审 commit,并沿用之前的评审(PR #6 原样) | 混合作者的 PR 可以绕过评审 |
+| G5 | 当前 head 上**任何**一条 `aiwork-review` 给出 BLOCK → failure,除非业主批准 | P2 | 一条 BLOCK 被另一条 PASS 盖过 | 挑一个 PASS 就能过 |
+| G6 | **high 路径**(策略文件列出)→ 两个不同非作者家族 PASS + 业主批准 | P2 | 高风险改动只有一家审过 | 高风险和普通改动同等放行(沿用现行 high = 2) |
+| G7 | **人工例外** = SunJ1ayu 在**当前 head** 上的 Approve;可豁免 G2 / G4 / G5,**不能豁免 G1(CI)** | P3 | 旧的批准被沿用到新代码上 | UNKNOWN、判卷面、争议将永远卡住(这是唯一的出口) |
+| G8 | **失败即拒**:API 报错、分页不全、限流、活动记录读不到 → failure | 全部 | 缺数据被当成通过 | 数据缺失时误放行 |
+| M1 | **gate 运行方式**:由 `pull_request_target`(opened / synchronize / reopened / labeled)与 `workflow_run`(CI 完成)触发;只用 main 上的 gate 代码(放在 OpenDesign 的 `.github/aiwork-gate/`),不 checkout PR 代码;同一 PR 取消旧的运行,只保留最新一次;gate 私钥放在只允许 main 使用的 Environment secret | P3 | Builder 在 PR 里改 gate,或借 PR 的 workflow 伪造 gate 检查 | gate 可以被 PR 自己改写 |
+| I1 | **身份分离**:SunJ1ayu 只给人用(撤销 agent 用过的 PAT 与授权);云端 Claude 用机器账号;`aiwork-review` 无推代码权限 | P3 | agent 以业主身份批准或合并;reviewer 直接改 Builder 的分支(PR #6) | G4、G7 全部失效 |
+| D1 | **发版 workflow**:业主手动触发,只在 main 上跑,release environment 需业主批准;产物来自 main 上的具体 commit | P3 | 用未合入的代码打包发布(PR #6 之后的打包) | 撤掉本机的业主凭证后就发不了版,会逼着把凭证放回去,I1 随之失效 |
 
----
-
-## 3. 总体架构
-
-### 3.1 各方分工
-
-| 方 | 管什么 | 不管什么 |
-|---|---|---|
-| **GitHub** | 分支、提交、PR、评审对象、CI 运行;分支规则强制执行 gate 结果;自动合并 | 判断证据是否可信 |
-| **aiwork gate** | 风险分档、评审资格判定、证据校验、仲裁协议;输出缺项清单 | 调度、保存任务状态、执行 PR 代码 |
-| **OpenClaw** | 拆任务、按缺项清单派活、额度与健康管理、重试、通知业主 | 规则、判定、合并、写代码 |
-| **Agent** | 写代码、评审、QA、交付 | 给自己判卷、合并 |
-| **业主** | 需求取舍、Pre-QA 待决问题、high 风险放行、人工例外、触发交付、真机试用 | 常规仲裁 |
-
-### 3.2 通用流程与项目插槽
-
-- **通用(所有项目相同)**:PR → CI → 评审(+QA)→ gate → 合并;身份与 App;腿名册;仲裁规则;风险档位;轮数上限;固定底线;结论格式;对抗用例。
-- **项目插槽(各仓库 `.aiwork/project.yml`)**:CI 命令、风险路径、判卷面、有无界面及 QA 方式、交付类型与交付脚本、版本回显命令。
-
-接入一个新项目 = 写一份 `project.yml`(需要交付的再附一个交付脚本),通用流程不改。
-
-### 3.3 一个任务的生命周期
-
-```
-业主目标
-  → (用户可见改动)Pre-QA 验收契约
-  → Builder 开 PR
-  → CI + 评审 + (用户可见改动)黑盒 QA  —— 并行
-  → 问题回到原 Builder 修改 → 按规则增量复审
-  → gate 重算 → 满足即自动合并(high 风险由业主合并)
-  → (项目需要时)交付 → 运行中的目标回显版本与 commit
-```
+补充说明:
+- **评审发出后怎么触发重算**:评审适配器发完评审,给 PR 加一个 `aiwork:recheck` 标签,触发 `labeled` 事件。加标签只需 PR 写权限,不需要推代码权限;用 `repository_dispatch` 则需要推代码权限,所以不用。漏算时,人或 agent 手动加这个标签即可重算。
+- **结论格式**:评审正文里放一个 JSON 块,字段为 verdict、head_sha、model、family、completeness、files_read。只因为它由 `aiwork-review` 发出才被采信;家族映射从 aiwork 现有的 `_review_result.py` 生成,不手写第二份。
+- **推送者**:用 GitHub 的仓库活动记录(每次推送的执行者)判断,commit 里填写的作者名不作数。阶段 C 先验证这个接口可用;读不到就按 UNKNOWN 处理。
+- **gate 代码放在 OpenDesign**:原因是 aiwork 的 GitHub 仓库只是无历史的镜像,每次重新生成,固定不了 commit。
 
 ---
 
-## 4. 身份与权限
+## 3. 阶段(每个阶段:交付什么 / 怎么验收 / 删掉什么)
 
-### 4.1 身份表
+### 阶段 A:CI + 分支规则
 
-| 身份 | 谁用 | 权限要点 |
-|---|---|---|
-| `SunJ1ayu` | 业主本人 | gate 只认它签发的人工例外;任何 agent 环境都不得持有它的凭证 |
-| 机器账号(如 `sunj1ayu-bot`) | 云端 Claude(经 claude.ai 的 GitHub 连接) | 仓库协作者(write) |
-| `aiwork-build` App | 本地 Builder | 推分支、开 PR;**不给 workflows 权限**(推不了 `.github/workflows/` 改动) |
-| `aiwork-review` App | 所有评审腿 | 读代码、写 PR 评审 |
-| `aiwork-gate` App | gate | 写 check run;读 PR、Actions 运行记录;读 aiwork(取固定版本 gate 代码) |
-| `aiwork-qa` App | QA 执行器 | 阶段 5 再建:读代码、写 PR 评论与 check run |
-| 交付执行者 | 发版/集成 | 优先做成业主手动触发、只在 main 上运行的 workflow(release environment);确需本机交付的项目再建 `aiwork-release` App |
+- 交付:R2;R1 先把必过检查设为 `ci`(暂时可能被同名假 job 冒充,阶段 C 由 G1 接管)。
+- 先验证禁止联网的守卫(`_no_egress`)在 GitHub runner 上能否生效;不行就换一种可用的方式,不直接关掉。
+- 约定:PR 不改 VERSION,版本号改动走发版 PR。
+- **验收**:普通 PR 上 CI 自动出现;直推 main 被拒;测试失败时不能合并;发版 PR 能走通。
+- **废止**:PR 评论里自述测试结果的做法;OpenDesign 的新任务不再用 `runlog` 贴收据(CI 本身就是收据)。
 
-GitHub 条款允许每人一个免费账号外加一个机器账号,所以不另注册"人用的第二账号"。
+### 阶段 B:身份分离 + 发版 workflow
 
-### 4.2 三层结构
+- 交付:I1、D1。业主注册机器账号并切换 claude.ai 的 GitHub 连接;建 `aiwork-review`、`aiwork-gate` 两个 App;在 GitHub 上撤销 agent 用过的 SunJ1ayu PAT 与已授权应用;建 release workflow 与 release environment(审批人:SunJ1ayu)。
+- 过渡:本机 agent 只评审、不推代码。
+- **验收**:本机 `gh auth status` 已不是 SunJ1ayu;用 `aiwork-review` 推代码被拒;机器账号能开 PR;发版 workflow 要等业主批准才执行,产物对应 main 上的 commit。
+- **删除**:本机的 SunJ1ayu 凭证;"reviewer 直接修 Builder 分支"和"本机手工打包发布"的做法。
 
-App(角色与权限,设一次)→ **适配器**(持有私钥、换临时 token、报告实际模型、发结构化结论)→ 模型(随时换)。
+### 阶段 C:最小 gate(先只报不拦,再拦截)
 
-- 模型全程拿不到 token。适配器在开始时换一次 token 取 PR 信息,审完后再换一次新 token 发结论,中途过期的 token 用不到。
-- 私钥不过期;JWT 最长 10 分钟;安装 token 1 小时。都由库自动续换(PyGithub、`@octokit/auth-app`、`actions/create-github-app-token`)。
-- 换 token 失败时停住,不放行,并推 QQ 通知业主;不许静默重试。
+- 交付:G1–G8、M1;`.aiwork/policy.yml`(判卷面清单、high 路径);`bin/review-pr <PR>`:取当前 head 快照 → 运行现有 `subcodex` 评审 → 以 `aiwork-review` 发出 → 加 recheck 标签。
+- 先以 `aiwork-gate-shadow` 这个检查名只报不拦,再把必过检查从 `ci` 换成 `aiwork-gate`。用不同的名字,是为了避免切换时 neutral 被当作通过。
+- **验收**:第 5 节的对抗用例全部通过 + 第 4 节的 PR #6 端到端回放全部符合预期。
+- **删除**(拦截生效后):OpenDesign 停止新建 track。aiwork 中被取代的代码:
+  - `_review_delivery.py`:被 head SHA 绑定取代;
+  - `track-record` 的评审覆盖校验、`observations` 与 ledger:被 G3 / G5 取代,证据已在 GitHub 上;
+  - `panel-roster` 与 `.plan` / `.state` 重建:同上;
+  - `panel-slice`:从未计入覆盖;
+  - `delegate-codex` 的 worktree 管理:被分支 / PR 取代;
+  - `runlog`:被 CI 取代;
+  - `bin/track`、`track-guard`、`track-commit-msg`:被 PR 取代。
+  
+  **前提是这些代码已无其他调用方**,见第 7 节待定 1。每删一项留墓碑。
 
-### 4.3 凭证保管与已知限制
+### 阶段 D:QA(核心闭环稳定后)
 
-- review/build 私钥放在单独的 Linux 用户下(仅该用户可读)。
-- **已知限制**:agent 目前以 root 运行,root 能读任何文件。在把 agent 降为普通用户之前,凭证层只防误用、不防蓄意冒充,**不宣称"本机 Builder 无法冒充 reviewer"**。
-- **过渡规则**:agent 降为普通用户之前,凡含本机 agent 所写 commit 的 PR,不开自动合并,由业主手动合并。
-- 云端 Claude 跑在云端容器里,碰不到本机私钥;阶段 2 完成后,"云端 Builder 冒充 reviewer"是真正挡住的。
-- gate 私钥放进**只允许 main 使用的 Environment secret**,不放仓库级 secret(同仓库分支发起的 PR,其 workflow 能读到仓库级 secret)。
-- 在 GitHub 上**撤销** agent 用过的 SunJ1ayu PAT 与已授权应用(如 GitHub CLI),光删本机文件不够。
-- App 私钥定期轮换:先加新的,更新配置,再删旧的。
-- 后续项:把 agent 降为普通用户(前提是迁移各 CLI 的登录态)。
+- Pre-QA 验收契约 + 黑盒 QA,只用于用户可见的改动;此时再建 `aiwork-qa`。进入前先写明每条新规则防什么。
 
----
+### 阶段 E:OpenClaw(最后)
 
-## 5. 配置(解耦)
-
-原则:**所有可调项只写在配置里,其他代码一律从配置读,不许另存一份。**
-
-### 5.1 全局配置(放 aiwork)
-
-| 配置 | 内容 | 规则 |
-|---|---|---|
-| **腿名册** | 每腿一行:名字、适配器、允许的模型、家族、能担任的角色(review/qa/build/explore)、能否读仓库、开关 | 只是声明;适配器每次报告实际调用的模型,**与声明不符就不计覆盖**。不认识的家族拒绝运行 |
-| **角色表** | 角色 → App → 期望权限 | 启动时对照 App 实际安装的权限,发现漂移就报警;它不是第二套权限系统 |
-| **通用策略** | 风险档位及各档要求、轮数上限、豁免文件 | 见第 6 节 |
-
-**固定底线写在 gate 代码里,配置改不掉**:全局配置、`project.yml`、gate 代码、workflow、测试入口与测试配置、验收规则、交付脚本,改动一律属 high 风险。
-
-**gate 永远用 main 上已生效的配置判当前 PR**;新配置合入 main 后才生效。
-
-### 5.2 项目配置(各仓库 `.aiwork/project.yml`)
-
-字段:CI 命令、风险路径、判卷面、有无界面与 QA 方式、交付类型(none/package/deploy)与交付脚本、版本回显命令。
-
-- 只能在全局底线之上**加严**,不能放宽。
-- 本身属判卷面。
-- CI 校验 PR 拟改的 `project.yml`:不得低于全局底线;并试跑新的 CI 命令和交付脚本(只打包、不发布),避免配置一合入就让后续 CI 失效。
-
-### 5.3 以后调整时改几处
-
-| 想做的事 | 改哪里 | 几处 |
-|---|---|---|
-| 某条腿升级到新版本 | 腿名册里该行的模型名 | 1 |
-| 暂停某条腿(额度用完) | 腿名册里的开关 | 1 |
-| Cursor 改跑另一家族的模型 | 腿名册里的模型名 + 家族 | 1 行 2 格 |
-| high 从 2 家改 3 家 | 通用策略里一个数字 | 1 |
-| 某项目也要求 QA | 该项目 `project.yml` | 1 |
-| 新增一条腿 | 写一个适配器 + 名册加一行 | 2(适配器只在第一次写) |
-| 同类证据加一个新来源 | 配置 | 1 |
-| 引入新种类的证据(如发版后回显) | 要改 gate 代码 | — |
-
-现在散在 4 处的腿信息,在阶段 3 并入腿名册;阶段 7 删掉旧的散表。
+- 按 gate 的缺项清单派活,从 GitHub 重建状态,负责额度与健康管理。进入前同样逐条写明防什么。
 
 ---
 
-## 6. 证据与判定规则
+## 4. PR #6 端到端回放(阶段 C 验收)
 
-### 6.1 结论格式 v3
+在 OpenDesign 上用一个无害的改动,按 PR #6 的真实过程走一遍:
 
-在现有 ReviewLegResult v2 外加一层外壳,不一次重写所有 `sub*`:
-
-- `role`:review / qa / ci / release
-- `subject`:仓库、PR、head SHA、base SHA
-- `issuer`:App、适配器、会话、声明模型、实际模型、家族
-- `evidence`:输入清单(读过哪些文件、diff 行数)、问题列表(编号、严重度、文件:行)、完整性(complete / timeout / degraded / no_verdict)
-- `verdict`:PASS / BLOCK / NEEDS_MORE_INFO
-
-### 6.2 收集器(新的信任边界)
-
-- 只通过 GitHub API 取事实:当前 head、每条结论针对的 commit、检查结果、契约确认记录、推送记录。
-- 可以读取指定 commit 的文件字节和 diff,**只当数据处理,绝不执行**。
-- 契约哈希、文件内容比对等由收集器**独立计算**,不采信 Builder 提交的任何证据、哈希或同名 JSON。
-- 核对 CI 结果确实来自预期的 workflow 文件。
-- API 分页不全、限流或权限错误 → 判"证据不足",不得当作通过。
-- `workflow_run` 传来的产物一律视为不可信数据,不执行。
-
-### 6.3 gate 核心
-
-纯函数:输入证据 JSON,输出决定 JSON(风险档、要求、已满足项、缺项清单、判定)。
-
-- 只发**明确的 success 或 failure**(GitHub 会把 skipped/neutral 当成通过)。
-- 缺项清单就是 OpenClaw 的待办,OpenClaw 自己不存规则。
-
-### 6.4 风险档与要求(默认值,可在策略里调整)
-
-| | 要求 |
+| 步骤 | 预期 |
 |---|---|
-| **standard**(默认) | CI 通过 + 1 个非作者家族的评审 |
-| **high**(命中高风险路径、判卷面、auth/权限/钱/数据一致性/迁移/控制面) | CI 通过 + 2 个不同的非作者家族评审 + redcheck + 业主合并(不开自动合并) |
-| **用户可见改动**(与档位叠加) | + Pre-QA 验收契约 + 黑盒 QA(阶段 5 验证后才设为必过) |
-
-档位由路径规则和契约决定,Builder 只能调高,不能调低。
-
-### 6.5 覆盖规则
-
-**不计数**:超时、降级、没给结论、零上下文的 PASS、针对旧 commit 的结论、实际模型与名册声明不符。
-
-**作者按每段改动算,不按 PR 的 Builder 算:**
-- PR 上每段 commit 都必须由与其作者不同家族的 reviewer 审过。
-- 作者按适配器记录的**实现会话**认定;推送身份只作下限;commit 里填写的作者名不作数。
-- 无法确认实现会话的 commit 标为 **UNKNOWN**,须由**至少两个不同家族**审过(两家里最多一家与真实作者同族)。
-- Reviewer 默认只提意见、由 Builder 修改;Reviewer 一旦亲手改代码,就转为 Builder,它新增的改动须由独立会话复审。对自己修复做的"验证"不算覆盖。
-- 人推的 commit(SunJ1ayu)同样需要评审,否则人的凭证一旦泄露就能绕过 gate。
-
-**结论沿用:**
-- 只有当 PR 改过的每个文件,此刻内容与审查时**逐字节相同**,才能沿用旧结论(不用 patch-id)。
-- main 同时改了 PR 改过的同一文件 → 增量复审。
-- 审查后 main 改动了高风险路径,或与 PR 文件同目录的文件 → 增量复审(有意不做依赖图分析,以控制复杂度)。
-- CI 在 main 变化后一律重跑。
-
-**人工例外**:只认 SunJ1ayu 签发;绑定签发时的 head SHA,有新推送即失效。
-
-### 6.6 仲裁
-
-- 仲裁会话不能是该 PR 任何一段改动的 Builder 会话。
-- P1 及以上的问题:修掉(由原 reviewer 在新 commit 上确认),或经仲裁驳回;P2 及以下不阻断合并。
-- 驳回记录沿用现有 `split_resolutions` 的格式:引用原话 + 可核对的证据 + 理由。
-- 同家族仲裁者驳回异家族的 BLOCK:必须附一个**由 CI 跑绿的反证测试**(把 reviewer 描述的失败场景写成测试,留作回归测试);否则交第三家族裁决,每条问题最多一次;仍无法决定则交业主。
-- 轮数上限:实质评审 2 轮、返工 3 轮,超出交业主。
-
-### 6.7 验收测试
-
-- **能自动跑的 P0**:base 上必须失败,**且失败在断言处**(导入错误、环境故障、超时不算);PR 上必须通过。沿用 `redcheck --must-fail` 的思路。
-- **其他 P0**:QA 检查测试断言;纯人工用例留操作记录与结果。
-- **high**:仍跑 redcheck。
-- **契约防篡改**:QA 确认契约时记录哈希(由收集器独立计算);之后契约被改,就要重新确认。
-
-### 6.8 重算触发链
-
-GitHub 事件会漏发、乱序,不能只靠事件:
-
-- **触发**:
-  - `pull_request_target`:新推送、标签变化
-  - `workflow_run`:CI 完成
-  - `push` 到 main:重算所有未合并 PR(覆盖 main 更新和配置变更)
-  - `repository_dispatch`:评审/QA 适配器、OpenClaw、人工例外工具提交后发出
-  - 每 10 分钟全量对账一次,兜底漏掉的事件
-- **只用读取 main 上 workflow 定义的触发方式**;不用 `pull_request` / `pull_request_review` 触发 gate;gate 从不 checkout 或执行 PR 代码;gate 代码版本固定。
-- **防旧结果覆盖新结果**:同一 PR 的计算用 `concurrency` 分组排队;发布结果前再核对一次输入指纹,已变化就放弃这次结果。
-- **在途规则**:只要还有已派发、尚未交结果的评审或 QA,gate 就不给 success。
-
-### 6.9 CI 要求
-
-- `pull_request` 触发,不给任何 secrets。
-- 必过的 CI 不做路径过滤(被跳过的检查会被当成通过)。
-- gate 亲自确认 CI 结论为 success,且来自预期的 workflow 文件。
-- 分支规则开启"合并前必须与 main 同步",让 CI 测的合并结果就是最终要合入的内容。
-
-### 6.10 记录
-
-- 每次判定由 gate 在 PR 上写一条紧凑 JSON 记录:PR、head SHA、base SHA、策略版本、证据引用、判定。
-- 这条记录只供阅读与追溯,**不作为下次判定的输入**;每次都从原始评审、CI、契约内容重新计算。
-- Actions 日志与产物会过期,不作为永久审计依据。
+| 1. 云端 Claude(机器账号)开 PR | CI 自动运行 |
+| 2. CI 绿,但还没有评审 | gate failure(G3) |
+| 3. Codex 经 `review-pr` 在当前 head 给 PASS | gate success(standard) |
+| 4. Codex 在新 head 上给 BLOCK(对应 PR #6 的第二条意见) | gate failure(G5) |
+| 5. **回放失效**:Codex 试图自己推修复 | 用 `aiwork-review` 推送被拒(I1) |
+| 6. **回放失效**:以非机器账号的身份往 PR 分支推 commit | gate 判 UNKNOWN → failure(G4) |
+| 7. **回放失效**:试图直推 main,或从 PR 分支打包发布 | 直推被拒(R1);发版 workflow 只在 main 上跑且需业主批准(D1) |
+| 8. 正确路径:Claude 推修复 → 旧评审失效 → Codex 在新 head 上复审 PASS | gate success → 自动合并 |
+| 9. 附加:PR 改 `ci.yml`;CI 红;评审针对旧 SHA | 分别 failure(G2 / G1 / G3) |
 
 ---
 
-## 7. 角色
+## 5. 对抗用例(gate 的单元测试)
 
-| 角色 | 由谁担任 | 能做 | 不能做 |
-|---|---|---|---|
-| Builder | 云端 Claude(机器账号)、本地 agent(`aiwork-build`) | 推自己的分支、开 PR、按意见修改 | 合并;改版本号 |
-| Reviewer | 非作者家族的任意腿(`aiwork-review`) | 读快照、发结构化评审 | 推代码(亲手改即转为 Builder) |
-| QA | `aiwork-qa`(阶段 5) | 写/确认验收契约;黑盒操作 PR 构建产物 | 读源码、推代码 |
-| 仲裁者 | 独立会话 | 按 6.6 维持或驳回问题 | 仲裁自己参与构建的 PR |
-| 发版/集成 | 业主触发的交付 workflow 或脚本 | 改版本号、打包、发布、回显 | 改产品代码 |
-| OpenClaw | 调度器 | 派活、重试、通知 | 判定、合并、推代码 |
-| 业主 | SunJ1ayu | 需求取舍、待决问题、人工例外、high 放行、触发交付、真机试用 | —— |
+**应拦下:**
+1. CI 红、被跳过或为 neutral(G1)
+2. PR 新增一个同名的假 `ci` job(G1 核对来源路径)
+3. PR 改 `ci.yml`、`run-all.sh` 或 `.aiwork/`,且业主未批准(G2)
+4. 没有评审;评审针对旧 head(G3)
+5. PASS 不是由 `aiwork-review` 发出,比如机器账号或 SunJ1ayu 在评论里贴一段 PASS 的 JSON(G3)
+6. 评审超时、降级或零上下文(G3)
+7. 评审家族等于作者家族(Claude 审 Claude)(G3)
+8. PR 分支上有非机器账号的推送,也就是 PR #6 的情形(G4)
+9. 仓库活动记录读不到(G4 / G8)
+10. 当前 head 上既有 PASS 又有 BLOCK(G5)
+11. high 路径只有一家 PASS,或缺业主批准(G6)
+12. 业主批准针对旧 head;业主批准试图豁免红 CI(G7)
+13. API 限流或分页不全(G8)
+14. PR 修改 `.github/aiwork-gate/`:仍按 main 上的代码判,并算作判卷面(M1 / G2)
 
----
-
-## 8. 交付(可选插槽)
-
-- **类型**:`none`(合并即完成)/ `package`(如 OpenDesign 安装包 + 更新源)/ `deploy`(如 systemd 服务、OpenClaw gateway)。
-- **触发**:默认业主触发;项目可配置为"合并后自动交付"(适合自用工具)。
-- **执行**:发版/集成角色;只改版本号、打包、发布、回显,不改产品代码。产品代码改动一律回到 PR 流程。
-- **版本号**:PR 里不改 VERSION;版本号改动走发版 PR。
-- **完成标准**:证据绑定被测 commit、产物哈希和实际运行目标,不能只看版本号。运行中的程序要能报出"版本 + 构建 commit"。
-- OpenDesign 已有 `published-bytes-match` 证据(核对发布字节),需补上运行中的程序回显构建 commit。
-- Windows electron-e2e 在发版时跑,不在每个 PR 上跑。
-
----
-
-## 9. Pre-QA 与黑盒 QA(只用于用户可见的改动)
-
-- **契约** `acceptance/<issue>.md`:
-  - 最多约 10 条 P0,每条写"前提 / 操作 / 期望",带编号和测法(e2e / 单测 / 人工);
-  - 前置状态两两组合(试点里的共同盲区);
-  - 探索式测试提纲(P1/P2 放这里,不作必测项);
-  - 待业主决定的问题(只有这一节会卡住流程)。
-- **触发**:只有改变用户可见行为时才做;修 bug 时,复现步骤就是契约。先派一家做 QA 设计,high 再加第二家。
-- **黑盒 QA**:在 PR 构建出的程序上用 Playwright 真实操作,不读源码;结果以 `aiwork-qa` 发出。
-- **用户发现的 bug**:打 `escaped` 标签,记录本该由哪一关抓到(Pre-QA / 评审 / QA / CI),并补回归测试。
+**应放行(对照组):**
+- A. 机器账号推送 + CI 绿 + 当前 head 上有一条非 Claude 家族的 PASS
+- B. UNKNOWN + 至少一条 PASS + 业主在当前 head 上批准 + CI 绿
+- C. high 路径 + 两个不同非作者家族 PASS + 业主批准 + CI 绿
 
 ---
 
-## 10. 阶段计划
+## 6. 暂缓清单(为什么暂缓 / 什么时候再做)
 
-顺序:**1 → 2 → 3 → 4** 是最小闭环;5 在 2 之后可与 3、4 并行准备,但"QA 必过"要等 5 验证完;6 在 4 之后;7 最后。
+| 暂缓项 | 现在怎么处理 | 何时再做 |
+|---|---|---|
+| 按实现会话逐段溯源作者 | 只有机器账号推送才算已知作者,其余一律 UNKNOWN 交业主 | 本机 agent 需要当 Builder 时 |
+| `aiwork-build` App、本机 Builder | 本机 agent 只评审 | 同上 |
+| agent 降为普通用户(root 隔离) | 本机 agent 不当 Builder,伪造评审对它没有动机;云端 Builder 碰不到本机私钥 | 本机 agent 当 Builder 之前 |
+| 结论沿用(文件内容不变就不重审) | 一律按 head SHA 精确匹配,同步 main 后重审 | 同步 main 导致的重审次数明显时(先记录次数) |
+| 完整事件调度(在途规则、定时对账、dispatch) | PR 事件 + CI 完成 + recheck 标签 + 同一 PR 只保留最新一次运行 | 出现漏算或卡住时 |
+| 仲裁协议(同家族反证、第三家族) | 争议交业主批准 | 业主每周处理的争议超过约 3 条时 |
+| 腿名册合并、三张配置表、通用 `project.yml`、多项目 | 只有 OpenDesign 一份 `policy.yml`;家族映射从 `_review_result.py` 生成 | 接入第二个项目时 |
+| 交付类型 none / deploy;回显"版本 + 构建 commit" | 只保留 OpenDesign 的 release workflow(产物天然来自 main 上的 commit) | 接入需要部署的项目时 |
+| 结论格式 v3 完整外壳 | 最小 JSON 块 | 接入第二种评审腿或 QA 时 |
+| 更多评审腿 | 只接 `subcodex` | 核心闭环稳定后,按需逐条接入 |
+| Pre-QA / 黑盒 QA | —— | 阶段 D |
+| OpenClaw 调度、健康与额度迁移、并行 | 现行 `panel-review` 照旧 | 阶段 E |
+| 迁到组织名下、谱系规则 | 业主已决定暂不做 | 阶段 E 复议 |
 
-**阶段 1、2 已多轮讨论无异议,可以先开工。**
-
-### 阶段 1:PR 上的真 CI(OpenDesign)
-
-- 新增 `.github/workflows/ci.yml`:`pull_request` 触发,不给 secrets;跑 `tests/run-all.sh`(CI 里建 venv,用 `PY=` 指定)与 `tests/e2e/run-all.sh`(含产物新鲜度检查与 Linux Chromium e2e;需要 gateway 的两条照旧跳过)。
-- 先验证无出口守卫(`_no_egress`)在 GitHub runner 上能否生效;不行就换一种可用的方式,不直接关掉。
-- Windows electron-e2e 保持手动,只在发版时跑。
-- 业主在 main 设分支规则:禁止直推和强推、必须走 PR、`ci` 必过、合并前必须与 main 同步、评审讨论必须全部解决。
-- 约定:PR 不改 VERSION;发版走发版 PR。
-
-**完成标准**:用一个普通 PR 和一个发版 PR 实测——CI 自动出现;直推 main 被拒;测试失败时不能合并;发版 PR 改版本号能走通。
-
-### 阶段 2:身份分离(大部分由业主操作)
-
-- 注册机器账号,加为协作者;在 claude.ai/connect-github 切换连接;让云端 Claude 发一条测试评论确认署名。
-- 建 3 个 App 并安装:`aiwork-build`、`aiwork-review`、`aiwork-gate`(`aiwork-qa` 到阶段 5 再建)。
-- 在 GitHub 上撤销 agent 用过的 SunJ1ayu PAT 与已授权应用;清理本机凭证;本机 agent 推代码改用 `aiwork-build`。
-- 私钥保管与 gate 私钥按 4.3 处理。
-
-**完成标准**:SunJ1ayu 的操作只来自人;实测云端 Builder 冒充 reviewer 失败;旧凭证已撤销。
-
-### 阶段 3:配置、结论格式、gate(只报不拦)
-
-- 先建全局配置与配置校验;把 4 处腿信息并入腿名册。
-- 结论格式 v3(外壳);只接入现在在用的腿;健康与额度管理暂留 `panel-review`。
-- 收集器 + gate 核心 + gate workflow(按 6.8 的触发方式),以 `aiwork-gate-shadow` 这个检查名**只报不拦**(与将来必过的检查名不同,避免切换时 neutral 被当作通过)。
-- 第 11 节的对抗用例写成 gate 核心的单元测试。
-
-**完成标准**:对抗用例全部通过;影子期记录新旧判定差异、漏触发、事件乱序,每一处差异都有解释。**正确性由对抗用例证明,不以"跑满 N 个 PR"代替。**
-
-### 阶段 4:第一次启用拦截,冻结旧流程
-
-- 必过 = CI + 独立评审 + 身份与证据检查(**暂不含 QA**)。
-- 分支规则要求 `aiwork-gate` 必过,且只认 `aiwork-gate` App 发出的结果;开启自动合并(high 与含本机 agent commit 的 PR 除外)。
-- 普通任务不再建 track;high 的设计文档随 PR 放进 `docs/decisions/`。
-- 发版单独成线:发版 PR → Windows e2e → 业主真机试用 → 发布 → 运行中版本与 commit 回显。
-
-**完成标准**:用真实 PR 验证 gate 发出的检查确实被分支规则识别,并对应当前 head 与当前 main 的组合;没有出现为绕过误拦而手工合并的情况。
-
-### 阶段 5:Pre-QA 与黑盒 QA
-
-- 建 `aiwork-qa`;按第 9 节落地契约、黑盒 QA 与 escaped 记录。
-- QA 链路验证通过后,**第二次启用**:用户可见的改动 QA 必过。
-
-**完成标准**:3 个用户可见改动完整走完;与 09-24 试点对比耗时与发现数。
-
-### 阶段 6:OpenClaw 调度
-
-- 只按缺项清单派活;每轮从 GitHub 重建状态;去重键为(PR、commit、角色、家族);任务租约超时,用来发现掉线的 agent。
-- 健康、冷却、额度管理从 `panel-review` 迁入;鉴权失败推送到 QQ。
-- 同时进行的任务数按 reviewer 产能定;按文件归属拆任务。
-- 复议是否迁到组织名下。
-
-**完成标准**:3 个任务并行跑完,除设计好的人工节点外无需业主介入。
-
-### 阶段 7:删除旧代码
-
-- **删除条件(写死)**:对抗用例全部通过 + 真实 PR 无错误放行 + 旧功能已无调用方 + 迁移清单完成。
-- **删**:`bin/track`(new/archive/preflight)、`track-guard`、`track-commit-msg`、`_review_delivery.py`、`delegate-codex` 的 worktree 管理、`panel-roster` 与 `.plan/.state`、`observations` 与 ledger、`runlog`、临时路径扫描、my-review 闸、`panel-slice`、散落的腿信息表,以及它们的测试。按惯例留墓碑。
-- **留**:`tracks/archive` 原样保留;`sub*` 适配器、家族表(并入腿名册)、禁止联网守卫、`redcheck`、运行中版本回显。
+业主已拍板、继续有效:实质评审 2 轮、返工最多 3 轮(超出交业主);暂不迁组织;不设谱系规则;交付是可选插槽。
 
 ---
 
-## 11. 对抗用例
+## 7. 待业主决定
 
-**以下都应拦下:**
-
-1. 评审超时或降级
-2. 结论针对旧 commit
-3. 零上下文的 PASS
-4. 同家族自审
-5. Builder 冒充 reviewer
-6. QA 确认之后契约被改
-7. PR 修改、重命名或删除判卷面(含测试入口脚本、间接引用的配置、软链接)
-8. PR 修改全局配置或 `project.yml`,想降低自己的档位
-9. 同家族仲裁者无反证驳回异家族 BLOCK
-10. 人工例外不是 SunJ1ayu 签发的
-11. 人工例外签在旧 commit,之后又有新推送
-12. 只改 Python 缩进,却想沿用旧评审
-13. CI 结论为 skipped/neutral,或 CI 绿在旧 head / 旧 main 上
-14. 每类触发事件的漏发、乱序、重复投递;较早的计算晚完成,覆盖了新结论
-15. base 上的验收测试因导入错误、环境故障或超时失败(不是断言失败)
-16. GitHub API 分页不全、限流或权限错误
-17. 腿名册声明的模型与实际调用的模型不一致
-18. 混合作者 PR:reviewer 所在家族追加了修复 commit,并用自己之前的结论或自我验证申请放行
-19. 以 SunJ1ayu 身份推送、未经任何评审的 commit
-20. 作者为 UNKNOWN 的 commit 只有一个家族审过
-21. 还有已派发、未交结果的评审或 QA 时给出 success
-22. 审查后 main 改了高风险路径或 PR 同目录的文件,却沿用旧结论
-23. PR 拟改的 `project.yml` 低于全局底线,或交付脚本试跑失败
-24. 交付证据只有版本号,没有构建 commit 与产物哈希
-
-**以下应放行(对照组,防止规则收得过紧):**
-
-- A. 只合入 main、PR 改过的文件内容全部未变、main 未改高风险路径与同目录文件 → 沿用评审,CI 在新组合上重跑并通过
-- B. 同家族仲裁者附 CI 跑绿的反证测试,驳回异家族 BLOCK
-- C. 作者为 UNKNOWN 的 commit 由两个不同家族审过
+1. **aiwork 自己是否也改走 GitHub PR 流程?** 现在以本机 `/root/aiwork` 为准,GitHub 上只是无历史的镜像。
+   - 不迁:aiwork 自己还在用 track 那套代码,阶段 C 之后只能在 OpenDesign 停用,不能删除。
+   - 迁:aiwork 是私有仓库,GitHub Free 下 gate 只能做提示;要强制拦截需 GitHub Pro。
+2. **high 风险保留"两个家族 + 业主批准"(G6),还是简化为"一个家族 + 业主批准"?** 后者更省;前者沿用现行规则。
 
 ---
 
-## 12. 全程记录的指标
+## 8. 请 GPT 复核
 
-每个 PR 的耗时、返工轮数、问题来源(CI / 评审 / QA / 用户)、各家族独家发现、gate 误判、用户发现的 bug(escaped)。
-
----
-
-## 13. 已知限制与后续复议
-
-- **root 隔离**:见 4.3。降为普通用户之前,凭证层只防误用。
-- **私有仓库**:GitHub Free 只能给公开仓库设分支规则;aiwork 等私有仓库的 gate 只能做提示,要强制拦截需 GitHub Pro。私有仓库的 Actions 免费分钟数有限,Windows 机器按两倍计时。
-- **依赖分析**:有意不做,用"高风险路径或同目录"规则近似(6.5)。
-- **谱系规则**:暂不设;攒约 20 个 PR 的"独家发现"数据后再议。
-- **迁组织**:阶段 6 复议(见第 2 节的前提条件)。
-- **业主是天然瓶颈**:人工节点只保留需求取舍、待决问题、high 放行、人工例外、交付触发与真机试用。
-
----
-
-## 14. 请 GPT 复核的重点
-
-1. 第 3 版还有哪些误放行路径,特别是 6.5(作者与沿用)和 6.8(触发链)。
-2. 阶段 1–4 的完成标准是否足够。
-3. 对抗用例还缺什么,对照组是否足够。
-4. 对单人 + 多 agent 的团队,哪里仍然过重、可以砍掉。
+1. G1–G8、M1、I1、D1 是否足以证明 P1–P3,有没有哪条可以再删。
+2. 第 4 节的回放是否覆盖了 PR #6 的全部失效点。
+3. 暂缓清单里有没有其实不能暂缓的项。
