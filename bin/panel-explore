@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# panel-explore - the DIVERGENT sibling of panel-review.
+#
+# panel-review converges: three weak models check one design/diff and the main
+# agent (the frontier model driving the session) arbitrates down to a single
+# PASS/BLOCK verdict.
+# panel-explore diverges: DIFFERENT model families (MiMo / DeepSeek / GLM / Grok)
+# each answer the SAME design brief in isolation and propose ONE concrete
+# direction from the angle their priors favor, plus the blind spots they see in
+# the brief. There is deliberately NO verdict - the spread is the output.
+#
+#   submimo explore (MiMo) + subdeepseek-agent explore/subdeepseek review
+#   + subglm-agent explore/subglm review
+#
+# The main agent commits its OWN direction FIRST (anti-anchoring, same discipline
+# as panel-review), then reads these three as angle-expansion + a blind-spot net,
+# and SYNTHESISES. It must not collapse the spread into one answer, and must not
+# let three shallow takes launder into a fake-thorough consensus.
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  panel-explore [--members ID[,ID...]] BRIEF_FILE [REPO_DIR] [LOG_PREFIX]
+
+Runs the enabled exploration models in parallel on the SAME design brief:
+  submimo explore -> <LOG_PREFIX>.submimo.log
+  subdeepseek-agent explore -> <LOG_PREFIX>.subdeepseek.log
+                         (falls back to subdeepseek review when requested/needed)
+  subglm-agent explore -> <LOG_PREFIX>.subglm.log
+                         (falls back to subglm review when requested/needed)
+  subgrok explore -> <LOG_PREFIX>.subgrok.log (PANEL_GROK_LEG=off disables)
+  subcursor explore -> <LOG_PREFIX>.subcursor.log (PANEL_CURSOR_LEG=off disables)
+
+Each returns ONE position paper (Direction / Core bet / How it works / Best at /
+Sacrifices / Blind spots in the brief / Smallest first step). No PASS/BLOCK.
+
+Args:
+  BRIEF_FILE   markdown design brief / open question (required)
+  REPO_DIR     repo for context (default: $PWD)
+  LOG_PREFIX   log path prefix (default: /root/aiwork/logs/explore-<briefname>-<ts>)
+
+The main agent reads ALL reports, then SYNTHESISES - it never averages them into a
+verdict. A failure in one model does not block the others.
+EOF
+}
+
+# Explicit exploration shares member/session machinery, but has its own non-review contract.
+for _arg in "$@"; do
+  if [[ "$_arg" == --members ]]; then
+    exec "$(dirname "$0")/panel-review" --explore-members "$@"
+  fi
+done
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
+if [[ $# -lt 1 || $# -gt 3 ]]; then usage; exit 2; fi
+
+BIN="$(dirname "$0")"
+BRIEF_FILE="$1"
+REPO_DIR="${2:-$PWD}"
+
+[[ -f "$BRIEF_FILE" ]] || { echo "panel-explore: brief file not found: $BRIEF_FILE" >&2; exit 1; }
+[[ -d "$REPO_DIR" ]]   || { echo "panel-explore: repo dir not found: $REPO_DIR" >&2; exit 1; }
+
+TS="$(date +%Y%m%d-%H%M%S)"
+BRIEFNAME="$(basename "${BRIEF_FILE%.*}")"
+LOG_PREFIX="${3:-/root/aiwork/logs/explore-${BRIEFNAME}-${TS}}"
+mkdir -p "$(dirname "$LOG_PREFIX")"
+
+SUBMIMO_LOG="${LOG_PREFIX}.submimo.log"
+SUBDEEPSEEK_LOG="${LOG_PREFIX}.subdeepseek.log"
+SUBGLM_LOG="${LOG_PREFIX}.subglm.log"
+SUBMIMO_ERR="${SUBMIMO_LOG}.err"
+SUBDEEPSEEK_ERR="${SUBDEEPSEEK_LOG}.err"
+SUBGLM_ERR="${SUBGLM_LOG}.err"
+SUBGROK_LOG="${LOG_PREFIX}.subgrok.log"
+SUBGROK_ERR="${SUBGROK_LOG}.err"
+GROK_LEG="${PANEL_GROK_LEG:-agent}"
+[[ "$GROK_LEG" == agent || "$GROK_LEG" == off ]] || {
+  echo 'panel-explore: PANEL_GROK_LEG must be agent or off (no chat fallback)' >&2
+  exit 2
+}
+SUBCURSOR_LOG="${LOG_PREFIX}.subcursor.log"
+SUBCURSOR_ERR="${SUBCURSOR_LOG}.err"
+CURSOR_LEG="${PANEL_CURSOR_LEG:-agent}"
+[[ "$CURSOR_LEG" == agent || "$CURSOR_LEG" == off ]] || {
+  echo 'panel-explore: PANEL_CURSOR_LEG must be agent or off (no chat fallback)' >&2
+  exit 2
+}
+
+# GLM/DeepSeek leg selection mirrors panel-review: 两条都默认**底座腿**。
+# GLM 那格 2026-08-18 一天翻了两次(白天 chat / 晚上 agent),两次都是被事实推的 ——
+# 完整来龙去脉在 bin/panel-review 的同一处注释里,**只有那一份**,别在这儿抄第二份。
+# PANEL_*_LEG=chat 强制回落聊天腿;absent agent auto-falls
+# back to chat. Agent legs read the repo themselves, chat legs only see the
+# prompt/diff context supplied by their own wrapper.
+GLM_LEG="${PANEL_GLM_LEG:-agent}"
+if [[ "$GLM_LEG" == "agent" && -x "$BIN/subglm-agent" ]]; then
+  GLM_CMD="$BIN/subglm-agent"
+else
+  GLM_CMD="$BIN/subglm"
+fi
+
+DEEPSEEK_LEG="${PANEL_DEEPSEEK_LEG:-agent}"
+if [[ "$DEEPSEEK_LEG" == "agent" && -x "$BIN/subdeepseek-agent" ]]; then
+  DEEPSEEK_CMD="$BIN/subdeepseek-agent"
+else
+  DEEPSEEK_CMD="$BIN/subdeepseek"
+fi
+
+# Explore mode: tells the engine not to demand a PASS/BLOCK verdict in the
+# output (the Direction/Core-bet format has none by design).
+export REVIEW_MODE=explore
+
+# Divergent system prompt for the chat-engine employees (subdeepseek/subglm). It is
+# injected via REVIEW_SYSTEM_PROMPT, which submimo-review reads in place of its
+# baked review prompt (prompt TEXT only - mode is REVIEW_MODE above). MiMo gets
+# the equivalent framing from `submimo explore`'s MESSAGE instead (mimo CLI has
+# no separate system role). Keep the two in sync.
+export REVIEW_SYSTEM_PROMPT='You are an independent design-exploration agent. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
+
+Rules:
+- Propose exactly ONE concrete direction. Do NOT hedge across multiple options or output a menu.
+- Do NOT output PASS/BLOCK/approve/reject - this is not a review.
+- Commit to a position even under uncertainty; state your assumptions.
+- Ground claims in the supplied brief and any provided files; do not invent facts about the codebase.
+
+Output format (use exactly these labels):
+Direction: <one-line name of the approach you propose>
+Core bet: <the single key assumption/trade-off this direction bets on>
+How it works: <concrete shape - components, flow, key decisions>
+Best at: <what it optimizes for / where it wins>
+Sacrifices: <what it gives up; when it is the wrong choice>
+Blind spots in the brief: <what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen>
+Smallest first step: <the first concrete thing to build to validate this>'
+
+# Divergence wants exploration, not the review path's near-deterministic 0.2.
+# subdeepseek/subglm inherit this and pass it to the engine; they do not override it.
+export MIMO_TEMPERATURE="${PANEL_EXPLORE_TEMPERATURE:-0.7}"
+
+echo "panel-explore: brief=$BRIEF_FILE repo=$REPO_DIR temp=$MIMO_TEMPERATURE"
+echo "  submimo(explore) -> $SUBMIMO_LOG"
+echo "  subdeepseek      -> $SUBDEEPSEEK_LOG (leg: $(basename "$DEEPSEEK_CMD"))"
+echo "  subglm           -> $SUBGLM_LOG (leg: $(basename "$GLM_CMD"))"
+if [[ "$GROK_LEG" == agent ]]; then
+  echo "  subgrok(explore) -> $SUBGROK_LOG"
+else
+  echo '  subgrok          -> off'
+fi
+if [[ "$CURSOR_LEG" == agent ]]; then
+  echo "  subcursor(explore) -> $SUBCURSOR_LOG"
+else
+  echo '  subcursor          -> off'
+fi
+echo "  running all in parallel..."
+
+# Light pre-launch stagger (mirrors panel-review): the three models share provider
+# tpm budgets and bursting at once is the main 429 trigger. Sleep a small random
+# gap (default up to 2s; PANEL_STAGGER_MAX=0 disables) before the 2nd and 3rd
+# launches. $RANDOM seeds awk to dodge same-second srand() collisions. Pairs with
+# the engine's 429 backoff.
+stagger() {
+  local max="${PANEL_STAGGER_MAX:-2}"
+  [[ "$max" == 0 || "$max" == 0.0 ]] && return 0
+  sleep "$(awk -v m="$max" -v r="$RANDOM" 'BEGIN{printf "%.3f", (r/32768)*m}')"
+}
+
+# Same stderr-sidecar approach as panel-review: capture each model's startup
+# stderr so an early failure (missing key, 429, bad endpoint) is recorded rather
+# than swallowed. stdout is dropped (the result lands in the .log).
+# Agent-leg failure -> automatic chat-leg fallback. The agent evidence is kept
+# as <log>.agent.log(+.err) because the chat retry reuses the normal log path.
+run_leg() {  # run_leg <agent_cmd> <chat_cmd> <log> <err> <label>
+  local agent="$1" chat="$2" log="$3" err="$4" label="$5" rc
+  if [[ "$agent" == "$chat" ]]; then
+    "$chat" review "$BRIEF_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+    return $rc
+  fi
+  "$agent" explore "$BRIEF_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  if [[ $rc -eq 0 ]]; then return 0; fi
+  [[ -e "$log" ]] && mv -f "$log" "${log}.agent.log"
+  [[ -s "$err" ]] && mv -f "$err" "${log}.agent.log.err" || rm -f "$err"
+  echo "  NOTE: $label agent leg failed (rc=$rc) -> fallback to chat leg;" \
+       "agent output kept at ${log}.agent.log(.err)"
+  "$chat" review "$BRIEF_FILE" "$log" "$REPO_DIR" >/dev/null 2>"$err"; rc=$?
+  return $rc
+}
+
+"$BIN/submimo"  explore "$BRIEF_FILE" "$SUBMIMO_LOG"  "$REPO_DIR" >/dev/null 2>"$SUBMIMO_ERR"  &
+PID_MIMO=$!
+stagger
+run_leg "$DEEPSEEK_CMD" "$BIN/subdeepseek" "$SUBDEEPSEEK_LOG" "$SUBDEEPSEEK_ERR" subdeepseek &
+PID_DEEPSEEK=$!
+stagger
+run_leg "$GLM_CMD" "$BIN/subglm" "$SUBGLM_LOG" "$SUBGLM_ERR" subglm &
+PID_GLM=$!
+PID_GROK=""; RC_GROK=1
+if [[ "$GROK_LEG" == agent ]]; then
+  stagger
+  "$BIN/subgrok" explore "$BRIEF_FILE" "$SUBGROK_LOG" "$REPO_DIR" >/dev/null 2>"$SUBGROK_ERR" &
+  PID_GROK=$!
+fi
+PID_CURSOR=""; RC_CURSOR=1
+if [[ "$CURSOR_LEG" == agent ]]; then
+  stagger
+  "$BIN/subcursor" explore "$BRIEF_FILE" "$SUBCURSOR_LOG" "$REPO_DIR" >/dev/null 2>"$SUBCURSOR_ERR" &
+  PID_CURSOR=$!
+fi
+
+wait "$PID_MIMO";  RC_MIMO=$?
+wait "$PID_DEEPSEEK"; RC_DEEPSEEK=$?
+wait "$PID_GLM";   RC_GLM=$?
+if [[ -n "$PID_GROK" ]]; then wait "$PID_GROK"; RC_GROK=$?; fi
+if [[ -n "$PID_CURSOR" ]]; then wait "$PID_CURSOR"; RC_CURSOR=$?; fi
+
+echo
+echo "panel-explore: done. submimo rc=$RC_MIMO  subdeepseek rc=$RC_DEEPSEEK  subglm rc=$RC_GLM"
+if [[ $RC_MIMO -eq 0 ]]; then
+  [[ -s "$SUBMIMO_ERR" ]] || rm -f "$SUBMIMO_ERR"
+else
+  echo "  WARNING: submimo explore failed (rc=$RC_MIMO); reason in $SUBMIMO_ERR, log $SUBMIMO_LOG"
+fi
+if [[ $RC_DEEPSEEK -eq 0 ]]; then
+  [[ -s "$SUBDEEPSEEK_ERR" ]] || rm -f "$SUBDEEPSEEK_ERR"
+else
+  echo "  WARNING: subdeepseek failed (rc=$RC_DEEPSEEK); reason in $SUBDEEPSEEK_ERR, log $SUBDEEPSEEK_LOG"
+fi
+if [[ $RC_GLM -eq 0 ]]; then
+  [[ -s "$SUBGLM_ERR" ]] || rm -f "$SUBGLM_ERR"
+else
+  echo "  WARNING: subglm failed (rc=$RC_GLM); reason in $SUBGLM_ERR, log $SUBGLM_LOG"
+fi
+if [[ -n "$PID_GROK" ]]; then
+  echo "  subgrok rc=$RC_GROK"
+  if [[ $RC_GROK -eq 0 ]]; then
+    [[ -s "$SUBGROK_ERR" ]] || rm -f "$SUBGROK_ERR"
+  else
+    echo "  WARNING: subgrok failed (rc=$RC_GROK); reason in $SUBGROK_ERR, log $SUBGROK_LOG"
+  fi
+fi
+if [[ -n "$PID_CURSOR" ]]; then
+  echo "  subcursor rc=$RC_CURSOR"
+  if [[ $RC_CURSOR -eq 0 ]]; then
+    [[ -s "$SUBCURSOR_ERR" ]] || rm -f "$SUBCURSOR_ERR"
+  else
+    echo "  WARNING: subcursor failed (rc=$RC_CURSOR); reason in $SUBCURSOR_ERR, log $SUBCURSOR_LOG"
+  fi
+fi
+echo "  read all reports, commit your OWN direction first, then SYNTHESISE."
+echo "  do NOT collapse the spread into a single verdict - the spread is the point."
+
+# Non-zero only if every dispatched leg failed (no directions at all).
+if [[ $RC_MIMO -ne 0 && $RC_DEEPSEEK -ne 0 && $RC_GLM -ne 0 && $RC_GROK -ne 0 && $RC_CURSOR -ne 0 ]]; then exit 1; fi
+exit 0

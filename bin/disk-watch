@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# disk-watch —— 磁盘水位报警 + 「清扫器是不是已经静默失效」的复合判据。
+#
+# ── 为什么存在(2026-08-22)────────────────────────────────────────────────
+# 这台机器的盘被 mimo/opencode 泄漏的 .so 悄悄顶到 92%,**整整一个月没人知道**,
+# 最后是机主让我去看看才发现的。真正缺的东西不是清理逻辑(那只有二十行),
+# 是**没有任何东西会告诉我们盘在涨**。
+#
+# ── 为什么和 tmp-sweeper 分成两个脚本、两条 cron ──────────────────────────
+# 因为本脚本的职责之一**正是发现 tmp-sweeper 失效**。两者塞进一个脚本、一条 cron,
+# 清扫那半段一崩(set -e / find 报错 / 权限变更),报警这半段跟着一起哑 ——
+# 而那恰好是最需要它响的时刻。耦合只允许通过状态文件(它写、我读),不走控制流。
+#
+# ── 为什么测 `/` 而不是 `/tmp` ────────────────────────────────────────────
+# `df -h /tmp /` 两行都是 /dev/vda2,同一块盘。数字一样,但写 `/` 语义诚实。
+# 另外 /tmp 不是 tmpfs(`stat -f -c %T /tmp` → ext2/ext3)⇒ **重启不会清空它**,
+# 「等下次重启」不是一个选项。
+#
+# ── 阈值为什么是两档 ──────────────────────────────────────────────────────
+# 单次泄漏峰值曾达 5.7G,而 80% 到 90% 之间只有 5G。**一次泄漏就能跨过整个警告区**,
+# 所以必须有第二档,否则等于只有一次机会。
+#
+# 用法:disk-watch [--dry-run]
+
+set -uo pipefail
+
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+WARN_PCT=80
+CRIT_PCT=90
+QUIET_HOURS=6                       # 同一档位多久内不重复打扰(防刷屏 —— 每 30 分钟
+                                    # 一条会让人把通知关掉,那等于没有报警)
+STATE=/var/log/disk-watch.state
+SWEEPER_STATE=/var/log/tmp-sweeper.state
+CONF=/root/aiwork/etc/disk-watch.conf
+[ -f "$CONF" ] && . "$CONF"         # 可选:覆盖 QQ_TARGET / 阈值
+
+QQ_TARGET="${QQ_TARGET:-af08ed48ac526dd285d308875d192c50}"
+
+now=$(date +%s)
+pct=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc 0-9)
+avail=$(df -h --output=avail / 2>/dev/null | tail -1 | tr -d ' ')
+
+notify() {                          # $1=级别 $2=正文
+  local level="$1" body="$2"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "[DRY] 会发($level):$body"; return 0
+  fi
+  # 🔴 报警器不能假设它依赖的东西还活着 —— 磁盘满的一个典型后果就是网关先挂。
+  #    所以发不出去要有落地的退路,不能静默失败。
+  if openclaw message send --channel qqbot --target "$QQ_TARGET" \
+       -m "$body" >/dev/null 2>&1; then
+    echo "$(date -Is) sent level=$level pct=$pct"
+  else
+    echo "$(date -Is) SEND-FAILED level=$level pct=$pct —— 落到 motd"
+    printf '[%s] 磁盘告警(QQ 发送失败):%s\n' "$(date -Is)" "$body" \
+      > /etc/motd.d/99-disk-watch 2>/dev/null || true
+  fi
+}
+
+last_alert() {                      # 上次在 $1 这个档位报警的时间戳
+  grep -E " level=$1 " "$STATE" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0
+}
+record()  { [ "$DRY_RUN" = 1 ] || echo "$now level=$1 pct=$pct" >> "$STATE" 2>/dev/null || true; }
+throttled() {                       # 同档位 $QUIET_HOURS 小时内已经报过?
+  local last; last=$(last_alert "$1")
+  [ $((now - last)) -lt $((QUIET_HOURS * 3600)) ]
+}
+
+# ── ① 水位 ────────────────────────────────────────────────────────────────
+level=""
+[ -n "$pct" ] && [ "$pct" -ge "$WARN_PCT" ] && level=warn
+[ -n "$pct" ] && [ "$pct" -ge "$CRIT_PCT" ] && level=crit
+if [ -n "$level" ]; then
+  if throttled "$level"; then
+    echo "$(date -Is) pct=$pct level=$level(${QUIET_HOURS}h 内已报过,不重复)"
+  else
+    notify "$level" "服务器磁盘${pct}%(剩 ${avail})。$([ "$level" = crit ] && echo '⚠️ 已经很危险了,尽快清。' || echo '还不急,但该看一眼了。')"
+    record "$level"
+  fi
+else
+  echo "$(date -Is) pct=$pct 正常"
+fi
+
+# ── ② 清扫器静默失效检测 ──────────────────────────────────────────────────
+# 判据刻意**不假设文件名形状** —— 它问的是「清扫器还在起作用吗」,而不是
+# 「.so 还长那样吗」。这样一来:工具改了文件名、换了底座、有人给腿设了 TMPDIR
+# 把泄漏挪走 —— 三种失效它都抓得到。
+if [ -f "$SWEEPER_STATE" ]; then
+  recent=$(tail -7 "$SWEEPER_STATE" 2>/dev/null)
+  n=$(echo "$recent" | grep -c . )
+  if [ "$n" -ge 7 ]; then
+    zero=$(echo "$recent" | grep -c "deleted=0 ")
+    first_e=$(echo "$recent" | head -1 | grep -oE 'tmp_entries=[0-9]+' | cut -d= -f2)
+    last_e=$(echo "$recent"  | tail -1 | grep -oE 'tmp_entries=[0-9]+' | cut -d= -f2)
+    grow=$(( ${last_e:-0} - ${first_e:-0} ))
+    if [ "$zero" -eq 7 ] && [ "$grow" -gt 500 ]; then
+      if ! throttled sweeper; then
+        notify sweeper "tmp-sweeper 连续 7 次一个文件都没删,而 /tmp 条目净增 ${grow} —— 它可能已经静默失效了(工具改了文件名形状?)。"
+        record sweeper
+      fi
+    fi
+  fi
+fi

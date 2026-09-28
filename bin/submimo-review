@@ -1,0 +1,542 @@
+#!/usr/bin/env python3
+import argparse
+import datetime as dt
+import glob
+import json
+import os
+import random
+import re
+import subprocess
+import sys
+import textwrap
+import uuid
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+# Transient-failure retry policy for call_model. Fanning three reviewers out in
+# parallel routinely trips provider tpm (tokens-per-minute) limits -> HTTP 429,
+# and providers occasionally 5xx; without retry that whole perspective is lost
+# for the run. Bounded exponential backoff + jitter, honoring Retry-After, with
+# a hard attempt cap so worst-case wall-clock stays predictable. Non-429 4xx are
+# permanent client errors and are NOT retried. Knobs are env-overridable so the
+# oracle test can make retries instant/deterministic.
+RETRY_ATTEMPTS = max(1, int(os.environ.get("MIMO_RETRY_ATTEMPTS", "3")))
+RETRY_BASE_SECONDS = float(os.environ.get("MIMO_RETRY_BASE_SECONDS", "1.0"))
+RETRY_CAP_SECONDS = float(os.environ.get("MIMO_RETRY_CAP_SECONDS", "30.0"))
+
+
+def retry_delay(attempt: int, retry_after: str | None) -> float:
+    """Seconds to wait before the next attempt (0-based index of the failed one).
+
+    Honors a numeric Retry-After (capped); otherwise exponential backoff with
+    50-100% jitter to avoid three reviewers re-bursting in lockstep."""
+    if retry_after:
+        try:
+            ra = float(retry_after)
+            if ra >= 0:
+                return min(ra, RETRY_CAP_SECONDS)
+        except ValueError:
+            pass  # HTTP-date form not honored; fall through to backoff
+    backoff = min(RETRY_BASE_SECONDS * (2 ** attempt), RETRY_CAP_SECONDS)
+    return backoff * (0.5 + random.random() * 0.5)
+
+
+SYSTEM_PROMPT = """You are a read-only code review sub-agent.
+
+Rules:
+- Do not suggest or perform writes, deletes, pushes, production commands, or dependency installation.
+- Review only the supplied task, diff, and file contents.
+- Every finding must cite concrete evidence from the supplied context.
+- If evidence is insufficient, say NEEDS_MORE_INFO instead of guessing.
+- Do not decide by confidence alone. Prefer precise, falsifiable findings.
+
+Output format:
+Conclusion: PASS / BLOCK / NEEDS_MORE_INFO
+
+Findings:
+- Severity: CRITICAL / HIGH / MEDIUM / LOW
+- File:
+- Line:
+- Issue:
+- Evidence:
+- Is this introduced by the current change:
+- Suggested fix:
+
+Coverage:
+- Reviewed context:
+- Important context not available:
+"""
+
+
+# 本进程的身份:**唯一来源**。这个引擎被 subchat 复用给 deepseek / zhipu 两条腿
+# (`REVIEW_LABEL` 由 subchat 注入),所以名字不许在别处再写第二遍 —— 2026-08-03
+# 实证:日志头用 REVIEW_LABEL、stderr 却硬写 submimo-review,于是 subglm 腿把智谱的
+# 429/1113 印成「submimo-review: ... from Mimo endpoint」,读日志的人会把死因记到
+# 错误的模型头上。同一件事写在两个地方、只更新其中一个。
+LABEL = os.environ.get("REVIEW_LABEL", "submimo-review")
+
+
+def fail(message: str, code: int = 1) -> None:
+    print(f"{LABEL}: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def read_text(path: Path, max_bytes: int) -> str:
+    data = path.read_bytes()
+    truncated = len(data) > max_bytes
+    data = data[:max_bytes]
+    text = data.decode("utf-8", errors="replace")
+    if truncated:
+        text += f"\n\n[TRUNCATED: file exceeded {max_bytes} bytes]\n"
+    return text
+
+
+def run_git(repo: Path, args: list[str], timeout: int = 30) -> str:
+    # stderr is captured separately and NEVER returned: merged-in fatal text
+    # used to masquerade as diff content in non-git dirs, defeating the BLIND
+    # warning (F4), and merged-in warnings polluted value callers (F5).
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(repo),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception as exc:
+        return f"[git {' '.join(args)} failed: {exc}]"
+    return proc.stdout
+
+
+def run_git_rc(repo: Path, args: list[str], timeout: int = 30) -> tuple[int, str]:
+    """Like run_git but also returns the exit code, for callers that must
+    distinguish 'git said no' from output that merely looks odd.
+
+    On success the value is stdout ONLY - callers use it as a ref (merge-base,
+    hash-object), and any git warning on stderr would corrupt the ref. On
+    failure stderr is appended for diagnostics (the value is never used then)."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(repo),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception as exc:
+        return 1, f"[git {' '.join(args)} failed: {exc}]"
+    if proc.returncode != 0:
+        return proc.returncode, proc.stdout + proc.stderr
+    return 0, proc.stdout
+
+
+def resolve_diff_target(repo: Path) -> str | None:
+    """Choose what to diff the working tree against.
+
+    Bare `git diff` (the old behavior) shows only unstaged changes - staged or
+    committed work was invisible, so a chat reviewer fed that diff reviewed
+    blind. Preference order:
+      PANEL_DIFF_BASE set -> merge-base(base, HEAD), i.e. the whole branch
+                             including staged+unstaged (invalid base = hard
+                             error, not silent fatal-text in the prompt);
+      HEAD resolvable     -> HEAD (staged + unstaged both visible);
+      fresh repo, no HEAD -> the empty tree (staged files show as additions);
+      not a git repo      -> None (bare `git diff`, degrades like before).
+    """
+    if run_git_rc(repo, ["rev-parse", "--is-inside-work-tree"])[0] != 0:
+        return None
+    base = os.environ.get("PANEL_DIFF_BASE")
+    if base:
+        rc, out = run_git_rc(repo, ["merge-base", base, "HEAD"])
+        if rc != 0:
+            fail(f"PANEL_DIFF_BASE '{base}' does not resolve against HEAD in {repo}: {out.strip()}")
+        return out.strip()
+    if run_git_rc(repo, ["rev-parse", "--verify", "HEAD"])[0] == 0:
+        return "HEAD"
+    rc, out = run_git_rc(repo, ["hash-object", "-t", "tree", "/dev/null"])
+    return out.strip() if rc == 0 else None
+
+
+def clip_text(text: str, max_bytes: int, label: str) -> str:
+    """Cap a git output before it goes into the prompt. Oversized diffs are a
+    root cause of weak-model empty responses and 900s timeouts; the marker
+    tells the reviewer (and the arbiter reading the log) it saw a partial view."""
+    data = text.encode("utf-8")
+    if len(data) <= max_bytes:
+        return text
+    clipped = data[:max_bytes].decode("utf-8", errors="replace")
+    return clipped + f"\n[TRUNCATED: {label} exceeded {max_bytes} bytes]\n"
+
+
+def collect_includes(patterns: list[str], repo: Path, max_file_bytes: int) -> list[tuple[str, str]]:
+    files: list[Path] = []
+    for pattern in patterns:
+        base_pattern = pattern if os.path.isabs(pattern) else str(repo / pattern)
+        matches = [Path(p) for p in glob.glob(base_pattern, recursive=True)]
+        if not matches and Path(base_pattern).exists():
+            matches = [Path(base_pattern)]
+        for match in matches:
+            if match.is_file() and match not in files:
+                files.append(match)
+
+    collected: list[tuple[str, str]] = []
+    for path in files:
+        try:
+            label = str(path.relative_to(repo))
+        except ValueError:
+            label = str(path)
+        collected.append((label, read_text(path, max_file_bytes)))
+    return collected
+
+
+def collect_untracked(repo: Path, max_file_bytes: int, max_total_bytes: int) -> list[tuple[str, str]]:
+    """Return (label, content) for files git considers untracked, so that newly
+    added files (absent from `git diff`) are still shown for review.
+
+    Each file is capped at max_file_bytes, but the SUM was previously unbounded:
+    a repo with hundreds of untracked files blew up the prompt just like a huge
+    diff. Past max_total_bytes, remaining files are listed by name only."""
+    out = run_git(repo, ["ls-files", "--others", "--exclude-standard", "-z"])
+    if out.startswith("[git "):  # run_git error fallback; not a real repo
+        return []
+    collected: list[tuple[str, str]] = []
+    omitted: list[str] = []
+    total = 0
+    for rel in out.split("\0"):
+        if not rel:
+            continue
+        path = repo / rel
+        if not path.is_file():
+            continue
+        if total >= max_total_bytes:
+            omitted.append(rel)
+            continue
+        try:
+            content = read_text(path, max_file_bytes)
+        except Exception as exc:
+            content = f"[could not read: {exc}]"
+        total += len(content.encode("utf-8"))
+        collected.append((rel, content))
+    if omitted:
+        collected.append((
+            "[untracked budget exhausted]",
+            f"[TRUNCATED: untracked files exceeded {max_total_bytes} bytes total; "
+            f"{len(omitted)} more file(s) listed by name only]\n" + "\n".join(omitted),
+        ))
+    return collected
+
+
+def session_header() -> dict[str, str]:
+    name = os.environ.get("MIMO_SESSION_HEADER", "").strip()
+    if not name:
+        return {}
+    if not re.fullmatch(r"[A-Za-z0-9-]+", name):
+        fail(f"invalid MIMO_SESSION_HEADER: {name!r}")
+    return {name: SESSION_ID}
+
+
+SESSION_ID = uuid.uuid4().hex
+
+
+def chat_url() -> str:
+    explicit = os.environ.get("MIMO_CHAT_COMPLETIONS_URL")
+    if explicit:
+        return explicit.rstrip("/")
+
+    base = os.environ.get("MIMO_BASE_URL")
+    if not base:
+        fail(
+            "missing MIMO_BASE_URL or MIMO_CHAT_COMPLETIONS_URL. "
+            "Set the Mimo OpenAI-compatible endpoint first."
+        )
+    base = base.rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
+def call_model(prompt: str, timeout: int) -> str:
+    api_key = os.environ.get("MIMO_API_KEY")
+    if not api_key:
+        fail("missing MIMO_API_KEY")
+
+    model = os.environ.get("MIMO_MODEL", "mimo-2.5")
+    # The default system prompt drives convergent code review. panel-explore (and
+    # any divergent-design use) overrides it via REVIEW_SYSTEM_PROMPT so the same
+    # provider-agnostic engine can also run a divergent "propose one direction"
+    # pass. Empty/unset -> the baked review prompt (existing behavior unchanged).
+    system_prompt = os.environ.get("REVIEW_SYSTEM_PROMPT") or SYSTEM_PROMPT
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": float(os.environ.get("MIMO_TEMPERATURE", "0.2")),
+    }
+
+    url = chat_url()   # 绑成变量:报错要打真实端点(见下面 HTTPError 分支)
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            # 2026-08-18:urllib 的默认 UA(Python-urllib/3.x)会被 Cloudflare 前置的
+            # 端点直接 403(error code 1010,"按浏览器指纹封禁")。OpenCode Go 就在
+            # Cloudflare 后面 —— 同一个请求 curl 200 / urllib 403,只差这一行。
+            # 这不是绕反爬,是补上一个本来就该有的客户端身份。
+            "User-Agent": os.environ.get("MIMO_USER_AGENT", "aiwork-review/1.0"),
+            # 一次运行一个会话 id;req 在重试循环外只建一次 ⇒ 重试沿用同一个。
+            **session_header(),
+        },
+        method="POST",
+    )
+    body = None
+    for attempt in range(RETRY_ATTEMPTS):
+        last = attempt == RETRY_ATTEMPTS - 1
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+            break
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", errors="replace")
+            retryable = exc.code == 429 or 500 <= exc.code < 600
+            if retryable and not last:
+                delay = retry_delay(attempt, exc.headers.get("Retry-After"))
+                # Note retries on stderr: a silently-retried (then recovered)
+                # reviewer would otherwise hide that we're hitting rate limits.
+                print(
+                    f"{LABEL}: HTTP {exc.code}, retry "
+                    f"{attempt + 2}/{RETRY_ATTEMPTS} in {delay:.1f}s",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            # 打真实端点 URL,不打厂商名:这个引擎服务三个供应商,写死的名字必然
+            # 有两次是错的,而 URL 天然不会撒谎。
+            fail(f"HTTP {exc.code} from {url}:\n{err_body}")
+        except Exception as exc:
+            # Network-level failures (incl. timeouts) are NOT retried: the per-
+            # request timeout is large (default 900s), so retrying a hang would
+            # multiply worst-case wall-clock. Only provider 429/5xx (above) are
+            # retried, matching the agreed scope. Fail fast as before.
+            fail(f"request failed: {exc}")
+
+    try:
+        data = json.loads(body)
+        message = data["choices"][0]["message"]
+        content = message.get("content")
+        reasoning = message.get("reasoning_content")
+    except Exception:
+        return body
+    # Some providers (GLM-family reasoning models) return content: null with the
+    # actual text in reasoning_content — fall back so that reviewer leg is
+    # recovered instead of failing validation as "empty output". A raw None here
+    # used to crash write_log with a TypeError and no log at all; normalize so
+    # whatever remains flows into validate_result.
+    return content or reasoning or ""
+
+
+def build_prompt(args: argparse.Namespace) -> tuple[str, list[str]]:
+    task_path = Path(args.task_file).expanduser().resolve()
+    if not task_path.is_file():
+        fail(f"task file not found: {task_path}")
+
+    repo = Path(args.repo).expanduser().resolve()
+    parts = [
+        "# Task",
+        read_text(task_path, args.max_file_bytes),
+    ]
+    warnings: list[str] = []
+
+    untracked: list[tuple[str, str]] = []
+    diff_text = ""
+    if args.git_diff:
+        target = resolve_diff_target(repo)
+        target_args = [target] if target else []
+        diff_text = clip_text(
+            run_git(repo, ["diff", "--find-renames", *target_args]),
+            args.max_diff_bytes,
+            "git diff",
+        )
+        parts.extend(
+            [
+                "# Git Status",
+                "```text\n" + clip_text(run_git(repo, ["status", "--short"]), args.max_file_bytes, "git status") + "\n```",
+                "# Git Diff Stat",
+                "```text\n" + clip_text(run_git(repo, ["diff", "--stat", *target_args]), args.max_file_bytes, "git diff --stat") + "\n```",
+                "# Git Diff" + (f" (vs {target})" if target else ""),
+                "```diff\n" + diff_text + "\n```",
+            ]
+        )
+        # `git diff` only shows tracked changes; untracked/new files appear as
+        # `??` names in status with NO content. Inline their content here so a
+        # review of newly-added files is not a silent blind spot.
+        untracked = collect_untracked(repo, args.max_file_bytes, args.max_untracked_total_bytes)
+        if untracked:
+            parts.append(
+                "# Untracked / New Files (content not in the diff above)\n"
+                "These files are new (untracked) and their full content is shown "
+                "below for review:"
+            )
+            for label, content in untracked:
+                parts.append(f"## {label}\n```text\n{content}\n```")
+
+    includes = collect_includes(args.include, repo, args.max_file_bytes)
+    if includes:
+        parts.append("# Included Files")
+        for label, content in includes:
+            parts.append(f"## {label}\n```text\n{content}\n```")
+
+    # A chat-based reviewer only sees what we attach. Empty diff + nothing else
+    # attached = it will confidently review NOTHING (observed 07-02/07-03 blind
+    # reviews). Not fatal - the caller may know better - but never silent.
+    if args.git_diff and not diff_text.strip() and not untracked and not includes:
+        warnings.append(
+            "git diff is empty and no untracked/included files were attached - "
+            "a chat-based reviewer will review BLIND. Set PANEL_DIFF_BASE, or "
+            "attach files via --include / DEEPSEEK_INCLUDE / ZHIPU_INCLUDE."
+        )
+
+    return "\n\n".join(parts), warnings
+
+
+def review_result_helper() -> Path:
+    return Path(os.environ.get("AIWORK_REVIEW_RESULT_BIN", Path(__file__).with_name("_review_result.py")))
+
+
+def write_adapter_facts() -> None:
+    output = os.environ.get("AIWORK_REVIEW_FACTS_PATH")
+    if not output:
+        return
+    model = os.environ.get("MIMO_MODEL", "mimo-2.5")
+    subprocess.run(
+        [
+            sys.executable,
+            str(review_result_helper()),
+            "facts",
+            "--output",
+            output,
+            "--requested-model",
+            model,
+            "--invoked-model",
+            model,
+            "--view-delivery-state",
+            "complete",
+            "--view-mode",
+            "diff_bundle",
+            "--billing-mode",
+            "api",
+        ],
+        check=True,
+    )
+
+
+def validate_result(result: str, mode: str, log_path: Path) -> str | None:
+    """Reject model output that would masquerade as a successful review.
+
+    Empty output (provider hiccup, over-long prompt) used to exit 0 with a
+    4-line log - a fake 'success' the panel cannot see. The verdict check
+    applies in review mode only: explore mode (panel-explore's Direction/
+    Core-bet format) has no verdict by design. Mode is EXPLICIT (--mode /
+    REVIEW_MODE) - a custom REVIEW_SYSTEM_PROMPT alone used to silently
+    disable this check, which is exactly the kind of fake-success this
+    function exists to stop."""
+    if not result.strip():
+        return "model returned empty output"
+    if mode == "review":
+        normalized = subprocess.run(
+            [sys.executable, str(review_result_helper()), "normalize", str(log_path)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if normalized.returncode != 0:
+            return "shared verdict normalizer failed"
+        if normalized.stdout.strip() == "UNKNOWN":
+            return "review output contains no standalone PASS/BLOCK/NEEDS_MORE_INFO verdict"
+    return None
+
+
+def write_log(log_path: Path, content: str, prompt: str, dry_run: bool, warnings: list[str] | None = None) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    now = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+    header = textwrap.dedent(
+        f"""\
+        # {LABEL} log
+        time: {now}
+        model: {os.environ.get("MIMO_MODEL", "mimo-2.5")}
+        dry_run: {dry_run}
+        视野: 聊天腿(chat-completions)—— 只看得见下面附上的 diff 与 INCLUDE 文件,
+              **看不到仓库其余部分**,不能自己 Read/Grep 去查证。据此给这份结论定权重。
+        """
+    )
+    # Warnings go in the header too: the arbiter reads the log, not stderr.
+    for w in warnings or []:
+        header += f"warning: {w}\n"
+    header += "\n"
+    body = content if not dry_run else "DRY RUN: request was not sent.\n\n# Prompt Preview\n\n" + prompt
+    log_path.write_text(header + body + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run a read-only Mimo review task and save the output log.")
+    parser.add_argument("task_file", help="Markdown task file to send to Mimo")
+    parser.add_argument("log_file", help="Where to write the full model output")
+    parser.add_argument("--repo", default=os.getcwd(), help="Repo/workspace path for relative includes and git diff")
+    parser.add_argument("--include", action="append", default=[], help="File path or glob to include; repeatable")
+    parser.add_argument("--git-diff", action="store_true", help="Include git status and working tree diff")
+    parser.add_argument("--timeout", type=int, default=int(os.environ.get("MIMO_TIMEOUT", "900")))
+    parser.add_argument("--max-file-bytes", type=int, default=int(os.environ.get("MIMO_MAX_FILE_BYTES", "120000")))
+    # The diff is the primary review object, so it gets a larger budget than
+    # individual attached files; untracked files share one pooled budget.
+    parser.add_argument("--max-diff-bytes", type=int, default=int(os.environ.get("MIMO_MAX_DIFF_BYTES", "300000")))
+    parser.add_argument("--max-untracked-total-bytes", type=int, default=int(os.environ.get("MIMO_MAX_UNTRACKED_TOTAL_BYTES", "300000")))
+    # Mode gates the verdict check (review) vs none (explore). Explicit flag/env
+    # only - REVIEW_SYSTEM_PROMPT customizes the prompt TEXT and nothing else.
+    parser.add_argument("--mode", choices=("review", "explore"), default=os.environ.get("REVIEW_MODE", "review"),
+                        help="review (default): output must carry a verdict; explore: no verdict expected")
+    parser.add_argument("--dry-run", action="store_true", help="Write the assembled prompt to the log without calling Mimo")
+    args = parser.parse_args()
+    if args.mode not in ("review", "explore"):
+        # argparse checks choices only for explicit flags, not env-sourced defaults
+        fail(f"invalid REVIEW_MODE '{args.mode}' (want review or explore)")
+
+    prompt, warnings = build_prompt(args)
+    write_adapter_facts()
+    for w in warnings:
+        print(f"{LABEL}: WARNING: {w}", file=sys.stderr)
+    if args.dry_run:
+        result = ""
+    else:
+        result = call_model(prompt, args.timeout)
+
+    log_path = Path(args.log_file).expanduser().resolve()
+    write_log(log_path, result, prompt, args.dry_run, warnings)
+    if args.dry_run:
+        print(f"DRY RUN wrote prompt preview to {log_path}")
+        return
+    # Validate AFTER writing the log: evidence is kept either way, the reason
+    # lands on stderr (panel-review's .err sidecar), and rc=1 trips its WARNING.
+    problem = validate_result(result, args.mode, log_path)
+    if problem:
+        fail(f"{problem}; raw output kept in {log_path}")
+    print(result)
+    # Informational pointer belongs with the result on stdout, not stderr:
+    # panel-review keeps the stderr sidecar only when non-empty, and a benign
+    # success line here would otherwise leave a misleading .err on rc=0.
+    print(f"\n[full log written to {log_path}]")
+
+
+if __name__ == "__main__":
+    main()

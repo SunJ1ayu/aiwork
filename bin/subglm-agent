@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# subglm-agent - 智谱(GLM)底座腿;瘦 shim,躯干在 subagent(供应商表在那里)。
+exec "$(dirname "$0")/subagent" zhipu "$@"

@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Cursor read-only review/explore adapter. Start from an empty workspace so
+# reviewed .cursor hooks/plugins/config cannot execute during CLI startup.
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+die() { echo "subcursor: $*" >&2; exit 1; }
+usage() {
+  cat <<'EOF'
+Usage: subcursor <review|explore> TASK_FILE LOG_FILE [REPO_DIR]
+
+Cursor reads a disposable snapshot with read/search/list tools only.
+review requires a verdict; explore requires one direction and its tradeoffs.
+No fix mode, shell execution, or chat fallback.
+
+Environment:
+  CURSOR_MODEL       explicit model ID (default: bin/cursor-model)
+  CURSOR_TIMEOUT     wall-clock seconds (default 900)
+  CURSOR_AUTH_FILE   login credentials (default $XDG_CONFIG_HOME/cursor/auth.json,
+                     or $HOME/.config/cursor/auth.json)
+  CURSOR_API_KEY     explicit API-key authentication instead of session login
+  PANEL_CURSOR_LEG  agent (default) or off in both panel dispatchers
+
+Logs: LOG_FILE contains assistant text only; sibling .stream.jsonl contains
+raw events, and .stream-summary.json records completion, reported model and usage.
+EOF
+}
+. "$BIN_DIR/_my-review-gate.sh" || die 'missing review gate'
+gate_strip_flags "$@"; set -- "${GATE_ARGS[@]}"
+if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
+[[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
+MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
+[[ "$MODE" == review || "$MODE" == explore ]] || { usage >&2; exit 2; }
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+TASK_FILE="$(realpath "$TASK_FILE")"
+LOG_FILE="$(realpath -m "$LOG_FILE")"
+SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel)" || die 'needs a Git worktree with HEAD'
+SOURCE_REPO="$(realpath "$SOURCE_REPO")"
+my_review_gate "$MODE" "$TASK_FILE" "$SOURCE_REPO" subcursor || exit 1
+MODEL="${CURSOR_MODEL:-$(cat "$BIN_DIR/cursor-model")}" || die 'cannot read bin/cursor-model'
+python3 "$BIN_DIR/_review_result.py" cursor-family "$MODEL" >/dev/null \
+  || die 'CURSOR_MODEL must identify an explicit supported model family (no auto routing)'
+TIMEOUT_SECONDS="${CURSOR_TIMEOUT:-900}"
+[[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die 'timeout must be a positive integer'
+CURSOR_BIN="$(command -v cursor-agent)" || die 'Cursor CLI not found; install it and run cursor-agent login'
+AUTH_FILE="${CURSOR_AUTH_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/cursor/auth.json}"
+BILLING=subscription
+API_KEY="${CURSOR_API_KEY:-}"
+if [[ -n "$API_KEY" ]]; then
+  BILLING=api
+else
+  [[ -s "$AUTH_FILE" ]] || die "no session credentials: $AUTH_FILE (run cursor-agent login)"
+fi
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcursor: missing ro-repo-exec; refusing dispatch' >&2; exit 78; }
+[[ -f "$BIN_DIR/_cursor-stream.py" ]] || die 'missing Composer stream decoder'
+. "$BIN_DIR/_review-workspace.sh" || die 'missing review workspace helper'
+review_workspace_prepare "$SOURCE_REPO" subcursor || exit 78
+cleanup() {
+  local rc=$?
+  review_workspace_cleanup || echo 'subcursor: workspace cleanup failed' >&2
+  trap - EXIT
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+REPO_DIR="$(review_workspace_repo)"
+RUNTIME_HOME="$REVIEW_WORKSPACE_DIR/cursor-home"
+EMPTY_WORKSPACE="$REVIEW_WORKSPACE_DIR/cursor-workspace"
+mkdir -m 700 -p "$RUNTIME_HOME/.config/cursor" "$RUNTIME_HOME/.cursor" "$EMPTY_WORKSPACE"
+# Read-only tools cannot run git diff. Supply the exact snapshot delta as a
+# readable file, including untracked files, without modifying the snapshot.
+DIFF_BASE="$REVIEW_SNAPSHOT_HEAD"
+if [[ -n "${PANEL_DIFF_BASE:-}" ]]; then
+  DIFF_BASE="$(git -C "$REPO_DIR" merge-base "$PANEL_DIFF_BASE" "$REVIEW_SNAPSHOT_HEAD")" || die 'invalid PANEL_DIFF_BASE'
+fi
+git -C "$REPO_DIR" diff --no-ext-diff --no-textconv "$DIFF_BASE" "$REVIEW_SNAPSHOT_TREE" -- \
+  > "$EMPTY_WORKSPACE/review.diff" || die 'cannot prepare review diff'
+# Use the CLI's explicit session-token path: file login requires a refresh token.
+# Never give this disposable process the owner's refresh token.
+AUTH_ENV=()
+if [[ "$BILLING" == subscription ]]; then
+  ACCESS_TOKEN="$(python3 - "$AUTH_FILE" <<'PYAUTH'
+import json, sys
+with open(sys.argv[1]) as f:
+    token = json.load(f).get('accessToken')
+if not isinstance(token, str) or not token.strip():
+    raise SystemExit(1)
+print(token)
+PYAUTH
+  )" || die 'missing/invalid Cursor accessToken; run cursor-agent login'
+  AUTH_ENV+=("CURSOR_AUTH_TOKEN=$ACCESS_TOKEN")
+  unset ACCESS_TOKEN
+else
+  AUTH_ENV+=("CURSOR_API_KEY=$API_KEY")
+fi
+cat > "$RUNTIME_HOME/.cursor/cli-config.json" <<'EOF'
+{"version":1,"permissions":{"allow":["Read(**)"],"deny":["Shell(*)","Write(**)","Mcp(*)"]},"approvalMode":"allowlist","autoAcceptWebSearch":false}
+EOF
+PROMPT_FILE="$REVIEW_WORKSPACE_DIR/task.txt"
+cat > "$PROMPT_FILE" <<'EOF'
+You are an independent agent working in a disposable writable repository snapshot.
+Read the actual files and verify the task's claims using read/search/list tools.
+Shell and write tools are unavailable. Do not claim to have run tests.
+Do not intentionally edit source files. Do not push, merge, install dependencies,
+run migrations, access production, change credentials, or spawn other agents.
+Use only the supplied read/search/list tools. Do not wait for user input.
+EOF
+if [[ "$MODE" == review ]]; then
+  cat >> "$PROMPT_FILE" <<'EOF'
+Review the task. Give findings with severity, file:line evidence and reasoning.
+Write a verdict as soon as you can judge; restate it if your judgement changes.
+The last standalone verdict line counts. Choose exactly one:
+Conclusion: PASS
+Conclusion: BLOCK
+Conclusion: NEEDS_MORE_INFO
+EOF
+else
+  cat >> "$PROMPT_FILE" <<'EOF'
+Propose exactly ONE concrete direction. State assumptions and tradeoffs, and
+ground it in the repository. Do not output PASS/BLOCK or a menu of alternatives.
+Use all these labels, with substantive content for each:
+Direction: / Core bet: / How it works: / Best at: / Sacrifices: /
+Blind spots in the brief: / Smallest first step:
+EOF
+fi
+printf '\nRepository snapshot to read: %s\n--- TASK ---\n' "$REPO_DIR" >> "$PROMPT_FILE"
+printf 'Snapshot diff to read: %s/review.diff\n' "$EMPTY_WORKSPACE" >> "$PROMPT_FILE"
+cat "$TASK_FILE" >> "$PROMPT_FILE"
+mkdir -p "$(dirname "$LOG_FILE")"
+BASE="${LOG_FILE%.log}"
+STREAM="$BASE.stream.jsonl"; SUMMARY="$BASE.stream-summary.json"
+: > "$LOG_FILE"
+review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" lost partial || exit 78
+# Caller Cursor settings must not redirect authentication/config or enable tools.
+CURSOR_ENV_UNSET=()
+for _name in $(compgen -e); do
+  [[ "$_name" == CURSOR_* ]] && CURSOR_ENV_UNSET+=(-u "$_name")
+done
+# Cursor starts a worker that may outlive the CLI and detach further children.
+# PID namespace teardown kills the whole tree before temporary-home cleanup.
+run_cursor() (
+  cd "$EMPTY_WORKSPACE" || exit 78
+  env ${CURSOR_ENV_UNSET[@]+"${CURSOR_ENV_UNSET[@]}"} \
+    HOME="$RUNTIME_HOME" XDG_CONFIG_HOME="$RUNTIME_HOME/.config" \
+    XDG_CACHE_HOME="$RUNTIME_HOME/.cache" NODE_COMPILE_CACHE="$RUNTIME_HOME/.cache/node" \
+    AGENT_CLI_CREDENTIAL_STORE=file \
+    CURSOR_CONFIG_DIR="$RUNTIME_HOME/.cursor" CURSOR_DATA_DIR="$RUNTIME_HOME/.cursor" \
+    ${AUTH_ENV[@]+"${AUTH_ENV[@]}"} \
+    "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- \
+    timeout -k 10 "$TIMEOUT_SECONDS" \
+      unshare --pid --fork --kill-child --mount-proc "$CURSOR_BIN" "$@"
+)
+set +e
+run_cursor --workspace "$EMPTY_WORKSPACE" --add-dir "$REPO_DIR" \
+      --trust --model "$MODEL" --mode ask --print --output-format stream-json \
+      --disable-auto-update --disable-project-configs \
+      --allowed-tools read_tool_call,grep_tool_call,glob_tool_call,ls_tool_call \
+      < "$PROMPT_FILE" \
+  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL"
+STATUS=("${PIPESTATUS[@]}")
+set -e
+RC="${STATUS[0]}"
+REPORTED="$(python3 - "$SUMMARY" <<'PY'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get('reported_model') or '')
+except (OSError, ValueError):
+    print('')
+PY
+)"
+VERDICT=UNKNOWN
+if [[ "$MODE" == review ]]; then
+  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "$LOG_FILE")"
+fi
+if [[ "$RC" == 124 || "$RC" == 137 ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" timed_out partial timeout "$VERDICT" || exit 78
+  echo "subcursor: timed out after ${TIMEOUT_SECONDS}s; partial output kept in $LOG_FILE" >&2
+  exit 124
+fi
+if [[ "$RC" != 0 || "${STATUS[1]}" != 0 || "${STATUS[2]}" != 0 ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial "" "$VERDICT" || exit 78
+  echo "subcursor: incomplete/failed run (cli=$RC, stream=${STATUS[1]}, decoder=${STATUS[2]}); see $STREAM and $SUMMARY" >&2
+  [[ "$RC" != 0 ]] || RC=1
+  exit "$RC"
+fi
+if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial no_verdict UNKNOWN || exit 78
+  die "model returned no verdict (log: $LOG_FILE)"
+fi
+if [[ "$MODE" == explore ]]; then
+  python3 - "$LOG_FILE" <<'PY' || die 'incomplete direction paper'
+import re, sys
+text = open(sys.argv[1]).read()
+for label in ('Direction', 'Core bet', 'How it works', 'Best at', 'Sacrifices',
+              'Blind spots in the brief', 'Smallest first step'):
+    if not re.search(r'(?m)^\s*(?:[-*+]\s+)?(?:#+\s*)?(?:\*{1,2})?'
+                     + re.escape(label) + r'(?:\*{1,2})?\s*:', text):
+        raise SystemExit('subcursor: missing explore section: ' + label)
+PY
+fi
+review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited complete "" "$VERDICT" false "$REPORTED" || exit 78

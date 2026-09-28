@@ -1,0 +1,61 @@
+{
+  "_README": [
+    "这份文件是 triage 的**全部判断依据** —— 问题措辞 + 阈值都在这里,别散进脚本。",
+    "(TypeSafe 官方那条建议和我们的工艺撞上了:questions/thresholds 集中一处才 review 得动。)",
+    "🔴 这不是判据。判据不许有外网出口(08-10 烧光额度的事故 + 已立的断网不变量)。",
+    "   triage 只在**我做决定之前**给一个读数,永远不 BLOCK,退出码永远 0。",
+    "每条问题为什么在这:都对着一次真栽过的病,理由写在 why 里。理由失效即候删。"
+  ],
+  "model": "jev-latest",
+  "questions": {
+    "unverified_premise": {
+      "type": "noul",
+      "why": "最值钱的一条。WebView2 换固定内核、单实例锁改让位协议,都是『还没量就想动手』。08-04 业主那句『抖动实际上是我们的 bug』也是同一族。",
+      "instructions": "Does choosing or implementing the proposed change depend on an important technical assumption that the supplied evidence has not yet verified? Answer about the premise behind the chosen solution, not about ordinary implementation risk."
+    },
+    "data_or_authorization_change": {
+      "type": "noul",
+      "why": "CLAUDE.md 定死:新写口 / 权限 / auth / 钱 / 数据一致性默认 impact-risk=high(外审预算 2)。",
+      "instructions": "Does the proposed change alter persistent-data write behavior, coordination between concurrent writers, on-disk data format, authentication, or authorization enforcement? Classify the change itself, not existing behavior merely described as background."
+    },
+    "runtime_delivery_change": {
+      "type": "noul",
+      "why": "『在使用现场验证』那条规矩的触发器:动了装机/运行时/启动,就必须让运行中的目标自己回显版本,盘上和运行时对不上 = BLOCK。",
+      "instructions": "Does the proposed change alter installation, packaging, a bundled runtime, or application startup behavior?"
+    },
+    "judging_surface_change": {
+      "type": "noul",
+      "why": "弱模型最可能的失败方式是改考卷让自己及格(删断言/写死期望值/加 skip)。这条亮起来 ⇒ 收货时闸① 要逐行读判据 diff,且判据必须先单独 commit。",
+      "instructions": "Does the proposed change modify tests, assertions, expected values, test fixtures, skip markers, or any other code whose job is to judge whether the product is correct?"
+    },
+    "deploy_target_outside_repo": {
+      "type": "noul",
+      "why": "一周内栽过两次:抢购脚本浏览器里跑旧版、gateway 内存里跑 6.8 而盘上是 6.10。交付物在改的仓库之外时,『做完了』的标准是运行中的目标回显版本。",
+      "instructions": "Will the result of this change run somewhere other than the repository being edited — for example a browser extension or userscript, a system service, a gateway process, or an installation on another machine — so that copying new files into place is not by itself deployment?"
+    },
+    "next_step": {
+      "type": "choice",
+      "why": "把上面几条合成一个动作。注意它只看给它的那段文字,看不见仓库。",
+      "instructions": "What should be the immediate next engineering step, based only on the supplied facts?",
+      "criteria": {
+        "implement": "The scope is concrete and no prerequisite experiment is unresolved; proceed with the scoped change plus the appropriate checks.",
+        "measure": "Run a focused experiment or gather missing technical evidence before choosing or implementing the solution.",
+        "clarify_product": "An unresolved user preference or product requirement must be settled before any technical work."
+      }
+    }
+  },
+  "thresholds": {
+    "_why": "阈值对着 CLAUDE.md 的既有字段,不新发明轴。0.5 是 TypeSafe 文档给的『模型自己说不确定』的地板。",
+    "high_impact_if_any_over": {
+      "data_or_authorization_change": 0.5,
+      "judging_surface_change": 0.5
+    },
+    "high_uncertainty_if_over": {
+      "unverified_premise": 0.5
+    },
+    "runtime_echo_required_if_any_over": {
+      "runtime_delivery_change": 0.5,
+      "deploy_target_outside_repo": 0.5
+    }
+  }
+}

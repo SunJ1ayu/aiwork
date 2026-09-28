@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# subchat - provider-parameterized chat-completions review executor.
+#
+# One body for every employee that is only reachable over an OpenAI-compatible
+# /chat/completions endpoint (no agent base): today deepseek + zhipu, invoked
+# through the `subdeepseek` / `subglm` shims so callers never change. Adding a
+# provider = one more case branch below.
+#
+#   review -> chat-completions review (reuses the submimo-review engine).
+#   fix    -> NOT supported: editing repo files needs an agentic tool loop, and
+#             no installed agent base speaks chat-completions. Use `submimo fix`
+#             (mimo). DeepSeek and GLM remain review-only employees; neither has
+#             a separate supported fix path.
+
+
+# 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
+_GATE="$(dirname "$0")/_my-review-gate.sh"
+[ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
+[ -f "$_GATE" ] || { echo "subchat: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_GATE"
+gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
+
+ENGINE="$(dirname "$0")/submimo-review"
+
+usage() {
+  local default_model
+  default_model="$(cat "$(dirname "$0")/deepseek-model")" || exit 1
+  printf 'DeepSeek default model: %s\n\n' "$default_model" >&2
+  cat >&2 <<'EOF'
+Usage:
+  subchat PROVIDER review TASK_FILE LOG_FILE [REPO_DIR]
+  subchat PROVIDER fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
+
+Providers (usually invoked via their shims):
+  deepseek   (shim: subdeepseek)  model from bin/deepseek-model, env DEEPSEEK_*
+  zhipu      (shim: subglm)    default model glm-5.3-flash,     env ZHIPU_*
+
+Runs the provider's model as a read-only review sub-agent over an OpenAI-
+compatible chat-completions endpoint. Automatically attaches `git diff` of
+REPO_DIR.
+
+Environment (PREFIX = DEEPSEEK or ZHIPU):
+  <PREFIX>_MODEL      optional, model id (per-provider default above)
+  <PREFIX>_TIMEOUT    optional, seconds before timeout (default 900)
+  <PREFIX>_API_KEY    optional, overrides the key read from the auth file
+  <PREFIX>_AUTH_FILE  optional, JSON {"key":"..."}
+                      (default ~/.config/deepseek/auth.json | ~/.config/opencode-go/auth.json)
+  <PREFIX>_INCLUDE    optional, file/glob to also include (repeatable via spaces)
+  DEEPSEEK_API_BASE   optional, base URL (default https://api.deepseek.com)
+  ZHIPU_CHAT_COMPLETIONS_URL optional, exact endpoint (passed as exact URL, not a base)
+                      (default https://opencode.ai/zen/go/v1/chat/completions,
+                      OpenCode Go, OpenAI-compatible;2026-08-18 从智谱 bigmodel 换来 ——
+                      bigmodel 那把 key 欠费,这条腿因此默认关了两周)
+  PANEL_DIFF_BASE     optional, git rev; diff becomes merge-base(base,HEAD)->worktree
+                      (default: HEAD->worktree, i.e. staged + unstaged)
+
+Examples:
+  subchat zhipu review /root/aiwork/tasks/001-review.md /root/aiwork/logs/001-review.log /path/to/repo
+EOF
+}
+
+die() { echo "subchat: $*" >&2; exit 1; }
+
+# -h may arrive as $2 when invoked through a shim (`subdeepseek -h`).
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${2:-}" == "-h" || "${2:-}" == "--help" ]]; then usage; exit 0; fi
+if [[ $# -lt 4 || $# -gt 5 ]]; then usage; exit 2; fi
+
+PROVIDER="$1"; MODE="$2"; TASK_FILE="$3"; LOG_FILE="$4"; REPO_DIR="${5:-$PWD}"
+
+# 反锚定闸(2026-08-06):review 模式下,主 agent 自己那一遍必须先落盘;
+# panel-review 派发时在命令行末尾带 --panel-dispatch,不重复拦。共享实现,不抄第二份。
+# shellcheck source=_my-review-gate.sh
+my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subchat" || exit 1
+
+# Provider table: everything that differs between employees lives here.
+case "$PROVIDER" in
+  deepseek)
+    PREFIX="DEEPSEEK"
+    # DeepSeek official API (same key file as subdeepseek-agent). Formerly this
+    # leg rode SenseNova's chat API (provider "sensenova", retired 2026-07-18).
+    DEFAULT_MODEL="$(cat "$(dirname "$0")/deepseek-model")" || die "cannot read deepseek-model"
+    [[ -n "$DEFAULT_MODEL" ]] || die "empty deepseek-model"
+    ENDPOINT_ENV_VAR="MIMO_BASE_URL"    # engine suffixes a base URL with /chat/completions
+    ENDPOINT="${DEEPSEEK_API_BASE:-https://api.deepseek.com}"
+    DEFAULT_AUTH_FILE="$HOME/.config/deepseek/auth.json"
+    LABEL="subdeepseek-review"
+    ;;
+  zhipu)
+    PREFIX="ZHIPU"
+    # GLM 后端沿革:bigmodel(余额不足 1113)→ 百炼(429)→ 火山方舟(07-17)
+    # → 07-25 切回智谱开放平台 bigmodel → **2026-08-18 换到 OpenCode Go**
+    # (业主的 $10/月订阅)。理由是 bigmodel 那把 key 欠费,不是端点更好。
+    # 方舟 key 仍在 auth.json.ark-bak,智谱 key 仍在 ~/.config/zhipu/auth.json。
+    #
+    # 注意这是**聊天回落腿**(空 diff 会瞎)。当前默认是以 opencode CLI 为底座的
+    # subglm-agent；只有显式 PANEL_GLM_LEG=chat，或 agent 缺失/失败时才走这里。
+    # 回落到这里时记得带 ZHIPU_INCLUDE / PANEL_INCLUDE,否则它只看得见增量 diff。
+    # 它走 OpenAI 兼容面,认证是 Authorization: Bearer；当前 agent 则把 key 放进
+    # OpenCode provider 配置的 apiKey 字段。两个入口形状不同,别顺手统一。
+    DEFAULT_MODEL="glm-5.3-flash"
+    ENDPOINT_ENV_VAR="MIMO_CHAT_COMPLETIONS_URL"  # exact URL, engine appends nothing
+    ENDPOINT="${ZHIPU_CHAT_COMPLETIONS_URL:-https://opencode.ai/zen/go/v1/chat/completions}"
+    DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"
+    LABEL="subglm-review"
+    ;;
+  *) die "unknown provider: $PROVIDER (supported: deepseek, zhipu)" ;;
+esac
+
+# Prefixed env lookups (indirect expansion keeps the public DEEPSEEK_*/ZHIPU_*
+# variable names unchanged).
+v="${PREFIX}_MODEL";     MODEL="${!v:-$DEFAULT_MODEL}"
+v="${PREFIX}_TIMEOUT";   TIMEOUT_SECONDS="${!v:-900}"
+v="${PREFIX}_API_KEY";   API_KEY="${!v:-}"
+v="${PREFIX}_AUTH_FILE"; AUTH_FILE="${!v:-$DEFAULT_AUTH_FILE}"
+v="${PREFIX}_INCLUDE";   INCLUDE_PATTERNS="${!v:-}"
+
+if [[ "$MODE" == "fix" ]]; then
+  die "fix is not supported via chat-completions wrappers (no agent base speaks chat). Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
+fi
+[[ "$MODE" == "review" ]] || { usage; exit 2; }
+
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+[[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
+[[ -x "$ENGINE" || -f "$ENGINE" ]] || die "review engine not found: $ENGINE"
+
+# Load API key into the env the engine expects.
+if [[ -z "$API_KEY" ]]; then
+  [[ -f "$AUTH_FILE" ]] || die "auth file not found: $AUTH_FILE (set ${PREFIX}_API_KEY or create it as {\"key\":\"...\"})"
+  API_KEY="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['key'])" "$AUTH_FILE")" \
+    || die "could not read 'key' from $AUTH_FILE"
+fi
+[[ -n "$API_KEY" ]] || die "empty ${PREFIX}_API_KEY"
+
+# The submimo-review engine is provider-agnostic; drive it with these settings.
+# Only the selected endpoint var may reach the engine: a stray one inherited from
+# the caller's env (e.g. MIMO_CHAT_COMPLETIONS_URL on the deepseek leg) would
+# silently override the base URL.
+unset MIMO_BASE_URL MIMO_CHAT_COMPLETIONS_URL MIMO_SESSION_HEADER
+# OpenCode Go 要求每个会话带稳定的 x-opencode-session(09-09 HTTP 400 MissingSessionID;
+# opencode.ai/docs/go)。只给 zhipu 这条腿;调用方环境里继承来的一律先清掉。
+[[ "$PROVIDER" == zhipu ]] && export MIMO_SESSION_HEADER="x-opencode-session"
+export MIMO_API_KEY="$API_KEY"
+export "$ENDPOINT_ENV_VAR"="$ENDPOINT"
+export MIMO_MODEL="$MODEL"
+export MIMO_TIMEOUT="$TIMEOUT_SECONDS"
+export REVIEW_LABEL="$LABEL"
+
+INCLUDE_ARGS=()
+# Disable shell globbing: <PREFIX>_INCLUDE is a space-separated list of patterns
+# that the engine globs itself relative to REPO_DIR. Without `set -f`, bash would
+# prematurely expand globs against subchat's CWD (wrong directory).
+set -f
+for pat in $INCLUDE_PATTERNS; do INCLUDE_ARGS+=(--include "$pat"); done
+set +f
+
+exec python3 "$ENGINE" "$TASK_FILE" "$LOG_FILE" \
+  --repo "$REPO_DIR" --git-diff "${INCLUDE_ARGS[@]}"

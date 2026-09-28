@@ -1,0 +1,27 @@
+{
+  "schema_version": 2,
+  "track": "grok-leg-kimi-model",
+  "impact": {
+    "level": "high",
+    "factors": [
+      "auth",
+      "judging_control",
+      "sandbox_boundary",
+      "cross_module"
+    ]
+  },
+  "design": {
+    "uncertainty": "low",
+    "premise_attack": {
+      "status": "not_required",
+      "evidence": []
+    }
+  },
+  "execution_plan": {
+    "adapter": "main",
+    "model": null
+  },
+  "outcome": {
+    "verdict": "PASS"
+  }
+}

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# subdeepseek - chat-leg fallback shim (formerly "subsense"): DeepSeek model
+# served via DeepSeek official chat API, through the shared subchat body.
+exec "$(dirname "$0")/subchat" deepseek "$@"

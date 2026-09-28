@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# ro-repo-exec —— 把一条命令放进"被评审的仓是只读的"那个 mount namespace 里跑。
+# (2026-08-19,track repo-write-audit)
+#
+#   ro-repo-exec [--rw <路径>]... <仓根> -- <命令...>
+#
+# 为什么存在:评审腿有能力写被评审的仓,而且**挡不住** —— `git diff --output=<path>`
+# 就能写文件,对 git 这么灵活的程序做命令行白名单本身不成立(08-18 亲手复现)。
+# 08-18 我的第一反应是把腿的 bash 整个关掉,四审推翻了:关掉的代价是腿静默起不来,
+# 而 panel 照常出结论 —— **比"腿可能写个文件"危险得多**。
+#
+# 这里走第三条路:**腿的能力一个字不改,把仓变成只读的。**
+# 真探针(tracks/repo-write-audit/evidence/)测过:只读工作树上
+# `git status/diff/log/show/rev-parse/blame/diff HEAD~1` 七条全 rc=0,脏改动照常看得见,
+# 与可写状态逐条对照**差异为零**;而 `touch` / `git diff --output=` / 改 `tests/` 全部失败。
+#
+# ⚠️ **fail-closed 是这个工具的全部意义**:挂不上就拒跑(退出 78),
+# 绝不许静默降级成"在可写的仓里跑" —— 那样一切看起来完全正常,而防线根本不在。
+# 安静的失败比响亮的失败贵得多,这台机器为这条记过好几笔账。
+#
+# 它照不到:仓**外**的写(HOME 等)。也不防**有动机的对手**(namespace 里的 root
+# 可以自己 remount)—— 这一单的对面是误伤和提示注入,不是对手,前提写在 proposal 里。
+set -uo pipefail
+
+die() { printf 'ro-repo-exec: %s\n' "$*" >&2; exit 78; }
+
+RW=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rw) [[ $# -ge 2 ]] || die "--rw 后面要跟路径"; RW+=("$2"); shift 2 ;;
+    --)   shift; break ;;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 0 ;;
+    *)    break ;;
+  esac
+done
+
+[[ $# -ge 1 ]] || die "用法:ro-repo-exec [--rw <路径>]... <仓根> -- <命令...>"
+REPO="$1"; shift
+# **选项必须写在仓根前面**。2026-08-19 真探针撞出来的:我把 `--rw` 写到了仓根后面,
+# 第一版一声不吭,直接把 `--rw` 当成命令 exec 了(bash 报 `exec: --: invalid option`)。
+# 那是**静默降级伪装成"跑起来了"** —— 命令看着执行了,而防线一层都没有。
+# 这里改成响亮拒绝:说清用法,退出非零,一个字都不跑。
+case "${1:-}" in
+  --) shift ;;
+  --rw|--rw=*)
+    die "用法错了:--rw 要写在**仓根前面**(ro-repo-exec --rw <路径> <仓根> -- <命令...>);
+      你写成了 \`<仓根> --rw …\`,那样 --rw 会被当成要执行的命令。拒跑。" ;;
+  -*) die "不认识的选项(要写在仓根前面):$1 —— 用法:ro-repo-exec [--rw <路径>]... <仓根> -- <命令...>" ;;
+  *)  die "仓根后面必须紧跟 \`--\`,再写命令。用法:ro-repo-exec [--rw <路径>]... <仓根> -- <命令...>" ;;
+esac
+[[ $# -ge 1 ]] || die '-- 后面要有命令'
+[[ -d "$REPO" ]] || die "仓根不存在:$REPO"
+command -v unshare >/dev/null 2>&1 || die "机器上没有 unshare,建不了 mount namespace ⇒ 拒绝在可写的仓里跑腿"
+
+# realpath 化:挂载点必须是真路径,否则符号链接会让 remount 落在别处
+REPO="$(cd "$REPO" && pwd -P)" || die "仓根解析不了:$REPO"
+
+# --rw 的路径逐个检查:不存在就拒跑(而不是"挂不上就算了" —— 那正是静默降级)
+_rw_list=""
+for p in ${RW+"${RW[@]}"}; do
+  [[ -d "$p" ]] || die "--rw 指的目录不存在:$p(要写的地方得先存在,否则腿写日志时才炸)"
+  p="$(cd "$p" && pwd -P)"
+  case "$p" in
+    # `--rw <仓根>` = 整仓开闸,防线等于没有。这是配置错误里最危险的一种,
+    # 因为**一切照常工作**,没人会发现 ⇒ **拒跑**。
+    #
+    # 2026-08-19 第二轮改的(四审 subglm 孤腿命中):第一版这里只警告不拒绝,
+    # 理由是"判据里几十条老夹具的日志落在仓根,拒绝会误伤一大片"。那一轮把三条
+    # wrapper 的写口全删了(V37),**生产调用方归零** ⇒ 理由过期。更糟的是下面那道
+    # 挂完自检对这种配置**主动跳过** —— 最危险的配置错正好绕开最贵的那道自检,
+    # 而"两行 stderr 警告"在全池日志洪水里等于没说。fail-closed 才是这个工具的论点。
+    "$REPO")
+      die "--rw 指到了**仓根**($REPO)—— 那等于**整仓开闸**,只读防线形同虚设 ⇒ 拒跑。
+      写口要么落在仓内**子目录**(如 <仓>/logs/),要么干脆落在仓外(仓外本来就可写,
+      不需要开口)。2026-08-19 之前这里只警告,已改成拒绝:警告挡不住静默失效。" ;;
+    "$REPO"/*) _rw_list+="$p"$'\n' ;;
+    # 仓外的路径本来就可写(只读只盖住仓),不需要开口 ⇒ 跳过。
+    # 但**说出来**:静默跳过离静默降级只差一步,而调用方多半是写错了。
+    *) printf 'ro-repo-exec: --rw 指的路径在仓外,不需要开口,已跳过:%s\n' "$p" >&2 ;;
+  esac
+done
+
+# linked worktree:`.git` 只是个指针文件,真正的 refs/index/objects 住在**主仓**的
+# `.git/worktrees/<name>` 里 —— 只 bind 仓根盖不到它。2026-08-19 实测:腿在只读的
+# worktree 里照样 `git commit --allow-empty` / `git tag` 成功,**主仓的 git 状态被改了**。
+# (被推翻的 strace 方案当初明确计划保护 `--git-common-dir`,只读方案漏了这一处。)
+# ⇒ 真 git 目录若落在仓外,一并挂只读。
+GITDIRS=""
+if command -v git >/dev/null 2>&1; then
+  # 共同目录(worktree 的 refs/objects/config 都在这里)。
+  # ⚠️ `--path-format=absolute` 要 git ≥2.31(2021-03)。**老 git 不认这个参数会静默返回空**,
+  # rc 又被 `|| true` 吞掉 ⇒ 共同目录不挂只读 ⇒ 腿照样 git tag / 直接写 objects 改主仓,
+  # 而仓根探针一路绿灯。这曾是全工具唯一一处失败被吞而不是 fail-closed 的地方
+  # (2026-08-19 第三轮四审 subdeepseek F1,我实测复现:V42 红 2 条)。
+  # 兜底:老 git 用不带 --path-format 的版本(可能给相对路径,相对 REPO 解析)。
+  _common="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -z "$_common" ]; then
+    _rel="$(git -C "$REPO" rev-parse --git-common-dir 2>/dev/null || true)"
+    [ -n "$_rel" ] && _common="$( cd "$REPO" 2>/dev/null && cd "$_rel" 2>/dev/null && pwd -P || true )"
+  fi
+  # 是 git 仓库却连共同目录都拿不到 ⇒ **拒跑**。静默少挂一块 = 防线在你不知道的时候变薄,
+  # 那正是这道防线立起来要防的形状(缺件就拒跑,别静默降级)。
+  if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -z "$_common" ]; then
+    die "拿不到 git 共同目录($REPO)—— git 太老或 rev-parse 失败。
+      少挂共同目录 = worktree 的 refs/objects 仍可写,而仓根探针看不见 ⇒ 拒跑,不静默降级。"
+  fi
+  for _g in "$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null || true)" \
+            "$_common"; do
+    [ -n "$_g" ] && [ -d "$_g" ] || continue
+    _g="$(cd "$_g" && pwd -P)" || continue
+    case "$_g" in "$REPO"|"$REPO"/*) continue ;; esac   # 在仓里 ⇒ 已经被盖住了
+    case "$GITDIRS" in *"$_g"$'\n'*) continue ;; esac   # 去重
+    GITDIRS+="$_g"$'\n'
+  done
+fi
+
+# 「挂上了没有」必须有实证,不能靠退出码猜:命令自己也可能返回 78。
+# 标记文件落在仓外(仓在 namespace 里是只读的,仓外照常可写)。
+MARK="$(mktemp)" || die "建不了标记文件"
+trap 'rm -f "$MARK"' EXIT
+
+RO_REPO="$REPO" RO_RW="$_rw_list" RO_GITDIRS="$GITDIRS" RO_MARK="$MARK" unshare -m /usr/bin/env bash -c '
+  set -uo pipefail
+  fail() { printf "ro-repo-exec: %s\n" "$*" >&2; exit 78; }
+  # 不传播回父 namespace —— 少了这一步,主机的仓会被一起挂成只读。
+  mount --make-rprivate / 2>/dev/null || fail "mount --make-rprivate / 失败(需要 CAP_SYS_ADMIN)"
+  mount --bind "$RO_REPO" "$RO_REPO"          || fail "bind 仓失败:$RO_REPO"
+  mount -o remount,ro,bind "$RO_REPO"         || fail "把仓 remount 成只读失败:$RO_REPO"
+  # 写口白名单:整仓只读之后,把这几处单独开回可写(腿日志就在仓内 logs/,
+  # 写不了 = 这道防线把腿弄死了,而"腿静默起不来"正是 08-18 那次的病)。
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    mount --bind "$p" "$p"                    || fail "bind 写口失败:$p"
+    mount -o remount,rw,bind "$p"             || fail "把写口 remount 成可写失败:$p"
+  done <<< "$RO_RW"
+  # 仓外的真 git 目录(linked worktree)也盖成只读
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    mount --bind "$g" "$g"                    || fail "bind git 目录失败:$g"
+    mount -o remount,ro,bind "$g"             || fail "把 git 目录 remount 成只读失败:$g"
+  done <<< "$RO_GITDIRS"
+
+  # ── **挂完实测一次**,别相信退出码。
+  # `mount` 每条都 rc=0 不等于仓真的只读了,而"挂载没生效"是这道防线**最贵**的
+  # 失败形态:腿照跑、结论照出、一切看起来正常。本仓已有的同款做法是
+  # `tests/_no-egress.sh`——它在 namespace 里真的 connect 一次,而不是相信 unshare 有效。
+  # (以前这里对 `--rw <仓根>` 主动跳过自检 —— 已经不需要了:那种配置在上面就被拒了。
+  #  "最危险的配置错恰好绕开最贵的那道自检"是不能留的形状。)
+  #
+  # ⚠️ 探针的报错**必须包在花括号里**再重定向:`: > "$p" 2>/dev/null` 是从左往右处理的,
+  # 重定向失败的那句 `Read-only file system` 在 `2>/dev/null` 生效**之前**就打出去了。
+  # 后果不是难看而已 —— 它出现在每条腿的日志里,长得像腿自己崩了,而本单的老账正是
+  # "cryptic 报错被误读成额度耗尽"。防线不该长得像故障。(第二轮四审 subdeepseek F4。)
+  _probe="$RO_REPO/.ro-selfcheck-$$"
+  if { : > "$_probe"; } 2>/dev/null; then
+    rm -f "$_probe" 2>/dev/null
+    fail "自检:挂完之后仓**仍然可写**($RO_REPO)—— 挂载没有真的生效 ⇒ 拒跑"
+  fi
+
+  # ── ④ git 目录也各探一次 ────────────────────────────────────────────────────
+  # 这道自检存在的**全部理由**就是"不许相信 mount 的退出码",而第一版对 GITDIRS
+  # 恰恰只信退出码(第二轮四审 subdeepseek F6 + subglm 各自独立命中)。
+  # 漏在这儿的后果不是小事:worktree 的真 git 目录还可写 ⇒ 腿照样 commit/tag 改主仓,
+  # 而仓根探针一路绿灯 —— 安静失效的靶心上留了个洞。
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    _gprobe="$g/.ro-selfcheck-$$"
+    if { : > "$_gprobe"; } 2>/dev/null; then
+      rm -f "$_gprobe" 2>/dev/null
+      fail "自检:git 目录挂完之后**仍然可写**($g)—— 挂载没有真的生效 ⇒ 拒跑"
+    fi
+  done <<< "$RO_GITDIRS"
+
+  # 挂载**全部**成功之后才落标记,然后才 exec —— 顺序不能反。
+  printf OK > "$RO_MARK" 2>/dev/null || fail "落不下标记文件:$RO_MARK"
+  exec "$@"
+' bash "$@"
+rc=$?
+
+# 标记是空的 ⇒ 根本没挂上(unshare 不可用、没权限、mount 被拒……)。
+# 这时**绝不许**把 rc 当成命令的结果透传出去,更不许重跑一遍"不挂载版" ——
+# 静默降级正是这道防线唯一会死的方式。
+if [[ ! -s "$MARK" ]]; then
+  printf 'ro-repo-exec: 没能把仓挂成只读 —— unshare/mount 这一步就失败了(rc=%s)。\n' "$rc" >&2
+  printf 'ro-repo-exec: **拒绝**在可写的仓里跑评审腿(fail-closed:宁可不跑,不要假装有防线)。\n' >&2
+  printf 'ro-repo-exec: 仓=%s;先查 unshare 能不能用、以及有没有 CAP_SYS_ADMIN。\n' "$REPO" >&2
+  exit 78
+fi
+# 挂上了 ⇒ 命令自己的退出码原样透传(78 也照传,谁的错谁背)。
+exit $rc

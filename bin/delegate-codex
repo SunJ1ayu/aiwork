@@ -1,0 +1,689 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# delegate-codex —— 派活给 codex(GPT)执行腿的**唯一入口**,以及收货闸①的机械版。
+#
+# 为什么是"入口"而不是又一条规矩(2026-08-06):
+#   本机反复验证过同一件事 —— **补脚本和入口有效,补字段和约定无效**。
+#   `lane:` / `派给:` 有守卫 ⇒ 七份 verify 一次没空过;`Verdict:` 没守卫 ⇒ 两个月空两次。
+#   08-05 那一单里,"派活前请第三方攻一遍我的 design + oracle"这条只住在 track 模板的
+#   填空提示里,而我派活时打开的抽屉(delegate/SKILL.md)一个字都没提;那格填空当天
+#   被我自己一句括号绕过("不适用")。代价:五个真实缺陷里**至少四个不看实现就能发现**,
+#   却全都等到执行腿跑完 22 分钟 + 我收货 53 分钟之后才被抓 ——
+#   用户给这个形状起过名字:**"有能力的检查站在成本花掉之后"**。
+#   所以这里把那两件事钉在**派活那一刻**:给不出攻题记录、给不出判卷清单,就发不出去。
+#
+# 它防的是"忘了",不是"故意":`codex exec` 永远还在,绕过一行命令的事。
+# 这条如实写在这儿,免得把它当成安全边界。
+#
+# 用法:
+#   delegate-codex --task TASK.md --repo DIR --attack-log PATH \
+#                  --protect PATH [--protect PATH ...] \
+#                  [--track NAME] [--model gpt-<id>(默认 bin/codex-model)] [--log PATH] [--no-isolate] [--dry-run] \
+#                  [-- <直通 codex 的参数>]
+#   delegate-codex --print-oracle-hash --repo DIR --protect PATH...
+#                  # 攻完题把这一行贴进攻题记录,否则派不出去
+#   delegate-codex --receive RECEIPT.json      # 收货闸①(机械版)
+#
+# 退出码:0 正常   2 用法/前置不满足(**拒发,codex 一次都不启动**)   其它 = codex 的 rc
+#         --receive:0 判卷没被动过   1 判卷被动过(含新增未跟踪文件)   2 回执读不了/现场没了
+#
+# ── 2026-08-11 两件事(track codex-worktree-delegation,design「十」)────────────
+# **一、派活默认在独立 worktree 里跑**(`--isolate` 默认开,`--no-isolate` 退出)。
+#   动机不是"为并行铺路"(并行已驳回:oracle 只能主 agent 亲写 ⇒ 同时可派的活结构上
+#   不存在),是**归因**:闸① 的基线是派活时 HEAD,而"腿说考卷错了 ⇒ 我改考卷并提交"
+#   是常规路径 —— 在同一棵树上,那两笔判据修复会让闸① 判红**在我自己头上**。
+#   08-11 note-source 那单真实处于这个状态。会响的报警器变成经常误报的报警器,活不过一周。
+#   树建在 ${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}/<任务名>-<时间戳>,
+#   分支 delegate/<同名>。**环境变量只为判据能用临时目录**,如实写在这儿,不假装它不存在。
+#
+#   **隔离不是沙箱边界,别把它读成边界**(2026-08-11 真 codex 探针实测,收据在 track 的
+#   evidence/ 里):`-s workspace-write` 的可写范围是它自己向上解析出的"项目根" ——
+#   worktree 的 `.git` 是个文件,于是它一路走到**主仓**,能往主仓写、改主仓的文件;
+#   `/tmp` 也是敞的;只有无关路径才拒。读更是完全不管。
+#   所以隔离买到的是**归因**(腿默认在树里干活 ⇒ 闸① 不再误报我自己、底账精确),
+#   不是"腿被关起来了"。因此:卷宗仍然不许落进仓 ∪ 树,收货时闸① **两棵树都要看**。
+#
+# **二、攻题新鲜度从 mtime 换成内容哈希。** 旧闸问"攻题记录是不是比判卷新",而 worktree
+#   是 checkout 出来的 ⇒ 判卷 mtime 恒新 ⇒ 隔离下 100% 拒发(实测主树 rc=0/树里 rc=2)。
+#   出路只有两条,其中一条是每次 `touch` 攻题记录 —— 那等于把"例行解除一道判卷防线"
+#   变成肌肉记忆。所以换成内容哈希:`--print-oracle-hash` 印一行,贴进攻题记录。
+#   **强度和它替换掉的那道一样**:不重攻、直接把哈希贴进去仍然过得去;它防的是**忘了重攻**,
+#   不是防伪造。
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+CODEX="${CODEX:-codex}"
+WT_ROOT="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
+TRACK_RECORD_BIN="${TRACK_RECORD_BIN:-$BIN_DIR/track-record}"
+
+die()  { echo "delegate-codex: $*" >&2; exit 2; }
+usage() { sed -n '/^# 用法:/,/^#         --receive/p' "$0" | sed 's/^# \?//' >&2; }
+
+# ── 收货闸①(机械版)─────────────────────────────────────────────────────
+# CLAUDE.md 的闸① 有两半,两半都要:
+#   ① `git diff <派活时 HEAD> -- <判卷路径>` 为空;
+#   ② `git status --porcelain -uall -- <判卷路径>` 也为空。
+# **第二半才是重点**:`git diff` 看不见新增的未跟踪文件 —— 往 tests/ 里塞一个
+# `conftest.py`(autouse fixture)就能让闸②"亲跑全绿"变成假绿,而闸③亲读 diff
+# 也照不到它(它压根不在 diff 里)。08-04 临时仓实测。
+#
+# 基线用**派活那一刻的 HEAD**,不是 oracle 的 commit:08-05 我按字面跑
+# `git diff <oracle-commit> -- tests/` 不为空 —— 因为我自己一笔无关欠账也落在 tests/ 里,
+# 于是这道机械闸当场退化成"人眼把自己的改动减掉"。派活时的 HEAD 天然把它包含在基线里。
+_rj() {  # 读回执里的一个键;没有/为 null 就打印空(**老回执没有新键,不能因此炸掉**)
+  python3 -c 'import json,sys
+v=json.load(open(sys.argv[1])).get(sys.argv[2])
+print("" if v is None else v)' "$1" "$2" 2>/dev/null
+}
+
+do_receive() {
+  local receipt="$1"
+  [[ -s "$receipt" ]] || die "回执读不到:$receipt"
+  local repo head protect wt branch
+  repo="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["repo"])' "$receipt")" \
+    || die "回执解析失败:$receipt"
+  head="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["head"])' "$receipt")"
+  mapfile -t protect < <(python3 -c 'import json,sys;[print(p) for p in json.load(open(sys.argv[1]))["protect"]]' "$receipt")
+  [[ ${#protect[@]} -gt 0 ]] || die "回执里的 protect 清单是空的(这道闸就没有强度可言)"
+  # 这两个键是 2026-08-11 加的。**老回执没有它们** —— 盘上现在就躺着一批,
+  # 读不了老回执 = 把昨天派的活卡死,所以缺了就退回主仓(老行为)。
+  wt="$(_rj "$receipt" worktree)"
+  branch="$(_rj "$receipt" branch)"
+  # --dry-run 的回执:树从来没建过、活也没派过。**先答这一句**,再去看树在不在 ——
+  # 否则会撞上下面那条"隔离树不在了",把"没做"说成"丢了"(指错方向的报警器);
+  # 更糟的是 dry-run 算出的树名可能**撞上上一发真建的树**,那样它还会一本正经地收货成功。
+  if [[ "$(_rj "$receipt" dry_run)" == "True" ]]; then
+    echo "闸①:这是一份 --dry-run 的回执 —— 没建过树,也没派过活,没什么可收的。" >&2
+    echo "  想真派就去掉 --dry-run 重来一次(会写一份新回执)。" >&2
+    return 2
+  fi
+
+  # 四条臂 + 底账全部跑在**腿真正干活的那棵树**上。隔离之后这棵树里天然只有腿的改动 ——
+  # 我在主树上提交的判据修复不再落进闸①(A3),底账也不再混进我自己的改动。
+  local tree="$repo"
+  if [[ -n "$wt" ]]; then
+    tree="$wt"
+    [[ -d "$tree" ]] || { echo "闸①:回执里记的隔离树不在了:$tree" >&2
+      echo "  这不是'干净',是**现场没了** —— 闸① 无从查起,先弄清它是被谁删的。" >&2
+      return 2; }
+  fi
+
+  echo "闸①(机械版):repo=$repo"
+  [[ -n "$wt" ]] && echo "  隔离树 = $tree(分支 ${branch:-?})"
+  echo "  基线 = 派活时 HEAD ${head:0:12}"
+  echo "  判卷清单:${protect[*]}"
+
+  local diff_out status_out ignored_out marked bad=0
+  diff_out="$(git -C "$tree" diff "$head" -- "${protect[@]}" 2>&1)"
+  # -uall:不带它 git 会把未跟踪目录折叠成 `tests/`,里面塞的文件就漏检了
+  status_out="$(git -C "$tree" status --porcelain -uall -- "${protect[@]}" 2>&1)"
+  # 第三臂(四审 subdeepseek F2):被 gitignore 藏起来的新文件,上面两臂都看不见。
+  # `__pycache__` 是唯一放行的 ignored 形状:python 仓跑一次判据就会生成它,
+  # 而 PEP 3147 布局下没有对应源码的 .pyc **import 不进来**(2026-08-07 实测),
+  # 所以它藏不了判卷逻辑。别的 ignored 文件照拒。
+  # **按路径成分匹配,不是子串**(2026-08-08 四审 subdeepseek F5 / subkimi / 我 三方独立命中):
+  # 写成 `grep -v '__pycache__'` 的话,`tests/__pycache__-evil/conftest.py` 和
+  # `tests/x__pycache__conftest.py` 都会被一起滤掉 —— 执行腿同时握着 .gitignore
+  # 和文件名,于是它能在判卷目录里放一个闸①三条臂全照不到的文件,
+  # 而上面那条"没有源码的 .pyc import 不进来"对这种文件根本不成立(它不是字节码)。
+  ignored_out="$(git -C "$tree" status --porcelain -uall --ignored -- "${protect[@]}" 2>/dev/null \
+                 | grep '^!!' | grep -vE '(^|[ /])__pycache__/' || true)"
+  # 第四臂(四审 subdeepseek F1):`git update-index --skip-worktree/--assume-unchanged`
+  # 一挂,diff 和 status **同时**把该文件当没改过 —— 工件查证退化回自述,正好打在
+  # 这道闸的立足点上。`git ls-files -v` 的标志位:**小写字母 = assume-unchanged**,
+  # **`S` = skip-worktree**(两者都要抓;只抓小写会漏掉 skip-worktree 那一半)。
+  marked="$(git -C "$tree" ls-files -v -- "${protect[@]}" 2>/dev/null \
+            | grep -E '^([a-z]|S) ' || true)"
+
+  if [[ -n "$diff_out" ]]; then
+    bad=1
+    echo "  ❌ 判卷文件相对派活时的基线**变了**:"
+    git -C "$tree" diff --stat "$head" -- "${protect[@]}" | sed 's/^/     /'
+  fi
+  if [[ -n "$status_out" ]]; then
+    bad=1
+    echo "  ❌ 判卷路径下有未提交/未跟踪的东西(git diff 看不见它):"
+    printf '%s\n' "$status_out" | sed 's/^/     /'
+  fi
+  if [[ -n "$ignored_out" ]]; then
+    bad=1
+    echo "  ❌ 判卷路径下有**被 gitignore 藏起来**的文件(前两臂都看不见它):"
+    printf '%s\n' "$ignored_out" | sed 's/^/     /'
+  fi
+  if [[ -n "$marked" ]]; then
+    bad=1
+    echo "  ❌ 判卷文件被挂了 skip-worktree/assume-unchanged 位 —— 挂上之后 diff 和 status"
+    echo "     会同时把它当作没改过(这道闸就瞎了):"
+    printf '%s\n' "$marked" | sed 's/^/     /'
+  fi
+  # 【2026-08-11 探针逼出来的那条,四审两腿都没提】腿**够得着主树**(实测:
+  # workspace-write 把项目根向上解析到主仓,能写)。闸① 改看 worktree 之后,
+  # 主树的判卷文件就没人看了 —— 腿伸手过去改主树的判据,这道闸全绿,
+  # 而我随后**在主树上**跑判据 = 跑的是被改过的考卷。
+  # 只问"主树上有没有**没提交的**判卷动静":我自己的判据修复是提交过的(那正是 A3),
+  # 不许因为补这条又把误报请回来。
+  if [[ -n "$wt" ]]; then
+    local main_dirty
+    main_dirty="$(git -C "$repo" status --porcelain -uall -- "${protect[@]}" 2>/dev/null)"
+    if [[ -n "$main_dirty" ]]; then
+      bad=1
+      echo "  ❌ **主树**(不是隔离树)的判卷路径上有没提交的动静 —— 腿够得着这里:"
+      printf '%s\n' "$main_dirty" | sed 's/^/     /'
+      echo "     (要么是腿伸手过去了,要么是我自己改了判据没提交。两种都得停下来看。)"
+    fi
+  fi
+
+  if [[ $bad -ne 0 ]]; then
+    echo "  ⇒ 闸① 不过。执行腿的自述一概不作数,先查清楚这些改动是谁写的、为什么。"
+    return 1
+  fi
+  echo "  ✅ 闸① 通过:判卷文件逐字节没动过,判卷路径下也没有多出来的文件。"
+
+  # 闸③(亲读 diff)要的底账:执行腿到底动了哪些文件。**只列不判** ——
+  # 白名单(只许改这几个文件)更强,但会在"执行腿合理地新建了一个文件"时误报,
+  # 而误报的守卫活不过一周。判断留给闸③,这里只保证它有一份不是自述的清单。
+  local writeset
+  writeset="$( { git -C "$tree" diff --name-only "$head"
+    # 路径含空格时 `awk '{print $NF}'` 只取最后一个词 —— 底账会失真(四审 subdeepseek F3)。
+    # porcelain 的格式是「两位状态 + 空格 + 路径」,直接砍前三个字符。
+    git -C "$tree" status --porcelain -uall | cut -c4-
+  } | sort -u | grep -v '^$' )"
+  echo "  ── 执行腿动过的文件(闸③的底账,含未跟踪)──"
+  printf '%s\n' "$writeset" | sed 's/^/     /'
+
+  # 把底账**写回回执**:它是机器算出来的实际写集,以后要对账、要引用,都不该再靠我打字
+  # (runlog 那一单的同一条道理:汇总会撒谎,细节不会)。
+  printf '%s\n' "$writeset" | python3 -c '
+import json, os, sys
+receipt = sys.argv[1]
+ws = [l for l in sys.stdin.read().splitlines() if l.strip()]
+r = json.load(open(receipt))
+r["actual_write_set"] = ws
+tmp = receipt + ".tmp"
+json.dump(r, open(tmp, "w"), ensure_ascii=False, indent=2)
+os.replace(tmp, receipt)' "$receipt" || echo "  ⚠️ 实际写集没写回回执(不影响闸①的结论)"
+
+  # 交回:**只打印,不动手**。自动 merge 的代价是把判断权交出去,自动删的代价是
+  # 丢掉唯一一份改动 —— 两边都不对称,所以这一步永远是我自己敲。
+  if [[ -n "$wt" ]]; then
+    echo
+    echo "  ── 交回(下面每一条都是给我自己敲的,这个工具一件都不做)──"
+    echo "     亲读 diff : git -C $tree diff $head"
+    echo "     符号链接  : git -C $tree diff --summary $head | grep 'create mode 120000'"
+    echo "                 ↑ worktree 里建的链接被 merge 带回主仓会**覆盖掉真目录**(本机出过事故)"
+    echo "     腿没提交的话先: git -C $tree add -A && git -C $tree commit -m '<腿的交付>'"
+    echo "     集成      : git -C $repo merge --no-ff ${branch:-<分支>}"
+    echo "     集成后必须重跑完整判据 —— worktree 里的绿不许复用。"
+    echo "     回收      : git -C $repo worktree remove $tree && git -C $repo branch -d ${branch:-<分支>}"
+    local root others
+    root="$(dirname "$tree")"
+    others="$(ls -1 "$root" 2>/dev/null | grep -vFx -- "$(basename "$tree")" || true)"
+    if [[ -n "$others" ]]; then
+      echo "     ⚠️ $root 下还挂着别的树 —— 隔离的代价就是攒树,自己看看要不要收:"
+      printf '%s\n' "$others" | sed 's/^/        /'
+    fi
+  fi
+  return 0
+}
+
+# ── 判卷面内容摘要 ──────────────────────────────────────────────────────
+# 打印「<条目数> <哈希>」。规格写在 design「十·10.1」,判据侧**另有一份独立实现**
+# (tests/_oracle_hash.sh 走 find + sha256sum),两边不共享一行代码 ——
+# 算法两边一起错的话判据会全绿,那是本机 08-01 栽过的形状。
+_oracle_digest() {  # _oracle_digest <repo> <protect...>
+  python3 - "$@" <<'PY'
+import hashlib, os, sys
+repo, *protect = sys.argv[1:]
+entries = {}
+
+def note(rel, full):
+    if "__pycache__" in rel.split("/"):
+        return
+    if os.path.islink(full):                      # 链接目标也是考卷的一部分:
+        entries[rel] = b"symlink:" + os.readlink(full).encode("utf-8", "surrogateescape")
+    elif os.path.isfile(full):                    # 改指向 = 换了判据,必须让哈希变
+        h = hashlib.sha256()
+        with open(full, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        entries[rel] = h.hexdigest().encode()
+
+def walk(rel, full):
+    if os.path.islink(full) or os.path.isfile(full):
+        note(rel, full)
+    elif os.path.isdir(full):
+        if os.path.basename(rel) == "__pycache__":
+            return
+        for name in sorted(os.listdir(full)):
+            walk(f"{rel}/{name}" if rel else name, os.path.join(full, name))
+
+for p in protect:
+    p = p.strip("/")
+    walk(p, os.path.join(repo, p))
+
+h = hashlib.sha256()
+for rel in sorted(entries):
+    h.update(rel.encode("utf-8", "surrogateescape") + b"\0" + entries[rel] + b"\n")
+print(len(entries), h.hexdigest())
+PY
+}
+
+# ── 参数 ────────────────────────────────────────────────────────────────
+TASK=""; REPO=""; ATTACK=""; LOG=""; MODEL=""; RECEIVE=""; TRACK=""; DRY=0
+ISOLATE=1; PRINTHASH=0                 # **默认隔离**(design 九·2 用户拍板)
+TRACK_SAID=0                           # 归属这件事我有没有**亲口说过**(见下面那道闸)
+PROTECT=(); PASSTHRU=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --task)       TASK="${2:-}";   shift 2 ;;
+    --repo)       REPO="${2:-}";   shift 2 ;;
+    --attack-log) ATTACK="${2:-}"; shift 2 ;;
+    --protect)    [[ -n "${2:-}" ]] || die "--protect 要一个路径"; PROTECT+=("$2"); shift 2 ;;
+    --track)      TRACK="${2:-}"; TRACK_SAID=1; shift 2 ;;
+    --no-track)   TRACK=""; TRACK_SAID=1; shift ;;
+    --model)      MODEL="${2:-}";  shift 2 ;;
+    --log)        LOG="${2:-}";    shift 2 ;;
+    --receive)    RECEIVE="${2:-}"; shift 2 ;;
+    --isolate)    ISOLATE=1; shift ;;
+    --no-isolate) ISOLATE=0; shift ;;
+    --print-oracle-hash) PRINTHASH=1; shift ;;
+    --dry-run)    DRY=1; shift ;;
+    --) shift; PASSTHRU+=("$@"); break ;;
+    *) die "不认识的参数:$1" ;;
+  esac
+done
+# 默认模型与评审腿 subcodex 同一处单源 bin/codex-model(业主 09-25:干活腿也换 gpt-6-sol;09-23 只换了评审腿,
+# 这里当时写死 gpt-5.5 没跟上 —— 两处各写一份迟早一新一旧)。--model 仍可单次覆盖。
+if [[ -z "$MODEL" ]]; then
+  MODEL="$(tr -d '[:space:]' < "$BIN_DIR/codex-model" 2>/dev/null)" || die '读不到 bin/codex-model(默认模型单源)'
+  [[ "$MODEL" =~ ^gpt-[A-Za-z0-9._-]+$ ]] || die "bin/codex-model 必须恰好一个 gpt-<model-id>,实得 '$MODEL'"
+fi
+
+if [[ -n "$RECEIVE" ]]; then
+  _receive_started_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  _receive_started_ns="$(date +%s%N)"
+  do_receive "$RECEIVE"
+  _receive_rc=$?
+  _received_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  _received_ns="$(date +%s%N)"
+  _receive_duration_ms=$(( (_received_ns - _receive_started_ns) / 1000000 ))
+  python3 - "$RECEIVE" "$_receive_started_at" "$_received_at" "$_receive_duration_ms" "$_receive_rc" <<'PY'
+import json, os, sys
+path, started, finished, duration, rc = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    receipt = json.load(stream)
+receipt.update({
+    "receive_started_at": started,
+    "received_at": finished,
+    "receive_duration_ms": int(duration),
+    "receive_rc": int(rc),
+})
+temp = path + ".tmp"
+with open(temp, "w", encoding="utf-8") as stream:
+    json.dump(receipt, stream, ensure_ascii=False, indent=2)
+    stream.write("\n")
+os.replace(temp, path)
+PY
+  if [[ $? -ne 0 ]]; then
+    echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIVE event=received (回执完成态写入失败)" >&2
+  elif ! "$TRACK_RECORD_BIN" import-delegate --receipt "$RECEIVE" --event received; then
+    echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIVE event=received" >&2
+  fi
+  exit "$_receive_rc"
+fi
+
+# ── 拒发闸(下面每一条不满足都 exit 2,codex 一次都不启动)──────────────
+if [[ $PRINTHASH -eq 0 ]]; then
+  [[ -n "$TASK" ]] || { usage; die "缺 --task"; }
+  [[ -f "$TASK" ]] || die "任务书不存在:$TASK"
+fi
+[[ -n "$REPO" ]] || die "缺 --repo"
+[[ -d "$REPO" ]] || die "仓库目录不存在:$REPO"
+git -C "$REPO" rev-parse HEAD >/dev/null 2>&1 || die "$REPO 不是 git 仓库(闸①要基线)"
+
+# ① 攻题记录:派活前请第三方攻一遍 design + oracle 的记录。
+#    "不看实现就能发现的问题"要在这一刻被发现,而不是在收货那一刻。
+if [[ $PRINTHASH -eq 0 ]]; then
+  [[ -n "$ATTACK" ]] || die "缺 --attack-log:派活前先请第三方攻一遍 design + oracle,
+  把「哪条断言全绿了结果仍然错」的清单落盘再来。这不是仪式 —— 08-05 那单五个真实缺陷里
+  至少四个不看实现就能发现,却等到 75 分钟成本花完之后才被抓。"
+  [[ -f "$ATTACK" ]] || die "攻题记录不存在:$ATTACK"
+  [[ -s "$ATTACK" ]] || die "攻题记录是空文件:$ATTACK(空文件应付不算做过这件事)"
+fi
+_rp="$(realpath "$REPO")"
+CONTROL_REPO="$_rp"
+_common_git="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ "$(basename "$_common_git")" == ".git" ]]; then
+  CONTROL_REPO="$(dirname "$_common_git")"
+fi
+
+# typed track 的机器事实只认主仓卷宗；从 worktree 派发时也不能把事件/决策写进临时树。
+if [[ $PRINTHASH -eq 0 && -n "$TRACK" ]]; then
+  [[ "$TRACK" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "--track 不是安全的单段名称:$TRACK"
+  [[ -d "$CONTROL_REPO/tracks/$TRACK" ]] || die "active track 不存在:$CONTROL_REPO/tracks/$TRACK"
+  "$TRACK_RECORD_BIN" validate --phase dispatch "$CONTROL_REPO/tracks/$TRACK" \
+    || die "track 的 typed decision 未通过 dispatch 闸:$TRACK"
+fi
+
+# ② 判卷清单:守卫的强度只等于这份清单,漏列一个就是那个洞。没有清单 = 没有守卫。
+[[ ${#PROTECT[@]} -gt 0 ]] || die "缺 --protect:把 oracle 为得出裁决所读的**每一个**文件
+  (判据、fixture、期望输出)都列进来。收货时用的就是这一份,不再靠人眼重建。"
+for p in "${PROTECT[@]}"; do
+  [[ -e "$REPO/$p" ]] || die "--protect 的路径在仓里不存在:$p(相对 $REPO)"
+done
+
+# 判卷路径**不许有被 gitignore 的东西**(四审 subdeepseek F2):
+# 执行腿只要往 .gitignore 追一行、再塞一个 `tests/conftest.py`,闸①两臂就全空 ——
+# `git status --porcelain -uall` 默认不显示 ignored 文件,那招(闸①最值钱的一幕)被绕过。
+# 在派活这一刻查:判卷目录里现在就有 ignored 文件的话,这套闸从一开始就不成立。
+# `__pycache__` 放行,理由见上面收货那一臂同名注释(藏不了代码,且删了立刻长回来);
+# 同样**按路径成分匹配** —— 名字里带这个子串的伪缓存不是例外。
+_ignored="$(git -C "$REPO" status --porcelain -uall --ignored -- "${PROTECT[@]}" 2>/dev/null \
+            | grep '^!!' | grep -vE '(^|[ /])__pycache__/' || true)"
+if [[ -n "$_ignored" ]]; then
+  die "判卷路径下有**被 gitignore 藏起来**的文件,闸① 看不见它们:
+$(printf '%s\n' "$_ignored" | sed 's/^/    /')
+  先把它们从 .gitignore 里放出来(或移出判卷目录)再派活 ——
+  否则执行腿往那儿塞一个 conftest.py 就能让"亲跑全绿"变假绿。"
+fi
+# `.gitignore` 本身也进判卷清单:不然执行腿改 .gitignore 就能把新塞的判卷文件藏起来。
+if [[ -f "$REPO/.gitignore" ]]; then
+  _has_ignorefile=0
+  for p in "${PROTECT[@]}"; do [[ "$p" == ".gitignore" ]] && _has_ignorefile=1; done
+  [[ $_has_ignorefile -eq 1 ]] || PROTECT+=(".gitignore")
+fi
+
+# ③ 攻题记录必须对得上**这一版判卷**:攻的是上一版考卷等于没攻。
+#    洞是 gpt-5.6-sol 的独立方案点破的:我原来只查"非空 + 在仓外",而"攻完之后我又改了
+#    oracle"这条路整条敞开 —— 而那正是最常发生的事(攻题的产出就是让我去改判卷)。
+#    2026-08-11 之前这里用的是**便宜的等价物 mtime**;隔离层把它逼到必须还账:
+#    worktree 是 checkout 出来的,判卷 mtime 恒新 ⇒ mtime 闸在隔离下 100% 拒发,
+#    而绕它的办法(每次 touch 攻题记录)= 把解除一道判卷防线变成肌肉记忆。
+#    现在按它当初提的做法来:**内容寻址**。
+if ! read -r _n_files ORACLE_HASH < <(_oracle_digest "$REPO" "${PROTECT[@]}"); then
+  die "算不出判卷面的内容哈希(python3 挂了?)"
+fi
+[[ "${_n_files:-0}" -gt 0 ]] || die "--protect 一个文件都没匹配到:${PROTECT[*]}
+  这道闸的强度只等于这份清单,空清单 = 没有闸(空目录、只有 __pycache__ 都算空)。"
+HASH_LINE="oracle-sha256: $ORACLE_HASH"
+
+if [[ $PRINTHASH -eq 1 ]]; then
+  # stdout 只印这一行 —— 方便 `>> 攻题记录`;清单走 stderr,免得被一起追加进去。
+  printf '%s\n' "$HASH_LINE"
+  printf '判卷面 %s 个文件:%s\n' "$_n_files" "${PROTECT[*]}" >&2
+  exit 0
+fi
+
+# ④ 隔离:一 job 一棵树、一个分支。**默认开**(design 九·2)。
+TS="$(date +%Y%m%d-%H%M%S)"
+NAME="$(basename "${TASK%.*}")"
+JOB="${NAME}-${TS}"
+OBS_LABEL="delegate-$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-110)"
+RUN_ID="delegate-${TS}-$$"
+WT=""; BRANCH=""; RUNDIR="$REPO"
+if [[ $ISOLATE -eq 1 ]]; then
+  _wtroot_abs="$(realpath -m "$WT_ROOT")"
+  [[ "$_wtroot_abs" != "$_rp" ]] || die "worktree 根不能就是被派的仓本身:$WT_ROOT"
+  # 树落在仓里(`--repo /root/aiwork` 就是这形状)⇒ **必须被 gitignore**,
+  # 否则主树 `git status` 被它污染,闸①第二臂和闸③的底账跟着一起脏。
+  case "$_wtroot_abs/" in
+    "$_rp"/*)
+      _wtrel="${_wtroot_abs#$_rp/}"
+      git -C "$REPO" check-ignore -q -- "$_wtrel/" 2>/dev/null || die \
+"worktree 根落在被派的仓里,却没被 gitignore:$_wtroot_abs
+  这样主树 git status 会被那棵树污染(闸①第二臂、闸③底账一起失真)。
+  往 $REPO/.gitignore 里加一行 '$_wtrel/',或用 DELEGATE_WORKTREE_ROOT 指到仓外。"
+      ;;
+  esac
+  if [[ -n "$TRACK" ]]; then
+    WT="$_wtroot_abs/$TRACK/$JOB"
+    BRANCH="delegate/$TRACK/$JOB"
+  else
+    WT="$_wtroot_abs/$JOB"
+    BRANCH="delegate/$JOB"
+  fi
+  RUNDIR="$WT"
+fi
+
+# ⑤ 卷宗(攻题记录/日志/回执)不许落进**腿够得着的地方** = 被派的仓 ∪ worktree 根。
+#    【2026-08-11 探针实测,别再"推理"这件事】我一度把它放宽成"隔离下只管那棵树,
+#    落在主仓里可以",理由是"腿的沙箱就是那棵树"。**真 codex 把这条打掉了**:
+#      · `codex exec -C <worktree> -s workspace-write` **能往主仓写、改主仓的文件** ——
+#        worktree 的 `.git` 是个文件,它把"项目根"一路向上解析到了主仓;
+#        写无关路径才会被拒(`patch rejected: writing outside of the project`),`/tmp` 也是敞的。
+#      · 写沙箱**管不了读**:探针里腿把主仓中一份未跟踪的"秘密攻题记录"原文贴了回来。
+#    收据:tracks/codex-worktree-delegation/evidence/*probe-real-sandbox*
+#    ⇒ 卷宗落主仓 = 腿改得到回执(闸① 自证)+ 读得到攻题记录(考卷的洞递给考生)。
+#    ⇒ **A2 那个死结没解开**:派 aiwork 自己的活,日志/攻题记录必须显式指到 /root/aiwork 之外。
+_forbid=("$_rp"); _legwhat="被派活的仓里"
+if [[ $ISOLATE -eq 1 ]]; then _forbid+=("$_wtroot_abs"); _legwhat="被派活的仓 / worktree 根里"; fi
+_in_forbidden() {  # <绝对路径> → 0 = 落在禁区里
+  local x="$1" f
+  for f in "${_forbid[@]}"; do case "$x/" in "$f"/*) return 0 ;; esac; done
+  return 1
+}
+for _a in "$(realpath "$ATTACK")" "$(realpath -s "$ATTACK")"; do
+  if _in_forbidden "$_a"; then
+    die "攻题记录在${_legwhat}:$_a
+  执行腿**读得到**它(实测:写沙箱管不了读)= 把考卷的洞递给考生。
+  挪到仓外,例如 /root/attack-logs/<name>.md;派 aiwork 自己的活时,'仓外'就是 /root/aiwork 之外。"
+  fi
+done
+
+# ⑤a 归属:仓里有 active track 时,**必须亲口说**这一单挂不挂轮次(`--track X` 或 `--no-track`)。
+#     为什么不替我猜"只有一个 track 那就是它吧"(2026-08-12 四审 subdeepseek,我采纳):
+#     那等于把"我没说"翻译成"我同意删" —— 归档时轮次目录下的树是**可以被自动收掉**的,
+#     而无主的树只点名不碰。猜错的代价落在删这一侧,和本机"猜不出就 fail closed"的立场相反。
+#     没有 active track 的仓不啰嗦(守卫一变噪音就没人看)。
+if [[ $PRINTHASH -eq 0 && $TRACK_SAID -eq 0 && -d "$CONTROL_REPO/tracks" ]]; then
+  _active="$(ls -1 "$CONTROL_REPO/tracks" 2>/dev/null | grep -v '^archive$' || true)"
+  if [[ -n "$_active" ]]; then
+    die "这个仓里有开着的 track,得说一句这单归谁(我不替你猜):
+$(printf '%s\n' "$_active" | sed 's/^/    --track /')
+  归档那一轮时,挂在它名下的树会被自动收掉(前提是干净且已合进主线);
+  这单不挂任何轮次就显式写 **--no-track**(那样树只会被点名,不会被自动收)。"
+  fi
+fi
+
+# ⑤b 直通参数排在工具自己给的 `-C <树>` `-s workspace-write` **后面**,last-wins ⇒
+#     `-- -C /别处` 或 `-- -s danger-full-access` 能**静默撤销隔离**,而我会以为它隔离着。
+#     只有我自己会传直通参数(是脚枪不是攻击面),但"我以为隔离了、其实没有"正是本单
+#     最不能出的错(四审 subdeepseek)。要传就显式 --no-isolate,别在隔离下偷偷换掉。
+if [[ $ISOLATE -eq 1 && ${#PASSTHRU[@]} -gt 0 ]]; then
+  for _pt in "${PASSTHRU[@]}"; do
+    case "$_pt" in
+      -C|--cd|-s|--sandbox|-C=*|--cd=*|-s=*|--sandbox=*)
+        die "直通参数里有 '$_pt' —— 它排在工具给的 -C/-s 后面,会 last-wins **撤销隔离**,
+  而回执上还写着 isolate=true。要这么跑就显式加 --no-isolate(那样至少不骗人)。" ;;
+    esac
+  done
+fi
+
+# ⑥ 攻题记录必须盖着**当前这版判卷**的哈希
+grep -Fq "$HASH_LINE" "$ATTACK" || die "攻题记录对不上当前这版判卷,已过期:
+    攻题记录 $ATTACK
+    判卷面   ${PROTECT[*]}($_n_files 个文件)
+  拿现在这版 design + oracle **重新攻一遍**,然后把下面这一行贴进攻题记录:
+    $HASH_LINE
+  (拿现成的:delegate-codex --print-oracle-hash --repo $REPO ${PROTECT[*]/#/--protect })"
+
+LOG="${LOG:-/root/aiwork/logs/delegate-${NAME}-${TS}.log}"
+mkdir -p "$(dirname "$LOG")"
+RECEIPT="${LOG}.receipt.json"
+# 回执/日志同理(四审 subdeepseek F15 / subkimi F3):它们是闸① 的卷宗,
+# 腿能改 head/protect 就等于让闸① 自己给自己开绿灯。考生不许碰卷宗。
+for _l in "$(realpath -m "$LOG")" "$(realpath -m "$RECEIPT")"; do
+  if _in_forbidden "$_l"; then
+    die "日志/回执落在${_legwhat}:$_l
+  执行腿**改得到**它(实测,见上)⇒ 闸① 变成自证。挪出去(默认就在 /root/aiwork/logs/;
+  但派 aiwork 自己的活时那儿也在禁区里,得显式 --log 到 /root/aiwork 之外)。"
+  fi
+done
+HEAD_AT_DISPATCH="$(git -C "$REPO" rev-parse HEAD)"
+
+# ⑦ 隔离下**判卷路径必须是干净的**。
+#    树是从基线建的 ⇒ 腿看到的是**已提交那版**判卷,而上面那道哈希闸算的是工作区那版;
+#    两者不一致时,闸量的是另一份考卷。顺带把本机既有规矩「判据先单独 commit」焊进入口。
+if [[ $ISOLATE -eq 1 ]]; then
+  _dirty_protect="$(git -C "$REPO" status --porcelain -uall -- "${PROTECT[@]}" 2>/dev/null)"
+  if [[ -n "$_dirty_protect" ]]; then
+    die "判卷路径有没提交的改动,隔离模式下不许派:
+$(printf '%s\n' "$_dirty_protect" | sed 's/^/    /')
+  腿在树里看到的是**已提交那版**判卷,而哈希算的是你工作区这版 —— 对不上。
+  **判据先单独 commit**(本机规矩:判据和它的修复揉进一个 commit,闸① 就退化成人工找补),
+  再派活。"
+  fi
+  _dirty_all="$(git -C "$REPO" status --porcelain -uall 2>/dev/null)"
+  if [[ -n "$_dirty_all" ]]; then
+    # 只警告不拦:实现侧的半成品是我自己的事,但腿在树里**看不到**它们,
+    # 这件事必须说出来 —— 否则"它怎么没接着我的改动写"要查半天。
+    echo "⚠️  主工作树有未提交的改动,腿在隔离树里看不到它们:"
+    printf '%s\n' "$_dirty_all" | sed 's/^/    /'
+  fi
+fi
+
+# ⑧ 建树。失败一律**拒发**(不许静默退回非隔离:那会让"我以为它隔离了"变成假象)。
+if [[ $ISOLATE -eq 1 && $DRY -eq 0 ]]; then
+  mkdir -p "$(dirname "$WT")" || die "建不了 worktree 根:$(dirname "$WT")"
+  # 撞名:**绝不覆盖**(覆盖 = 丢掉上一棵树里唯一那份改动),往后挪一个名字。
+  # 时间戳是秒级的,而"同一秒派第二次"不是假想 —— 判据连着跑就是这形状,
+  # 我自己拒发一次、立刻改了再派也是。这里不引入随机数/登记表:
+  # `git worktree add` 自己就是原子占位,占不上就换下一个。
+  _try=1
+  while [[ -e "$WT" || -n "$(git -C "$REPO" rev-parse --verify -q "refs/heads/$BRANCH" 2>/dev/null)" ]]; do
+    _try=$((_try+1))
+    [[ $_try -le 20 ]] || die "同名任务的树/分支太多了(${JOB}-2..20 全被占着),先收几棵:
+    git -C $REPO worktree list"
+    if [[ -n "$TRACK" ]]; then
+      WT="$_wtroot_abs/$TRACK/${JOB}-${_try}"; BRANCH="delegate/$TRACK/${JOB}-${_try}"
+    else
+      WT="$_wtroot_abs/${JOB}-${_try}"; BRANCH="delegate/${JOB}-${_try}"
+    fi
+  done
+  _wt_out="$(git -C "$REPO" worktree add -b "$BRANCH" "$WT" "$HEAD_AT_DISPATCH" 2>&1)" || die \
+"建 worktree 失败(codex 一次都没启动):
+$(printf '%s\n' "$_wt_out" | sed 's/^/    /')"
+  RUNDIR="$WT"
+fi
+
+# ── 派活三件套:逐字注入 ─────────────────────────────────────────────────
+# codex 腿**看不到本机说明书**(说明书叫 CLAUDE.md,codex 只认 AGENTS.md,这是刻意的),
+# 所以规矩不写进任务书就等于不存在。这三件不是客套话,是三次踩过的坑。
+protect_lines=""
+for p in "${PROTECT[@]}"; do protect_lines+="  - $p"$'\n'; done
+# 隔离模式下多说一句:腿不知道自己在 worktree 里,而 `git checkout main` 这种动作
+# 会把现场搅了(它以为在修主树)。规矩不写进任务书就等于不存在。
+ISOLATE_NOTE=""
+if [[ $ISOLATE -eq 1 ]]; then
+  ISOLATE_NOTE="
+  另外:你在一棵**独立的 git worktree**(不是主工作树)里干活。不要切分支、不要
+  git worktree/branch 相关操作、不要动这棵树以外的东西 —— 改动就留在工作区里,
+  合并回主仓由我来做。"
+fi
+PROMPT="$(cat "$TASK")
+
+────────────────────────────────────────────────────────────
+以下是派活方(主 agent)加的硬性规矩,与任务书同等效力。请用**中文**回答。
+
+【一】判卷文件 off-limits —— 下面这些路径**一个字节都不许改、也不许新增文件进去**:
+${protect_lines}  改判卷(删断言、写死期望值、加 skip、加 autouse fixture、往目录里塞新文件)
+  一律视为交付失败;收货时会对派活时的基线逐字节比对,并单独检查未跟踪文件。
+  判据本身若有错,**报告给我**,不要自己动手改。
+
+【二】自检清单 —— 交付前必须自己跑完并在报告里写明结果:
+  1. 判据(oracle)全绿;
+  2. 相关回归全绿;
+  3. build 通过。
+  三条里有任何一条没跑,如实说没跑,**不要用"应该没问题"代替**。
+
+【三】边界 —— 不许:push、merge、归档、装依赖、删无关文件、碰生产系统、
+  跑数据库迁移、改密钥。需要这类操作时**停下来问我**。${ISOLATE_NOTE}
+────────────────────────────────────────────────────────────"
+
+# 任务书 + 三件套是走**命令行参数**递给 codex 的,而 Linux 单个 argv 的上限
+# (MAX_ARG_STRLEN)是 128KiB。超了 `codex exec` 直接 E2BIG,而那时回执**已经写出去了**
+# ⇒ 盘上留着一份"已派活"的回执、实际一次都没跑(四审 subkimi F14)。所以在写回执之前先量。
+_plen=${#PROMPT}
+if [[ $_plen -gt 120000 ]]; then
+  die "任务书 + 注入的规矩共 ${_plen} 字节,超过命令行单参数上限(128KiB),codex 起不来。
+  把任务书拆小,或者把大段材料放成文件让它自己去读。"
+fi
+
+# 回执里**不另造 `base` 键**:现有的 `head` 就是建树用的基线,多一个同义键就是第二份账
+# (design 四·2 驳回 registry 的同一条理由:并发度为 1 时磁盘本身就是账)。
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+STARTED_NS="$(date +%s%N)"
+python3 - "$RECEIPT" "$REPO" "$HEAD_AT_DISPATCH" "$ATTACK" "$TASK" "$LOG" "$MODEL" \
+         "$ISOLATE" "$WT" "$BRANCH" "$TRACK" "$ORACLE_HASH" "$DRY" "$RUN_ID" "$OBS_LABEL" \
+         "$STARTED_AT" "${PROTECT[@]}" <<'PY'
+import hashlib, json, sys, datetime
+receipt, repo, head, attack, task, log, model, isolate, wt, branch, track, ohash, dry, run_id, label, started_at, *protect = sys.argv[1:]
+sha = hashlib.sha256(open(attack, "rb").read()).hexdigest()
+json.dump({
+    "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    "run_id": run_id, "label": label, "started_at": started_at,
+    "repo": repo, "head": head, "protect": protect,
+    "isolate": isolate == "1", "dry_run": dry == "1",
+    "worktree": wt or None, "branch": branch or None,
+    "track": track or None,
+    "oracle_sha256": ohash,
+    "attack_log": attack, "attack_log_sha256": sha,
+    "task": task, "log": log, "model": model,
+}, open(receipt, "w"), ensure_ascii=False, indent=2)
+PY
+[[ -s "$RECEIPT" ]] || die "回执写不出来:$RECEIPT"
+
+echo "delegate-codex: repo=$REPO  model=$MODEL"
+if [[ $ISOLATE -eq 1 ]]; then
+  echo "  隔离树   -> $WT$([[ $DRY -eq 1 ]] && echo "(--dry-run:没真建)")"
+  echo "  分支     -> $BRANCH  (基线 ${HEAD_AT_DISPATCH:0:12})"
+else
+  echo "  ⚠️ --no-isolate:腿直接写主工作树(我自己的改动会和它的混在一起,闸① 可能误报我)"
+fi
+echo "  任务书   -> $TASK"
+echo "  攻题记录 -> $ATTACK"
+echo "  判卷清单 -> ${PROTECT[*]}"
+echo "  日志     -> $LOG"
+echo "  回执     -> $RECEIPT(收货时:delegate-codex --receive $RECEIPT)"
+
+if [[ $DRY -eq 1 ]]; then
+  printf '%s\n' "$PROMPT" > "$LOG.prompt"
+  echo "  --dry-run:没有派发,任务书全文在 $LOG.prompt"
+  exit 0
+fi
+
+# -c project_doc_max_bytes=0 **每次都要带**:否则 codex 会自动吞被派仓库里的
+# AGENTS.md 并向上层递归找。本机说明书已改名规避,但别的仓库可能自带一份。
+# 模型显式给 -m:依赖 ~/.codex/config.toml 的默认值 = 以后改配置这里会静默升档。
+"$CODEX" exec -C "$RUNDIR" -m "$MODEL" -s workspace-write \
+  -c project_doc_max_bytes=0 -o "$LOG" \
+  ${PASSTHRU[@]+"${PASSTHRU[@]}"} "$PROMPT"
+rc=$?
+FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+FINISHED_NS="$(date +%s%N)"
+DURATION_MS=$(( (FINISHED_NS - STARTED_NS) / 1000000 ))
+python3 - "$RECEIPT" "$FINISHED_AT" "$DURATION_MS" "$rc" <<'PY'
+import json, os, sys
+path, finished, duration, rc = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    receipt = json.load(stream)
+receipt.update({"finished_at": finished, "duration_ms": int(duration), "codex_rc": int(rc)})
+temp = path + ".tmp"
+with open(temp, "w", encoding="utf-8") as stream:
+    json.dump(receipt, stream, ensure_ascii=False, indent=2)
+    stream.write("\n")
+os.replace(temp, path)
+PY
+if [[ $? -ne 0 ]]; then
+  echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIPT event=execution_finished (回执完成态写入失败)" >&2
+elif ! "$TRACK_RECORD_BIN" import-delegate --receipt "$RECEIPT" --event execution_finished; then
+  echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIPT event=execution_finished" >&2
+fi
+
+echo
+echo "delegate-codex: codex rc=$rc"
+echo "  收货三道闸一道都不能省 —— 先跑闸①:delegate-codex --receive $RECEIPT"
+echo "  然后闸②亲跑 oracle+回归+build、闸③亲读 diff(盯 create mode 120000 符号链接)。"
+[[ $ISOLATE -eq 1 ]] && echo "  现场留在 $WT(失败也不删 —— 自动删的代价是丢掉唯一一份改动)。"
+exit $rc

@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# 本仓(/root/aiwork)的**总跑入口**:一条命令跑完全部离线判据套件,并给一行汇总。
+# Exit 0 = 全绿,非零 = 有东西烂了(外部漂移、环境升级、我自己改坏了)——
+# 目的是在真跑一次 panel-review / 真派一次活之前就把静默腐烂抓出来。
+# 绿了也打一行心跳,这样 cron 死了本身也看得见(P0-2「静默过期」的教训)。
+# 只跑桩/离线套件,不做真供应商探活(不烧额度)。
+#
+# 2026-08-06:改成**清单驱动**。此前是三行硬写的 T1/T2/T3,于是
+# `test-track-guard.sh`(08-04 建)和 `test-delegate-entry.sh`(08-06 建)
+# **谁都没被任何总跑调用过** —— 和 design-studio 那边 `tests/mcp-gate.sh` 成了孤儿脚本
+# 是同一种病:病根不是缺哪条检查,是缺一个把它们全串起来的入口。
+# **新增判据套件 = 往下面这张表里加一行。**
+set -uo pipefail
+
+SUITES=(
+  "panel-candidates|python3|/root/aiwork/tests/test_panel_candidates.py"
+  "review-delivery|python3|/root/aiwork/tests/test_review_delivery.py"
+  "review-result|python3|/root/aiwork/tests/test_review_result.py"
+  "subgrok|python3|/root/aiwork/tests/test_subgrok.py"
+  "subcursor|python3|/root/aiwork/tests/test_subcursor.py"
+  "leg-quick-fixes|python3|/root/aiwork/tests/test_leg_quick_fixes.py"
+  "review-tooling|bash|/root/aiwork/tests/test-review-tooling.sh"
+  "panel-observation|bash|/root/aiwork/tests/test-panel-observation.sh"
+  "panel-roster|bash|/root/aiwork/tests/test-panel-roster.sh"
+  "panel-slice|bash|/root/aiwork/tests/test-panel-slice.sh"
+  "panel-round-discipline|bash|/root/aiwork/tests/test-panel-round-discipline.sh"
+  "subcodex|bash|/root/aiwork/tests/test-subcodex.sh"
+  "fix-oracle|bash|/root/aiwork/tests/test-submimo-fix-oracle.sh"
+  "retry|python3|/root/aiwork/tests/test_submimo_retry.py"
+  "track-guard|bash|/root/aiwork/tests/test-track-guard.sh"
+  "track-record|bash|/root/aiwork/tests/test-track-record.sh"
+  "track-preflight|python3|/root/aiwork/tests/test_track_preflight.py"
+  "ledger|bash|/root/aiwork/tests/test-ledger.sh"
+  "track-links|bash|/root/aiwork/tests/test-track-links.sh"
+  "delegate-entry|bash|/root/aiwork/tests/test-delegate-entry.sh"
+  "delegate-observation|bash|/root/aiwork/tests/test-delegate-observation.sh"
+  "delegate-isolate|bash|/root/aiwork/tests/test-delegate-isolate.sh"
+  "worktree-sweep|bash|/root/aiwork/tests/test-worktree-sweep.sh"
+  "hooks-installed|bash|/root/aiwork/tests/test-hooks-installed.sh"
+  "runlog|bash|/root/aiwork/tests/test-runlog.sh"
+  "no-egress|bash|/root/aiwork/tests/test-no-egress.sh"
+  "evidence-lifetime|bash|/root/aiwork/tests/test-evidence-lifetime.sh"
+  "review-workspace|bash|/root/aiwork/tests/test-review-workspace.sh"
+  "workflow-docs|bash|/root/aiwork/tests/test-workflow-docs.sh"
+  "mimo-key|bash|/root/aiwork/tests/test-mimo-key-single-source.sh"
+  # 守的是**仓外**那份 ~/.claude/switch-model.sh 的原子写。它原本住在 track 目录里,
+  # 归档后就没有任何入口叫得动 —— 正是本文件开头骂的那种孤儿脚本(09-01 断线接手时自己抓到)。
+  "switch-model-atomic|bash|/root/aiwork/tests/test-switch-model-atomic.sh"
+)
+
+# ── 名单漏网报告(2026-08-06)────────────────────────────────────────────
+# 规矩4 的名单是**手列**的 ⇒ 新起一个不匹配的工具名就漏,而且漏的时候没人会知道。
+# 硬堵不行(把运维脚本也拖进来 = 误报 = 守卫被绕过),所以只**报**不拦:
+# 每次总跑列一次「bin/ 里哪些可执行文件不在名单内」,让清单腐烂时有人吭一声。
+. "$(dirname "$0")/_tooling-paths.sh" 2>/dev/null || true
+uncovered=""
+if declare -f is_judging_surface >/dev/null; then
+  for f in "${COVERAGE_BIN_DIR:-$(dirname "$0")}"/*; do
+    [ -f "$f" ] && [ -x "$f" ] || continue
+    is_judging_surface "bin/$(basename "$f")" || uncovered="$uncovered $(basename "$f")"
+  done
+fi
+
+# ── 孤儿判据套件(2026-08-08 四审 F2 实证)──────────────────────────────
+# 新写的 `tests/test-runlog.sh` 没被加进上面那张表 ⇒ 落盘当天绿的,此后**没有任何入口
+# 再跑它**,烂掉不会有人知道。本文件头部自己写着「新增判据套件 = 往那张表里加一行」——
+# 靠"记得加"就等于没有闸,和 bin/ 名单那条债是同一笔。
+# 和 bin/ 名单**不同的是这里硬红**:`tests/test-*` 没有"运维脚本"那种歧义,
+# 一个判据套件不进总跑,没有任何正当理由。
+TESTS_DIR="${COVERAGE_TESTS_DIR:-$(dirname "$0")/../tests}"
+orphans=""
+for f in "$TESTS_DIR"/test-*.sh "$TESTS_DIR"/test_*.sh "$TESTS_DIR"/test-*.py "$TESTS_DIR"/test_*.py; do
+  [ -f "$f" ] || continue
+  b="$(basename "$f")"
+  case " ${SUITES[*]} " in *"/$b|"*|*"/$b "*) ;; *) orphans="$orphans $b" ;; esac
+done
+
+# --coverage-only:只出漏网报告就退出(判据要问这件事,不该为此跑完 10 分钟的全套件)
+if [[ "${1:-}" == "--coverage-only" ]]; then
+  if [[ -n "$uncovered" ]]; then
+    echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(只扫 bin/):$uncovered"
+  else
+    echo "ℹ️  规矩4 名单覆盖了 bin/ 下所有可执行文件(只扫 bin/,tests/ 与 track/templates/ 未扫)"
+  fi
+  if [[ -n "$orphans" ]]; then
+    echo "🔴 有判据套件不在 SUITES 里(写了没人跑 = 从此静默腐烂):$orphans"
+    exit 1
+  fi
+  exit 0
+fi
+
+
+names=(); rcs=(); summaries=(); outs=()
+for entry in "${SUITES[@]}"; do
+  IFS='|' read -r name runner path <<< "$entry"
+  if [[ ! -f "$path" ]]; then
+    names+=("$name"); rcs+=(127); summaries+=("判据文件不见了:$path"); outs+=("")
+    continue
+  fi
+  # 每个套件套 timeout(四审两腿都点到:没有超时的话,某个套件挂死 = 总跑跟着挂死,
+  # 既不红也不绿、心跳也不打 —— 而这个脚本存在的理由就是"让静默腐烂看得见"）。
+  out="$(timeout "${SUITE_TIMEOUT:-1800}" "$runner" "$path" 2>&1)"; rc=$?
+  if [[ $rc -eq 124 ]]; then out="$out
+（超时:超过 ${SUITE_TIMEOUT:-1800}s 没跑完,当红处理）"; fi
+  s="$(printf '%s\n' "$out" | grep -oE 'total: [0-9]+ passed, [0-9]+ failed' | tail -1)"
+  [[ -z "$s" ]] && s="$(printf '%s\n' "$out" | tail -1)"
+  names+=("$name"); rcs+=("$rc"); summaries+=("$s"); outs+=("$out")
+done
+
+fail=0
+line=""
+for i in "${!names[@]}"; do
+  [[ "${rcs[$i]}" -ne 0 ]] && fail=$((fail+1))
+  line+=" | ${names[$i]}: ${summaries[$i]:-?}"
+done
+
+if [[ -n "$uncovered" ]]; then
+  echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**,没扫 tests/ 与 track/templates/;只报不拦):"
+  echo "   $uncovered"
+fi
+if [[ -n "$orphans" ]]; then
+  echo "🔴 有判据套件不在 SUITES 里(写了没人跑 = 从此静默腐烂):$orphans"
+  fail=$((fail+1))
+fi
+if [[ $fail -eq 0 ]]; then
+  echo "✅ 工具链防锈通过${line}"
+  exit 0
+fi
+echo "❌ 工具链防锈失败(外部漂移/环境升级?先跑本地判据复现):"
+for i in "${!names[@]}"; do
+  [[ "${rcs[$i]}" -eq 0 ]] && continue
+  echo "--- ${names[$i]} (rc=${rcs[$i]}) ---"
+  printf '%s\n' "${outs[$i]}" | grep -E 'FAIL|total' | tail -20
+done
+exit 1

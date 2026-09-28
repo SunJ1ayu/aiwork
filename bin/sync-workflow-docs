@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# 把 Git 内的工作流唯一源部署到 Claude Code 使用现场。
+set -uo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: sync-workflow-docs [--check] [--force] [--target-root DIR]
+
+Default installs missing managed files, but refuses to overwrite drifted files.
+--check only compares. --force explicitly replaces drifted regular files.
+Only the fixed workflow manifest is touched; settings, memory and credentials
+are outside that manifest.
+EOF
+}
+
+CHECK=0; FORCE=0; TARGET_ROOT="/root"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --check) CHECK=1; shift ;;
+    --force) FORCE=1; shift ;;
+    --target-root)
+      TARGET_ROOT="${2:-}"; [[ -n "$TARGET_ROOT" ]] || { usage; exit 2; }
+      shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "sync-workflow-docs: unknown argument: $1" >&2; usage; exit 2 ;;
+  esac
+done
+[[ "$CHECK" -eq 0 || "$FORCE" -eq 0 ]] || {
+  echo "sync-workflow-docs: --check and --force are mutually exclusive" >&2; exit 2; }
+[[ -d "$TARGET_ROOT" && ! -L "$TARGET_ROOT" ]] || {
+  echo "sync-workflow-docs: target root must be a real directory: $TARGET_ROOT" >&2; exit 2; }
+TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd -P)" || exit 2
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+SOURCE="$ROOT/workflow"
+MAPPINGS=(
+  "CLAUDE.md|CLAUDE.md"
+  "skills/track/SKILL.md|.claude/skills/track/SKILL.md"
+  "skills/panel/SKILL.md|.claude/skills/panel/SKILL.md"
+  "skills/panel/references/legs.md|.claude/skills/panel/references/legs.md"
+  "skills/delegate/SKILL.md|.claude/skills/delegate/SKILL.md"
+)
+
+has_symlink_component() {  # has_symlink_component <relative destination>
+  local rel="$1" here="$TARGET_ROOT" part
+  IFS='/' read -r -a parts <<< "$rel"
+  for part in "${parts[@]}"; do
+    here="$here/$part"
+    [[ -L "$here" ]] && return 0
+  done
+  return 1
+}
+
+# First pass is read-only and all-or-nothing: one unsafe/unexpected target means
+# no managed file is changed during this invocation.
+blocked=0; drift=0
+for spec in "${MAPPINGS[@]}"; do
+  src_rel="${spec%%|*}"; dst_rel="${spec#*|}"
+  src="$SOURCE/$src_rel"; dst="$TARGET_ROOT/$dst_rel"
+  if [[ ! -f "$src" || -L "$src" ]]; then
+    echo "sync-workflow-docs: invalid canonical source: $src" >&2; blocked=1; continue
+  fi
+  if has_symlink_component "$dst_rel"; then
+    echo "sync-workflow-docs: refusing symlinked managed path: $dst" >&2; blocked=1; continue
+  fi
+  if [[ ! -e "$dst" ]]; then
+    echo "MISSING $dst_rel"; drift=1
+  elif [[ ! -f "$dst" ]]; then
+    echo "sync-workflow-docs: managed target is not a regular file: $dst" >&2; blocked=1
+  elif ! cmp -s "$src" "$dst"; then
+    echo "DRIFT $dst_rel"; drift=1
+    if [[ "$CHECK" -eq 0 && "$FORCE" -eq 0 ]]; then
+      echo "sync-workflow-docs: refusing to overwrite drift; inspect it, then rerun with --force" >&2
+      blocked=1
+    fi
+  fi
+done
+[[ "$blocked" -eq 0 ]] || exit 1
+if [[ "$CHECK" -eq 1 ]]; then [[ "$drift" -eq 0 ]]; exit $?; fi
+
+for spec in "${MAPPINGS[@]}"; do
+  src_rel="${spec%%|*}"; dst_rel="${spec#*|}"
+  src="$SOURCE/$src_rel"; dst="$TARGET_ROOT/$dst_rel"
+  cmp -s "$src" "$dst" 2>/dev/null && continue
+  parent="$(dirname "$dst")"; mkdir -p "$parent" || exit 1
+  tmp="$parent/.workflow-sync.$$.tmp"
+  if ! install -m 0644 "$src" "$tmp" || ! mv -fT -- "$tmp" "$dst"; then
+    rm -f "$tmp"; exit 1
+  fi
+  echo "SYNCED $dst_rel"
+done

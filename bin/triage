@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""triage —— 开 track 之前的秒级分诊(TypeSafe / Jev)。
+
+## 这东西是什么,不是什么
+
+**是**:把一单的情况喂给一个不生成文字的模型,0.5 秒拿回几个带概率的读数
+(动没动数据/权限、动没动判据、有没有未验证前提、交付物在不在仓外、下一步该做什么),
+贴进 decision.json 当**提醒**。三次调用不到万分之一美分。
+
+**不是**:判据、闸、裁决、第五条评审腿。
+
+🔴 **它永远不许进判据路径**。我们有条硬规矩:判据自己不许有外网出口 ——
+2026-08-10 那次一上午烧光 kimi 额度就是判据真去叫模型造成的,后来立了
+「跑判据的进程断网」的机械不变量。api.typesafe.ai 是外网。
+所以本脚本:① 显式拒绝在判据环境下运行 ② **退出码永远 0**(除了用法/配置错),
+③ 每次输出都印一行"建议不是裁决"。想让它 BLOCK 什么东西,那是设计错了。
+
+**它看不见仓库**,只看见你喂给它的那段话。所以它说的"没有未验证前提"只等于
+"你写的这段话里看不出未验证前提",不等于"仓里没有"。
+
+## 用法
+
+  triage <文件>                 # 一段描述这一单的话(proposal 那种)
+  triage -                      # 从 stdin 读
+  triage --track <track 目录>   # 自动拼 proposal.md + design.md
+  triage ... --json             # 机器读;不加就是给人看的
+
+key 放 /root/.config/aiwork/typesafe.env(0600,`export TYPESAFE_API_KEY=...`)。
+问题措辞和阈值全在 /root/aiwork/triage/questions.json —— 改那里,别改这里。
+"""
+import json, os, re, sys, urllib.error, urllib.request
+from pathlib import Path
+
+QUESTIONS_FILE = Path("/root/aiwork/triage/questions.json")
+ENV_FILE = Path("/root/.config/aiwork/typesafe.env")
+API = "https://api.typesafe.ai/v1/systemone"
+DISCLAIMER = "⚠️  以上是建议不是裁决,而且它只看见你喂的这段话、看不见仓库。拍板的是主 agent。"
+
+
+def die(msg, code=2):
+    print(f"triage: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def refuse_if_judging():
+    """判据环境里拒绝启动 —— 断网不变量已经会让请求失败,但失败得像"网络抖动",
+    那正是最容易被顺手加个 retry 绕过去的形状。所以这里先说清楚再退。"""
+    for var in ("AIWORK_JUDGING", "DS_JUDGING", "NO_EGRESS"):
+        if os.environ.get(var):
+            die(f"检测到判据环境({var}) —— triage 不许在判据里跑(判据不许有外网出口)。", 3)
+
+
+def load_key():
+    if not ENV_FILE.exists():
+        die(f"没有 {ENV_FILE};里面要有一行 export TYPESAFE_API_KEY=...")
+    m = re.search(r"TYPESAFE_API_KEY=['\"]?([^'\"\n]+)", ENV_FILE.read_text())
+    key = (m.group(1).strip() if m else "")
+    if not key:
+        die(f"{ENV_FILE} 里没读出 TYPESAFE_API_KEY")
+    return key
+
+
+def read_state(args):
+    if args.get("track"):
+        d = Path(args["track"])
+        parts = []
+        for name in ("proposal.md", "design.md"):
+            f = d / name
+            if f.exists():
+                parts.append(f"=== {name} ===\n{f.read_text().strip()}")
+        if not parts:
+            die(f"{d} 里没有 proposal.md / design.md")
+        return "\n\n".join(parts)
+    src = args["file"]
+    return sys.stdin.read() if src == "-" else Path(src).read_text()
+
+
+def ask(key, model, state, questions):
+    body = {"model": model, "state": state,
+            "questions": {k: {kk: vv for kk, vv in q.items() if kk != "why"}
+                          for k, q in questions.items()}}
+    req = urllib.request.Request(
+        API, data=json.dumps(body).encode(),
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        die(f"HTTP {e.code} —— {e.read()[:300].decode('utf-8', 'replace')}")
+    except urllib.error.URLError as e:
+        die(f"连不上 api.typesafe.ai:{e.reason}")
+
+
+def main():
+    refuse_if_judging()
+    argv = sys.argv[1:]
+    args = {"file": None, "track": None, "json": False}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--json":
+            args["json"] = True
+        elif a == "--track":
+            i += 1
+            args["track"] = argv[i] if i < len(argv) else die("--track 后面要跟目录")
+        elif a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        else:
+            args["file"] = a
+        i += 1
+    if not args["file"] and not args["track"]:
+        print(__doc__)
+        return 2
+
+    cfg = json.loads(QUESTIONS_FILE.read_text())
+    state = read_state(args).strip()
+    if not state:
+        die("state 是空的")
+    res = ask(load_key(), cfg["model"], state, cfg["questions"])
+    answers = res.get("answers", {})
+
+    th = cfg["thresholds"]
+    flags = []
+    def over(group):
+        return [(k, answers.get(k, {}).get("noul"))
+                for k, lim in th[group].items()
+                if isinstance(answers.get(k, {}).get("noul"), (int, float))
+                and answers[k]["noul"] >= lim]
+    hi_impact, hi_unc, echo = over("high_impact_if_any_over"), over("high_uncertainty_if_over"), over("runtime_echo_required_if_any_over")
+    if hi_impact:
+        flags.append(("impact-risk 看着像 high", hi_impact,
+                      "新写口/权限/auth/钱/数据一致性默认 high(外审预算 2);动了判卷面还要闸① 逐行读判据 diff"))
+    if hi_unc:
+        flags.append(("design-uncertainty 看着像 high", hi_unc,
+                      "该先 premise attack / 双出 / panel-explore,别直接实现"))
+    if echo:
+        flags.append(("交付物可能跑在仓外", echo,
+                      "『做完了』的标准是运行中的目标自己回显版本,盘上和运行时对不上 = BLOCK"))
+
+    if args["json"]:
+        print(json.dumps({"model": res.get("model"), "answers": answers,
+                          "flags": [{"say": s, "hits": dict(h), "because": b} for s, h, b in flags],
+                          "usage": res.get("usage"), "disclaimer": DISCLAIMER},
+                         ensure_ascii=False, indent=2))
+        return 0
+
+    print(f"\n── triage ({res.get('model')}) ──")
+    for k, q in cfg["questions"].items():
+        a = answers.get(k, {})
+        if a.get("type") == "noul":
+            v = a.get("noul", 0)
+            bar = "█" * round(v * 20)
+            print(f"  {v:>5.2f} {bar:<20} {k}")
+        elif a.get("type") == "choice":
+            print(f"  → {k}: {a.get('choice')} (confidence {a.get('confidence')})")
+    if flags:
+        print("\n  值得再想一遍:")
+        for say, hits, because in flags:
+            print(f"   • {say} —— {', '.join(f'{k}={v:.2f}' for k, v in hits)}")
+            print(f"     {because}")
+    else:
+        print("\n  没有触发任何阈值。")
+    u = res.get("usage", {})
+    print(f"\n  用量 {u.get('input_tokens')} in / {u.get('output_tokens')} out")
+    print(f"  {DISCLAIMER}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

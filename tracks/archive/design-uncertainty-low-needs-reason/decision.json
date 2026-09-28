@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "track": "design-uncertainty-low-needs-reason",
+  "impact": {
+    "level": "standard",
+    "factors": []
+  },
+  "design": {
+    "uncertainty": "low",
+    "premise_attack": {
+      "status": "not_required",
+      "evidence": [
+        "design.md"
+      ]
+    }
+  },
+  "execution_plan": {
+    "adapter": "main",
+    "model": "claude-opus-5"
+  },
+  "outcome": {
+    "verdict": "BLOCK"
+  }
+}

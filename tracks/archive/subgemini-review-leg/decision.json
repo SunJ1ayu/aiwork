@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "subgemini-review-leg",
+  "impact": {
+    "level": "high",
+    "factors": [
+      "auth",
+      "judging_control",
+      "new_write_surface",
+      "sensitive_data"
+    ]
+  },
+  "design": {
+    "uncertainty": "low",
+    "premise_attack": {
+      "status": "not_required",
+      "evidence": []
+    }
+  },
+  "execution_plan": {
+    "adapter": "main",
+    "model": "claude-opus-5"
+  },
+  "outcome": {
+    "verdict": "PASS"
+  }
+}

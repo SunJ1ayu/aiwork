@@ -1,0 +1,15 @@
+# Runtime output and local credentials
+logs/
+out/
+worktrees/
+refs/
+attack-logs/
+etc/
+mimo-home/
+kimi-review-home/
+.mimocode/
+.mutation-state/
+__pycache__/
+*.pyc
+*.raw
+node_modules/

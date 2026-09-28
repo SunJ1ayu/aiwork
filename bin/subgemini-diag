@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# subgemini-diag —— 挖出 agy 到底被拒了什么工具 / 什么命令。
+#
+# 存在的理由:agy 在 headless 下的失败信息是
+#   「a tool required the "command" permission ... was auto-denied」
+# —— **它从不说是哪个命令**。而修法完全取决于那个命令是什么。
+# 2026-08-26 建这条腿时,这个排查动作手工重复了五次,每次都要:
+# 找最新会话 db → 连 -wal 一起复制(只读模式读不到还在 WAL 里的数据,
+# 这一步漏了就会得到"没找到失败记录"的假结论,我栽过一次)→ 翻 steps 表的 blob。
+#
+# 用法: subgemini-diag [评审home]     (默认 $HOME/.cache/aiwork/agy-review-home)
+set -uo pipefail
+HOME_DIR="${1:-${AGY_REVIEW_HOME:-$HOME/.cache/aiwork/agy-review-home}}"
+CONV="$HOME_DIR/.gemini/antigravity-cli/conversations"
+[ -d "$CONV" ] || { echo "subgemini-diag: 找不到会话目录 $CONV" >&2; exit 2; }
+BASE="$(ls -t "$CONV" 2>/dev/null | grep '\.db$' | head -1)"
+[ -n "$BASE" ] || { echo "subgemini-diag: $CONV 里没有会话数据库" >&2; exit 2; }
+T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+# 🔴 必须把 -wal / -shm 一起复制:刚跑完的那轮多半还没 checkpoint 进主库,
+#    只拷 .db 会得到「没找到失败记录」这个**假结论**。
+cp "$CONV/$BASE"* "$T/" 2>/dev/null
+echo "会话: $BASE"
+python3 - "$T/$BASE" <<'PY'
+import sqlite3,sys,re
+con=sqlite3.connect(sys.argv[1])   # 可写模式打开 ⇒ 合并 WAL
+cols=[c[1] for c in con.execute('PRAGMA table_info(steps)')]
+print(f"steps: {con.execute('SELECT COUNT(*) FROM steps').fetchone()[0]} 行")
+seen=set()
+def emit(tag,val):
+    k=tag+val
+    if k not in seen: seen.add(k); print(f"  {tag} {val}")
+for r in con.execute('SELECT * FROM steps'):
+    for k,v in zip(cols,r):
+        if not isinstance(v,(bytes,bytearray)): continue
+        t=v.decode('utf-8','replace')
+        for m in re.findall(r'permission check failed for command "([^"]{0,150})"',t): emit("🔴 被拒命令:",m)
+        for m in re.findall(r'requires? the "(\w+)" permission',t):                   emit("🔴 被拒工具:",m)
+        for m in re.findall(r'"CommandLine":"([^"]{0,150})"',t):                      emit("·  想跑:",m)
+if not seen: print("  (没有 permission 失败记录 —— 这轮多半是别的原因)")
+PY

@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# subkimi - Kimi (Moonshot) review employee on an AGENT base: kimi-code CLI
+# run headless (`kimi -p`). Like subglm-agent/subdeepseek-agent, the model
+# explores the repo itself (Read/Glob/Grep + Bash), so no blind reviews and no
+# manual INCLUDE feeding. Review runs in a writable disposable clone while the
+# original repository stays physically read-only.
+#
+#   review -> kimi -p, review-only guard, verdict-gated. Works now.
+#   fix    -> NOT supported here on purpose: panel reviewers stay review-only.
+#             Use `submimo fix` (mimo) for fix work.
+#
+# Isolation: KIMI_CODE_HOME points at a dedicated review home whose config
+# carries a PreToolUse guard hook. Read/ReadMediaFile/Glob/Grep/todo-goal and
+# Bash are allowed; Bash writes only the disposable clone. The original repo is
+# separately protected by ro-repo-exec. Write/Edit/Agent/AgentSwarm/Skill,
+# Cron*/FetchURL/WebSearch, and unknown tools are blocked. The user's global
+# ~/.kimi-code is never touched. Auth is the
+# Kimi membership OAuth token, shared via a credentials symlink in the review
+# home. NOTE: kimi-code's hook protocol is fail-open (non-0/2 exit = allow),
+# so this wrapper preflights the guard (must deny a canary Write with rc=2)
+# and refuses to dispatch if the guard is broken or node is missing.
+
+
+# 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
+_GATE="$(dirname "$0")/_my-review-gate.sh"
+[ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
+[ -f "$_GATE" ] || { echo "subkimi: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_GATE"
+gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
+
+# 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
+# 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
+# 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
+_RHG="$(dirname "$0")/_review-home-guard.sh"
+[ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh   # 脚本被拷到别处跑时的家
+[ -f "$_RHG" ] || { echo "subkimi: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
+. "$_RHG"
+
+# 运行期 home **必须在被评审的仓外面**(track repo-write-audit,2026-08-19 第二轮)。
+# 原默认是 `/root/aiwork/kimi-review-home` —— 仓内。腿进只读仓之后 kimi 的 logger
+# 当场 EROFS、腿起不来。另两条腿的运行期目录早就在 ~/.cache/aiwork/ 下,
+# kimi 是唯一的例外,这里把它拉齐。仓内那份继续当**种子**(见下面的同步)。
+REVIEW_HOME="${KIMI_REVIEW_HOME:-$HOME/.cache/aiwork/kimi-review-home}"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  subkimi review TASK_FILE LOG_FILE [REPO_DIR]
+  subkimi fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
+
+Runs Kimi (Moonshot kimi-code CLI, headless) as an isolated review sub-agent.
+The reviewer reads and tests a disposable clone; the source repo remains
+read-only and direct write tools stay blocked in an isolated KIMI_CODE_HOME.
+
+Environment:
+  KIMI_MODEL        optional, kimi-code/<model-id> (default from bin/kimi-model)
+                    (the seed config declares 1M context + effort=max for ANY model;
+                    check the server's /models before switching)
+  KIMI_TIMEOUT      optional, seconds before timeout (default 1500; 07-27 取证:
+                    900 不够,时间花在长推理而非自读仓库)
+  KIMI_REVIEW_HOME  optional, default $HOME/.cache/aiwork/kimi-review-home
+                    (仓内的 kimi-review-home/ 只是**种子**,不是运行期 home ——
+                     运行期 home 落在被评审的仓里会被拒跑,见 _review-home-guard.sh)
+
+Examples:
+  subkimi review /root/aiwork/tasks/001-review.md /root/aiwork/logs/001-review.log /path/to/repo
+EOF
+}
+
+die() { echo "subkimi: $*" >&2; exit 1; }
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
+if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
+
+MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
+SOURCE_REPO="$REPO_DIR"
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ "$MODE" == "review" ]]; then
+  _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
+    || die "review needs a Git worktree with HEAD: $SOURCE_REPO"
+  SOURCE_REPO="$(cd "$_SOURCE_TOP" && pwd -P)" || die "cannot resolve source repo: $_SOURCE_TOP"
+  REPO_DIR="$SOURCE_REPO"
+fi
+
+
+# 反锚定闸(2026-08-06 补):第四条腿也要接 —— 上一版只接了三条躯干,
+# 而 subkimi 是**默认开着**的那条,直调它就能跳过"先写自己的一遍"。
+# 四审两条腿把这条顶成 HIGH:目标说的是"每一条评审路径",实现漏了一条 = 实质落差。
+my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subkimi" || exit 1
+
+# 自省开关:让 wrapper 自己把解析结果打出来,判据据此断言(**查工件不查自述**,
+# 别让判据去 grep 源码里的默认值 —— 那查的是我写了什么,不是它算出了什么)。
+# 🔴 **必须排在种子同步之前**:这是个「问一句默认路径是什么」的查询,查询不该改东西。
+#    排在同步之后时,判据每问一次就触发一次首次同步 —— 运行期 home 不存在时那是
+#    `cp -a` 整份种子(实测 100MB,**含那条指向业主真凭证的符号链接**),
+#    等于judging 每跑一遍就在临时目录里重建一次它刚消灭掉的通道。
+#    2026-08-25 三条评审腿里两条独立指出,探针实测。REVIEW_HOME 在本文件顶部就解析完了,
+#    这里不依赖同步的任何结果。
+if [[ -n "${REVIEW_PRINT_HOME:-}" ]]; then printf '%s\n' "$REVIEW_HOME"; exit 0; fi
+
+# 模型选择只有一个源；CLI alias 与 API model ID 均从它派生。
+MODEL="${KIMI_MODEL:-$(cat "$BIN_DIR/kimi-model")}" || die 'cannot read bin/kimi-model'
+[[ "$MODEL" =~ ^kimi-code/[A-Za-z0-9._-]+$ ]] || die 'model must be one kimi-code/<model-id>'
+
+# ── 运行期 home:种子同步 + 位置检查(track repo-write-audit,2026-08-19 第二轮)──
+# 仓内的 `kimi-review-home/` 继续留在版本控制里当**种子**:config.toml 和
+# hooks/guard.mjs 是判卷防线的一部分,必须可审计。每次跑都从种子覆盖到运行期 home
+# —— 不覆盖的话,改了仓内那份守卫**不生效**,又是"同一件事写两处、只更新一处"。
+# 只在用默认 home 时同步:显式指定 KIMI_REVIEW_HOME 的调用方自己负责(判据夹具靠这个)。
+KIMI_SEED_HOME="$BIN_DIR/../kimi-review-home"
+if [[ -z "${KIMI_REVIEW_HOME:-}" && -d "$KIMI_SEED_HOME" ]]; then
+  # 首次:把旧 home 的运行期状态(sessions / oauth / device_id)整份搬过来,**不删旧的**
+  if [[ ! -d "$REVIEW_HOME" ]]; then
+    mkdir -p "$(dirname "$REVIEW_HOME")"
+    cp -a "$KIMI_SEED_HOME" "$REVIEW_HOME" 2>/dev/null || true
+  fi
+  mkdir -p "$REVIEW_HOME/hooks"
+  for _h in "$KIMI_SEED_HOME"/hooks/*; do
+    [[ -f "$_h" ]] && cp -f "$_h" "$REVIEW_HOME/hooks/" 2>/dev/null || true
+  done
+  # hook 命令里的路径也得跟着搬(第二轮四审 subdeepseek F2):种子里写的是
+  # `node /root/aiwork/kimi-review-home/hooks/guard.mjs` —— 仓内那一份。不改的话
+  # 上面辛辛苦苦同步过来的 guard 副本**是死代码**,真正被执行的还是仓内那份,
+  # 而仓在只读挂载下(还随时可能被换掉),"运行期 home 自包含"就是句假话。
+  # 老账:同一件事写两处、只更新一处。
+  KIMI_RUNTIME_HOME="$REVIEW_HOME" python3 - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || die 'cannot render review config'
+import os, re, sys
+home = os.environ["KIMI_RUNTIME_HOME"].rstrip("/")
+model = sys.argv[2]
+p = home + "/config.toml"
+s = open(sys.argv[1]).read()
+s = s.replace("__KIMI_MODEL_ALIAS__", model).replace("__KIMI_MODEL_ID__", model.split("/", 1)[1])
+s2 = re.sub(r'(command\s*=\s*"node )[^"]*/hooks/guard\.mjs"',
+            lambda m: m.group(1) + home + '/hooks/guard.mjs"', s)
+tmp = p + ".tmp." + str(os.getpid())
+with open(tmp, "w") as fh:
+    fh.write(s2)
+os.replace(tmp, p)      # 原子改名:别让并发的另一条腿读到半截 config
+PYHOOK
+fi
+
+# 落在被评审的仓里 ⇒ **拒跑并说清楚**(共享实现,三条腿同一句话)。
+# 这里原本是 kimi 自己的一份内联检查 —— 第二轮四审点名:另两条腿的
+# OPENCODE_REVIEW_HOME / MIMO_REVIEW_HOME 一样指得进仓里,而只有 kimi 有这道检查。
+review_home_guard kimi "$REVIEW_HOME" "$SOURCE_REPO" KIMI_REVIEW_HOME || exit 1
+
+# ── 原仓只读 + review 副本可写 ─────────────────────────────────────────────
+# Kimi 的 cwd 是独立 clone；mount namespace 只保护 SOURCE_REPO。腿可在 clone
+# 跑 tests/build，但原仓写口物理消失 —— 08-18 我发现
+# `git diff --output=<path>` 绕得过任何命令行白名单,而"把 bash 整个关掉"那条路
+# 已被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
+# **一个写口都不开。** 腿日志是父 shell 重定向写的(`>> "$LOG_FILE"` / `| tee -a`),
+# fd 在**父 namespace** 就打开了,挂载管不着已经打开的 fd —— 探针实测过。
+# 第一版开了 `--rw <日志目录>`,那个写口不但多余,还带来两条真 bug:
+# `dirname` 相对调用方 cwd 解析 ⇒ 从仓根裸文件名调用时整仓开闸(安静失效);
+# 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。
+# fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
+
+if [[ "$MODE" == "fix" ]]; then
+  die "fix is not supported: panel reviewers are review-only. Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
+fi
+[[ "$MODE" == "review" ]] || { usage; exit 2; }
+
+[[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+[[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
+command -v kimi >/dev/null 2>&1 || die "kimi CLI not found on PATH (npm i -g @moonshot-ai/kimi-code)"
+command -v node >/dev/null 2>&1 || die "node not found on PATH (guard hook needs it; without it the hook fails OPEN)"
+
+GUARD="$REVIEW_HOME/hooks/guard.mjs"
+[[ -f "$REVIEW_HOME/config.toml" ]] || die "review home config missing: $REVIEW_HOME/config.toml"
+[[ -f "$GUARD" ]] || die "guard hook missing: $GUARD"
+[[ -e "$REVIEW_HOME/credentials/kimi-code.json" ]] || die "no Kimi credentials in $REVIEW_HOME/credentials (run 'kimi login' once, then symlink ~/.kimi-code/credentials)"
+
+# Preflight the guard: it must DENY a canary Write with rc=2. kimi-code hooks
+# fail open on any other exit code, so a broken guard means no sandbox at all.
+set +e
+echo '{"tool_name":"Write","tool_input":{"path":"canary"}}' | node "$GUARD" >/dev/null 2>&1
+GUARD_RC=$?
+set -e
+[[ $GUARD_RC -eq 2 ]] || die "guard preflight failed (rc=$GUARD_RC, want 2) - refusing to dispatch with a fail-open sandbox"
+
+_RW="$BIN_DIR/_review-workspace.sh"
+[ -f "$_RW" ] || _RW=/root/aiwork/bin/_review-workspace.sh
+[ -f "$_RW" ] || die '找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)'
+# shellcheck source=_review-workspace.sh
+. "$_RW"
+if ! review_workspace_prepare "$SOURCE_REPO" subkimi; then
+  die 'review workspace 准备失败 ⇒ 模型未启动'
+fi
+REVIEW_WORKSPACE_ACTIVE=1
+SOURCE_REPO="$REVIEW_SOURCE_REPO"
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+REPO_DIR="$(review_workspace_repo)" || exit 78
+review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
+
+_subkimi_cleanup() {
+  local rc=$?
+  if [[ "${REVIEW_WORKSPACE_ACTIVE:-0}" -eq 1 ]]; then
+    review_workspace_cleanup \
+      || echo "subkimi: 警告:review workspace 清理失败:${REVIEW_WORKSPACE_DIR:-?}" >&2
+  fi
+  trap - EXIT
+  exit "$rc"
+}
+trap _subkimi_cleanup EXIT
+
+# Absolute log path: the agent runs with cwd = REPO_DIR.
+case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# 08-18~08-19 这里曾经有一整套 diff 注入(为了补偿"把 bash 关掉"造成的失明):
+# 按 argv 预算截断、基线校验、工件排除。业主推翻了那个方向 —— 评审腿没有
+# "改判据让自己及格"的动机(那是执行腿的威胁模型),而关 bash 的代价是
+# E2BIG(这条腿 rc=126 直接起不来)、`git diff | head -c N` 在本文件的
+# `set -euo pipefail` 下让 git 吃 SIGPIPE **静默暴毙 rc=141 一个字不留**。
+# 现在腿在独立副本里自己看 diff 并跑本地检查；原仓由只读挂载承重。
+PROMPT="You are an independent code reviewer running inside a disposable writable repository snapshot.
+Explore the repository yourself with the tools you have
+(Read, Glob, Grep, and Bash for local tests, lint, build, and diagnostics).
+Do not take the task's claims at face value -
+verify them against the actual files. Some tools are intentionally blocked by
+the harness; if a call is denied, work with the allowed tools instead of
+retrying it.
+
+Command outputs and caches may be written inside this disposable snapshot, but
+do not intentionally edit source files. Do not push, merge, install dependencies,
+run migrations, access production systems, or change credentials.
+
+Report findings with file:line references and a severity each.
+
+Write the verdict line AS SOON AS you have enough to judge, immediately after
+your findings — do not save it for the end. You may keep analysing afterwards
+and restate the line at the end if your judgement changes; the last one counts.
+(This harness kills long reviews on a timeout. 2026-07-27: a run was cut off
+with its best finding already written out but no verdict line, so the whole
+review was discarded. Verdict first preserves that judgement as partial
+evidence; a timed-out review is still not eligible for coverage.)
+
+The verdict line must be exactly this form:
+Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
+
+--- REVIEW TASK ---
+$(cat "$TASK_FILE")"
+
+{
+  echo "# subkimi review log"
+  echo "time: $(date -Iseconds)"
+  echo "mode: review (agent base: kimi-code headless)"
+  echo "model: $MODEL"
+  echo "review_home: $REVIEW_HOME"
+  echo "repo: $REPO_DIR"
+  echo "source_repo: $SOURCE_REPO"
+  echo "task: $TASK_FILE"
+  echo
+} > "$LOG_FILE"
+
+RC=0
+(
+  cd "$REPO_DIR"
+  KIMI_CODE_HOME="$REVIEW_HOME" \
+  KIMI_CODE_NO_AUTO_UPDATE=1 \
+    "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" kimi -m "$MODEL" -p "$PROMPT"
+) >> "$LOG_FILE" 2>&1 || RC=$?
+
+# Verdict gate shares the contract normalizer with the terminal producer.  The
+# adapter publishes what it actually observed; it does not decide coverage.
+_RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
+[ -f "$_RR" ] || _RR=/root/aiwork/bin/_review_result.py
+[ -f "$_RR" ] || die "typed verdict normalizer missing"
+VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
+  || die "typed verdict normalization failed (log: $LOG_FILE)"
+
+# Timeout may preserve an early verdict as partial evidence, but it is never a
+# successful/coverage-eligible review.  Keep rc=124 and publish the atomic facts
+# before returning so the detached terminal producer cannot promote it later.
+if [[ $RC -eq 124 ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    timed_out partial timeout "$VERDICT" || exit 78
+  if [[ "$VERDICT" == "UNKNOWN" ]]; then
+    echo "subkimi: timed out after ${TIMEOUT_SECONDS}s with no verdict (log: $LOG_FILE)" >&2
+  else
+    echo "subkimi: timed out after ${TIMEOUT_SECONDS}s; preserving verdict=$VERDICT as partial evidence, not coverage (log: $LOG_FILE)" >&2
+  fi
+  exit 124
+fi
+if [[ $RC -ne 0 ]]; then
+  # kimi 把供应商错误打在自己的输出里(进了腿日志),不在我们的 stderr;终端产物只按我们的
+  # 诊断归类(不扫模型正文)。09-09 "5-hour usage limit" 因此被记成 runtime。只抄 CLI 自己的错误行。
+  { grep -a -E '^error: failed to run prompt:' "$LOG_FILE" || true; } | tail -n 3 >&2
+fi
+[[ $RC -eq 0 ]] || die "kimi exited rc=$RC (log: $LOG_FILE)"
+
+[[ "$VERDICT" != "UNKNOWN" ]] \
+  || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+  exited complete "" "$VERDICT" || exit 78
+
+exit 0
