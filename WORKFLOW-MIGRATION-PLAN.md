@@ -1,6 +1,6 @@
 # aiwork 工作流改造 · 第 4 版(最小实施方案)
 
-> 状态:待 GPT 复核。日期:2026-09-28。
+> 状态:待 GPT 复核。日期:2026-09-28。第 4.1 版:写入业主对第 7 节两项的决定,补 high 的第二家族评审入口。
 > 由第 3 版按 GPT"第一性原理收敛"的意见缩减而来;第 3 版全文见本文件的上一个 commit(`087cabf`)。
 > ⚠️ 本文件目前只在 GitHub 镜像仓库里,本机 `/root/aiwork` 还没有。同步镜像前先把它拉回本机。
 
@@ -23,7 +23,7 @@
 | 环节 | 由谁做 |
 |---|---|
 | 写代码(可自动放行) | **只有**云端 Claude,用机器账号推送。本机 agent 暂不当 Builder |
-| 评审 | 本机评审腿先只接 `subcodex`,通过 `aiwork-review` App 发结构化评审;这个 App **没有推代码权限** |
+| 评审 | 本机评审腿通过 `aiwork-review` App 发结构化评审(这个 App **没有推代码权限**)。standard 只用 `subcodex`;high 另加一条非 OpenAI、非 Anthropic 家族的第二评审腿(见 G6) |
 | 判定 | `aiwork-gate`:代码随 OpenDesign 的 main 固定,只读 GitHub API,不执行 PR 代码 |
 | 合并 | gate 为 success 时 GitHub 自动合并;UNKNOWN、判卷面、high、有争议的 PR 需业主在当前 commit 上点 Approve |
 | 发版 | 业主触发的 release workflow,只在 main 上跑,需业主在 GitHub 上批准后才执行 |
@@ -41,7 +41,7 @@
 | G3 | **评审**:需要一条评审,由 `aiwork-review` 发出、针对当前 head、结论 PASS、完整、上下文非空、家族与作者家族不同 | P2 | 未审就合、审的是旧代码(D13)、自己审自己、没看代码就给 PASS | 独立评审变成可有可无 |
 | G4 | **作者**:PR 分支上的每次推送都来自机器账号 → 作者是 Claude;否则判为 UNKNOWN → 需业主批准,且当前 head 上仍须有至少一条 PASS | P3 | reviewer、本机 agent 或泄露的凭证追加未审 commit,并沿用之前的评审(PR #6 原样) | 混合作者的 PR 可以绕过评审 |
 | G5 | 当前 head 上**任何**一条 `aiwork-review` 给出 BLOCK → failure,除非业主批准 | P2 | 一条 BLOCK 被另一条 PASS 盖过 | 挑一个 PASS 就能过 |
-| G6 | **high 路径**(策略文件列出)→ 两个不同非作者家族 PASS + 业主批准 | P2 | 高风险改动只有一家审过 | 高风险和普通改动同等放行(沿用现行 high = 2) |
+| G6 | **high 路径**(策略文件列出)→ 两个不同的非 Builder 家族 PASS(都针对当前 head)+ 业主批准。**业主批准是风险决策,不能代替第二次技术审查**:没有第二家合格结论就不放行 | P2 | 高风险改动只有一家审过 | 高风险和普通改动同等放行(沿用现行 high = 2) |
 | G7 | **人工例外** = SunJ1ayu 在**当前 head** 上的 Approve;可豁免 G2 / G4 / G5,**不能豁免 G1(CI)** | P3 | 旧的批准被沿用到新代码上 | UNKNOWN、判卷面、争议将永远卡住(这是唯一的出口) |
 | G8 | **失败即拒**:API 报错、分页不全、限流、活动记录读不到 → failure | 全部 | 缺数据被当成通过 | 数据缺失时误放行 |
 | M1 | **gate 运行方式**:由 `pull_request_target`(opened / synchronize / reopened / labeled)与 `workflow_run`(CI 完成)触发;只用 main 上的 gate 代码(放在 OpenDesign 的 `.github/aiwork-gate/`),不 checkout PR 代码;同一 PR 取消旧的运行,只保留最新一次;gate 私钥放在只允许 main 使用的 Environment secret | P3 | Builder 在 PR 里改 gate,或借 PR 的 workflow 伪造 gate 检查 | gate 可以被 PR 自己改写 |
@@ -75,19 +75,11 @@
 
 ### 阶段 C:最小 gate(先只报不拦,再拦截)
 
-- 交付:G1–G8、M1;`.aiwork/policy.yml`(判卷面清单、high 路径);`bin/review-pr <PR>`:取当前 head 快照 → 运行现有 `subcodex` 评审 → 以 `aiwork-review` 发出 → 加 recheck 标签。
+- 交付:G1–G8、M1;`.aiwork/policy.yml`(判卷面清单、high 路径);`bin/review-pr <PR> [--leg <腿>]`:取当前 head 快照 → 运行一条现有评审腿 → 以 `aiwork-review` 发出 → 加 recheck 标签。默认 `subcodex`;**high 用的第二家族入口**就是同一命令指定一条非 OpenAI、非 Anthropic 家族的现有腿(先固定一条,如 `subdeepseek`),不做多腿调度、轮换或健康管理。第二腿失败或结论不合格时 gate 保持 failure,由人决定重跑或换腿。
 - 先以 `aiwork-gate-shadow` 这个检查名只报不拦,再把必过检查从 `ci` 换成 `aiwork-gate`。用不同的名字,是为了避免切换时 neutral 被当作通过。
 - **验收**:第 5 节的对抗用例全部通过 + 第 4 节的 PR #6 端到端回放全部符合预期。
-- **删除**(拦截生效后):OpenDesign 停止新建 track。aiwork 中被取代的代码:
-  - `_review_delivery.py`:被 head SHA 绑定取代;
-  - `track-record` 的评审覆盖校验、`observations` 与 ledger:被 G3 / G5 取代,证据已在 GitHub 上;
-  - `panel-roster` 与 `.plan` / `.state` 重建:同上;
-  - `panel-slice`:从未计入覆盖;
-  - `delegate-codex` 的 worktree 管理:被分支 / PR 取代;
-  - `runlog`:被 CI 取代;
-  - `bin/track`、`track-guard`、`track-commit-msg`:被 PR 取代。
-  
-  **前提是这些代码已无其他调用方**,见第 7 节待定 1。每删一项留墓碑。
+- **停用**(拦截生效后):OpenDesign 停止新建 track,新任务一律走 PR + gate。
+- **不删除 aiwork 的 track 代码**:业主决定 aiwork 暂不迁 GitHub PR 流程,本机仍是准本,`bin/track`、`track-guard`、`track-record`、`runlog`、`panel-*` 等继续供 aiwork 自己使用。aiwork 的迁移与旧代码删除,等 OpenDesign 的 CI、身份和 gate 稳定后**单独规划**,不绑在这一轮。
 
 ### 阶段 D:QA(核心闭环稳定后)
 
@@ -155,7 +147,7 @@
 | 腿名册合并、三张配置表、通用 `project.yml`、多项目 | 只有 OpenDesign 一份 `policy.yml`;家族映射从 `_review_result.py` 生成 | 接入第二个项目时 |
 | 交付类型 none / deploy;回显"版本 + 构建 commit" | 只保留 OpenDesign 的 release workflow(产物天然来自 main 上的 commit) | 接入需要部署的项目时 |
 | 结论格式 v3 完整外壳 | 最小 JSON 块 | 接入第二种评审腿或 QA 时 |
-| 更多评审腿 | 只接 `subcodex` | 核心闭环稳定后,按需逐条接入 |
+| 更多评审腿、多腿调度 | standard 只接 `subcodex`;high 固定加一条第二家族腿 | 核心闭环稳定后,按需逐条接入 |
 | Pre-QA / 黑盒 QA | —— | 阶段 D |
 | OpenClaw 调度、健康与额度迁移、并行 | 现行 `panel-review` 照旧 | 阶段 E |
 | 迁到组织名下、谱系规则 | 业主已决定暂不做 | 阶段 E 复议 |
@@ -164,12 +156,11 @@
 
 ---
 
-## 7. 待业主决定
+## 7. 业主决定(2026-09-28)
 
-1. **aiwork 自己是否也改走 GitHub PR 流程?** 现在以本机 `/root/aiwork` 为准,GitHub 上只是无历史的镜像。
-   - 不迁:aiwork 自己还在用 track 那套代码,阶段 C 之后只能在 OpenDesign 停用,不能删除。
-   - 迁:aiwork 是私有仓库,GitHub Free 下 gate 只能做提示;要强制拦截需 GitHub Pro。
-2. **high 风险保留"两个家族 + 业主批准"(G6),还是简化为"一个家族 + 业主批准"?** 后者更省;前者沿用现行规则。
+1. **aiwork 暂不迁 GitHub PR 流程**。本机 `/root/aiwork` 继续作为准本,旧 track 代码保留供 aiwork 使用;OpenDesign 启用新流程后停止为它新建 track。aiwork 的迁移与旧代码删除,等 OpenDesign 的 CI、身份和 gate 稳定后单独规划。
+2. **high 保留"两个不同的非 Builder 家族评审 + 业主批准"**。业主批准是风险决策,不能替代第二次技术审查;阶段 C 补一个仅供 high 使用的最简第二家族评审入口(见阶段 C),没有第二家合格结论就不放行。
+3. **阶段 A 现在开始**:先完成 PR 自动 CI 和 main 分支规则,用真实 PR 验收,不等上面两项的后续工作。
 
 ---
 
