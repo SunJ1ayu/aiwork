@@ -65,6 +65,19 @@
 - 约定:PR 不改 VERSION,版本号改动走发版 PR。
 - **验收**:普通 PR 上 CI 自动出现;直推 main 被拒;测试失败时不能合并;发版 PR 能走通。
 - **废止**:PR 评论里自述测试结果的做法;OpenDesign 的新任务不再用 `runlog` 贴收据(CI 本身就是收据)。
+- **状态:已完成(2026-09-28),"发版 PR 能走通"一项待下次发版时补验。**
+  - CI:OpenDesign PR #7 引入 `.github/workflows/ci.yml`,在 PR 上逐轮修到全绿(`7aa496e`)。合并后 main 上的 push 运行(`3af3083`)也全绿。
+  - 分支规则:ruleset 24121895 已生效,内容为禁止删除和强推、必须走 PR、评审讨论须解决、`ci` 必过(限定 GitHub Actions 发出)、合并前须与 main 同步。
+  - 直推 main 被拒:用业主的管理员账号推一个空提交,返回 `GH013: Changes must be made through a pull request`,说明绕过名单为空。
+  - 红 CI 挡合并:探针 PR #8 只加一条故意失败的测试,CI 仅红在这一条,`mergeable_state` = `blocked`;验完已关闭、删除分支。
+  - 无出口守卫:在 GitHub runner 上以 root 运行可生效,e2e 在独立网络命名空间里跑。
+  - 发版 PR 能走通:**未验**。本轮没有待发的版本,下次发版时走发版 PR 补验。
+  - 过程中发现、已在 PR #7 里处理的环境差异:
+    - `web/package-lock.json` 的下载地址是腾讯云内网镜像,CI 里临时改从 npm 官方源装,integrity 逐包校验;
+    - 需要完整历史才能读到 `win-installer-0.98.8` 这个 tag;
+    - CI 上固定有 4 条测试不跑:python 里 Windows 专属 1 条、要活 gateway 的 ws 冒烟 1 条,e2e 里要活 gateway 的 2 条;
+    - 两条 e2e 的时序竞争(`settings_fvis`、`composer_zcode` ②),只加等待,断言不变。
+  - 未查清:`stage_history.e2e.mjs` 在 CI 上红过一次,之后都绿。现在红了会自动保留日志,再红时查。
 
 ### 阶段 B:身份分离 + 发版 workflow
 
