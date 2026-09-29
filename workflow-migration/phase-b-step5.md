@@ -116,7 +116,7 @@ gh-app-token orchestrator --grant
    GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git -C /root/aiwork-web push origin HEAD:refs/heads/probe/aiwork-sync-check
    GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git -C /root/aiwork-web push origin --delete probe/aiwork-sync-check
    ```
-2. OpenClaw 备份:照 OpenClaw 平时的方式手动触发一次,触发时屏蔽 `gh` 登录(`env -u GH_TOKEN GH_CONFIG_DIR="$(mktemp -d)" <触发备份的命令>`)。跑完核 lt-workspace 的 main 与本地 HEAD 一致(`git ls-remote`)。
+2. OpenClaw 备份:照 OpenClaw 平时的方式手动触发一次,触发时屏蔽 `gh` 登录(`env -u GH_TOKEN GH_CONFIG_DIR="$(mktemp -d)" <触发备份的命令>`)。跑完核 lt-workspace 的 main 与本地 HEAD 一致:`git ls-remote` 要**带上 sync 令牌**(同第 1 条的凭证助手写法,用 `git -c credential.helper=...`);lt-workspace 是私有仓库,不带身份访问时 GitHub 一律回 `Repository not found`,那不代表权限有问题。
 3. GitHub-Watch:同样屏蔽 `gh` 登录后手动跑一次,应拿到三个仓库的最新 Release。
 4. orchestrator 读得到、写不了:
    ```sh
