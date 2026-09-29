@@ -34,7 +34,7 @@
 
 | 编号 | 规则 / 模块 | 证明 | 防的具体误放行 | 删掉会怎样 |
 |---|---|---|---|---|
-| R1 | **分支规则**:main 禁止直推和强推、必须走 PR、合并前必须与 main 同步;必过检查只有 `aiwork-gate`,并限定只认 `aiwork-gate` App 发出的结果 | P1 P3 | 发版提交直推 main(`ad8ce62` 等);PR #6 修复后未审即合并 | 任何有写权限的身份都能绕过全部检查 |
+| R1 | **分支规则**:main 禁止直推和强推、必须走 PR、合并前必须与 main 同步;必过检查是 `aiwork-gate`(限定只认 `aiwork-gate` App 发出的结果)加保险丝 `aiwork-gate/fuse`(限定 GitHub Actions;App 私钥坏了时挡住旧 success,单独放行不了) | P1 P3 | 发版提交直推 main(`ad8ce62` 等);PR #6 修复后未审即合并 | 任何有写权限的身份都能绕过全部检查 |
 | R2 | **CI workflow**:`pull_request` 触发,不给 secrets,不做路径过滤,跑 `tests/run-all.sh` 与 `tests/e2e/run-all.sh` | P1 | 未经测试的代码合入;Builder 自述"全过" | 回到 PR #6 的状态 |
 | G1 | gate 核对 CI:结果针对当前 head、来自 `.github/workflows/ci.yml`、结论为 success | P1 | CI 被跳过或结论为 neutral 却被当成通过(GitHub 默认如此);PR 新增一个同名的假 job 冒充 CI | skipped 被当成通过;假 job 能冒充 |
 | G2 | **判卷面**:PR 改动 `.github/**`、`.aiwork/**`、`tests/run-all.sh`、`tests/e2e/run-all.sh` 及测试配置 → 需业主批准 | P1 P3 | Builder 改 CI 或测试入口,让自己变绿 | 改一行 workflow 就能放行 |
@@ -98,9 +98,9 @@
 ### 阶段 C:最小 gate(先只报不拦,再拦截)
 
 - 交付:G1–G8、M1;`.aiwork/policy.yml`(判卷面清单、high 路径);`bin/review-pr <PR> [--leg <腿>]`:取当前 head 快照 → 运行一条现有评审腿 → 以 `aiwork-review` 发出 → 加 recheck 标签。默认 `subcodex`;**high 用的第二家族入口**就是同一命令指定一条非 OpenAI、非 Anthropic 家族的现有腿(先固定一条,如 `subdeepseek`),不做多腿调度、轮换或健康管理。第二腿失败或结论不合格时 gate 保持 failure,由人决定重跑或换腿。
-- 先以 `aiwork-gate-shadow` 这个检查名只报不拦,再把必过检查从 `ci` 换成 `aiwork-gate`。用不同的名字,是为了避免切换时 neutral 被当作通过。
+- 先以 `aiwork-gate-shadow` 这个检查名只报不拦,再把必过检查从 `ci` 换成 `aiwork-gate` + `aiwork-gate/fuse`。用不同的名字,是为了避免切换时 neutral 被当作通过。
 - **验收**:第 5 节的对抗用例全部通过 + 第 4 节的 PR #6 端到端回放全部符合预期。
-- **进度(2026-09-29)**:关卡代码与对抗用例在 OpenDesign PR #10(`.github/aiwork-gate/`,20 条用例 + 8 处变异检查);策略用 `.aiwork/policy.json`(JSON,免装 YAML 解析器)。`aiwork-gate` App:App ID `5121026`,installation `166124786`,只有 Checks 读写;私钥放在只许 main 用、不设审批人的 environment `aiwork-gate`。读数据用只读 `GITHUB_TOKEN`,App 只用来发检查结果。评审后重算改由无权限的 `aiwork-review-ping`(pull_request_review)触发关卡的 workflow_run,`aiwork:recheck` 标签留作手动重算。`review-pr` 实现单:`workflow-migration/phase-c-review-pr.md`(本机 Codex 实现)。
+- **进度(2026-09-29)**:关卡代码与对抗用例在 OpenDesign PR #10(`.github/aiwork-gate/`,20 条用例 + 8 处变异检查);策略用 `.aiwork/policy.json`(JSON,免装 YAML 解析器)。`aiwork-gate` App:App ID `5121026`,installation `166124786`,只有 Checks 读写;私钥放在只许 main 用、不设审批人的 environment `aiwork-gate`。读数据用 `GITHUB_TOKEN`,App 只用来发检查结果;另用 `GITHUB_TOKEN` 发保险丝 `aiwork-gate/fuse`(commit status,workflow 唯一的写权限 `statuses: write`):GitHub 上只有 App 改得动它发过的检查,App 私钥坏了时旧 success 靠保险丝挡(评审 5353990150 第 3 条)。aiwork-review 在当前 head 上发的评审,除"格式完整且结论不是 BLOCK"以外一律按 BLOCK 算(同一评审第 1 条)。评审后重算改由无权限的 `aiwork-review-ping`(pull_request_review)触发关卡的 workflow_run,`aiwork:recheck` 标签留作手动重算。`review-pr` 实现单:`workflow-migration/phase-c-review-pr.md`(本机 Codex 实现)。
 - **停用**(拦截生效后):OpenDesign 停止新建 track,新任务一律走 PR + gate。
 - **不删除 aiwork 的 track 代码**:业主决定 aiwork 暂不迁 GitHub PR 流程,本机仍是准本,`bin/track`、`track-guard`、`track-record`、`runlog`、`panel-*` 等继续供 aiwork 自己使用。aiwork 的迁移与旧代码删除,等 OpenDesign 的 CI、身份和 gate 稳定后**单独规划**,不绑在这一轮。
 
