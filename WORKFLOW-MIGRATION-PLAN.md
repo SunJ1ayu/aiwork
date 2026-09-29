@@ -85,6 +85,12 @@
 - 过渡:本机 agent 只评审、不推代码。
 - **验收**:本机 `gh auth status` 已不是 SunJ1ayu;用 `aiwork-review` 推代码被拒;机器账号能开 PR;发版 workflow 要等业主批准才执行,产物对应 main 上的 commit。
 - **删除**:本机的 SunJ1ayu 凭证;"reviewer 直接修 Builder 分支"和"本机手工打包发布"的做法。
+- **进度(2026-09-29)**:
+  - 机器账号 `SunJ1ayuBoT`:已注册,OpenDesign 与 aiwork 均为 write 协作者;claude.ai 的 GitHub 连接已从 SunJ1ayu 换到它(`get_me` = SunJ1ayuBoT;OpenDesign PR #7 上的测试评论署名为它)。
+  - `aiwork-review` App:已建并只装在 OpenDesign。App ID `5116249`,installation ID `165993669`(都不是机密;私钥只在业主电脑上)。权限按业主口述是 Contents 只读、Pull requests 读写,第 4 步用它换令牌时以 GitHub 返回的权限为准核一次。
+  - `aiwork-gate` App:挪到阶段 C 与 gate 一起建 —— 现在建了也没有东西用它。
+  - 发版 workflow:OpenDesign PR #9(`release.yml`;tag 打在构建提交上)。environment `release` 由业主建。真跑一次要等下一个改版本号的发版 PR,顺带补验阶段 A 的"发版 PR 能走通"。
+  - 待做:本机评审包装改用 App 私钥(单独的系统用户、文件权限 600);最后撤销本机与 GitHub 上 agent 用过的 SunJ1ayu 凭证。
 
 ### 阶段 C:最小 gate(先只报不拦,再拦截)
 
