@@ -91,8 +91,8 @@
   - `aiwork-gate` App:挪到阶段 C 与 gate 一起建 —— 现在建了也没有东西用它。
   - 发版 workflow:OpenDesign PR #9(`release.yml`;tag 打在构建提交上)。environment `release` 由业主建。真跑一次要等下一个改版本号的发版 PR,顺带补验阶段 A 的"发版 PR 能走通"。
   - environment `release`:业主已建(审批人 SunJ1ayu、不勾 Prevent self-review、部署分支只有 main)。第一次建成了 `aiwork`,名字不对时 GitHub 会在发布那一刻自动建一个没有保护的同名 environment,所以 `release.yml` 的 check 在构建前先核它的保护是齐的。
-  - 第 4 步(进行中):执行单 `workflow-migration/phase-b-step4.md`,适配器 `workflow-migration/gh-app-token`。私钥放 `/etc/aiwork/apps/`(root、600,不在任何仓库里)。**不另建系统用户**:本机 agent 都以 root 运行,另建用户挡不住 root;真正隔离见 §6"agent 降为普通用户"。同时只读盘点本机的 SunJ1ayu 凭证,供第 5 步用。
-  - 待做:第 5 步撤销本机与 GitHub 上 agent 用过的 SunJ1ayu 凭证(按第 4 步盘点结果,先给还需要推送的流程换上替代凭证,例如 aiwork 镜像同步)。
+  - 第 4 步(**已通过**,2026-09-29):执行单 `workflow-migration/phase-b-step4.md`,适配器 `workflow-migration/gh-app-token`。验收:A1 令牌权限恰为 contents:read / pull_requests:write / metadata:read、仓库只有 OpenDesign(首次 422:App 权限未生效,业主改好后通过——适配器按配置要权限,因此当场暴露);A2 PR #8 评论署名 `aiwork-review[bot]`(issuecomment-5883842602);A3 推送 403、rc=128,OpenDesign 上没有探针分支;A4 私钥权限、位置、副本检查符合预期。A5 盘点:本机 `gh` 登录与 `/root/.git-credentials` 两条都属 SunJ1ayu;OpenClaw 备份脚本从 `gh` 登录取令牌;SSH 身份未核成(主机公钥未登记)。私钥放 `/etc/aiwork/apps/`(root、600,不在任何仓库里)。**不另建系统用户**:本机 agent 都以 root 运行,另建用户挡不住 root;真正隔离见 §6"agent 降为普通用户"。同时只读盘点本机的 SunJ1ayu 凭证,供第 5 步用。
+  - 第 5 步(下一步):执行单 `workflow-migration/phase-b-step5.md`。顺序:盘点写入流程与 SSH 身份 → 按用途建 `aiwork-sync`(必要时 `aiwork-orchestrator`)→ 流程换上并真跑验证 → 业主在 GitHub 上吊销 → 本机先证明旧凭证已失效再删。
 
 ### 阶段 C:最小 gate(先只报不拦,再拦截)
 
