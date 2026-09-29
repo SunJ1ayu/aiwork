@@ -90,7 +90,9 @@
   - `aiwork-review` App:已建并只装在 OpenDesign。App ID `5116249`,installation ID `165993669`(都不是机密;私钥只在业主电脑上)。权限按业主口述是 Contents 只读、Pull requests 读写,第 4 步用它换令牌时以 GitHub 返回的权限为准核一次。
   - `aiwork-gate` App:挪到阶段 C 与 gate 一起建 —— 现在建了也没有东西用它。
   - 发版 workflow:OpenDesign PR #9(`release.yml`;tag 打在构建提交上)。environment `release` 由业主建。真跑一次要等下一个改版本号的发版 PR,顺带补验阶段 A 的"发版 PR 能走通"。
-  - 待做:本机评审包装改用 App 私钥(单独的系统用户、文件权限 600);最后撤销本机与 GitHub 上 agent 用过的 SunJ1ayu 凭证。
+  - environment `release`:业主已建(审批人 SunJ1ayu、不勾 Prevent self-review、部署分支只有 main)。第一次建成了 `aiwork`,名字不对时 GitHub 会在发布那一刻自动建一个没有保护的同名 environment,所以 `release.yml` 的 check 在构建前先核它的保护是齐的。
+  - 第 4 步(进行中):执行单 `workflow-migration/phase-b-step4.md`,适配器 `workflow-migration/gh-app-token`。私钥放 `/etc/aiwork/apps/`(root、600,不在任何仓库里)。**不另建系统用户**:本机 agent 都以 root 运行,另建用户挡不住 root;真正隔离见 §6"agent 降为普通用户"。同时只读盘点本机的 SunJ1ayu 凭证,供第 5 步用。
+  - 待做:第 5 步撤销本机与 GitHub 上 agent 用过的 SunJ1ayu 凭证(按第 4 步盘点结果,先给还需要推送的流程换上替代凭证,例如 aiwork 镜像同步)。
 
 ### 阶段 C:最小 gate(先只报不拦,再拦截)
 
