@@ -71,7 +71,7 @@ SSH:本机钥匙 `/root/.ssh/new_key`(SHA256:ihFzbw3W5CRJSxGY2sGT9qKlecs67Q3FQR7
 
 ## 丙 换上新身份并真跑验证(本机 agent)
 
-**丙1 装私钥与配置**(同第 4 步;`<…>` 换成业主给的数字):
+**丙1 装私钥与配置**(同第 4 步;App ID 与 installation ID 已按业主给的填好):
 
 ```sh
 mv /root/aiwork-sync.*.private-key.pem /etc/aiwork/apps/aiwork-sync.pem
@@ -79,15 +79,15 @@ mv /root/aiwork-orchestrator.*.private-key.pem /etc/aiwork/apps/aiwork-orchestra
 chown root:root /etc/aiwork/apps/*.pem && chmod 600 /etc/aiwork/apps/*.pem
 for k in aiwork-sync aiwork-orchestrator; do openssl pkey -in /etc/aiwork/apps/$k.pem -noout && echo "$k 私钥能解析"; done
 cat > /etc/aiwork/apps/sync.env <<'CONF'
-APP_ID=<sync 的 App ID>
-INSTALLATION_ID=<sync 的 installation ID>
+APP_ID=5118560
+INSTALLATION_ID=166057171
 KEY=/etc/aiwork/apps/aiwork-sync.pem
 REPOS="aiwork lt-workspace"
 PERMISSIONS='{"contents":"write"}'
 CONF
 cat > /etc/aiwork/apps/orchestrator.env <<'CONF'
-APP_ID=<orchestrator 的 App ID>
-INSTALLATION_ID=<orchestrator 的 installation ID>
+APP_ID=5118664
+INSTALLATION_ID=166058398
 KEY=/etc/aiwork/apps/aiwork-orchestrator.pem
 REPOS="OpenDesign"
 PERMISSIONS='{"actions":"read","checks":"read","contents":"read","issues":"read","pull_requests":"read","statuses":"read"}'
