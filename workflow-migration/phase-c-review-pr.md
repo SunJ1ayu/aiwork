@@ -1,0 +1,70 @@
+# 阶段 C:`review-pr`(给本机 agent 的实现单)
+
+计划见同分支 `WORKFLOW-MIGRATION-PLAN.md` 阶段 C。放行关卡(OpenDesign PR #10,`.github/aiwork-gate/`)已经写好,
+它**只认**按本文件第 3 节格式、由 `aiwork-review[bot]` 发出的 PR 评审。`review-pr` 就是产出这种评审的唯一入口。
+
+## 1. 接口
+
+```
+review-pr <PR号> [--leg <腿名>] [--dry-run]
+```
+
+- 默认 `--leg subcodex`(OpenAI 家族)。high 路径的第二家族入口 = 同一命令指定另一条腿,先固定 `--leg subdeepseek`(DeepSeek 家族)。
+- 只接受 `bin/_review_result.py` 的 `ADAPTER_IDENTITIES` 里有的腿;**拒绝 anthropic 家族的腿**(Builder 是 Claude,关卡本来也不认)。
+- `--dry-run`:照常跑评审,但只把要发的评审正文打印出来,不发到 GitHub。
+- 仓库固定 `SunJ1ayu/OpenDesign`。所有 GitHub 调用用 `GH_TOKEN="$(gh-app-token review)"`,不用任何人的账号。
+- 放在 aiwork 的 `bin/review-pr`,按 aiwork 本机的正常流程提交;`gh-app-token` 也在这次一起收进 aiwork 的 `bin/`(阶段 B 时先放在 `/usr/local/bin`)。
+
+## 2. 步骤
+
+1. **取 PR**:`GET /repos/SunJ1ayu/OpenDesign/pulls/<PR号>`,记下 `head.sha`(下称 HEAD)、`head.ref`、`base.ref`。PR 不是 open 就退出。
+2. **快照**:在一个临时目录里拿到**正好是 HEAD** 的代码(`git fetch` 这个提交后检出,核对 `git rev-parse HEAD` 等于 HEAD),并算出相对 base 的改动(merge-base 起的 diff 和改动文件清单)。快照目录只读给评审腿用,用完删掉。
+3. **任务书**:写明这是 OpenDesign PR #N 在 HEAD 上的**完整评审**,附改动文件清单和 diff,要求评审腿读改动涉及的文件、按现行评审口径给出独占一行的 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。沿用 aiwork 现有评审任务书的写法,不另起一套口径。
+4. **跑腿**:`bin/<腿名> review <任务书> <日志> <快照目录>`,然后用 `bin/_review_result.py` 规整出 ReviewLegResult(不在 `review-pr` 里自己解析结论行)。
+5. **组结论块**(第 3 节),字段全部由 `review-pr` 从 ReviewLegResult 和快照填,**不让模型自己写**:
+   - `verdict`:ReviewLegResult 的 verdict;
+   - `head_sha`:HEAD;
+   - `model`:这次实际用的模型名;`family`:这条腿在 `ADAPTER_IDENTITIES` 里的家族;
+   - `completeness`:只有"进程正常退出、结论解析成功、没降级、证据完整"才是 `complete`;其余按实际写 `partial` 或 `none`;
+   - `files_read`:评审腿实际读过的文件;适配器报不出来时,用"完整快照视图下交给它的改动文件清单"。不能是空数组。
+6. **发之前再核一次 HEAD**:重新 `GET` 这个 PR,`head.sha` 已经不是 HEAD(评审期间有新推送)⇒ **不发**,退出码非 0,提示重跑。
+7. **发评审**:`POST /repos/SunJ1ayu/OpenDesign/pulls/<PR号>/reviews`,`commit_id` = HEAD,`event` = `COMMENT`(不管 PASS 还是 BLOCK 都用 COMMENT;**不用 APPROVE / REQUEST_CHANGES**),`body` = 第 3 节格式。打印评审链接。
+8. 评审腿没跑成(超时、额度、鉴权、没有结论)⇒ **什么都不发**,退出码非 0,原样报原因。不重试、不换腿(换腿由人或以后的 OpenClaw 决定)。
+
+## 3. 评审正文格式(关卡按这个认)
+
+```
+**aiwork-review · <腿名> · <model>**
+
+<模型的评审意见原文(见下面的净化)>
+
+```json
+{"verdict":"PASS","head_sha":"<40 位小写提交号>","model":"<模型名>","family":"<家族>","completeness":"complete","files_read":["路径1","路径2"]}
+```
+```
+
+关卡的核对规则(`.github/aiwork-gate/decide.mjs` 的 `parseReviewBlock`):
+
+| 字段 | 要求 |
+|---|---|
+| 结论块 | 正文里**恰好一个** ` ```json ` 块,是一个 JSON 对象 |
+| `verdict` | `PASS` / `BLOCK` / `NEEDS_MORE_INFO` / `UNKNOWN` |
+| `head_sha` | 40 位小写十六进制,且等于评审挂的提交(`commit_id`)和 PR 当前 head |
+| `model` | 非空字符串 |
+| `family` | 小写字母开头,只含小写字母、数字、`-`(如 `openai`、`deepseek`) |
+| `completeness` | `complete` / `partial` / `none`;只有 `complete` 的 PASS 才算 |
+| `files_read` | 字符串数组,每项非空;PASS 要求至少一项 |
+
+**净化**:模型原文里如果出现 ` ```json `,改成 ` ```text ` 再放进正文,否则正文里就不止一个结论块,关卡会整条不认。
+
+## 4. 验收(本机先测,再做计划第 4 节的 PR #6 端到端回放)
+
+1. `--dry-run` 在一个真实 PR 上跑:打印出的正文只有一个 ` ```json ` 块,字段齐全,`head_sha` 等于 PR 当前 head,`family` 是 `openai`。
+2. 同一 PR 用 `--leg subdeepseek --dry-run`:`family` 是 `deepseek`。
+3. `--leg` 给一个 anthropic 家族的腿:直接拒绝,不跑。
+4. 净化:构造一段含 ` ```json ` 的"模型原文",组出的正文仍只有一个 ` ```json ` 块。
+5. HEAD 变了:评审期间往 PR 推一个新提交(或用假数据模拟第 6 步读到不同的 head),不发、退出码非 0。
+6. 真发一次:评审出现在 PR 上,署名 `aiwork-review[bot]`,挂在当前 head;几十秒内 PR 上的 `aiwork-gate-shadow` 检查重算。
+7. 评审腿失败(例如给一个不存在的模型):什么都不发,退出码非 0。
+
+做完停下,报告每条的结果和发出去的评审链接。**不要自己去合并或批准任何 PR。**
