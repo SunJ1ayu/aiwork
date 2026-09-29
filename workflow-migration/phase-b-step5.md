@@ -43,9 +43,9 @@ rm -f /tmp/github_known_hosts
 按甲1 的结果**按用途**建 App,不把不同用途的权限合进一个:
 
 - **`aiwork-sync`**:备份、镜像这类只往 aiwork 和备份仓库写的流程(下面的步骤)。
-- **`aiwork-orchestrator`**(只在甲1 显示 OpenClaw 总管要碰 OpenDesign 时建):权限只给甲1 列出的那些操作要的(例如读 PR/CI、加标签、评论、触发 workflow),装在 OpenDesign。
-  它可以替业主做日常调度,但**做不了**这三件,这三件本来就只该业主做:批准发版、批准高风险改动、改仓库设置和分支规则。
-  合并 PR 是否交给它,等阶段 C 的 gate 上线后再定(分支规则挡着,检查不过也合不进去)。
+- **`aiwork-orchestrator`**:OpenClaw 当总管用的身份(业主决定:以后由 OpenClaw 主控、管理日常)。权限按甲1 列出的操作给,装在 OpenDesign(需要时加 aiwork)。
+  它代表业主调度,但**不拿业主账号**:业主账号能删仓库、改或关掉分支规则和检查,而且操作记录分不出是人还是程序。
+  发版和高风险改动的最后确认:默认仍由业主在 GitHub 上点一下批准(OpenClaw 先写好一句大白话说明);业主以后可以改成交给 OpenClaw,改法是去掉 `release` 环境的审批人并给它触发权限,见计划 §7。
 
 `aiwork-sync` 的建法和建 `aiwork-review` 同样的步骤(https://github.com/settings/apps/new),只有这些不同:
 
@@ -55,7 +55,7 @@ rm -f /tmp/github_known_hosts
 - 生成私钥,传到服务器 `/root/`(同第 4 步)
 - 把 App ID 和 installation ID 发给 Claude(不是机密)
 
-`aiwork-orchestrator` 如需要,Claude 按甲1 的报告另给权限清单和第丙步的对应做法。
+`aiwork-orchestrator` 的权限清单和第丙步的对应做法,Claude 按甲1 的报告另给。
 
 ---
 
