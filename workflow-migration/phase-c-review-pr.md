@@ -19,7 +19,7 @@ review-pr <PR号> [--leg <腿名>] [--dry-run]
 
 1. **取 PR**:`GET /repos/SunJ1ayu/OpenDesign/pulls/<PR号>`,记下 `head.sha`(下称 HEAD)、`head.ref`、`base.ref`。PR 不是 open 就退出。
 2. **快照**:在一个临时目录里拿到**正好是 HEAD** 的代码(`git fetch` 这个提交后检出,核对 `git rev-parse HEAD` 等于 HEAD),并算出相对 base 的改动(merge-base 起的 diff 和改动文件清单)。快照目录只读给评审腿用,用完删掉。
-3. **任务书**:写明这是 OpenDesign PR #N 在 HEAD 上的**完整评审**,附改动文件清单和 diff,要求评审腿读改动涉及的文件、按现行评审口径给出独占一行的 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。沿用 aiwork 现有评审任务书的写法,不另起一套口径。
+3. **任务书**:写明这是 OpenDesign PR #N 在 HEAD 上的**完整评审**,附改动文件清单和 diff,要求评审腿读改动涉及的文件、按现行评审口径给出独占一行的 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。沿用 aiwork 现有评审任务书的写法,不另起一套口径。**任务书里原样附上 aiwork 的 `REVIEW-RULES.md`(评审口径:P1 / P2 / P3 分级、只有 P1 给 BLOCK、一次报全)和 PR 所在仓库 main 上的 `.aiwork/accepted-risks.md`(没有这个文件就写"无")**。
 4. **跑腿**:`bin/<腿名> review <任务书> <日志> <快照目录>`,然后用 `bin/_review_result.py` 规整出 ReviewLegResult(不在 `review-pr` 里自己解析结论行)。
 5. **组结论块**(第 3 节),字段全部由 `review-pr` 从 ReviewLegResult 和快照填,**不让模型自己写**:
    - `verdict`:ReviewLegResult 的 verdict;
@@ -55,7 +55,7 @@ review-pr <PR号> [--leg <腿名>] [--dry-run]
 | `completeness` | `complete` / `partial` / `none`;只有 `complete` 的 PASS 才算 |
 | `files_read` | 字符串数组,每项非空;PASS 要求至少一项 |
 
-**看不懂就按 BLOCK**:格式不对的评审(结论块缺字段、不止一个、不是 JSON、没有,或正文 `Conclusion:` 行写 BLOCK 而结论块不是)关卡一律按 BLOCK 算,要业主在其后批准才能豁免。所以 `aiwork-review` 只用来发结论评审,不要用它回复评论(回复也会生成一条空正文的评审)。
+**看不懂就按 BLOCK**:格式不对的评审(结论块缺字段、不止一个、不是 JSON、没有,或正文 `Conclusion:` 行和结论块的 verdict 不一样)、以及**发出后正文被改写过**的评审,关卡一律按 BLOCK 算,要业主在其后批准才能豁免。所以 `aiwork-review` 只用来发结论评审,不要用它回复评论(回复也会生成一条空正文的评审),**也不要改写已发出的评审** —— 要改结论就发一条新的。
 
 **净化**:模型原文里如果出现 ` ```json `,改成 ` ```text ` 再放进正文,否则正文里就不止一个结论块,关卡会按 BLOCK 算。
 
