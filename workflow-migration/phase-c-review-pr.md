@@ -19,7 +19,7 @@ review-pr <PR号> [--leg <腿名>] [--dry-run]
 
 1. **取 PR**:`GET /repos/SunJ1ayu/OpenDesign/pulls/<PR号>`,记下 `head.sha`(下称 HEAD)、`head.ref`、`base.ref`。PR 不是 open 就退出。
 2. **快照**:在一个临时目录里拿到**正好是 HEAD** 的代码(`git fetch` 这个提交后检出,核对 `git rev-parse HEAD` 等于 HEAD),并算出相对 base 的改动(merge-base 起的 diff 和改动文件清单)。快照目录只读给评审腿用,用完删掉。
-3. **任务书**:写明这是 OpenDesign PR #N 在 HEAD 上的**完整评审**,附改动文件清单和 diff,要求评审腿读改动涉及的文件、按现行评审口径给出独占一行的 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。沿用 aiwork 现有评审任务书的写法,不另起一套口径。**任务书里原样附上 PR 所在仓库 main 上的两份文件**:`.aiwork/review-rules.md`(评审口径:P1 / P2 / P3 分级、只有 P1 给 BLOCK、一次报全)和 `.aiwork/accepted-risks.md`(业主已接受的风险,不当问题报;没有这个文件就写"无")。**从 main 读,不从 PR 里读**(PR 不能改评它自己的口径);`review-rules.md` 读不到就报错退出、不评审(没有口径的评审不算数)。
+3. **任务书**:写明这是 OpenDesign PR #N 在 HEAD 上的**完整评审**,附改动文件清单和 diff,要求评审腿读改动涉及的文件、按现行评审口径给出独占一行的 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。沿用 aiwork 现有评审任务书的写法,不另起一套口径。**任务书里原样附上 PR 所在仓库 main 上的两份文件**:`.aiwork/review-rules.md`(评审口径)和 `.aiwork/accepted-risks.md`(没有这个文件就写"无")。**从 main 读,不从 PR 里读**(PR 不能改评它自己的口径);`review-rules.md` 读不到就报错退出、不评审(没有口径的评审不算数)。
 4. **跑腿**:`bin/<腿名> review <任务书> <日志> <快照目录>`,然后用 `bin/_review_result.py` 规整出 ReviewLegResult(不在 `review-pr` 里自己解析结论行)。
 5. **组结论块**(第 3 节),字段全部由 `review-pr` 从 ReviewLegResult 和快照填,**不让模型自己写**:
    - `verdict`:ReviewLegResult 的 verdict;
