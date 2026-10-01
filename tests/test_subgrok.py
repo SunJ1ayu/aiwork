@@ -131,6 +131,9 @@ class GrokTest(unittest.TestCase):
         report = (self.d/'leg.log').read_text()
         self.assertIn('Conclusion: BLOCK',report)
         self.assertNotIn('Conclusion: PASS',report)
+        # review-pr separates the model's report at the end of this header.
+        self.assertTrue(report.startswith('# subgrok review log\n'),report[:80])
+        self.assertIn('Conclusion: BLOCK',report.split('\n\n',1)[1])
         facts = json.loads((self.d/'leg.facts.json').read_text())
         self.assertEqual(facts['verdict'],'BLOCK')
         self.assertEqual(facts['evidence_completeness'],'complete')
