@@ -2,7 +2,6 @@
 
 > 状态:待 GPT 复核。日期:2026-09-28。第 4.1 版:写入业主对第 7 节两项的决定,补 high 的第二家族评审入口。
 > 由第 3 版按 GPT"第一性原理收敛"的意见缩减而来;第 3 版全文见本文件的上一个 commit(`087cabf`)。
-> ⚠️ 本文件目前只在 GitHub 镜像仓库里,本机 `/root/aiwork` 还没有。同步镜像前先把它拉回本机。
 
 ---
 
@@ -92,7 +91,7 @@
   - `aiwork-gate` App:挪到阶段 C 与 gate 一起建 —— 现在建了也没有东西用它。
   - 发版 workflow:OpenDesign PR #9 已合并(main `7fc71bf`;`release.yml`,tag 打在构建提交上,构建前核 environment 保护)。environment `release` 由业主建。真跑一次要等下一个改版本号的发版 PR,顺带补验阶段 A 的"发版 PR 能走通"。
   - environment `release`:业主已建(审批人 SunJ1ayu、不勾 Prevent self-review、部署分支只有 main)。第一次建成了 `aiwork`,名字不对时 GitHub 会在发布那一刻自动建一个没有保护的同名 environment,所以 `release.yml` 的 check 在构建前先核它的保护是齐的。
-  - 第 4 步(**已通过**,2026-09-29):执行单 `workflow-migration/phase-b-step4.md`,适配器 `workflow-migration/gh-app-token`。验收:A1 令牌权限恰为 contents:read / pull_requests:write / metadata:read、仓库只有 OpenDesign(首次 422:App 权限未生效,业主改好后通过——适配器按配置要权限,因此当场暴露);A2 PR #8 评论署名 `aiwork-review[bot]`(issuecomment-5883842602);A3 推送 403、rc=128,OpenDesign 上没有探针分支;A4 私钥权限、位置、副本检查符合预期。A5 盘点:本机 `gh` 登录与 `/root/.git-credentials` 两条都属 SunJ1ayu;OpenClaw 备份脚本从 `gh` 登录取令牌;SSH 身份未核成(主机公钥未登记)。私钥放 `/etc/aiwork/apps/`(root、600,不在任何仓库里)。**不另建系统用户**:本机 agent 都以 root 运行,另建用户挡不住 root;真正隔离见 §6"agent 降为普通用户"。同时只读盘点本机的 SunJ1ayu 凭证,供第 5 步用。
+  - 第 4 步(**已通过**,2026-09-29):执行单 `workflow-migration/phase-b-step4.md`,适配器 `gh-app-token`(现在在 `bin/`)。验收:A1 令牌权限恰为 contents:read / pull_requests:write / metadata:read、仓库只有 OpenDesign(首次 422:App 权限未生效,业主改好后通过——适配器按配置要权限,因此当场暴露);A2 PR #8 评论署名 `aiwork-review[bot]`(issuecomment-5883842602);A3 推送 403、rc=128,OpenDesign 上没有探针分支;A4 私钥权限、位置、副本检查符合预期。A5 盘点:本机 `gh` 登录与 `/root/.git-credentials` 两条都属 SunJ1ayu;OpenClaw 备份脚本从 `gh` 登录取令牌;SSH 身份未核成(主机公钥未登记)。私钥放 `/etc/aiwork/apps/`(root、600,不在任何仓库里)。**不另建系统用户**:本机 agent 都以 root 运行,另建用户挡不住 root;真正隔离见 §6"agent 降为普通用户"。同时只读盘点本机的 SunJ1ayu 凭证,供第 5 步用。
   - 第 5 步(**已完成**,2026-09-29):执行单 `workflow-migration/phase-b-step5.md`。甲已完成:`gh` 登录令牌已失效,03:00 备份与 09:00 GitHub-Watch 因此跑不通;本机 SSH 钥匙未登记在 GitHub。乙已完成:`aiwork-sync`(App ID `5118560`,installation `166057171`,Contents 读写,装在 aiwork、lt-workspace)、`aiwork-orchestrator`(App ID `5118664`,installation `166058398`,六项只读,装在 OpenDesign)。丙已通过:aiwork 镜像探针推送与删除成功;OpenClaw 备份带 sync 令牌推到 lt-workspace,远端 main 与本地 HEAD 一致;GitHub-Watch 用 orchestrator 令牌跑通;orchestrator 发评论被拒 403;sync 推 OpenDesign 被拒 403。(首次核 lt-workspace 报 Repository not found:核对命令没带令牌,私有仓库不带身份时 GitHub 就这样回。)丁:业主吊销 GitHub CLI 授权与全部个人令牌(含细粒度令牌 grokbot)。戊:旧 gh 令牌 401、旧 git 凭证访问私有仓库认证失败;已退出 gh、删 `/root/.git-credentials` 与全局 helper、清 Claude Code 里的旧令牌允许项;三份 OpenClaw 历史会话备份保留原样(其中唯一完整的旧 `ghp_` 令牌测试 401,且不在每日备份目录内);两个定时任务取令牌已改为 `gh-app-token`。收尾发现备份仓库本地配着 `credential.helper=store`,会把 App 临时令牌(`ghs_`)写回 `.git-credentials`:已改为仓库级 `gh-app-token sync` 助手、备份脚本改用不含令牌的 URL,复跑备份与镜像推送均成功且文件未再出现。顺序:盘点写入流程与 SSH 身份 → 按用途建 `aiwork-sync`(必要时 `aiwork-orchestrator`)→ 流程换上并真跑验证 → 业主在 GitHub 上吊销 → 本机先证明旧凭证已失效再删。
 
 ### 阶段 C:最小 gate(先只报不拦,再拦截)
