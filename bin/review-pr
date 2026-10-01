@@ -98,7 +98,7 @@ def snapshot(token: str, pr: dict, directory: Path) -> tuple[Path, str, list[str
     head = pr["head"]["sha"]
     base = pr["base"]["sha"]
     run(["git", "-C", str(repo), "-c", "credential.helper=", "fetch", "-q", "--no-tags",
-         URL, head, base], env=env)
+         URL, head, base, "refs/heads/main:refs/aiwork/main"], env=env)
     run(["git", "-C", str(repo), "checkout", "-q", "--detach", head])
     if run(["git", "-C", str(repo), "rev-parse", "HEAD"]).strip() != head:
         raise ReviewError("snapshot HEAD differs from PR head")
@@ -117,7 +117,23 @@ def snapshot(token: str, pr: dict, directory: Path) -> tuple[Path, str, list[str
     return repo, merge_base, files, diff
 
 
-def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str) -> str:
+def main_document(repo: Path, path: str, *, required: bool = True) -> str:
+    entry = run(["git", "-C", str(repo), "ls-tree", "refs/aiwork/main", "--", path]).strip()
+    if not entry:
+        if required:
+            raise ReviewError(f"required review document main:{path} is missing; no review run")
+        return "无"
+    if not entry.startswith(("100644 blob ", "100755 blob ")):
+        raise ReviewError(f"main:{path} is not a regular file")
+    process = subprocess.run(["git", "-C", str(repo), "show", f"refs/aiwork/main:{path}"],
+                             capture_output=True, check=False)
+    if process.returncode:
+        raise ReviewError(f"cannot read main:{path}")
+    return process.stdout.decode("utf-8")
+
+
+def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
+              review_rules: str, risks: str) -> str:
     return (
         f"# OpenDesign PR #{number} · 当前 HEAD 的完整评审\n\n"
         f"HEAD: {pr['head']['sha']} ({pr['head']['ref']})\n"
@@ -131,6 +147,9 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
         "文件证据用仓库相对路径，不要用临时目录的绝对路径或指向临时目录的链接。"
         "最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
         "Conclusion: NEEDS_MORE_INFO。\n\n"
+        "## 项目 main 的 .aiwork/review-rules.md（原文，现行评审口径）\n\n" + review_rules
+        + "\n\n## 项目 main 的 .aiwork/accepted-risks.md（原文；不存在时为无）\n\n" + risks
+        + "\n\n"
         "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
         + "\n## 完整 diff（merge base → HEAD）\n```diff\n" + diff + "\n```\n"
     )
@@ -197,8 +216,11 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
             directory = Path(temporary)
             repo, merge_base, files, diff = snapshot(token, pr, directory)
+            review_rules = main_document(repo, ".aiwork/review-rules.md")
+            risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
             task = directory / "task.md"
-            task.write_text(task_text(args.pr, pr, merge_base, files, diff), encoding="utf-8")
+            task.write_text(task_text(args.pr, pr, merge_base, files, diff,
+                                      review_rules, risks), encoding="utf-8")
             log = directory / "review.log"
             facts = directory / "facts.json"
             result_file = directory / "result.json"
