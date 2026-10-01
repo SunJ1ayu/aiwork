@@ -3,9 +3,10 @@
 
 import importlib.machinery
 import importlib.util
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -41,12 +42,93 @@ class ReviewPrTests(unittest.TestCase):
         self.assertEqual(block["head_sha"], "a" * 40)
         self.assertEqual(block["family"], "openai")
 
-    def test_leg_selection_rejects_unlisted_or_anthropic(self):
-        self.assertEqual(self.review.choose_leg("subcodex"), "openai")
-        self.assertEqual(self.review.choose_leg("subdeepseek"), "deepseek")
-        for name in ("subclaude", "subcursor", "../subcodex"):
+    def test_leg_selection_needs_an_attributable_family(self):
+        self.assertEqual(self.review.choose_leg("subcodex"), ("openai", None))
+        self.assertEqual(self.review.choose_leg("subdeepseek"), ("deepseek", None))
+        for name in ("subclaude", "../subcodex"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.review.choose_leg(name)
+
+    def test_cursor_family_follows_any_model_including_claude(self):
+        # Which families count for which PR is the gate's call; review-pr refuses none.
+        for model, family in (("grok-4.7-high", "xai"), ("gpt-5.6", "openai"),
+                              ("claude-4.5-sonnet", "anthropic"), ("composer-2.5", "cursor")):
+            with self.subTest(model=model), patch.dict("os.environ", {"CURSOR_MODEL": model}):
+                self.assertEqual(self.review.choose_leg("subcursor"), (family, model))
+        for model in ("auto", "Auto", "some-new-vendor-1"):
+            with self.subTest(model=model), patch.dict("os.environ", {"CURSOR_MODEL": model}), \
+                    self.assertRaisesRegex(self.review.ReviewError, "unsupported review leg"):
+                self.review.choose_leg("subcursor")
+
+    def test_cursor_model_defaults_to_the_config_file(self):
+        configured = (ROOT / "bin/cursor-model").read_text(encoding="utf-8").rstrip("\n")
+        with patch.dict("os.environ", {"CURSOR_MODEL": ""}):
+            self.assertEqual(self.review.choose_leg("subcursor")[1], configured)
+
+    def run_main_with_leg_result(self, model_used: str):
+        """Run main() --dry-run on subcursor with a fake leg; return (rc, leg env, emit command, stdout)."""
+        calls = {}
+
+        def fake_run(command, **_):
+            if command[0].endswith("gh-app-token"):
+                return "fake-token"
+            calls["emit"] = command
+            return ""
+
+        def fake_leg(command, **kwargs):
+            calls["leg_env"] = kwargs["env"]
+            # The config file changes mid-run; the frozen model must not.
+            os.environ["CURSOR_MODEL"] = "gpt-other"
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        result = {
+            "process": {"state": "exited", "exit_code": 0},
+            "verdict": "PASS", "failure_kind": "none", "degraded": False,
+            "evidence": {"completeness": "complete"},
+            "view": {"delivery_state": "complete"},
+            "model": {"requested": model_used, "invoked": model_used, "reported": None},
+        }
+        pr = {"state": "open", "head": {"sha": "a" * 40, "ref": "f"}, "base": {"sha": "b" * 40, "ref": "main"}}
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch("sys.argv", ["review-pr", "12", "--leg", "subcursor", "--dry-run"]), \
+                patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
+                patch.object(self.review, "run", side_effect=fake_run), \
+                patch.object(self.review, "pr_state", return_value=pr), \
+                patch.object(self.review, "snapshot", return_value=(Path("unused"), "c" * 40, ["src/a.py"], "diff")), \
+                patch.object(self.review, "main_document", return_value="rules"), \
+                patch.object(self.review, "load_result", return_value=result), \
+                patch.object(self.review, "review_report", return_value="Finding\nConclusion: PASS"), \
+                patch.object(self.review.subprocess, "run", side_effect=fake_leg), \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            rc = self.review.main()
+        return rc, calls.get("leg_env"), calls.get("emit"), stdout.getvalue(), stderr.getvalue()
+
+    def test_cursor_model_is_frozen_for_leg_and_result(self):
+        rc, leg_env, emit, body, stderr = self.run_main_with_leg_result("gpt-5.6")
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(leg_env["CURSOR_MODEL"], "gpt-5.6")
+        self.assertEqual(emit[emit.index("--expected-model") + 1], "gpt-5.6")
+        self.assertEqual(emit[emit.index("--family") + 1], "openai")
+        self.assertIn("**aiwork-review · subcursor · gpt-5.6**", body)
+        block = json.loads(body.split("```json\n", 1)[1].split("\n```", 1)[0])
+        self.assertEqual((block["model"], block["family"]), ("gpt-5.6", "openai"))
+
+    def test_cursor_result_from_another_model_is_not_published(self):
+        rc, _, _, body, stderr = self.run_main_with_leg_result("claude-4.5-sonnet")
+        self.assertEqual(rc, 1)
+        self.assertEqual(body, "")
+        self.assertIn("does not match selected family", stderr)
+
+    def test_report_is_separated_only_at_the_leg_log_header(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "review.log"
+            log.write_text("# subcursor review log\nmodel: gpt-5.6\n\nFirst paragraph.\n\n"
+                           "Conclusion: PASS\n", encoding="utf-8")
+            self.assertEqual(self.review.review_report(log), "First paragraph.\n\nConclusion: PASS")
+            # Without the header, cutting at the first empty line would drop the report's opening.
+            log.write_text("First paragraph.\n\nConclusion: PASS\n", encoding="utf-8")
+            with self.assertRaisesRegex(self.review.ReviewError, "header"):
+                self.review.review_report(log)
 
     def test_stale_head_is_refused_before_post(self):
         with self.assertRaises(ValueError):

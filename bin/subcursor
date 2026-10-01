@@ -21,7 +21,7 @@ Environment:
   CURSOR_API_KEY     explicit API-key authentication instead of session login
   PANEL_CURSOR_LEG  agent (default) or off in both panel dispatchers
 
-Logs: LOG_FILE contains assistant text only; sibling .stream.jsonl contains
+Logs: LOG_FILE = header + assistant text; sibling .stream.jsonl contains
 raw events, and .stream-summary.json records completion, reported model and usage.
 EOF
 }
@@ -130,7 +130,15 @@ cat "$TASK_FILE" >> "$PROMPT_FILE"
 mkdir -p "$(dirname "$LOG_FILE")"
 BASE="${LOG_FILE%.log}"
 STREAM="$BASE.stream.jsonl"; SUMMARY="$BASE.stream-summary.json"
-: > "$LOG_FILE"
+# Same header shape as the other legs: review-pr separates the report at its end.
+{
+  echo "# subcursor $MODE log"
+  echo "time: $(date -Iseconds)"
+  echo "model: $MODEL"
+  echo "repo: $REPO_DIR (snapshot of $SOURCE_REPO, source mounted read-only)"
+  echo "task: $TASK_FILE"
+  echo
+} > "$LOG_FILE"
 review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" lost partial || exit 78
 # Caller Cursor settings must not redirect authentication/config or enable tools.
 CURSOR_ENV_UNSET=()

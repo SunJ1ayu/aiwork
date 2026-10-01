@@ -140,6 +140,18 @@ def cursor_model_family(model: str | None) -> str | None:
     return None
 
 
+def leg_identity(adapter: str, model: str | None) -> tuple[str, str] | None:
+    """(family, required model prefix) of one leg run; None when it cannot be attributed.
+
+    A fixed adapter serves one family. Cursor serves whichever model was selected,
+    so its family follows that model and the invoked model must be exactly it.
+    """
+    if adapter == "subcursor":
+        family = cursor_model_family(model)
+        return None if family is None else (family, model)
+    return ADAPTER_IDENTITIES.get(adapter)
+
+
 class ReviewResultError(ValueError):
     """A stable contract or integrity rule was violated."""
 
@@ -653,13 +665,10 @@ def eligibility_reasons(value: dict[str, Any], *, verify_evidence: bool = True) 
         reasons.append("verdict_not_decisive")
     if result["degraded"]:
         reasons.append("degraded")
-    identity = ADAPTER_IDENTITIES.get(result["adapter"])
     requested = result["model"]["requested"]
     invoked = result["model"]["invoked"]
     reported = result["model"]["reported"]
-    if result["adapter"] == "subcursor":
-        family = cursor_model_family(requested)
-        identity = (family, requested) if family is not None else None
+    identity = leg_identity(result["adapter"], requested)
     if identity is None or result["family"] != identity[0]:
         reasons.append("adapter_family_unknown")
     if requested is None or invoked is None or requested != invoked:
