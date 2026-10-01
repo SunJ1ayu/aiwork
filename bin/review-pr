@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""Review one OpenDesign PR head and publish a scoped App COMMENT review."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _review_result import ADAPTER_IDENTITIES, load_result, sha256_file
+
+
+BIN = Path(__file__).resolve().parent
+REPO = "SunJ1ayu/OpenDesign"
+URL = f"https://github.com/{REPO}.git"
+SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+class ReviewError(ValueError):
+    pass
+
+
+def choose_leg(name: str) -> str:
+    identity = ADAPTER_IDENTITIES.get(name)
+    if identity is None or identity[0] == "anthropic" or not (BIN / name).is_file():
+        raise ReviewError(f"unsupported review leg: {name}")
+    return identity[0]
+
+
+def run(command: list[str], *, env: dict[str, str] | None = None,
+        input_text: str | None = None, cwd: Path | None = None) -> str:
+    process = subprocess.run(command, input=input_text, text=True, capture_output=True,
+                             cwd=cwd, env=env, check=False)
+    if process.returncode:
+        reason = process.stderr.strip() or process.stdout.strip() or f"exit {process.returncode}"
+        # Provider and Git errors are diagnostics, never a place to echo credentials.
+        reason = re.sub(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", "[redacted]", reason,
+                        flags=re.S)
+        reason = re.sub(r"(?i)\b(token|password|api[_-]?key|secret)\s*[:=]\s*\S+",
+                        r"\1=[redacted]", reason)
+        reason = re.sub(r"\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+", "[redacted]", reason)
+        raise ReviewError(f"{Path(command[0]).name} failed (rc={process.returncode}): {reason[:800]}")
+    return process.stdout
+
+
+def github(token: str, endpoint: str, payload: dict | None = None) -> dict:
+    env = dict(os.environ, GH_TOKEN=token)
+    command = ["gh", "api", endpoint]
+    if payload is not None:
+        command += ["--method", "POST", "--input", "-"]
+    data = run(command, env=env, input_text=json.dumps(payload) if payload is not None else None)
+    try:
+        value = json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise ReviewError(f"GitHub returned invalid JSON for {endpoint}") from exc
+    if not isinstance(value, dict):
+        raise ReviewError(f"GitHub returned a non-object for {endpoint}")
+    return value
+
+
+def pr_state(token: str, number: int) -> dict:
+    value = github(token, f"repos/{REPO}/pulls/{number}")
+    head = value.get("head") or {}
+    base = value.get("base") or {}
+    if value.get("state") != "open":
+        raise ReviewError(f"PR #{number} is not open")
+    if not SHA.fullmatch(head.get("sha", "")) or not SHA.fullmatch(base.get("sha", "")):
+        raise ReviewError("PR head/base SHA is missing or invalid")
+    if not isinstance(head.get("ref"), str) or not isinstance(base.get("ref"), str):
+        raise ReviewError("PR head/base ref is missing")
+    return value
+
+
+def check_current_head(expected: str, current: dict) -> None:
+    if current.get("state") != "open" or (current.get("head") or {}).get("sha") != expected:
+        raise ReviewError(f"PR head changed since review of {expected}; no review posted, rerun")
+
+
+def snapshot(token: str, pr: dict, directory: Path) -> tuple[Path, str, list[str], str]:
+    repo = directory / "repo"
+    repo.mkdir()
+    run(["git", "init", "-q", str(repo)])
+    askpass = directory / "askpass"
+    askpass.write_text(
+        "#!/bin/sh\ncase \"$1\" in *sername*) printf x-access-token;; *) printf %s \"$AIWORK_REVIEW_GIT_TOKEN\";; esac\n",
+        encoding="utf-8",
+    )
+    askpass.chmod(0o700)
+    env = dict(os.environ, GIT_ASKPASS=str(askpass), GIT_TERMINAL_PROMPT="0",
+               AIWORK_REVIEW_GIT_TOKEN=token)
+    head = pr["head"]["sha"]
+    base = pr["base"]["sha"]
+    run(["git", "-C", str(repo), "-c", "credential.helper=", "fetch", "-q", "--no-tags",
+         URL, head, base, "refs/heads/main:refs/aiwork/main"], env=env)
+    run(["git", "-C", str(repo), "checkout", "-q", "--detach", head])
+    if run(["git", "-C", str(repo), "rev-parse", "HEAD"]).strip() != head:
+        raise ReviewError("snapshot HEAD differs from PR head")
+    # The reviewer sees a complete checkout, not a sparse or partial worktree.
+    if "160000 " in run(["git", "-C", str(repo), "ls-files", "--stage"]):
+        raise ReviewError("snapshot contains submodules; full view cannot be verified")
+    merge_base = run(["git", "-C", str(repo), "merge-base", base, head]).strip()
+    raw_names = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", "-z",
+                                merge_base, head], capture_output=True, check=True).stdout
+    files = [os.fsdecode(item) for item in raw_names.split(b"\0") if item]
+    if not files:
+        raise ReviewError("PR has no changed files relative to merge base")
+    diff = run(["git", "-C", str(repo), "diff", "--binary", "--no-ext-diff", merge_base, head])
+    if not diff:
+        raise ReviewError("PR diff is empty")
+    return repo, merge_base, files, diff
+
+
+def main_document(repo: Path, path: str, *, required: bool = True) -> str:
+    entry = run(["git", "-C", str(repo), "ls-tree", "refs/aiwork/main", "--", path]).strip()
+    if not entry:
+        if required:
+            raise ReviewError(f"required review document main:{path} is missing; no review run")
+        return "无"
+    if not entry.startswith(("100644 blob ", "100755 blob ")):
+        raise ReviewError(f"main:{path} is not a regular file")
+    process = subprocess.run(["git", "-C", str(repo), "show", f"refs/aiwork/main:{path}"],
+                             capture_output=True, check=False)
+    if process.returncode:
+        raise ReviewError(f"cannot read main:{path}")
+    return process.stdout.decode("utf-8")
+
+
+def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
+              review_rules: str, risks: str) -> str:
+    return (
+        f"# OpenDesign PR #{number} · 当前 HEAD 的完整评审\n\n"
+        f"HEAD: {pr['head']['sha']} ({pr['head']['ref']})\n"
+        f"Base: {pr['base']['sha']} ({pr['base']['ref']})\n"
+        f"Merge base: {merge_base}\n\n"
+        "请独立审查这次 PR 的完整改动，亲自检查涉及的文件及调用方、测试和系统约束。"
+        "只凭亲自读到、跑到的证据下结论；没跑过的检查不许写成跑过。"
+        "不许修改源文件、push、merge、装依赖、联网查资料、派子 agent。"
+        "上下文不够就指出缺口并给 NEEDS_MORE_INFO。\n\n"
+        "每条发现写严重程度、file:line 证据、触发条件及影响；列出实际检查过的文件。"
+        "文件证据用仓库相对路径，不要用临时目录的绝对路径或指向临时目录的链接。"
+        "最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
+        "Conclusion: NEEDS_MORE_INFO。\n\n"
+        "## 项目 main 的 .aiwork/review-rules.md（原文，现行评审口径）\n\n" + review_rules
+        + "\n\n## 项目 main 的 .aiwork/accepted-risks.md（原文；不存在时为无）\n\n" + risks
+        + "\n\n"
+        "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
+        + "\n## 完整 diff（merge base → HEAD）\n```diff\n" + diff + "\n```\n"
+    )
+
+
+def publishable_model(result: dict) -> str:
+    process = result["process"]
+    if process != {"state": "exited", "exit_code": 0}:
+        raise ReviewError(f"review leg process failed: {process}")
+    if result["verdict"] == "UNKNOWN" or result["failure_kind"] != "none":
+        raise ReviewError(f"review leg failed: {result['failure_kind']}; verdict={result['verdict']}")
+    if result["evidence"]["completeness"] == "none" or result["view"]["delivery_state"] == "none":
+        raise ReviewError("review leg supplied no evidence or view")
+    model = result["model"]
+    if not model["invoked"] or model["requested"] != model["invoked"]:
+        raise ReviewError("review leg model invocation is unverified")
+    if model["reported"] is not None and model["reported"] != model["invoked"]:
+        raise ReviewError("review leg reported a different model")
+    return model["invoked"]
+
+
+def completeness(result: dict) -> str:
+    if result["evidence"]["completeness"] == "none":
+        return "none"
+    if (result["process"] == {"state": "exited", "exit_code": 0}
+            and result["verdict"] != "UNKNOWN" and result["failure_kind"] == "none"
+            and not result["degraded"] and result["evidence"]["completeness"] == "complete"
+            and result["view"]["delivery_state"] == "complete"):
+        return "complete"
+    return "partial"
+
+
+def build_body(leg: str, model: str, report: str, block: dict) -> str:
+    clean = re.sub(r"```json\b", "```text", report.strip(), flags=re.I)
+    return (f"**aiwork-review · {leg} · {model}**\n\n{clean}\n\n"
+            f"```json\n{json.dumps(block, ensure_ascii=False, separators=(',', ':'))}\n```\n")
+
+
+def review_report(log: Path) -> str:
+    # Both existing adapters prepend a human log header and one empty line.
+    text = log.read_text(encoding="utf-8", errors="replace")
+    if "\n\n" not in text:
+        raise ReviewError("review leg log has no model report")
+    report = text.split("\n\n", 1)[1].strip()
+    if not report:
+        raise ReviewError("review leg log has an empty model report")
+    return report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("pr", type=int, help="OpenDesign PR number")
+    parser.add_argument("--leg", default="subcodex")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    try:
+        if args.pr < 1:
+            raise ReviewError("PR number must be positive")
+        family = choose_leg(args.leg)
+        token = run([str(BIN / "gh-app-token"), "review"]).strip()
+        if not token:
+            raise ReviewError("review App returned an empty token")
+        pr = pr_state(token, args.pr)
+        with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
+            directory = Path(temporary)
+            repo, merge_base, files, diff = snapshot(token, pr, directory)
+            review_rules = main_document(repo, ".aiwork/review-rules.md")
+            risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
+            task = directory / "task.md"
+            task.write_text(task_text(args.pr, pr, merge_base, files, diff,
+                                      review_rules, risks), encoding="utf-8")
+            log = directory / "review.log"
+            facts = directory / "facts.json"
+            result_file = directory / "result.json"
+            diagnostic = directory / "leg.stderr"
+            env = dict(os.environ)
+            for key in ("GH_TOKEN", "GITHUB_TOKEN", "AIWORK_REVIEW_GIT_TOKEN", "GIT_ASKPASS"):
+                env.pop(key, None)
+            env.update(AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_RESULT_BIN=str(BIN / "_review_result.py"),
+                       PANEL_DIFF_BASE=merge_base)
+            leg = subprocess.run([str(BIN / args.leg), "review", str(task), str(log), str(repo)],
+                                 text=True, capture_output=True, env=env, check=False)
+            diagnostic.write_text(leg.stderr, encoding="utf-8")
+            command = [sys.executable, str(BIN / "_review_result.py"), "emit", "--result", str(result_file),
+                       "--run-id", f"pr-{args.pr}-{pr['head']['sha'][:12]}", "--name", args.leg,
+                       "--family", family, "--adapter", args.leg, "--exit-code", str(leg.returncode),
+                       "--task-sha256", sha256_file(task), "--log", str(log), "--diagnostic", str(diagnostic)]
+            if facts.is_file():
+                command += ["--facts", str(facts)]
+            run(command)
+            result = load_result(result_file)
+            model = publishable_model(result)
+            if not model.startswith(ADAPTER_IDENTITIES[args.leg][1]):
+                raise ReviewError("review leg model does not match selected family")
+            report = review_report(log)
+            block = {"verdict": result["verdict"], "head_sha": pr["head"]["sha"],
+                     "model": model, "family": family, "completeness": completeness(result),
+                     "files_read": files}
+            body = build_body(args.leg, model, report, block)
+            check_current_head(pr["head"]["sha"], pr_state(token, args.pr))
+            if args.dry_run:
+                print(body, end="")
+                return 0
+            response = github(token, f"repos/{REPO}/pulls/{args.pr}/reviews",
+                              {"commit_id": pr["head"]["sha"], "event": "COMMENT", "body": body})
+            link = response.get("html_url")
+            if not isinstance(link, str) or not link.startswith("https://github.com/"):
+                raise ReviewError("review POST succeeded but returned no review link")
+            print(link)
+            github(token, f"repos/{REPO}/issues/{args.pr}/labels", {"labels": ["aiwork:recheck"]})
+            return 0
+    except (ReviewError, OSError, ValueError) as exc:
+        print(f"review-pr: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

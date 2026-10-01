@@ -8,6 +8,12 @@ protocol, safety rules — is versioned under `workflow/`; `/root/CLAUDE.md` and
 deliberately absent so Codex does not automatically load these Claude-specific
 instructions; this README only maps the machinery.
 
+The `main` branch of this GitHub repository is the only copy of aiwork. The
+local `/root/aiwork` is a clone of it; changes land through branches and PRs.
+What stays on the machine only (credentials, logs, track evidence and
+observations, run output, ...) is whatever `.gitignore` says. Local history
+from before the first commit (`1f26cdf`) was not uploaded.
+
 ## Layout
 
 - `bin/` executors and panel tools (below)
@@ -16,7 +22,7 @@ instructions; this README only maps the machinery.
 - `templates/` starter task files (`review-task.md`, `fix-task.md`)
 - `tests/` regression oracles for this tooling itself
 - `track/` lightweight change-workflow convention + templates (`bin/track` CLI)
-- `tracks/` the change artifacts themselves (proposal/design/tasks/verify + evidence)
+- `tracks/` the change artifacts themselves (proposal/design/tasks/verify; their `evidence/` and `observations/` stay local, gitignored)
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - `worktrees/` per-job isolated checkouts created by `delegate-codex` (gitignored)
 - `reports/`, `review/`, `mimo-home/`, `quicklook/` project-specific areas
