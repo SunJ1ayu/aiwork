@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "track": "phase-c-review-pr",
+  "impact": {
+    "level": "high",
+    "factors": ["new_write_surface", "auth", "judging_control"]
+  },
+  "design": {
+    "uncertainty": "low",
+    "premise_attack": {
+      "status": "not_required",
+      "evidence": []
+    }
+  },
+  "execution_plan": {
+    "adapter": "main",
+    "model": null
+  },
+  "outcome": {
+    "verdict": null
+  }
+}
