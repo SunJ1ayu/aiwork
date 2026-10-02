@@ -65,9 +65,14 @@ class ReviewPrTests(unittest.TestCase):
         with patch.dict("os.environ", {"CURSOR_MODEL": ""}):
             self.assertEqual(self.review.choose_leg("subcursor")[1], configured)
 
-    def run_main_with_leg_result(self, model_used: str):
-        """Run main() --dry-run on subcursor with a fake leg; return (rc, leg env, emit command, stdout)."""
-        calls = {}
+    def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True):
+        """Run main() on subcursor with a fake leg and GitHub; return (rc, calls, stdout, stderr)."""
+        calls = {"github_writes": []}
+
+        def fake_github(token, endpoint, payload=None):
+            if payload is not None:
+                calls["github_writes"].append(endpoint)
+            return {"html_url": "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1"}
 
         def fake_run(command, **_):
             if command[0].endswith("gh-app-token"):
@@ -90,9 +95,10 @@ class ReviewPrTests(unittest.TestCase):
         }
         pr = {"state": "open", "head": {"sha": "a" * 40, "ref": "f"}, "base": {"sha": "b" * 40, "ref": "main"}}
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch("sys.argv", ["review-pr", "12", "--leg", "subcursor", "--dry-run"]), \
+        with patch("sys.argv", ["review-pr", "12", "--leg", "subcursor"] + (["--dry-run"] if dry_run else [])), \
                 patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
                 patch.object(self.review, "run", side_effect=fake_run), \
+                patch.object(self.review, "github", side_effect=fake_github), \
                 patch.object(self.review, "pr_state", return_value=pr), \
                 patch.object(self.review, "snapshot", return_value=(Path("unused"), "c" * 40, ["src/a.py"], "diff")), \
                 patch.object(self.review, "main_document", return_value="rules"), \
@@ -101,12 +107,13 @@ class ReviewPrTests(unittest.TestCase):
                 patch.object(self.review.subprocess, "run", side_effect=fake_leg), \
                 redirect_stdout(stdout), redirect_stderr(stderr):
             rc = self.review.main()
-        return rc, calls.get("leg_env"), calls.get("emit"), stdout.getvalue(), stderr.getvalue()
+        return rc, calls, stdout.getvalue(), stderr.getvalue()
 
     def test_cursor_model_is_frozen_for_leg_and_result(self):
-        rc, leg_env, emit, body, stderr = self.run_main_with_leg_result("gpt-5.6")
+        rc, calls, body, stderr = self.run_main_with_leg_result("gpt-5.6")
+        emit = calls["emit"]
         self.assertEqual(rc, 0, stderr)
-        self.assertEqual(leg_env["CURSOR_MODEL"], "gpt-5.6")
+        self.assertEqual(calls["leg_env"]["CURSOR_MODEL"], "gpt-5.6")
         self.assertEqual(emit[emit.index("--expected-model") + 1], "gpt-5.6")
         self.assertEqual(emit[emit.index("--family") + 1], "openai")
         self.assertIn("**aiwork-review · subcursor · gpt-5.6**", body)
@@ -114,10 +121,19 @@ class ReviewPrTests(unittest.TestCase):
         self.assertEqual((block["model"], block["family"]), ("gpt-5.6", "openai"))
 
     def test_cursor_result_from_another_model_is_not_published(self):
-        rc, _, _, body, stderr = self.run_main_with_leg_result("claude-4.5-sonnet")
+        rc, _, body, stderr = self.run_main_with_leg_result("claude-4.5-sonnet")
         self.assertEqual(rc, 1)
         self.assertEqual(body, "")
         self.assertIn("does not match selected family", stderr)
+
+    def test_publishing_writes_only_the_review(self):
+        # The review itself wakes the gate (OpenDesign aiwork-review-ping); a second write
+        # such as a recheck label is a second doorbell, and its failure would turn a posted
+        # review into exit 1.
+        rc, calls, stdout, stderr = self.run_main_with_leg_result("gpt-5.6", dry_run=False)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/OpenDesign/pulls/12/reviews"])
+        self.assertEqual(stdout.strip(), "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1")
 
     def test_report_is_separated_only_at_the_leg_log_header(self):
         with tempfile.TemporaryDirectory() as temporary:

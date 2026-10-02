@@ -276,8 +276,8 @@ def main() -> int:
             link = response.get("html_url")
             if not isinstance(link, str) or not link.startswith("https://github.com/"):
                 raise ReviewError("review POST succeeded but returned no review link")
+            # The gate wakes on the review itself (OpenDesign aiwork-review-ping); no second doorbell.
             print(link)
-            github(token, f"repos/{REPO}/issues/{args.pr}/labels", {"labels": ["aiwork:recheck"]})
             return 0
     except (ReviewError, OSError, ValueError) as exc:
         print(f"review-pr: {exc}", file=sys.stderr)
