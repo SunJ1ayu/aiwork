@@ -13,7 +13,5 @@ __pycache__/
 *.pyc
 *.raw
 node_modules/
-tracks/**/evidence/
-tracks/**/observations/
 .pytest_cache/
 tasks/
