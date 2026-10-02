@@ -8,24 +8,80 @@ protocol, safety rules — is versioned under `workflow/`; `/root/CLAUDE.md` and
 deliberately absent so Codex does not automatically load these Claude-specific
 instructions; this README only maps the machinery.
 
-The `main` branch of this GitHub repository is the only copy of aiwork. The
-local `/root/aiwork` is a clone of it; changes land through branches and PRs.
-What stays on the machine only (credentials, logs, track evidence and
-observations, run output, ...) is whatever `.gitignore` says. Local history
-from before the first commit (`1f26cdf`) was not uploaded.
+The `main` branch of this GitHub repository is the authoritative source for
+aiwork. The local `/root/aiwork` is a clone of it; changes land through branches
+and PRs. This repository keeps workflow tooling and its change records.
+Credentials, project task briefs, reviewer logs, runtime homes, reference
+copies, build output and worktrees stay on the machine as listed in `.gitignore`.
+Track evidence and observations are versioned alongside their change records.
+
+## Historical archive and project separation
+
+`archive/local-history` preserves the original local Git history before this
+repository was curated. Its frozen tip is
+`6f1873842c98cb8351c27be46fd301c0ef4bf2c3` (675 commits). It includes the 961
+evidence/observation files belonging to already archived tracks, plus the
+original project records. Those files were verified against a fresh fetch from
+GitHub. Their untracked working copies remain in the local checkout because
+`track-guard` reads receipts referenced by the archived records during commits.
+They are kept in their original history; adding them to completed tracks now
+would change the archived records. New tracks keep their evidence and
+observations in Git through archive.
+
+The old history was scanned for credentials before upload. All detected key
+patterns were the same deliberate fake value in `tests/test-runlog.sh` across
+its historical versions. The local `/root/aiwork.old` is retained.
+
+Treat the archive branch as a frozen historical snapshot; do not merge it into
+`main` or add new work there. GitHub currently rejects ruleset queries for this
+private repository with an upgrade-required response, so the branch is not
+enforced as read-only. Use the full commit ID above to identify the snapshot.
+To inspect it independently:
+
+```bash
+git clone --single-branch --branch archive/local-history https://github.com/SunJ1ayu/aiwork.git ../aiwork-history
+git -C ../aiwork-history rev-parse HEAD
+```
+
+Before using the local commit hooks in a fresh checkout, restore the historical
+receipt working copies from the pinned archive. These commands do not stage
+them; they will appear as untracked files. Their source is already preserved
+on GitHub, so do not add them to a new commit in `main`.
+
+```bash
+git fetch origin archive/local-history
+git restore --source=6f1873842c98cb8351c27be46fd301c0ef4bf2c3 --worktree -- ':(glob)tracks/archive/*/evidence/**' ':(glob)tracks/archive/*/observations/**'
+```
+
+Project components have separate owners:
+
+- quicklook lives at `/root/quicklook`; its systemd unit and run-output path
+  point there. Moving it out of aiwork did not create a separate GitHub repo.
+- The current wiki-ingest skill lives in the OpenClaw workspace at
+  `/root/.openclaw/workspace/skills/wiki-ingest`; the removed aiwork copy was older.
+- The `opendesign-file-organizer` and `opendesign-ref-images` track records
+  belong to OpenDesign and are preserved in the historical archive.
+- Project task briefs remain locally under `tasks/` and are ignored by Git.
+  Existing local output, reference copies, logs and worktrees also remain in
+  their current locations; this split changes what aiwork versions.
+
+`WORKFLOW-MIGRATION-PLAN.md` records the staged OpenDesign workflow migration.
+Its older statements that aiwork is a regenerated mirror or that the local
+checkout is authoritative are superseded by the repository policy above.
 
 ## Layout
 
 - `bin/` executors and panel tools (below)
-- `tasks/` task/brief files sent to reviewers (main-agent-authored)
-- `logs/` reviewer output, `.err` sidecars, my-review/arbitration records
+- `tasks/` local task/brief files sent to reviewers (main-agent-authored, gitignored)
+- `logs/` local reviewer output, `.err` sidecars, my-review/arbitration records (gitignored)
 - `templates/` starter task files (`review-task.md`, `fix-task.md`)
 - `tests/` regression oracles for this tooling itself
 - `track/` lightweight change-workflow convention + templates (`bin/track` CLI)
-- `tracks/` the change artifacts themselves (proposal/design/tasks/verify; their `evidence/` and `observations/` stay local, gitignored)
+- `tracks/` workflow change records and their versioned `evidence/` and `observations/`; pre-curation archived evidence is in `archive/local-history`
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - `worktrees/` per-job isolated checkouts created by `delegate-codex` (gitignored)
-- `reports/`, `review/`, `mimo-home/`, `quicklook/` project-specific areas
+- `mimo-home/`, `kimi-review-home/`, `.mimocode/`, `etc/` local reviewer runtime state and configuration (gitignored)
+- `out/`, `refs/` local build output and reference copies (gitignored)
 
 ## Core engine
 
