@@ -28,9 +28,17 @@ They are kept in their original history; adding them to completed tracks now
 would change the archived records. New tracks keep their evidence and
 observations in Git through archive.
 
-The old history was scanned for credentials before upload. All detected key
-patterns were the same deliberate fake value in `tests/test-runlog.sh` across
-its historical versions. The local `/root/aiwork.old` is retained.
+The old history was scanned for credentials before upload. The key-shaped
+hits were deliberate fake test values: one shared fixture in
+`tests/test-runlog.sh` across its historical versions, placeholder spike keys
+quoted in `attack-logs/`, the fixture pair in
+`tracks/archive/mimo-key-single-source/mutation-check.sh`, a fake key in
+`tests/test_subcursor.py`, and one URL-slug false positive in
+`refs/context-engineering-claude5-20260724.md`. One further token-shaped
+value in the historical `refs/nodepath-fix-20260728-143246/switch-model.sh`
+could not be confirmed fake; it is absent from this machine's current live
+configuration and has been reported to the owner for verification or
+rotation. The local `/root/aiwork.old` is retained.
 
 Treat the archive branch as a frozen historical snapshot; do not merge it into
 `main` or add new work there. GitHub currently rejects ruleset queries for this
