@@ -15,67 +15,33 @@ Credentials, project task briefs, reviewer logs, runtime homes, reference
 copies, build output and worktrees stay on the machine as listed in `.gitignore`.
 Track evidence and observations are versioned alongside their change records.
 
-## Historical archive and project separation
+## History and project separation
 
-`archive/local-history` preserves the original local Git history before this
-repository was curated. Its frozen tip is
-`6f1873842c98cb8351c27be46fd301c0ef4bf2c3` (675 commits). It includes the 961
-evidence/observation files belonging to already archived tracks, plus the
-original project records. Those files were verified against a fresh fetch from
-GitHub. Their untracked working copies remain in the local checkout because
-`track-guard` reads receipts referenced by the archived records during commits.
-They are kept in their original history; adding them to completed tracks now
-would change the archived records. New tracks keep their evidence and
-observations in Git through archive.
+The first-parent history of `main` is the original local history of
+`/root/aiwork` (675 commits up to `6f18738`), joined in by merge `be49728`.
+Tracks archived before the switch therefore keep their evidence and
+observations from their original archive commits; nothing in a completed
+track was re-added or edited. The second-parent line is the curated snapshot
+(`1f26cdf`) that briefly stood in for this repository, plus the changes made
+on it.
 
-The old history was scanned for credentials before upload. The key-shaped
-hits were deliberate fake test values: one shared fixture in
-`tests/test-runlog.sh` across its historical versions, placeholder spike keys
-quoted in `attack-logs/`, the fixture pair in
-`tracks/archive/mimo-key-single-source/mutation-check.sh`, a fake key in
-`tests/test_subcursor.py`, and one URL-slug false positive in
-`refs/context-engineering-claude5-20260724.md`. One further token-shaped
-value in the historical `refs/nodepath-fix-20260728-143246/switch-model.sh`
-could not be confirmed fake; it is absent from this machine's current live
-configuration and has been reported to the owner for verification or
-rotation. The local `/root/aiwork.old` is retained.
+The old history was scanned for credentials before it was uploaded. Apart
+from fake test values it holds one real-looking key: a Xiaomi MiMo token-plan
+key in `refs/nodepath-fix-20260728-143246/switch-model.sh`, not used by the
+current configuration. The string stays in history, so revoking it in the
+MiMo console is what makes it harmless.
 
-Treat the archive branch as a frozen historical snapshot; do not merge it into
-`main` or add new work there. GitHub currently rejects ruleset queries for this
-private repository with an upgrade-required response, so the branch is not
-enforced as read-only. Use the full commit ID above to identify the snapshot.
-To inspect it independently:
-
-```bash
-git clone --single-branch --branch archive/local-history https://github.com/SunJ1ayu/aiwork.git ../aiwork-history
-git -C ../aiwork-history rev-parse HEAD
-```
-
-Before using the local commit hooks in a fresh checkout, restore the historical
-receipt working copies from the pinned archive. These commands do not stage
-them; they will appear as untracked files. Their source is already preserved
-on GitHub, so do not add them to a new commit in `main`.
-
-```bash
-git fetch origin archive/local-history
-git restore --source=6f1873842c98cb8351c27be46fd301c0ef4bf2c3 --worktree -- ':(glob)tracks/archive/*/evidence/**' ':(glob)tracks/archive/*/observations/**'
-```
-
-Project components have separate owners:
+Things that are not aiwork live with their own owners:
 
 - quicklook lives at `/root/quicklook`; its systemd unit and run-output path
-  point there. Moving it out of aiwork did not create a separate GitHub repo.
+  point there.
 - The current wiki-ingest skill lives in the OpenClaw workspace at
-  `/root/.openclaw/workspace/skills/wiki-ingest`; the removed aiwork copy was older.
+  `/root/.openclaw/workspace/skills/wiki-ingest`; the older aiwork copy was
+  removed.
 - The `opendesign-file-organizer` and `opendesign-ref-images` track records
-  belong to OpenDesign and are preserved in the historical archive.
-- Project task briefs remain locally under `tasks/` and are ignored by Git.
-  Existing local output, reference copies, logs and worktrees also remain in
-  their current locations; this split changes what aiwork versions.
-
-`WORKFLOW-MIGRATION-PLAN.md` records the staged OpenDesign workflow migration.
-Its older statements that aiwork is a regenerated mirror or that the local
-checkout is authoritative are superseded by the repository policy above.
+  belong to OpenDesign (moved by `SunJ1ayu/OpenDesign` PR #20).
+- Project task briefs stay on the machine under `tasks/`, ignored by Git like
+  logs.
 
 ## Layout
 
@@ -85,7 +51,7 @@ checkout is authoritative are superseded by the repository policy above.
 - `templates/` starter task files (`review-task.md`, `fix-task.md`)
 - `tests/` regression oracles for this tooling itself
 - `track/` lightweight change-workflow convention + templates (`bin/track` CLI)
-- `tracks/` workflow change records and their versioned `evidence/` and `observations/`; pre-curation archived evidence is in `archive/local-history`
+- `tracks/` workflow change records with their `evidence/` and `observations/`
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - `worktrees/` per-job isolated checkouts created by `delegate-codex` (gitignored)
 - `mimo-home/`, `kimi-review-home/`, `.mimocode/`, `etc/` local reviewer runtime state and configuration (gitignored)
