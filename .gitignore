@@ -1,49 +1,17 @@
-# /root/aiwork 版本控制 —— 纯本地仓,不推任何远端。
-# 目的:bin/ 里的安全闸门工具、track 模板、任务书有历史可回滚。
-
-# 别的仓的 worktree,不能嵌套进来
+# Runtime output and local credentials
+logs/
+out/
 worktrees/
-
-# 含登录凭证(auth.json / credentials),永不入库
+refs/
+attack-logs/
+etc/
 mimo-home/
-# kimi 评审腿的 HOME:**凭证/会话/oauth 一律不入库,但守卫要入库**。
-# 2026-08-19 发现:整个目录被忽略 ⇒ `hooks/guard.mjs`(判卷防线的一部分)
-# 从来没进过版本控制 ⇒ 它被改了不留痕,闸③亲读 diff 也照不到。
-# 写法注意:必须是 `kimi-review-home/*` 而不是 `kimi-review-home/` ——
-# 父目录被整个忽略时,里面的文件是 unignore 不回来的(gitignore 的老陷阱)。
-kimi-review-home/*
-!kimi-review-home/hooks/
-kimi-review-home/hooks/*
-!kimi-review-home/hooks/guard.mjs
-!kimi-review-home/hooks/probe.sh
-# 2026-08-19 补:上面那次只补了 hooks/,漏了**决定 hooks 挂不挂**的那个开关。
-# `config.toml` 里的 `[[hooks]] command = "node …/guard.mjs"` 才是防线的接线;
-# 它不入库 ⇒ 被改了不留痕,闸③ 亲读 diff 也照不到 —— 同一个坑补了一半。
-# (里面没有凭证:api_key 是空串,oauth 只写"存哪儿"、真凭证在 credentials/ 下,那个仍不入库。)
-!kimi-review-home/config.toml
-
-# 日志是流水,不入库;但 oracle 哈希存档是安全工件,留下
-logs/*
-!logs/*oracle-hashes.txt
-
-# 生成物
-quicklook/runs/
+kimi-review-home/
+.mimocode/
+.mutation-state/
 __pycache__/
 *.pyc
 *.raw
-
-# 生成物与依赖(2026-08-18 补:此前它们只是"碰巧没被 add"，一次 `git add -A` 就会
-# 把 400M+ 塞进 .git，而这仓是纯本地无远端、清理只能重写历史)
-# **不写尾斜杠是故意的**:带尾斜杠只匹配目录,挡不住同名符号链接 ——
-# 07 月那次 worktree 事故就是链接被 merge 带回主仓覆盖了真目录。
-node_modules
-out
-
-# 评审腿的运行期产物(2026-08-19 第三轮四审 subdeepseek #7 抓到:`.mimocode/plans/`
-# 已经有 9 份入库了 —— 它们正是"腿往被评审的仓里写文件"的实物证据)。
-# 已入库的那几份用 `git rm --cached` 撤出,盘上留着;历史里也还查得到
-# (`git show <commit>:.mimocode/plans/<file>`),证据不会丢。
-.mimocode
-
-# 红检被硬杀(kill -9)时留下的痕迹目录 —— 是状态不是产物,不进版本库
-.mutation-state/
+node_modules/
+.pytest_cache/
+tasks/
