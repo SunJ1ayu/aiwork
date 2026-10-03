@@ -22,7 +22,7 @@ Environment:
   XAI_API_KEY     API billing instead of session login, when set
   PANEL_GROK_LEG  agent (default) or off, in panel-review/panel-explore
 
-Logs: LOG_FILE contains assistant text only; sibling .stream.jsonl contains
+Logs: LOG_FILE = header + assistant text; sibling .stream.jsonl contains
 tool events and .stream-summary.json records completion, model and usage.
 EOF
 }
@@ -116,7 +116,15 @@ cat "$TASK_FILE" >> "$PROMPT_FILE"
 mkdir -p "$(dirname "$LOG_FILE")"
 BASE="${LOG_FILE%.log}"
 STREAM="$BASE.stream.jsonl"; SUMMARY="$BASE.stream-summary.json"
-: > "$LOG_FILE"
+# Same header shape as the other legs: review-pr separates the report at its end.
+{
+  echo "# subgrok $MODE log"
+  echo "time: $(date -Iseconds)"
+  echo "model: $MODEL"
+  echo "repo: $REPO_DIR (snapshot of $SOURCE_REPO, source mounted read-only)"
+  echo "task: $TASK_FILE"
+  echo
+} > "$LOG_FILE"
 review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" || exit 78
 # No caller GROK_* reaches the CLI; only the values set below. The binary reads
 # dozens of them: GROK_FOLDER_TRUST=0 ungates repo hooks/MCP (reviewed-repo code

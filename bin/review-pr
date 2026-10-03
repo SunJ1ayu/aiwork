@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _review_result import ADAPTER_IDENTITIES, load_result, sha256_file
+from _review_result import leg_identity, load_result, sha256_file
 
 
 BIN = Path(__file__).resolve().parent
@@ -27,11 +27,22 @@ class ReviewError(ValueError):
     pass
 
 
-def choose_leg(name: str) -> str:
-    identity = ADAPTER_IDENTITIES.get(name)
-    if identity is None or identity[0] == "anthropic" or not (BIN / name).is_file():
-        raise ReviewError(f"unsupported review leg: {name}")
-    return identity[0]
+def choose_leg(name: str) -> tuple[str, str | None]:
+    """The family this review is published under, and the model frozen for this run.
+
+    A leg only has to be attributable to one family. Which families count for which
+    PR is the gate's call (OpenDesign .github/aiwork-gate/decide.mjs), not this tool's.
+    Cursor's model is frozen once here, from the same source as the panel
+    (CURSOR_MODEL, else bin/cursor-model), and decides the family.
+    """
+    model = None
+    if name == "subcursor":
+        model = (os.environ.get("CURSOR_MODEL")
+                 or (BIN / "cursor-model").read_text(encoding="utf-8").rstrip("\n"))
+    identity = leg_identity(name, model)
+    if identity is None or not (BIN / name).is_file():
+        raise ReviewError(f"unsupported review leg: {name}" + (f" (model {model!r})" if model else ""))
+    return identity[0], model
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None,
@@ -189,10 +200,12 @@ def build_body(leg: str, model: str, report: str, block: dict) -> str:
 
 
 def review_report(log: Path) -> str:
-    # Both existing adapters prepend a human log header and one empty line.
+    # Leg log contract: a "# <leg> <mode> log" header, one empty line, then the model's
+    # report. A log without that header is refused, not guessed at: cutting at the first
+    # empty line would silently drop the opening of the report.
     text = log.read_text(encoding="utf-8", errors="replace")
-    if "\n\n" not in text:
-        raise ReviewError("review leg log has no model report")
+    if not text.startswith("# ") or "\n\n" not in text:
+        raise ReviewError("review leg log has no '# <leg> <mode> log' header; cannot separate the report")
     report = text.split("\n\n", 1)[1].strip()
     if not report:
         raise ReviewError("review leg log has an empty model report")
@@ -208,7 +221,7 @@ def main() -> int:
     try:
         if args.pr < 1:
             raise ReviewError("PR number must be positive")
-        family = choose_leg(args.leg)
+        family, frozen_model = choose_leg(args.leg)
         token = run([str(BIN / "gh-app-token"), "review"]).strip()
         if not token:
             raise ReviewError("review App returned an empty token")
@@ -230,6 +243,8 @@ def main() -> int:
                 env.pop(key, None)
             env.update(AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_RESULT_BIN=str(BIN / "_review_result.py"),
                        PANEL_DIFF_BASE=merge_base)
+            if frozen_model is not None:
+                env["CURSOR_MODEL"] = frozen_model
             leg = subprocess.run([str(BIN / args.leg), "review", str(task), str(log), str(repo)],
                                  text=True, capture_output=True, env=env, check=False)
             diagnostic.write_text(leg.stderr, encoding="utf-8")
@@ -239,10 +254,13 @@ def main() -> int:
                        "--task-sha256", sha256_file(task), "--log", str(log), "--diagnostic", str(diagnostic)]
             if facts.is_file():
                 command += ["--facts", str(facts)]
+            if frozen_model is not None:
+                command += ["--expected-model", frozen_model]
             run(command)
             result = load_result(result_file)
             model = publishable_model(result)
-            if not model.startswith(ADAPTER_IDENTITIES[args.leg][1]):
+            identity = leg_identity(args.leg, model)
+            if identity is None or identity[0] != family or not model.startswith(identity[1]):
                 raise ReviewError("review leg model does not match selected family")
             report = review_report(log)
             block = {"verdict": result["verdict"], "head_sha": pr["head"]["sha"],
@@ -258,8 +276,8 @@ def main() -> int:
             link = response.get("html_url")
             if not isinstance(link, str) or not link.startswith("https://github.com/"):
                 raise ReviewError("review POST succeeded but returned no review link")
+            # The gate wakes on the review itself (OpenDesign aiwork-review-ping); no second doorbell.
             print(link)
-            github(token, f"repos/{REPO}/issues/{args.pr}/labels", {"labels": ["aiwork:recheck"]})
             return 0
     except (ReviewError, OSError, ValueError) as exc:
         print(f"review-pr: {exc}", file=sys.stderr)

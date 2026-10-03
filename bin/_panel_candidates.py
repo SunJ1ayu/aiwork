@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-from _review_result import ADAPTER_IDENTITIES, TOKEN_RE, cursor_model_family
+from _review_result import TOKEN_RE, cursor_model_family, leg_identity
 
 BIN = Path(__file__).resolve().parent
 # Config stem, override variable, modes, repository-reading modes, invocation prefix.
@@ -47,12 +47,13 @@ def describe(row, mode, cursor_model=None):
     stem, variable, modes, read_modes, prefix = CAPABILITIES[name]
     raw_model = cursor_model or os.environ.get(variable) or (BIN / (stem + '-model')).read_text().strip()
     model = prefix + raw_model
+    identity = leg_identity(adapter, model)
     if name == 'subcursor':
-        family = cursor_model_family(model)
-        if family is None:
+        if identity is None:
             raise ValueError('Cursor requires an explicit known model family (no auto routing)')
+        family = identity[0]
         name = 'subcursor.' + model
-    elif not TOKEN_RE.fullmatch(model) or not model.startswith(ADAPTER_IDENTITIES[adapter][1]):
+    elif identity is None or not TOKEN_RE.fullmatch(model) or not model.startswith(identity[1]):
         raise ValueError(f'model does not match adapter family: {adapter}')
     rows = health_rows()
     return {

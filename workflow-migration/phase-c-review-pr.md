@@ -10,7 +10,7 @@ review-pr <PR号> [--leg <腿名>] [--dry-run]
 ```
 
 - 默认 `--leg subcodex`(OpenAI 家族)。high 路径的第二家族入口 = 同一命令指定另一条腿,先固定 `--leg subdeepseek`(DeepSeek 家族)。
-- 只接受 `bin/_review_result.py` 的 `ADAPTER_IDENTITIES` 里有的腿;**拒绝 anthropic 家族的腿**(Builder 是 Claude,关卡本来也不认)。
+- 只接受认得出家族的腿(`bin/_review_result.py` 的 `leg_identity`):固定模型的腿查 `ADAPTER_IDENTITIES`;`subcursor` 是通道,家族跟着这次用的模型走 —— 开跑时冻结一次模型(`CURSOR_MODEL`,没设就读 `bin/cursor-model`,和评审组同一个来源),传给腿、事后按它核对;认不出家族的模型(`auto` 之类)直接拒绝。**不按家族拒绝**:哪一家的评审对哪个 PR 算数,由 OpenDesign 的关卡判(`.github/aiwork-gate/decide.mjs`),`review-pr` 只负责把家族如实写进结论块。
 - `--dry-run`:照常跑评审,但只把要发的评审正文打印出来,不发到 GitHub。
 - 仓库固定 `SunJ1ayu/OpenDesign`。所有 GitHub 调用用 `GH_TOKEN="$(gh-app-token review)"`,不用任何人的账号。
 - 放在 aiwork 的 `bin/review-pr`,按 aiwork 本机的正常流程提交;`gh-app-token` 也在这次一起收进 aiwork 的 `bin/`(阶段 B 时先放在 `/usr/local/bin`)。
@@ -20,11 +20,11 @@ review-pr <PR号> [--leg <腿名>] [--dry-run]
 1. **取 PR**:`GET /repos/SunJ1ayu/OpenDesign/pulls/<PR号>`,记下 `head.sha`(下称 HEAD)、`head.ref`、`base.ref`。PR 不是 open 就退出。
 2. **快照**:在一个临时目录里拿到**正好是 HEAD** 的代码(`git fetch` 这个提交后检出,核对 `git rev-parse HEAD` 等于 HEAD),并算出相对 base 的改动(merge-base 起的 diff 和改动文件清单)。快照目录只读给评审腿用,用完删掉。
 3. **任务书**:写明这是 OpenDesign PR #N 在 HEAD 上的**完整评审**,附改动文件清单和 diff,要求评审腿读改动涉及的文件、按现行评审口径给出独占一行的 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。沿用 aiwork 现有评审任务书的写法,不另起一套口径。**任务书里原样附上 PR 所在仓库 main 上的两份文件**:`.aiwork/review-rules.md`(评审口径)和 `.aiwork/accepted-risks.md`(没有这个文件就写"无")。**从 main 读,不从 PR 里读**(PR 不能改评它自己的口径);`review-rules.md` 读不到就报错退出、不评审(没有口径的评审不算数)。
-4. **跑腿**:`bin/<腿名> review <任务书> <日志> <快照目录>`,然后用 `bin/_review_result.py` 规整出 ReviewLegResult(不在 `review-pr` 里自己解析结论行)。
+4. **跑腿**:`bin/<腿名> review <任务书> <日志> <快照目录>`,然后用 `bin/_review_result.py` 规整出 ReviewLegResult(不在 `review-pr` 里自己解析结论行)。腿的日志 = 以 `# <腿名> <模式> log` 开头的表头 + 一个空行 + 模型原文;评审正文只取空行之后的原文。日志不是这个格式就报错、不发(不去猜哪一段是表头)。
 5. **组结论块**(第 3 节),字段全部由 `review-pr` 从 ReviewLegResult 和快照填,**不让模型自己写**:
    - `verdict`:ReviewLegResult 的 verdict;
    - `head_sha`:HEAD;
-   - `model`:这次实际用的模型名;`family`:这条腿在 `ADAPTER_IDENTITIES` 里的家族;
+   - `model`:这次实际用的模型名;`family`:`leg_identity` 给出的家族(`subcursor` 按冻结的模型);
    - `completeness`:只有"进程正常退出、结论解析成功、没降级、证据完整"才是 `complete`;其余按实际写 `partial` 或 `none`;
    - `files_read`:评审腿实际读过的文件;适配器报不出来时,用"完整快照视图下交给它的改动文件清单"。不能是空数组。
 6. **发之前再核一次 HEAD**:重新 `GET` 这个 PR,`head.sha` 已经不是 HEAD(评审期间有新推送)⇒ **不发**,退出码非 0,提示重跑。
@@ -63,7 +63,7 @@ review-pr <PR号> [--leg <腿名>] [--dry-run]
 
 1. `--dry-run` 在一个真实 PR 上跑:打印出的正文只有一个 ` ```json ` 块,字段齐全,`head_sha` 等于 PR 当前 head,`family` 是 `openai`。
 2. 同一 PR 用 `--leg subdeepseek --dry-run`:`family` 是 `deepseek`。
-3. `--leg` 给一个 anthropic 家族的腿:直接拒绝,不跑。
+3. `--leg` 给一个认不出家族的腿,或 `--leg subcursor` 配一个认不出家族的模型(如 `auto`):直接拒绝,不跑。`--leg subcursor` 配任何认得出的模型(包括 Claude):照常评审,`family` 是那个模型的家族。
 4. 净化:构造一段含 ` ```json ` 的"模型原文",组出的正文仍只有一个 ` ```json ` 块。
 5. HEAD 变了:评审期间往 PR 推一个新提交(或用假数据模拟第 6 步读到不同的 head),不发、退出码非 0。
 6. 真发一次:评审出现在 PR 上,署名 `aiwork-review[bot]`,挂在当前 head;几十秒内 PR 上的 `aiwork-gate-shadow` 检查重算。

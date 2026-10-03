@@ -4976,6 +4976,14 @@ assert p['source'] and p['view'] == {'delivery_state':'complete','mode':'full_sn
 assert p['process_state'] == 'exited' and p['verdict'] == 'PASS' and p['degraded'] is False
 PY
   check "V46①c: Gemini 正常路径交出模型、完整 snapshot 与裁决 facts" $?
+  # review-pr 在这个表头之后的空行处切出模型原文;表头不是这个形状,它会报错不发。
+  python3 - "$W/o2.log" <<'PY'
+import sys
+text = open(sys.argv[1], encoding='utf-8').read()
+assert text.startswith('# subgemini review log\n'), text[:80]
+assert 'Conclusion: PASS' in text.split('\n\n', 1)[1]
+PY
+  check "V46①d: 日志以 '# subgemini review log' 表头开头,裁决在表头后的空行之后" $?
 
   # ② 不设 AGY_MODEL 时,默认档必须**真的被传给 agy**,且必须是 gemini-* 家族。
   # 🔴 必须**单独跑一次不设 AGY_MODEL 的调用**再看。第一版直接翻前面两次调用的日志,

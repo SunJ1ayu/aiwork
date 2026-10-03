@@ -93,8 +93,8 @@ Things that are not aiwork live with their own owners:
   read-only. Existing `~/.grok/auth.json` supplies session login; `XAI_API_KEY`
   explicitly selects API billing. Override with `GROK_MODEL`, `GROK_AUTH_FILE`,
   `GROK_TIMEOUT` (900 seconds), or `GROK_MAX_TURNS` (80). No chat fallback or fix
-  mode. `PANEL_GROK_LEG=off` disables it in either panel. The report log contains
-  assistant text only; `.stream.jsonl` and `.stream-summary.json` preserve tools,
+  mode. `PANEL_GROK_LEG=off` disables it in either panel. The report log is a
+  header plus assistant text; `.stream.jsonl` and `.stream-summary.json` preserve tools,
   actual model, completion and reported usage. Timeout/turn-limit/error output
   remains partial evidence and never counts as completed review coverage.
 - `bin/submimo-iso` — concurrency-safe submimo for two simultaneous

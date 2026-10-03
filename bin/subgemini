@@ -284,13 +284,14 @@ Write the verdict line AS SOON AS you have enough to judge, then keep explaining
 The verdict line must be exactly this form:
 Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"
 
+# Same header shape as the other legs: review-pr separates the report at its end.
 {
-  echo "=== subgemini review ==="
-  echo "model:    $MODEL"
-  echo "repo:     $REPO_DIR (disposable clone; source stays read-only)"
-  echo "home:     $REVIEW_HOME"
-  echo "started:  $(date -Is)"
-  echo "========================"
+  echo "# subgemini review log"
+  echo "time: $(date -Iseconds)"
+  echo "model: $MODEL"
+  echo "repo: $REPO_DIR (disposable clone; source stays read-only)"
+  echo "home: $REVIEW_HOME"
+  echo
 } > "$LOG_FILE"
 
 set +e

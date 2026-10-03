@@ -48,7 +48,7 @@
 | D1 | **发版 workflow**:业主手动触发,只在 main 上跑,release environment 需业主批准;产物来自 main 上的具体 commit | P3 | 用未合入的代码打包发布(PR #6 之后的打包) | 撤掉本机的业主凭证后就发不了版,会逼着把凭证放回去,I1 随之失效 |
 
 补充说明:
-- **评审发出后怎么触发重算**:评审适配器发完评审,给 PR 加一个 `aiwork:recheck` 标签,触发 `labeled` 事件。加标签只需 PR 写权限,不需要推代码权限;用 `repository_dispatch` 则需要推代码权限,所以不用。漏算时,人或 agent 手动加这个标签即可重算。
+- **评审发出后怎么触发重算**:评审本身就是门铃 —— OpenDesign 的 `aiwork-review-ping`(`pull_request_review`)叫醒关卡重算,评审适配器不再另加标签(最初的方案是加 `aiwork:recheck` 标签触发 `labeled`,有了 ping 之后它成了第二个门铃,已去掉)。漏算时,人或 agent 手动加 `aiwork:recheck` 即可重算。
 - **结论格式**:评审正文里放一个 JSON 块,字段为 verdict、head_sha、model、family、completeness、files_read。只因为它由 `aiwork-review` 发出才被采信;家族映射从 aiwork 现有的 `_review_result.py` 生成,不手写第二份。
 - **推送者**:用 GitHub 的仓库活动记录(每次推送的执行者)判断,commit 里填写的作者名不作数。阶段 C 先验证这个接口可用;读不到就按 UNKNOWN 处理。
 - **gate 代码放在 OpenDesign**:原因是 aiwork 的 GitHub 仓库只是无历史的镜像,每次重新生成,固定不了 commit。(2026-10-03 起 aiwork 的 GitHub main 已是带完整历史的正本,见 aiwork README;gate 仍放在 OpenDesign,因为它判的是 OpenDesign 的 PR。)
