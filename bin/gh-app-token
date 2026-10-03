@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# gh-app-token <角色> [--grant]
+# gh-app-token <角色> [--grant] [--repo owner/name]
 #   用这个角色的 GitHub App 私钥换一个 1 小时有效的 installation token,标准输出只打印 token 本身。
 #   --grant:不打印 token,只打印 GitHub 实际给的权限、仓库和到期时间(验收用)。
+#   --repo:在角色配置内只要本次任务的仓库,并核实 GitHub 返回的完整仓库名。
 #
 # 三层:App = 角色和权限(GitHub 上建);本脚本 = 适配器(拿私钥换短期令牌);模型 = 谁来用这个令牌。
 # 换模型不碰这里;换 App 或收窄权限只改角色配置 /etc/aiwork/apps/<角色>.env:
@@ -15,9 +16,22 @@
 # 私钥和 token 都不许打印、不许写进日志或仓库;JWT 与 token 都不出现在命令行参数里(ps 看不到)。
 set -euo pipefail
 
-role=${1:?用法: gh-app-token <角色> [--grant]}
-mode=${2:-token}
-case $mode in token|--grant) ;; *) echo "gh-app-token: 不认识的参数 $mode" >&2; exit 2 ;; esac
+role=${1:?用法: gh-app-token <角色> [--grant] [--repo owner/name]}
+shift
+mode=token
+repo_scope=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    token|--grant) mode="$1"; shift ;;
+    --repo)
+      [ $# -ge 2 ] && [ -z "$repo_scope" ] || { echo 'gh-app-token: --repo 必须指定一次 owner/name' >&2; exit 2; }
+      repo_scope="$2"; shift 2
+      [[ "$repo_scope" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || {
+        echo 'gh-app-token: --repo 必须是 owner/name' >&2; exit 2; }
+      ;;
+    *) echo 'gh-app-token: 不认识的参数' >&2; exit 2 ;;
+  esac
+done
 conf=${AIWORK_APPS_DIR:-/etc/aiwork/apps}/$role.env
 [ -r "$conf" ] || { echo "gh-app-token: 读不到角色配置 $conf" >&2; exit 2; }
 APP_ID= INSTALLATION_ID= KEY= REPOS= PERMISSIONS=
@@ -27,6 +41,13 @@ for v in APP_ID INSTALLATION_ID KEY REPOS PERMISSIONS; do
   [ -n "${!v}" ] || { echo "gh-app-token: $conf 里缺 $v" >&2; exit 2; }
 done
 [ -r "$KEY" ] || { echo "gh-app-token: 读不到私钥 $KEY" >&2; exit 2; }
+
+if [ -n "$repo_scope" ]; then
+  scoped_name=$(jq -rn --arg wanted "${repo_scope#*/}" --arg configured "$REPOS" '
+    $configured | split(" ") | map(select(ascii_downcase == ($wanted | ascii_downcase))) | first // empty')
+  [ -n "$scoped_name" ] || { echo 'gh-app-token: 目标仓库不在角色配置范围内' >&2; exit 2; }
+  REPOS="$scoped_name"
+fi
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 now=$(date +%s)
@@ -50,9 +71,10 @@ if [ "$code" != 201 ]; then
 fi
 
 # GitHub 给的必须恰好是要的那些(外加它总会带上的 metadata:read)和那几个仓库,多一样少一样都不用
-if ! jq -e --argjson want "$PERMISSIONS" --arg r "$REPOS" '
+if ! jq -e --argjson want "$PERMISSIONS" --arg r "$REPOS" --arg scope "$repo_scope" '
     (.permissions | del(.metadata)) == $want
-    and ([.repositories[]?.name] | sort) == ($r | split(" ") | map(select(. != "")) | sort)' <<<"$resp" >/dev/null; then
+    and ([.repositories[]?.name] | sort) == ($r | split(" ") | map(select(. != "")) | sort)
+    and ($scope == "" or ([.repositories[]?.full_name | ascii_downcase] == [$scope | ascii_downcase]))' <<<"$resp" >/dev/null; then
   echo "gh-app-token: GitHub 给的权限或仓库和 $conf 不一致,不用这个令牌" >&2
   jq '{permissions, repositories: [.repositories[]?.full_name]}' <<<"$resp" >&2
   exit 1
