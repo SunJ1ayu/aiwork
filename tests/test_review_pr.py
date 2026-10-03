@@ -147,6 +147,43 @@ class ReviewPrTests(unittest.TestCase):
         self.assertTrue(task.startswith("# SunJ1ayu/aiwork PR #12"))
         self.assertNotIn("# OpenDesign PR", task)
 
+    def test_snapshot_fetches_the_selected_repository_and_its_main(self):
+        pr = {"head": {"sha": "a" * 40}, "base": {"sha": "b" * 40}}
+        commands = []
+
+        def fake_git(command, **kwargs):
+            commands.append(command)
+            if command[-2:] == ["rev-parse", "HEAD"]:
+                return "a" * 40
+            if "merge-base" in command:
+                return "c" * 40
+            if "--binary" in command:
+                return "patch"
+            return ""
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(self.review, "run", side_effect=fake_git), \
+                patch.object(self.review.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"src/a.py\0", b"")):
+            _, base, files, _ = self.review.snapshot("fake-token", pr, Path(temporary),
+                                                   repository="SunJ1ayu/aiwork")
+        fetch = next(command for command in commands if "fetch" in command)
+        self.assertIn("https://github.com/SunJ1ayu/aiwork.git", fetch)
+        self.assertNotIn("https://github.com/SunJ1ayu/OpenDesign.git", fetch)
+        self.assertIn("refs/heads/main:refs/aiwork/main", fetch)
+        self.assertEqual((base, files), ("c" * 40, ["src/a.py"]))
+
+    def test_other_repository_missing_rules_never_runs_a_leg_or_posts(self):
+        with patch("sys.argv", ["review-pr", "12", "--repo", "SunJ1ayu/aiwork"]), \
+                patch.object(self.review, "run", return_value="fake-token"), \
+                patch.object(self.review, "pr_state", return_value={}), \
+                patch.object(self.review, "snapshot", return_value=(Path("unused"), "a" * 40, ["file"], "diff")), \
+                patch.object(self.review, "main_document", side_effect=self.review.ReviewError("required review document missing")), \
+                patch.object(self.review.subprocess, "run") as leg, \
+                patch.object(self.review, "github") as api, redirect_stderr(io.StringIO()):
+            self.assertEqual(self.review.main(), 1)
+            leg.assert_not_called()
+            api.assert_not_called()
+
     def test_cursor_model_is_frozen_for_leg_and_result(self):
         rc, calls, body, stderr = self.run_main_with_leg_result("gpt-5.6")
         emit = calls["emit"]
