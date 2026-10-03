@@ -1,0 +1,4 @@
+# panel-review 花名册(2026-08-12 00:05:34)task=worktree-sweep-review
+# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。
+# 日志:/root/aiwork/logs/panel-worktree-sweep-review-20260811-235830.*.log
+submimo=PASS subdeepseek=PASS subglm=off subkimi=FAIL(rc=1)

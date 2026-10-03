@@ -1,0 +1,82 @@
+{
+  "schema_version": 2,
+  "track": "design-before-build",
+  "run_id": "20260920-162611-1900401-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "design-before-build-review-r2",
+  "started_at": "2026-09-20T08:26:11Z",
+  "finished_at": "2026-09-20T08:28:36Z",
+  "duration_ms": 144862,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "standard",
+    "degraded": false,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "adapter": "subcursor",
+        "degraded": false,
+        "duration_ms": 144260,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:8cb0dae2188555f361f80511a509115fa96175f497a928f26a3fab04db446100",
+          "ref": "file:///root/aiwork/logs/panel-design-before-build-r2.subcursor.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xai",
+        "model": {
+          "invoked": "cursor-grok-4.6-high",
+          "reported": null,
+          "requested": "cursor-grok-4.6-high"
+        },
+        "name": "subcursor",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260920-162611-1900401-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:fe2b8417204067a3a4787565835b7d688d43344a43a3997b95d98463ea7d3e36",
+            "policy_version": 1,
+            "track": "design-before-build"
+          },
+          "digest": "sha256:217ef5cc802cd25cac2aa47e135333caaf0a153b9bdd1985a920b1380b4291d5",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "a54c294f1d9cc6aad7042eaf86bf561781bc0536",
+            "index_tree_oid": "5f87cc92474021b7adade378cd343567b3d77a75",
+            "worktree_tree_oid": "5f87cc92474021b7adade378cd343567b3d77a75"
+          },
+          "task_sha256": "sha256:d49a84a2d4bdfed9e4364a8ff2bccb5606dbb46bb9b54b802fff6b1e2bfe74f0"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

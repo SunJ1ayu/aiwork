@@ -1,0 +1,17 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    baseline-host
+cmd:     bash bin/rust-check-review-tooling
+cwd:     /root/aiwork(仓根)
+commit:  553e7ba
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-09T02:03:31Z
+---------------- 输出开始 ----------------
+ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**,没扫 tests/ 与 track/templates/;只报不拦):
+    check-gateway-version disk-watch openclaw-up rotate-mimo-key tmp-sweeper
+❌ 工具链防锈失败(外部漂移/环境升级?先跑本地判据复现):
+--- review-tooling (rc=1) ---
+  PASS: V22c: 死腿记 FAIL 且带 rc
+  FAIL: V45: 判据动了业主的真实环境 —— 变的是:mimo/mimocode.json=1097237:2026-09-09 10:02:15.292639319 +0800:8335d7108ef0 mimo/mimocode.json=1097362:2026-09-09 10:04:27.114545223 +0800:98033d0c916b
+=== total: 548 passed, 1 failed ===
+---------------- 输出结束 ----------------
+runlog: baseline-host rc=1 commit=553e7ba dirty=yes at=2026-09-09T02:03:31Z file=tracks/review-delivery-binding/evidence/20260909T020331Z-01-baseline-host.txt

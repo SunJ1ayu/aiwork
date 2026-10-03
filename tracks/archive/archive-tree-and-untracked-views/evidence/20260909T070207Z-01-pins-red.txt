@@ -1,0 +1,76 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    pins-red
+cmd:     python3 tests/test_review_delivery.py -v
+cwd:     /root/aiwork(仓根)
+commit:  b5ac76d
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-09T07:02:07Z
+---------------- 输出开始 ----------------
+test_add_delete_rename_mode_and_symlink_are_content_changes (__main__.DeliveryTest.test_add_delete_rename_mode_and_symlink_are_content_changes) ... ok
+test_archive_rejects_stale_review_and_accepts_closeout (__main__.DeliveryTest.test_archive_rejects_stale_review_and_accepts_closeout) ... ok
+test_closeout_and_archive_relocation_are_free (__main__.DeliveryTest.test_closeout_and_archive_relocation_are_free) ... ok
+test_closeout_symlink_or_executable_does_not_get_excluded (__main__.DeliveryTest.test_closeout_symlink_or_executable_does_not_get_excluded) ... ok
+test_delivery_cannot_be_downgraded (__main__.DeliveryTest.test_delivery_cannot_be_downgraded) ... ok
+test_new_track_scaffold_requires_binding (__main__.DeliveryTest.test_new_track_scaffold_requires_binding) ... ok
+test_other_tracks_are_not_masked (__main__.DeliveryTest.test_other_tracks_are_not_masked) ... ok
+test_risk_task_text_and_fake_receipt_cannot_hide (__main__.DeliveryTest.test_risk_task_text_and_fake_receipt_cannot_hide) ... ok
+test_source_and_oracle_changes_invalidate (__main__.DeliveryTest.test_source_and_oracle_changes_invalidate) ... ok
+test_staged_and_working_cannot_answer_for_each_other (__main__.DeliveryTest.test_staged_and_working_cannot_answer_for_each_other) ... ok
+test_t1_second_archive_is_not_authorized_by_the_first_archive_tree (__main__.DeliveryTest.test_t1_second_archive_is_not_authorized_by_the_first_archive_tree) ... FAIL
+test_t2_single_lifecycle_archive_still_validates (__main__.DeliveryTest.test_t2_single_lifecycle_archive_still_validates) ... ok
+test_t3_delivered_content_edited_after_archiving_is_visible (__main__.DeliveryTest.test_t3_delivered_content_edited_after_archiving_is_visible) ... FAIL
+test_t4_closeout_records_stay_editable_after_archiving (__main__.DeliveryTest.test_t4_closeout_records_stay_editable_after_archiving) ... ok
+test_t5_view_mismatch_names_the_real_cause (__main__.DeliveryTest.test_t5_view_mismatch_names_the_real_cause) ... FAIL
+test_t6_cli_archive_refuses_before_moving_when_views_disagree (__main__.DeliveryTest.test_t6_cli_archive_refuses_before_moving_when_views_disagree) ... FAIL
+test_t7_cli_archive_still_works_on_a_clean_repo (__main__.DeliveryTest.test_t7_cli_archive_still_works_on_a_clean_repo) ... ok
+test_t8_two_views_differ_exactly_on_the_dirty_worktree (__main__.DeliveryTest.test_t8_two_views_differ_exactly_on_the_dirty_worktree) ... ok
+test_unbound_historical_review_does_not_authorize_v2 (__main__.DeliveryTest.test_unbound_historical_review_does_not_authorize_v2) ... ok
+test_views_equal_and_scan_does_not_change_source_index (__main__.DeliveryTest.test_views_equal_and_scan_does_not_change_source_index) ... ok
+
+======================================================================
+FAIL: test_t1_second_archive_is_not_authorized_by_the_first_archive_tree (__main__.DeliveryTest.test_t1_second_archive_is_not_authorized_by_the_first_archive_tree)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_review_delivery.py", line 298, in test_t1_second_archive_is_not_authorized_by_the_first_archive_tree
+    self.assertNotEqual(result.returncode, 0,
+AssertionError: 0 == 0 : 旧评审授权了新交付:track-record: status=valid phase=archive source=staged track=example delivery=required
+
+
+======================================================================
+FAIL: test_t3_delivered_content_edited_after_archiving_is_visible (__main__.DeliveryTest.test_t3_delivered_content_edited_after_archiving_is_visible)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_review_delivery.py", line 316, in test_t3_delivered_content_edited_after_archiving_is_visible
+    self.assertNotEqual(result.returncode, 0,
+AssertionError: 0 == 0 : 归档后改交付内容没人看得见:track-record: status=valid phase=archive source=staged track=example delivery=required
+
+
+======================================================================
+FAIL: test_t5_view_mismatch_names_the_real_cause (__main__.DeliveryTest.test_t5_view_mismatch_names_the_real_cause)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_review_delivery.py", line 340, in test_t5_view_mismatch_names_the_real_cause
+    self.assertIn("view_mismatch", output)
+AssertionError: 'view_mismatch' not found in 'track-record: rule=observation.review_delivery path=observations[].actual.legs[].subject.delivery actual={"target":"sha256:c8e0c9fd55f908cf83c36e8669020ba14a24c1511080233b1a36a1be7a4b3155","view":"staged"} expected="qualifying same-run review bound to this delivery; rerun panel-review after content changes" verdict=BLOCK\n'
+
+======================================================================
+FAIL: test_t6_cli_archive_refuses_before_moving_when_views_disagree (__main__.DeliveryTest.test_t6_cli_archive_refuses_before_moving_when_views_disagree)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_review_delivery.py", line 353, in test_t6_cli_archive_refuses_before_moving_when_views_disagree
+    self.assertNotEqual(result.returncode, 0, output)
+AssertionError: 0 == 0 : track-record: status=valid phase=archive source=working track=example delivery=required
+worktree-sweep: /root/aiwork/worktrees
+  不属于本轮,只点名不触碰:
+    /root/aiwork/worktrees/keyonb-baseline
+    /root/aiwork/worktrees/opendesign-data-outside-install
+    /root/aiwork/worktrees/opendesign-windows-installer
+archived -> /tmp/tmpsmbfivv9/repo/tracks/archive/example
+
+
+----------------------------------------------------------------------
+Ran 20 tests in 4.449s
+
+FAILED (failures=4)
+---------------- 输出结束 ----------------
+runlog: pins-red rc=1 commit=b5ac76d dirty=yes at=2026-09-09T07:02:07Z file=tracks/archive-tree-and-untracked-views/evidence/20260909T070207Z-01-pins-red.txt

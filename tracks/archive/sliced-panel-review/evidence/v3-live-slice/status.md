@@ -1,0 +1,26 @@
+# panel-slice 状态 · slice-20260913T161541Z-1085855
+
+- run_state: **clean** —— 事实汇总,**不是裁决**(not a verdict);主 agent 仍须亲读每份报告再仲裁。
+- 预算:初始 3/3, extra 1/1(retry 与 verify 共用)
+- run 目录:/tmp/claude-0/-root/ed36ff12-1b54-424b-aece-9acfe39b5cc7/scratchpad/v3/run [仓外不承重]
+- 切片结果契约版本=2:**永不计入**任何 track 的归档覆盖。
+
+| 项 | 角色 | 尝试 | 腿/家族 | 状态 | 裁决 |
+|---|---|---|---|---|---|
+| store | slice | #1 initial | submimo/xiaomi | done | BLOCK |
+| report | slice | #1 initial | subdeepseek/deepseek | done | BLOCK |
+| overall | overall | #1 initial | subcodex/openai | done | BLOCK |
+| c1 | verify | #1 extra | submimo/xiaomi | done | BLOCK |
+
+## 报告位置
+
+- store#1: items/store/attempt-1/panel.submimo.log
+- report#1: items/report/attempt-1/panel.subdeepseek.log
+- overall#1: items/overall/attempt-1/panel.subcodex.log
+- c1#1: items/c1/attempt-1/panel.submimo.log
+
+## Findings(只追加的问题账 findings.jsonl)
+
+- F1 [critical] 出处 store → closed(决定历史:accepted-risk;复核:无)
+- F2 [high] 出处 overall → closed(决定历史:accepted-risk;复核:无)
+- F3 [medium] 出处 report → closed(决定历史:accepted-risk;复核:c1)

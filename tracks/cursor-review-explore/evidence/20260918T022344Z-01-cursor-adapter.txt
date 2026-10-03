@@ -1,0 +1,15 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    cursor-adapter
+cmd:     python3 tests/test_subcursor.py
+cwd:     /root/aiwork(仓根)
+commit:  dc6f735
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-18T02:23:44Z
+---------------- 输出开始 ----------------
+................
+----------------------------------------------------------------------
+Ran 16 tests in 19.321s
+
+OK
+---------------- 输出结束 ----------------
+runlog: cursor-adapter rc=0 commit=dc6f735 dirty=yes at=2026-09-18T02:23:44Z file=tracks/cursor-review-explore/evidence/20260918T022344Z-01-cursor-adapter.txt

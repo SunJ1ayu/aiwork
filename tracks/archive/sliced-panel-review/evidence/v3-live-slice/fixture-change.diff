@@ -1,0 +1,44 @@
+commit 01709fcb00398a199b8e70de4fdbbfce6fa1cab5
+Author: t <t@t>
+Date:   Sun Sep 13 23:37:54 2026 +0800
+
+    Add event store and report
+
+diff --git a/report.py b/report.py
+new file mode 100644
+index 0000000..3750abf
+--- /dev/null
++++ b/report.py
+@@ -0,0 +1,15 @@
++"""Summaries over the event log written by store.save."""
++import json
++
++
++def load(path):
++    with open(path, encoding="utf-8") as handle:
++        return [json.loads(line) for line in handle if line.strip()]
++
++
++def latest(path):
++    """Return the name of the most recent event, by its epoch-seconds timestamp."""
++    events = load(path)
++    if not events:
++        return None
++    return max(events, key=lambda e: int(e["timestamp"]))["name"]
+diff --git a/store.py b/store.py
+new file mode 100644
+index 0000000..d8bf016
+--- /dev/null
++++ b/store.py
+@@ -0,0 +1,11 @@
++"""Append-only event log stored as JSON lines."""
++import json
++import time
++
++
++def save(events, path):
++    """Append each event to the log at `path`. Existing lines must be kept."""
++    with open(path, "w", encoding="utf-8") as handle:
++        for event in events:
++            record = {"name": event["name"], "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
++            handle.write(json.dumps(record) + "\n")

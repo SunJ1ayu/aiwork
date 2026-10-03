@@ -1,0 +1,25 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    regression-all
+cmd:     bash -c $'\nr=0\nfor t in tests/test-review-tooling.sh tests/test-hooks-installed.sh tests/test-track-guard.sh tests/test-submimo-fix-oracle.sh tests/test-runlog.sh tests/test-delegate-entry.sh; do\n  echo "════ $t ════"\n  bash "$t" 2>&1 | tail -1 || r=1\ndone\necho "════ tests/test_submimo_retry.py ════"\npython3 tests/test_submimo_retry.py 2>&1 | tail -1 || r=1\necho "════ 汇总 rc=$r ════"\nexit $r'
+cwd:     /root/aiwork(仓根)
+commit:  9218340
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-08T04:26:39Z
+---------------- 输出开始 ----------------
+════ tests/test-review-tooling.sh ════
+=== total: 272 passed, 0 failed ===
+════ tests/test-hooks-installed.sh ════
+=== total: 4 passed, 0 failed ===
+════ tests/test-track-guard.sh ════
+=== total: 49 passed, 0 failed ===
+════ tests/test-submimo-fix-oracle.sh ════
+=== total: 17 passed, 0 failed ===
+════ tests/test-runlog.sh ════
+=== total: 24 passed, 0 failed ===
+════ tests/test-delegate-entry.sh ════
+=== total: 79 passed, 0 failed ===
+════ tests/test_submimo_retry.py ════
+ALL RETRY ORACLE CHECKS PASSED
+════ 汇总 rc=0 ════
+---------------- 输出结束 ----------------
+runlog: regression-all rc=0 commit=9218340 dirty=yes at=2026-08-08T04:26:39Z file=tracks/machine-evidence-gate/evidence/20260808T042639Z-01-regression-all.txt

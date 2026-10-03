@@ -1,0 +1,55 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    mutation-ro-removed
+cmd:     env REVIEW_BIN=/tmp/claude-0/-root/38c70c8d-0924-4ae6-9f6f-e02bc4b93cdb/scratchpad/mutant/bin bash /tmp/claude-0/-root/38c70c8d-0924-4ae6-9f6f-e02bc4b93cdb/scratchpad/mutant/runner.sh
+cwd:     /root/aiwork(仓根)
+commit:  f664d75
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-19T07:36:27Z
+---------------- 输出开始 ----------------
+mimo debug
+
+debugging and troubleshooting tools
+
+Commands:
+  mimo debug config        show resolved configuration
+  mimo debug lsp           LSP debugging utilities
+  mimo debug rg            ripgrep debugging utilities
+  mimo debug file          file system debugging utilities
+  mimo debug scrap         list all known projects
+  mimo debug skill         list all available skills
+  mimo debug snapshot      snapshot debugging utilities
+  mimo debug agent <name>  show agent configuration details
+  mimo debug paths         show global paths (data, config, cache, state)
+  mimo debug wait          wait indefinitely (for debugging)
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]=== 变异红检 runner:只跑 V35+V36 ===
+[V35] 评审腿在只读的仓里跑(写口物理消失,读能力一条不少)
+  FAIL: V35: 锚 —— ro-repo-exec 确实把命令送进了只读仓(不然下面全是测空气)
+  FAIL: V35: 腿写不了仓内新文件(且命令确实跑过、仓里真的没多出东西)
+  FAIL: V35: `git diff --output=` 写不进去(08-18 那条已知绕过被物理挡死)
+  FAIL: V35: 腿改不了 tests/(命令跑过了,但判据一个字没变 —— 这条是整单的理由)
+  PASS: V35: 只读下六条读命令全通(读能力没被削)
+  PASS: V35: 对照组 —— 可写状态下失败数相同(差异只许来自只读:ro=0 rw=0)
+  PASS: V35: --rw 开的口子真能写(腿日志在仓内 logs/)
+  FAIL: V35: 开了 logs/ 之后仓的其余部分**仍然只读**(不是整仓开闸)
+  PASS: V36/V35: 选项写在仓根后面 ⇒ 拒跑(不许把 --rw 当命令执行)
+  PASS: V36/V35: 拒跑是 ro-repo-exec 自己说的(不是 bash exec 失败的副产品)
+  PASS: V36/V35: 不许把 --rw 当命令 exec(静默降级伪装成跑起来了)
+  PASS: V35: --rw 指到仓根 ⇒ 明确警告(等于整仓开闸,不许悄悄发生)
+  PASS: V35: unshare 挂不上 ⇒ **非零退出**(不许静默降级)
+  PASS: V35: 挂不上时命令**根本没跑**(降级跑=白读了只读两个字)
+  PASS: V35: 拒跑时说清是什么挂了(不说清 = 下次没人查得动)
+[V36] 三条 wrapper 真的把腿放进只读仓里跑(端到端:让假模型去写)
+  FAIL: V36: subdeepseek-agent 的腿写不了仓(假模型真的试过了:WROTE)
+  PASS: V36: 腿在只读下仍然正常出结论(防线没把腿弄死 —— 08-18 就是死在这)
+  FAIL: V36: submimo review 的腿写不了仓(假模型真的试过了:WROTE)
+  FAIL: V36: subkimi 的腿写不了仓(假模型真的试过了:WROTE)
+  PASS: V36: submimo **fix** 仍然写得动(假模型真的试过了:WROTE)
+=== total: 12 passed, 8 failed ===
+---------------- 输出结束 ----------------
+runlog: mutation-ro-removed rc=1 commit=f664d75 dirty=yes at=2026-08-19T07:36:27Z file=tracks/repo-write-audit/evidence/20260819T073627Z-01-mutation-ro-removed.txt

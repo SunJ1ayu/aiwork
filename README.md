@@ -8,24 +8,54 @@ protocol, safety rules — is versioned under `workflow/`; `/root/CLAUDE.md` and
 deliberately absent so Codex does not automatically load these Claude-specific
 instructions; this README only maps the machinery.
 
-The `main` branch of this GitHub repository is the only copy of aiwork. The
-local `/root/aiwork` is a clone of it; changes land through branches and PRs.
-What stays on the machine only (credentials, logs, track evidence and
-observations, run output, ...) is whatever `.gitignore` says. Local history
-from before the first commit (`1f26cdf`) was not uploaded.
+The `main` branch of this GitHub repository is the authoritative source for
+aiwork. The local `/root/aiwork` is a clone of it; changes land through branches
+and PRs. This repository keeps workflow tooling and its change records.
+Credentials, project task briefs, reviewer logs, runtime homes, reference
+copies, build output and worktrees stay on the machine as listed in `.gitignore`.
+Track evidence and observations are versioned alongside their change records.
+
+## History and project separation
+
+The first-parent history of `main` is the original local history of
+`/root/aiwork` (675 commits up to `6f18738`), joined in by merge `be49728`.
+Tracks archived before the switch therefore keep their evidence and
+observations from their original archive commits; nothing in a completed
+track was re-added or edited. The second-parent line is the curated snapshot
+(`1f26cdf`) that briefly stood in for this repository, plus the changes made
+on it.
+
+The old history was scanned for credentials before it was uploaded. Apart
+from fake test values it holds one real-looking key: a Xiaomi MiMo token-plan
+key in `refs/nodepath-fix-20260728-143246/switch-model.sh`, not used by the
+current configuration. The string stays in history, so revoking it in the
+MiMo console is what makes it harmless.
+
+Things that are not aiwork live with their own owners:
+
+- quicklook lives at `/root/quicklook`; its systemd unit and run-output path
+  point there.
+- The current wiki-ingest skill lives in the OpenClaw workspace at
+  `/root/.openclaw/workspace/skills/wiki-ingest`; the older aiwork copy was
+  removed.
+- The `opendesign-file-organizer` and `opendesign-ref-images` track records
+  belong to OpenDesign (moved by `SunJ1ayu/OpenDesign` PR #20).
+- Project task briefs stay on the machine under `tasks/`, ignored by Git like
+  logs.
 
 ## Layout
 
 - `bin/` executors and panel tools (below)
-- `tasks/` task/brief files sent to reviewers (main-agent-authored)
-- `logs/` reviewer output, `.err` sidecars, my-review/arbitration records
+- `tasks/` local task/brief files sent to reviewers (main-agent-authored, gitignored)
+- `logs/` local reviewer output, `.err` sidecars, my-review/arbitration records (gitignored)
 - `templates/` starter task files (`review-task.md`, `fix-task.md`)
 - `tests/` regression oracles for this tooling itself
 - `track/` lightweight change-workflow convention + templates (`bin/track` CLI)
-- `tracks/` the change artifacts themselves (proposal/design/tasks/verify; their `evidence/` and `observations/` stay local, gitignored)
+- `tracks/` workflow change records with their `evidence/` and `observations/`
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - `worktrees/` per-job isolated checkouts created by `delegate-codex` (gitignored)
-- `reports/`, `review/`, `mimo-home/`, `quicklook/` project-specific areas
+- `mimo-home/`, `kimi-review-home/`, `.mimocode/`, `etc/` local reviewer runtime state and configuration (gitignored)
+- `out/`, `refs/` local build output and reference copies (gitignored)
 
 ## Core engine
 

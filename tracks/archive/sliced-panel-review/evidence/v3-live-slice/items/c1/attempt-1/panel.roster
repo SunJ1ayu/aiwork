@@ -1,0 +1,8 @@
+# panel-review 花名册(2026-09-14 00:19:06)task=task
+# PASS = 进程 rc=0,**不等于给了裁决**;off = 这条腿压根没派(不许读成通过)。
+# impact-risk=standard requested-budget=1 selected-count=1
+# selected=submimo(xiaomi/submimo)
+# escalation=none
+# snapshot=head:01709fc
+# 日志:/tmp/claude-0/-root/ed36ff12-1b54-424b-aece-9acfe39b5cc7/scratchpad/v3/run/items/c1/attempt-1/panel.*.log
+submimo=PASS(verdict=BLOCK,coverage=INELIGIBLE) subdeepseek=off subglm=off subkimi=off subgemini=off subcodex=off

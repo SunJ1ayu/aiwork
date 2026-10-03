@@ -1,0 +1,180 @@
+{
+  "schema_version": 2,
+  "track": "legs-quick-fixes",
+  "run_id": "20260914-163954-314915-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "legs-quick-fixes-review-r2",
+  "started_at": "2026-09-14T08:39:54Z",
+  "finished_at": "2026-09-14T08:57:23Z",
+  "duration_ms": 1048907,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "high",
+    "degraded": true,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "adapter": "submimo",
+        "degraded": false,
+        "duration_ms": 322041,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:8508c2d8f1ed58d817af5b2b08cb62d484ca20aaa5ac7c3b390db0446de68ef7",
+          "ref": "file:///root/aiwork/logs/panel-legs-quick-fixes-review-r2-20260914-163954.submimo.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xiaomi",
+        "model": {
+          "invoked": "xiaomi/mimo-v2.5-pro",
+          "reported": null,
+          "requested": "xiaomi/mimo-v2.5-pro"
+        },
+        "name": "submimo",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260914-163954-314915-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:24f6ff1155d1dc479d74c0ed5a90db3f609ada63bcb64f5132da655ed64d23fa",
+            "policy_version": 1,
+            "track": "legs-quick-fixes"
+          },
+          "digest": "sha256:b10a52f28eedcf38af3aa501960894f7da9a50f22011203c1d33c337979ca3a8",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "b417a2d51b16f06a58778e6f00d383f07b2decff",
+            "index_tree_oid": "68c481cef7073953f9d7c59be9979bab47b7d89f",
+            "worktree_tree_oid": "68c481cef7073953f9d7c59be9979bab47b7d89f"
+          },
+          "task_sha256": "sha256:0f1ebebb6c9c55b3a54b2daa17a6ba4615aad2ed8053419cd0173cdec10a7ba3"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subdeepseek-agent",
+        "degraded": false,
+        "duration_ms": 189561,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:6860928a1e45ae0f582fed500f6cd00d18b61da6e0ca14f0e2ae01d5b6290637",
+          "ref": "file:///root/aiwork/logs/panel-legs-quick-fixes-review-r2-20260914-163954.subdeepseek.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "deepseek",
+        "model": {
+          "invoked": "deepseek-flash",
+          "reported": null,
+          "requested": "deepseek-flash"
+        },
+        "name": "subdeepseek",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260914-163954-314915-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:24f6ff1155d1dc479d74c0ed5a90db3f609ada63bcb64f5132da655ed64d23fa",
+            "policy_version": 1,
+            "track": "legs-quick-fixes"
+          },
+          "digest": "sha256:b10a52f28eedcf38af3aa501960894f7da9a50f22011203c1d33c337979ca3a8",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "b417a2d51b16f06a58778e6f00d383f07b2decff",
+            "index_tree_oid": "68c481cef7073953f9d7c59be9979bab47b7d89f",
+            "worktree_tree_oid": "68c481cef7073953f9d7c59be9979bab47b7d89f"
+          },
+          "task_sha256": "sha256:0f1ebebb6c9c55b3a54b2daa17a6ba4615aad2ed8053419cd0173cdec10a7ba3"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "api",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "BLOCK",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subglm",
+        "degraded": true,
+        "duration_ms": 3186,
+        "evidence": {
+          "completeness": "partial",
+          "digest": "sha256:fc3bd81560e7f460b84e13eeae558d982f04db86359e5206f23488eec641742b",
+          "ref": "file:///root/aiwork/logs/panel-legs-quick-fixes-review-r2-20260914-163954.subglm.evidence.log"
+        },
+        "failure_kind": "runtime",
+        "family": "zhipu",
+        "model": {
+          "invoked": "glm-5.3-flash",
+          "reported": null,
+          "requested": "glm-5.3-flash"
+        },
+        "name": "subglm",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 1,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260914-163954-314915-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "digest": null,
+          "manifest_version": 1,
+          "source": null,
+          "task_sha256": "sha256:0f1ebebb6c9c55b3a54b2daa17a6ba4615aad2ed8053419cd0173cdec10a7ba3"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "api",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "UNKNOWN",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "diff_bundle"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

@@ -1,0 +1,9 @@
+codex debug prompt-input, codex-cli 0.154.0, model gpt-6-astra, 2026-09-13
+- current flags (--disable multi_agent/multi_agent_v2): <multi_agent_role> present=True, <multi_agent_mode> present=True
+- catalog override without multi_agent_version: <multi_agent_role> present=False, <multi_agent_mode> present=False
+
+Re-checked 2026-09-14 for the detector self-check (review finding E), full subcodex flag set
+(web_search disabled + all 11 --disable), `probe` in an empty git repo:
+- no catalog override (the new baseline render): rc=0, 38567 bytes, <multi_agent_role> count=1
+- catalog override without multi_agent_version:  rc=0, 35009 bytes, <multi_agent_role> count=0
+- `codex debug models`: gpt-6-astra listed once, declares multi_agent_version=True; ~/.codex/config.toml byte-identical before/after

@@ -1,0 +1,39 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    oracle-after-io
+cmd:     bash tests/test-mimo-key-single-source.sh
+cwd:     /root/aiwork(仓根)
+commit:  5d9de92
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-01T03:32:38Z
+---------------- 输出开始 ----------------
+=== mimo key single-source oracle ===
+  PASS: 清单文件存在:bin/_mimo-key-locations.sh
+  PASS: 清单文件可 source
+  PASS: 清单定义了 MIMO_KEY_SOURCE
+  PASS: 清单定义了 MIMO_KEY_COPIES
+  PASS: 清单定义了 MIMO_KEY_CONDITIONAL_COPIES
+  PASS: 清单定义了 MIMO_KEY_FORBIDDEN
+  PASS: 清单定义了 MIMO_KEY_SCAN_DIRS
+  PASS: 清单的取值路径和判据手抄的那份一致(xiaomi.key)
+  PASS: 源头文件存在:/root/.local/share/mimocode/auth.json
+  PASS: 源头里的 key 形状对(tp- + 40~60 位)
+  PASS: 副本与源头一致:/root/.openclaw/secrets.json [models.providers.xiaomi-coding.apiKey]
+  PASS: 副本与源头一致:/root/.openclaw/secrets.json [models.providers.xiaomi-token.apiKey]
+  PASS: 副本与源头一致:/root/.openclaw/secrets.json [messages.tts.providers.xiaomi.apiKey]
+  PASS: 副本与源头一致:/root/.github-watch-config.json [api_key]
+  PASS: 条件式副本里没有 key(合法,例如切在 claude 档):/root/.claude/settings.json
+  PASS: 没有内嵌 key:/root/.bashrc
+  PASS: 没有内嵌 key:/root/.claude/switch-model.sh
+  PASS: 没有 cron 任务在提示词里内嵌 LLM_API_KEY=
+  PASS: 没有 cron 任务的提示词里躺着字面 key
+  PASS: 扫描面完整:清单里 11 个位置都在盘上
+  PASS: 扫描面里没有清单外的 key 副本(扫了 11 个位置)
+  PASS: 换 key 工具存在且可执行:bin/rotate-mimo-key
+  PASS: 工具 source 了共享清单(位置只有一份)
+  PASS: 工具用专用码拒绝形状不对的 key(rc=2,且理由是形状)
+  PASS: 被拒时源头文件没被动过
+  PASS: 写/恢复原语单独成文件:bin/_mimo-key-io.sh
+  PASS: 写/恢复原语:原子写 + 权限保留 + 恢复逐字节 + 空快照拒绝恢复(全过)
+=== total: 27 passed, 0 failed ===
+---------------- 输出结束 ----------------
+runlog: oracle-after-io rc=0 commit=5d9de92 dirty=yes at=2026-09-01T03:32:38Z file=tracks/mimo-key-single-source/evidence/20260901T033238Z-01-oracle-after-io.txt

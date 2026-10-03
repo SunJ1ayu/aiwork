@@ -1,0 +1,98 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    delegate-entry-redcheck-longout-green
+cmd:     bash tests/test-delegate-entry.sh
+cwd:     /root/aiwork(仓根)
+commit:  9e1bed1
+dirty:   no(跑之前采的;含未跟踪文件)
+started: 2026-09-14T06:28:36Z
+---------------- 输出开始 ----------------
+=== delegate-entry / redcheck oracle ===
+[D1] delegate-codex:缺攻题记录 / 缺判卷清单 ⇒ 拒发,且 codex 一次都不启动
+  PASS: D1: 没给 --attack-log ⇒ 非零
+  PASS: D1: 没给 --attack-log ⇒ codex 零调用
+  PASS: D1: 拒发时点名缺的是 --attack-log
+  PASS: D1: attack-log 不存在 ⇒ 非零 + 零调用
+  PASS: D1: 说清是攻题记录**不存在**
+  PASS: D1: attack-log 是空文件 ⇒ 非零 + 零调用
+  PASS: D1: 说清是**空文件**应付
+  PASS: D1: attack-log 在仓内 ⇒ 非零 + 零调用(漏洞清单不许进考场)
+  PASS: D1: 说清是**在仓里**
+  PASS: D1: 没给 --protect ⇒ 非零 + 零调用
+  PASS: D1: 拒发时点名缺的是 --protect
+  PASS: D1: 攻题记录没盖当前判卷的哈希 ⇒ 非零 + 零调用(攻的是旧版考卷)
+  PASS: D1: 说清是「攻题记录过期」,不是笼统报错
+  PASS: D1: 盖上当前哈希 ⇒ 放行
+[D2] delegate-codex:齐了就发,三件套逐字注入,回执记下派活那一刻
+  PASS: D2: 材料齐 ⇒ rc=0
+  PASS: D2: codex 被调用了一次
+  PASS: D2: 原任务书正文在里面
+  PASS: D2: 每条 protect 路径逐条写进任务书
+  PASS: D2: 三件套①判卷 off-limits
+  PASS: D2: 三件套②自检清单
+  PASS: D2: 三件套③不 push / 不 merge
+  PASS: D2: 命令行带 project_doc_max_bytes=0
+  PASS: D2: 模型显式给 -m(不吃默认值)
+  PASS: D2: 写出回执 <log>.receipt.json
+  PASS: D2: 回执字段齐(repo/派活时 HEAD/protect 清单/攻题记录+sha256)
+[D3] delegate-codex --receive:闸①机械版(diff 为空 **且** status 为空)
+  PASS: D3: 只动实现 ⇒ 闸①放行(不误报)
+  PASS: D3: 改了判卷文件 ⇒ 拦下
+  PASS: D3: 拦下时点名是哪个文件
+  PASS: D3: 改判卷并提交了 ⇒ 照样拦
+  PASS: D3: protect 目录下新增未跟踪文件 ⇒ 拦下(git diff 看不见它)
+  PASS: D3: 拦下时点名那个未跟踪文件
+  PASS: D3: 非 protect 路径的新增文件 ⇒ 放行(误报会让警告变噪音)
+  PASS: D3: 放行时列出改动清单(含新增的未跟踪文件),给闸③当底账
+[D4] 四审补的洞:判卷被 gitignore / skip-worktree / 回执落仓内 / 沙箱参数
+  PASS: D4: 命令行显式给 -s workspace-write
+  PASS: D4: 命令行显式给 -C <仓>(不靠 cwd)
+  PASS: D4: 判卷路径下有被 ignore 的东西 ⇒ 拒发
+  PASS: D4: 说清是被 gitignore 藏住了
+  PASS: D4: 判卷目录里只有 __pycache__ 被 ignore ⇒ 照发(否则 python 仓永远派不出活)
+  PASS: D4: 放行 __pycache__ 之后,被 ignore 的 conftest.py 仍然拒发
+  PASS: D4: 名字里带 __pycache__ 的**伪**缓存目录不算例外,照样拒发
+  PASS: D4: 文件名里带 __pycache__ 也不算例外,照样拒发
+  PASS: D4: 判卷被 skip-worktree 标记后改动 ⇒ 闸①仍要拦
+  PASS: D4: 日志/回执落在仓内 ⇒ 拒发(和攻题记录同源:考生不许碰卷宗)
+  PASS: D4: 拒发时 codex 也没被调用
+[E1] redcheck:把实现真退回基线再跑判据,必须红;跑完树要干净
+  PASS: E1: 旧实现下判据红 ⇒ 红检通过(rc=0)
+  PASS: E1: 跑完工作树干净
+  PASS: E1: 跑完实现真的恢复成 HEAD 那版
+  PASS: E1: 旧实现下判据仍绿 ⇒ 报失败(rc≠0)
+  PASS: E1: 失败时说清是「旧实现也过」
+  PASS: E1: 失败那次也把树恢复干净
+  PASS: E1: --build 跑了两次(退回后一次、恢复后一次)
+  PASS: E1: impl 有未提交改动 ⇒ 拒跑
+  PASS: E1: 拒跑时没动过工作区那份改动
+  PASS: E1: 中途被 TERM 掉,工作树照样恢复
+  PASS: E1: 中途被杀后实现也回到 HEAD 那版
+  PASS: E1: build 失败 ⇒ 红检无效(非零)
+  PASS: E1: 说清是「build 没过,这次红检不算数」
+  PASS: E1: build 失败那次也把树恢复干净
+  PASS: E1: 红了但不是目标断言红的 ⇒ 判失败
+  PASS: E1: 红在目标断言上 ⇒ 通过
+  PASS: E1: 目标断言在长输出前面 ⇒ 仍判红在目标上(rc=0,不许被 SIGPIPE 读成没命中)
+  PASS: E1: 基线上不存在的新实现 ⇒ 退回=删掉它,判据照样红
+  PASS: E1: 跑完那个新文件回来了
+  PASS: E1: 跑完工作树仍然干净
+  PASS: E1: --impl 接多个路径(变长写法)也认
+  PASS: E1: 产物按内容改名时红检照常通过
+  PASS: E1: **基线那份产物被收拾干净**(git status 为空,不是只喊一声)
+  PASS: E1: --impl 指到仓外 ⇒ 拒跑(rc≠0)
+  PASS: E1: **仓外那个文件必须还在**(不许 rm -rf 出去)
+  PASS: E1: 拒跑时说清是「路径在仓外」
+  PASS: E1: 恢复时 build 失败 ⇒ 非零退出(不许照常报成功)
+  PASS: E1: 恢复 build 失败时**不许**打印「已恢复,工作树干净」
+  PASS: E1: 夹具就位(缓存里存着新实现的字节码)
+  PASS: E1: 退回后判据跑的是**盘上的源码**,不是残留的 .pyc(否则假绿说它是死判据)
+  PASS: E1: 跑完盘上没留下 .pyc 缓存(git status 空)
+  PASS: E1: (另一半)退回那一跑照样判红
+  PASS: E1: 还原之后在**干净的树**上判据必须绿 —— 否则就是那天晚上的假红
+  PASS: E1: 目录名带 glob 字符时缓存照样清掉(pathspec 必须按字面量比,不然假绿)
+  PASS: E1: 被跟踪的那个同名文件一个字节都不许动
+  PASS: E1: **被跟踪的**真 __pycache__ 目录跳过不清(删了会把树弄脏)
+  PASS: E1: 跳过时要吼一声,不许静默(那个目录就是这道防线的洞)
+=== total: 81 passed, 0 failed ===
+---------------- 输出结束 ----------------
+runlog: delegate-entry-redcheck-longout-green rc=0 commit=9e1bed1 dirty=no at=2026-09-14T06:28:36Z file=tracks/grok-leg-kimi-model/evidence/20260914T062836Z-01-delegate-entry-redcheck-longout-green.txt

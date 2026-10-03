@@ -1,0 +1,19 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    final-full-weekly-suite
+cmd:     ./bin/rust-check-review-tooling
+cwd:     /root/aiwork(仓根)
+commit:  276ebf7
+dirty:   yes(跑之前采的;含未跟踪文件)
+head-before: 276ebf784f40767bbcf2b484e103138c545e2f64
+source-view-before: sha256:26e080b63858eb560f2c4680923314136a91ff81be527bd968c575092f74e480
+started: 2026-09-01T04:38:44Z
+---------------- 输出开始 ----------------
+ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**,没扫 tests/ 与 track/templates/;只报不拦):
+    check-gateway-version disk-watch openclaw-up rotate-mimo-key tmp-sweeper
+✅ 工具链防锈通过 | review-result: OK | review-tooling: total: 549 passed, 0 failed | panel-observation: total: 69 passed, 0 failed | panel-roster: ---- 合计 PASS=44 FAIL=0 ---- | fix-oracle: total: 17 passed, 0 failed | retry: ALL RETRY ORACLE CHECKS PASSED | track-guard: total: 85 passed, 0 failed | track-record: total: 82 passed, 0 failed | ledger: total: 20 passed, 0 failed | track-links: total: 14 passed, 0 failed | delegate-entry: total: 80 passed, 0 failed | delegate-observation: total: 16 passed, 0 failed | delegate-isolate: total: 102 passed, 0 failed | worktree-sweep: total: 68 passed, 0 failed | hooks-installed: total: 8 passed, 0 failed | runlog: total: 92 passed, 0 failed | no-egress: total: 18 passed, 0 failed | evidence-lifetime: === PASS=41 FAIL=0 === | review-workspace: total: 24 passed, 0 failed | workflow-docs: total: 36 passed, 0 failed | mimo-key: total: 29 passed, 0 failed | switch-model-atomic: total: 13 passed, 0 failed
+command-rc: 0
+head-after: 276ebf784f40767bbcf2b484e103138c545e2f64
+source-view-after:  sha256:26e080b63858eb560f2c4680923314136a91ff81be527bd968c575092f74e480
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: final-full-weekly-suite rc=0 commit=276ebf7 dirty=yes final=yes at=2026-09-01T04:38:44Z file=tracks/mimo-key-single-source/evidence/20260901T043844Z-01-final-full-weekly-suite.txt

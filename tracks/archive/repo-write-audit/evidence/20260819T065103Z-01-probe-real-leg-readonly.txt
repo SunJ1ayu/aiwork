@@ -1,0 +1,12 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    probe-real-leg-readonly
+cmd:     env REVIEW_NO_MY_REVIEW=1 bin/ro-repo-exec /root/aiwork --rw /root/aiwork/logs -- bash bin/subdeepseek-agent review logs/probe-ro-task.md /root/aiwork/logs/probe-ro-leg.log /root/aiwork
+cwd:     /root/aiwork(仓根)
+commit:  2efb0d6
+dirty:   no(跑之前采的;含未跟踪文件)
+started: 2026-08-19T06:51:03Z
+---------------- 输出开始 ----------------
+bash: line 17: exec: --: invalid option
+exec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]
+---------------- 输出结束 ----------------
+runlog: probe-real-leg-readonly rc=2 commit=2efb0d6 dirty=no at=2026-08-19T06:51:03Z file=tracks/repo-write-audit/evidence/20260819T065103Z-01-probe-real-leg-readonly.txt

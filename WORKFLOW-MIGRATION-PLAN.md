@@ -51,7 +51,7 @@
 - **评审发出后怎么触发重算**:评审适配器发完评审,给 PR 加一个 `aiwork:recheck` 标签,触发 `labeled` 事件。加标签只需 PR 写权限,不需要推代码权限;用 `repository_dispatch` 则需要推代码权限,所以不用。漏算时,人或 agent 手动加这个标签即可重算。
 - **结论格式**:评审正文里放一个 JSON 块,字段为 verdict、head_sha、model、family、completeness、files_read。只因为它由 `aiwork-review` 发出才被采信;家族映射从 aiwork 现有的 `_review_result.py` 生成,不手写第二份。
 - **推送者**:用 GitHub 的仓库活动记录(每次推送的执行者)判断,commit 里填写的作者名不作数。阶段 C 先验证这个接口可用;读不到就按 UNKNOWN 处理。
-- **gate 代码放在 OpenDesign**:原因是 aiwork 的 GitHub 仓库只是无历史的镜像,每次重新生成,固定不了 commit。
+- **gate 代码放在 OpenDesign**:原因是 aiwork 的 GitHub 仓库只是无历史的镜像,每次重新生成,固定不了 commit。(2026-10-03 起 aiwork 的 GitHub main 已是带完整历史的正本,见 aiwork README;gate 仍放在 OpenDesign,因为它判的是 OpenDesign 的 PR。)
 
 ---
 
@@ -180,7 +180,7 @@
 
 ## 7. 业主决定(2026-09-28)
 
-1. **aiwork 暂不迁 GitHub PR 流程**。本机 `/root/aiwork` 继续作为准本,旧 track 代码保留供 aiwork 使用;OpenDesign 启用新流程后停止为它新建 track。aiwork 的迁移与旧代码删除,等 OpenDesign 的 CI、身份和 gate 稳定后单独规划。
+1. **aiwork 暂不迁 GitHub PR 流程**(2026-10-03 已改:aiwork 以 GitHub main 为准、改动走 PR,见 aiwork README)。本机 `/root/aiwork` 继续作为准本,旧 track 代码保留供 aiwork 使用;OpenDesign 启用新流程后停止为它新建 track。aiwork 的迁移与旧代码删除,等 OpenDesign 的 CI、身份和 gate 稳定后单独规划。
 2. **high 保留"两个不同的非 Builder 家族评审 + 业主批准"**。业主批准是风险决策,不能替代第二次技术审查;阶段 C 补一个仅供 high 使用的最简第二家族评审入口(见阶段 C),没有第二家合格结论就不放行。
 3. **阶段 A 现在开始**:先完成 PR 自动 CI 和 main 分支规则,用真实 PR 验收,不等上面两项的后续工作。
 4. **(2026-09-29)云端 Claude 用机器账号 `SunJ1ayuBoT`;本机各角色用 GitHub App**;发版保留业主批准(不分测试版 / 正式版)。

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "review-convergence-and-preflight",
+  "run_id": "20260916T140636Z-01-red-f1-round-readout",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "red-f1-round-readout",
+  "started_at": "2026-09-16T14:06:36Z",
+  "finished_at": "2026-09-16T14:06:52Z",
+  "duration_ms": 15685,
+  "exit_code": 1,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 1,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

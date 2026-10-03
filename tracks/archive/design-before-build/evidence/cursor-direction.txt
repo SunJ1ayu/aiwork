@@ -1,0 +1,21 @@
+I'll read the snapshot diff and the listed workflow files first, then ground one concrete direction in what the repo actually does.
+The autopilot skill doesn’t apply here. Next I’ll read the listed workflow, track, and bin files to see how dispatch, design, and review actually work.
+Next I’ll inspect `validate_dispatch`, triage, panel-explore help, and the withdrawn low-uncertainty gate so the direction matches the actual control plane.
+**Direction:** 不要再加「low 必须有理由文件」闸，也不要把 Jev / panel-explore / 实现评审前移。在**第一次改用户可见行为之前**，用现成的只读攻题通道（`delegate-codex` 那套 `codex exec -s read-only`）加一问：**「判据全绿，用户原话仍失败」**。问的是规格骗用户，不是实现骗规格。
+
+**Core bet:** OpenDesign 已经证明：需求清楚、`design-uncertainty=low`、攻题 19 条、两家实现评审通过，仍会把「打开软件」做成等网络、35 秒中断。现有攻题题面问的是「哪种实现能绿掉考卷却违反 proposal 的 8 条」——锚在已选定的倒计时规格上，不会问「让用户等本身合理吗」。失败点是**目标→机制的翻译**，不是「有没有开放架构分叉」。自报 `low`、文件存在性、Jev 低分都挡不住这种翻译。
+
+**How it works:** 沿用已有两轴：`impact-risk` 只管事后外审人数；`design-uncertainty=high` 才走 `panel-explore` / 规划双出。本方向**不改** `validate_dispatch` 的 low 契约（`low` + `not_required` + `[]` 仍合法，R3 继续锁住）。触发不靠「我觉得确定」：
+
+- **跳过（保持轻量）：** 根本不起 track；或只动判卷/钉版本/文案；proposal「真问题」里用户原话与机制相同且没有新的启动/等待/交互序列。
+- **值得花一只模型：** 有用户原话，且机制是新的可见序列（启动、等待、横幅、自动动作）。此时**一只**不同家族只读腿，brief 只给：原话（禁止用已翻译的「业主选定的新行为」顶替）、选定机制、oracle「能被什么骗过」。只许点名「绿了用户仍痛」的一条；点不出则继续实现。主 agent 先落自己的骗过段落（反锚定），再读腿输出。证据可写入已有 `premise_attack.status=done`（low 也允许 done），**不**把 uncertainty 改成 high，**不**计入归档覆盖（与 `panel-slice` 一样）。
+- **Jev / `bin/triage`：** 继续只做提醒、退出码恒 0、不进判据。`next_step=implement` 或 `unverified_premise` 低分**禁止**用来减免这一问。它看不见仓库，完整散文规格会看起来「没有未验证前提」。
+- 工具够用：缺的是题面和触发，不是新分类器、新字段、五模型发散。
+
+**Best at:** 用户目标清楚、机制已经写进 design、实现评审只会问「是否合乎规格」的产品单。OpenDesign 的「免得每次打开都卡住」对上「启动阻塞在 check」就是这一类。
+
+**Sacrifices:** 可见行为单多一次只读调用；主 agent 实现、不走 `delegate-codex` 时也要跑（今日攻题闸绑在派活入口上，主路径可整段跳过）。不保证抓住「原话已被改写成机制」的单；不替代真机/运行时回显；切片仍可能漏片外老脚本——本方向不碰评审切片。
+
+**Blind spots in the brief:** 攻题其实跑过且改过考卷，问题不是「没检查」，是检查仍以规格为考卷。`design.md` 已有「oracle 能被什么骗过」、panel 4c 已有「目标与技术保证有落差先实验」，二者都由同一自信作者触发。Jev 三轮无完整事实标签，题目一调就误报/漏报——不能当路由。撤回的 low 理由闸：新六条绿、旧 R3 红，存在性≠理由对。scoped 结果本就不能当归档资格。
+
+**Smallest first step:** 不动 `bin/track-record`、不改 `triage/questions.json`、不开 `panel-explore`。写一份约 20 行 goal-attack brief，用仓库里已冻结的 `tasks/opendesign-auto-update-countdown-attack-prompt.md`（对照 `attack.md`）做纸面重放：成功 = 能点出启动等网络 / 35 秒中断相对「不要卡住」；失败 = 只重复那 19 条规格漏洞。负对照：对纯判卷钉死单应输出「无可见机制，跳过」。这一步证伪了再谈写进 track/delegate 抽屉；证伪了就停，不要先上车闸。

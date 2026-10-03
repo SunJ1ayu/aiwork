@@ -1,0 +1,66 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    redcheck-runlog
+cmd:     bin/redcheck --base c5fcb13 --impl bin/runlog --oracle bash\ tests/test-runlog.sh --must-fail FAIL:\ R2:\ 命令\ exit\ 3
+cwd:     /root/aiwork(仓根)
+commit:  9218340
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-08T04:22:24Z
+---------------- 输出开始 ----------------
+redcheck: repo=/root/aiwork
+  实现退回 c5fcb1373bcc(判卷留在 HEAD 92183400628e)
+  实现:bin/runlog
+  (基线上没有 bin/runlog ⇒ 退回 = 删掉它)
+  跑判据 ...
+     | === runlog oracle ===
+     | [R1] 跑一条命令 ⇒ 收据落盘,输出和身份都在里面
+     |   FAIL: R1: evidence/ 里有收据文件
+     |   FAIL: R1: 文件名带 slug
+     | grep: : No such file or directory
+     |   FAIL: R1: stdout 进了收据
+     | grep: : No such file or directory
+     |   FAIL: R1: stderr 也进了收据(合并捕获)
+     |   FAIL: R1: 输出同时还流到终端(不是闷头吞掉)
+     | grep: : No such file or directory
+     |   FAIL: R1: 收据末行 = 单行收据行,字段齐(slug/rc/commit/dirty/at/file)
+     | grep: : No such file or directory
+     |   FAIL: R1: 同一行原样打印在终端上(给我粘)
+     |   PASS: R1: 终端还告诉我完整输出在哪个文件
+     | [R2] 退出码原样透传 —— runlog 绝不许把红的跑成绿的
+     |   FAIL: R2: 命令 exit 3 ⇒ runlog 也 exit 3
+     | grep: : No such file or directory
+     |   FAIL: R2: 收据行记的是 rc=3
+     |   FAIL: R2: 命令成功 ⇒ runlog exit 0
+     | [R3] dirty 在跑之前算(收据文件自己不许把自己算脏)
+     | grep: : No such file or directory
+     |   FAIL: R3: 干净仓里跑 ⇒ dirty=no(没被自己写的收据带脏)
+     | grep: : No such file or directory
+     |   FAIL: R3: 工作树改过 ⇒ dirty=yes
+     | grep: : No such file or directory
+     |   FAIL: R3: 只有未跟踪文件 ⇒ 照样 dirty=yes
+     | [R4] 文件名字典序 = 时间序(规矩5b 取「最后一份」靠这个)
+     | ls: cannot access '/tmp/tmp.MVXAsulha6/tracks/t/evidence/*.txt': No such file or directory
+     |   FAIL: R4: 同一秒连跑三次 ⇒ 三份收据,谁也没覆盖谁
+     | ls: cannot access '/tmp/tmp.MVXAsulha6/tracks/t/evidence/*.txt': No such file or directory
+     | grep: : No such file or directory
+     |   FAIL: R4: 字典序最后一份 = 最后跑的那次
+     | [R5] 用法错误在开跑之前就拒,且用独立退出码 64(不和命令的 rc 撞车)
+     |   FAIL: R5: track 不存在 ⇒ rc=64
+     |   PASS: R5: 拒跑时不许顺手造目录
+     |   FAIL: R5: 没给命令 ⇒ rc=64
+     |   FAIL: R5: 没给 -t ⇒ rc=64
+     |   PASS: R5: 三次拒跑,一份收据都没落下
+     | [R6] 已归档的 track 也能补跑(收尾常在归档前后来回)
+     |   FAIL: R6: tracks/archive/<name> 也认
+     | [R7] 集成:runlog 打印的那一行粘进 verify.md ⇒ 守卫放行;改一个字 ⇒ 挡下
+     | grep: : No such file or directory
+     |   PASS: R7: 原样粘 ⇒ 放行
+     |   FAIL: R7: 把 rc=1 改成 rc=0 ⇒ 当场挡下(这就是本单要堵的那一手)
+     | === total: 4 passed, 20 failed ===
+  ✅ 红在目标断言上(命中 /FAIL: R2: 命令 exit 3/)。
+
+  ✅ 红检通过:旧实现下判据是红的(rc=1)。这份判据确实在问本轮的改动。
+
+redcheck: 恢复实现到 HEAD ...
+  ✅ 已恢复,工作树干净(git 说的,不是我说的)。
+---------------- 输出结束 ----------------
+runlog: redcheck-runlog rc=0 commit=9218340 dirty=yes at=2026-08-08T04:22:24Z file=tracks/machine-evidence-gate/evidence/20260808T042224Z-01-redcheck-runlog.txt

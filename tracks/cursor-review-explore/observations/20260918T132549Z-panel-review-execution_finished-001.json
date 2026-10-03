@@ -1,0 +1,136 @@
+{
+  "schema_version": 2,
+  "track": "cursor-review-explore",
+  "run_id": "20260918-211925-4134846-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "cursor-grok-default-review",
+  "started_at": "2026-09-18T13:19:25Z",
+  "finished_at": "2026-09-18T13:25:49Z",
+  "duration_ms": 383329,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "high",
+    "degraded": false,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "adapter": "submimo",
+        "degraded": false,
+        "duration_ms": 123623,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:35be946b6308da86d720177a91c0618abdbd087c38b48adb1a02315870e5d514",
+          "ref": "file:///root/aiwork/logs/panel-cursor-grok-final-20260918.submimo.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xiaomi",
+        "model": {
+          "invoked": "xiaomi/mimo-v2.5-pro",
+          "reported": null,
+          "requested": "xiaomi/mimo-v2.5-pro"
+        },
+        "name": "submimo",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260918-211925-4134846-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:92d787076636ebc787818490a266a3fba6a670ac5aabb06271c42dde373080c3",
+            "policy_version": 1,
+            "track": "cursor-review-explore"
+          },
+          "digest": "sha256:cb36076fce03ce7b84c00d77231e02e3e6f91ca0ba996ff9944b7aec3eef5ee2",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "dc6f735204d76e0952a67c8902a54a4b00966504",
+            "index_tree_oid": "42d9ebbe4dd510e716d3fec5c99757ddf24f1688",
+            "worktree_tree_oid": "251158a6c22b0a9308ab6d8ab5fb1035acbc8479"
+          },
+          "task_sha256": "sha256:d6353477019404c617607bc38bdd35f544794b7ad9658ae96aea5a209cd16542"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subcursor",
+        "degraded": false,
+        "duration_ms": 381278,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:649f1ef8dcfcf6425414befefd8b89c3d616c4e863a8d567f09e90cd38f7e71c",
+          "ref": "file:///root/aiwork/logs/panel-cursor-grok-final-20260918.subcursor.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xai",
+        "model": {
+          "invoked": "cursor-grok-4.6-high",
+          "reported": null,
+          "requested": "cursor-grok-4.6-high"
+        },
+        "name": "subcursor",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260918-211925-4134846-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:92d787076636ebc787818490a266a3fba6a670ac5aabb06271c42dde373080c3",
+            "policy_version": 1,
+            "track": "cursor-review-explore"
+          },
+          "digest": "sha256:cb36076fce03ce7b84c00d77231e02e3e6f91ca0ba996ff9944b7aec3eef5ee2",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "dc6f735204d76e0952a67c8902a54a4b00966504",
+            "index_tree_oid": "42d9ebbe4dd510e716d3fec5c99757ddf24f1688",
+            "worktree_tree_oid": "251158a6c22b0a9308ab6d8ab5fb1035acbc8479"
+          },
+          "task_sha256": "sha256:d6353477019404c617607bc38bdd35f544794b7ad9658ae96aea5a209cd16542"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

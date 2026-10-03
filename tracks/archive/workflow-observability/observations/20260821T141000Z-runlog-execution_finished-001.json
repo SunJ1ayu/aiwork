@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "workflow-observability",
+  "run_id": "20260821T140556Z-01-review-tooling-final-r4",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "review-tooling-final-r4",
+  "started_at": "2026-08-21T14:05:56Z",
+  "finished_at": "2026-08-21T14:10:00Z",
+  "duration_ms": 243805,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 0,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

@@ -1,0 +1,20 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    mutation-test-r2
+cmd:     bash tracks/codex-worktree-delegation/mutation-test.sh
+cwd:     /root/aiwork(仓根)
+commit:  88e47b4
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-11T12:46:28Z
+---------------- 输出开始 ----------------
+=== 变异测试:拆掉每一道闸,判据必须红 ===
+  ✅ [M1-默认不隔离] 判据红在该红的地方:I1: codex 的 -C 落在 worktree 根下
+  ✅ [M2-哈希只看有没有那一行不比对值] 判据红在该红的地方:H1: 判卷改了、攻题记录没跟上 ⇒ 拒发(攻的是上一版考卷)
+  ✅ [M3-闸①第一臂退回主树] 判据红在该红的地方:R2: 隔离下 ⇒ 闸①放行(误报消失)
+  ✅ [M4-底账退回主树] 判据红在该红的地方:R2: 底账里**没有**我自己改的判据文件
+  ✅ [M5-哈希不排除__pycache__(两道冗余排除一起拆)] 判据红在该红的地方:H2: __pycache__ 内容变了 ⇒ 哈希不变、照发
+  ✅ [M6-卷宗放宽过头(不查被跟踪的攻题记录)] 判据红在该红的地方:I4: 攻题记录被 git 跟踪 ⇒ 拒发(它会被 checkout 进树)
+  ✅ [M7-判卷脏也照派] 判据红在该红的地方:I2: 判卷路径有未提交改动 ⇒ 拒发
+=== 变异测试:7 处被咬住,0 处漏网 ===
+✅ 收尾:bin/delegate-codex 已恢复(git 说的)
+---------------- 输出结束 ----------------
+runlog: mutation-test-r2 rc=0 commit=88e47b4 dirty=yes at=2026-08-11T12:46:28Z file=tracks/codex-worktree-delegation/evidence/20260811T124628Z-01-mutation-test-r2.txt

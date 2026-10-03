@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "subgemini-review-leg",
+  "run_id": "20260826T034713Z-01-oracle-red-v41-subctx",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "oracle-red-v41-subctx",
+  "started_at": "2026-08-26T03:47:13Z",
+  "finished_at": "2026-08-26T03:50:20Z",
+  "duration_ms": 186962,
+  "exit_code": 1,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 1,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

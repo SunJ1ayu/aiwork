@@ -1,0 +1,467 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    resume-candidates-red
+cmd:     python3 tests/test_panel_candidates.py
+cwd:     /root/aiwork-model-selection(仓根)
+commit:  2d625b4
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-21T01:54:08Z
+---------------- 输出开始 ----------------
+FFF.FFFFF
+======================================================================
+FAIL: test_catalog_is_read_only_and_reports_unknown_quota (__main__.CandidateTest.test_catalog_is_read_only_and_reports_unknown_quota)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 179, in test_catalog_is_read_only_and_reports_unknown_quota
+    self.assertTrue(cli.exists(), 'read-only model catalog is missing')
+AssertionError: False is not true : read-only model catalog is missing
+
+======================================================================
+FAIL: test_explore_shared_selection_cannot_supply_review_coverage (__main__.CandidateTest.test_explore_shared_selection_cannot_supply_review_coverage)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 153, in test_explore_shared_selection_cannot_supply_review_coverage
+    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+AssertionError: 2 != 0 : Usage:
+  panel-explore BRIEF_FILE [REPO_DIR] [LOG_PREFIX]
+
+Runs the enabled exploration models in parallel on the SAME design brief:
+  submimo explore -> <LOG_PREFIX>.submimo.log
+  subdeepseek-agent explore -> <LOG_PREFIX>.subdeepseek.log
+                         (falls back to subdeepseek review when requested/needed)
+  subglm-agent explore -> <LOG_PREFIX>.subglm.log
+                         (falls back to subglm review when requested/needed)
+  subgrok explore -> <LOG_PREFIX>.subgrok.log (PANEL_GROK_LEG=off disables)
+  subcursor explore -> <LOG_PREFIX>.subcursor.log (PANEL_CURSOR_LEG=off disables)
+
+Each returns ONE position paper (Direction / Core bet / How it works / Best at /
+Sacrifices / Blind spots in the brief / Smallest first step). No PASS/BLOCK.
+
+Args:
+  BRIEF_FILE   markdown design brief / open question (required)
+  REPO_DIR     repo for context (default: $PWD)
+  LOG_PREFIX   log path prefix (default: /root/aiwork/logs/explore-<briefname>-<ts>)
+
+The main agent reads ALL reports, then SYNTHESISES - it never averages them into a
+verdict. A failure in one model does not block the others.
+
+
+======================================================================
+FAIL: test_health_is_separate_for_cursor_models (__main__.CandidateTest.test_health_is_separate_for_cursor_models)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 194, in test_health_is_separate_for_cursor_models
+    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+AssertionError: 2 != 0 : Usage:
+  panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
+
+Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
+Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO, an ineligible
+typed result, or conflict adds one healthy spare. `--all` requests the entire
+current reviewer pool: every enabled leg whose configured executable is available.
+
+Reviewer pool (from _panel-roster-lib.sh):
+  submimo        family=xiaomi     agent=submimo              switch=PANEL_MIMO_LEG
+  subdeepseek    family=deepseek   agent=subdeepseek-agent    switch=PANEL_DEEPSEEK_LEG; chat fallback=subdeepseek
+  subglm         family=zhipu      agent=subglm-agent         switch=PANEL_GLM_LEG; chat fallback=subglm
+  subkimi        family=moonshot   agent=subkimi              switch=PANEL_KIMI_LEG
+  subgemini      family=google     agent=subgemini            switch=PANEL_GEMINI_LEG
+  subgrok        family=xai        agent=subgrok              switch=PANEL_GROK_LEG
+  subcursor      family=xai        agent=subcursor            switch=PANEL_CURSOR_LEG
+
+Role-only legs (never rotated; panel-slice pins them via --scoped-review --pin-leg):
+  subcodex       family=openai     agent=subcodex             switch=PANEL_CODEX_LEG
+
+Args:
+  TASK_FILE    markdown task/review brief (required)
+  REPO_DIR     repo to review (default: $PWD)
+  LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
+
+Options / env:
+  --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
+  --budget N                 explicit initial budget, 0..current pool size
+  --all                      explicit full-pool review (special high risk)
+  --track NAME               bind dispatch/observation to a typed track in the main repo
+  --no-track                 explicitly state that this review belongs to no track
+  --scoped-review            internal (panel-slice): the reviewer owns only an assigned slice/overall/
+                             verification scope. Results carry review_contract_version=2 and never
+                             count as full-review coverage; no --track, no --all, no chat fallback,
+                             the normal rotation cursor is left alone, and budget>0 needs --pin-leg.
+  --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
+                             (pool legs and role-only legs such as subcodex)
+  PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
+  PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
+  PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
+  PANEL_HEALTH_DEAD_STREAK   连续这么多轮 rc≠0 就**停止轮换**该腿,冷却过了也不放回
+                             (默认 3;0=关掉)。只有 rc≠0 计数——INCOMPLETE/DEGRADED
+                             是 rc=0,腿产出了东西,算进去会把干活的腿踢掉。
+                             放回:PANEL_HEALTH_OVERRIDE=<leg>=healthy(成功一次即清零)
+  (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
+                             convention file <tool-root>/tasks/<taskname>-my-review.md
+                             (taskname = TASK_FILE basename) and REFUSES to dispatch
+                             if it is absent - so forgetting to write your own review
+                             stops the panel instead of silently skipping the gate.
+  --require-my-review PATH   use PATH instead of the convention path (still must
+                             exist and live OUTSIDE REPO_DIR - the engine inlines
+                             untracked repo files into reviewer prompts).
+  --no-my-review             explicit opt-out: run without the gate (a conscious
+                             choice, e.g. a task that has no diff to self-review).
+  PANEL_ORACLE_CMD           if set, run it (in REPO_DIR) BEFORE dispatching and
+                             record 'ORACLE: <cmd> rc=<N>' + <prefix>.oracle.log.
+                             Records only, never blocks: 07-04 lesson - three
+                             reviewers PASSed a broken oracle nobody had run.
+
+The main agent reads ALL logs and makes the final call. Reviewers are advisors,
+not voters. A failure in one reviewer does not block the others.
+
+
+======================================================================
+FAIL: test_native_and_cursor_selection_no_automatic_spare_or_fallback (__main__.CandidateTest.test_native_and_cursor_selection_no_automatic_spare_or_fallback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 113, in test_native_and_cursor_selection_no_automatic_spare_or_fallback
+    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+AssertionError: 2 != 0 : Usage:
+  panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
+
+Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
+Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO, an ineligible
+typed result, or conflict adds one healthy spare. `--all` requests the entire
+current reviewer pool: every enabled leg whose configured executable is available.
+
+Reviewer pool (from _panel-roster-lib.sh):
+  submimo        family=xiaomi     agent=submimo              switch=PANEL_MIMO_LEG
+  subdeepseek    family=deepseek   agent=subdeepseek-agent    switch=PANEL_DEEPSEEK_LEG; chat fallback=subdeepseek
+  subglm         family=zhipu      agent=subglm-agent         switch=PANEL_GLM_LEG; chat fallback=subglm
+  subkimi        family=moonshot   agent=subkimi              switch=PANEL_KIMI_LEG
+  subgemini      family=google     agent=subgemini            switch=PANEL_GEMINI_LEG
+  subgrok        family=xai        agent=subgrok              switch=PANEL_GROK_LEG
+  subcursor      family=xai        agent=subcursor            switch=PANEL_CURSOR_LEG
+
+Role-only legs (never rotated; panel-slice pins them via --scoped-review --pin-leg):
+  subcodex       family=openai     agent=subcodex             switch=PANEL_CODEX_LEG
+
+Args:
+  TASK_FILE    markdown task/review brief (required)
+  REPO_DIR     repo to review (default: $PWD)
+  LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
+
+Options / env:
+  --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
+  --budget N                 explicit initial budget, 0..current pool size
+  --all                      explicit full-pool review (special high risk)
+  --track NAME               bind dispatch/observation to a typed track in the main repo
+  --no-track                 explicitly state that this review belongs to no track
+  --scoped-review            internal (panel-slice): the reviewer owns only an assigned slice/overall/
+                             verification scope. Results carry review_contract_version=2 and never
+                             count as full-review coverage; no --track, no --all, no chat fallback,
+                             the normal rotation cursor is left alone, and budget>0 needs --pin-leg.
+  --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
+                             (pool legs and role-only legs such as subcodex)
+  PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
+  PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
+  PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
+  PANEL_HEALTH_DEAD_STREAK   连续这么多轮 rc≠0 就**停止轮换**该腿,冷却过了也不放回
+                             (默认 3;0=关掉)。只有 rc≠0 计数——INCOMPLETE/DEGRADED
+                             是 rc=0,腿产出了东西,算进去会把干活的腿踢掉。
+                             放回:PANEL_HEALTH_OVERRIDE=<leg>=healthy(成功一次即清零)
+  (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
+                             convention file <tool-root>/tasks/<taskname>-my-review.md
+                             (taskname = TASK_FILE basename) and REFUSES to dispatch
+                             if it is absent - so forgetting to write your own review
+                             stops the panel instead of silently skipping the gate.
+  --require-my-review PATH   use PATH instead of the convention path (still must
+                             exist and live OUTSIDE REPO_DIR - the engine inlines
+                             untracked repo files into reviewer prompts).
+  --no-my-review             explicit opt-out: run without the gate (a conscious
+                             choice, e.g. a task that has no diff to self-review).
+  PANEL_ORACLE_CMD           if set, run it (in REPO_DIR) BEFORE dispatching and
+                             record 'ORACLE: <cmd> rc=<N>' + <prefix>.oracle.log.
+                             Records only, never blocks: 07-04 lesson - three
+                             reviewers PASSed a broken oracle nobody had run.
+
+The main agent reads ALL logs and makes the final call. Reviewers are advisors,
+not voters. A failure in one reviewer does not block the others.
+
+
+======================================================================
+FAIL: test_roster_uses_frozen_members_after_config_changes (__main__.CandidateTest.test_roster_uses_frozen_members_after_config_changes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 166, in test_roster_uses_frozen_members_after_config_changes
+    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+AssertionError: 2 != 0 : Usage:
+  panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
+
+Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
+Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO, an ineligible
+typed result, or conflict adds one healthy spare. `--all` requests the entire
+current reviewer pool: every enabled leg whose configured executable is available.
+
+Reviewer pool (from _panel-roster-lib.sh):
+  submimo        family=xiaomi     agent=submimo              switch=PANEL_MIMO_LEG
+  subdeepseek    family=deepseek   agent=subdeepseek-agent    switch=PANEL_DEEPSEEK_LEG; chat fallback=subdeepseek
+  subglm         family=zhipu      agent=subglm-agent         switch=PANEL_GLM_LEG; chat fallback=subglm
+  subkimi        family=moonshot   agent=subkimi              switch=PANEL_KIMI_LEG
+  subgemini      family=google     agent=subgemini            switch=PANEL_GEMINI_LEG
+  subgrok        family=xai        agent=subgrok              switch=PANEL_GROK_LEG
+  subcursor      family=xai        agent=subcursor            switch=PANEL_CURSOR_LEG
+
+Role-only legs (never rotated; panel-slice pins them via --scoped-review --pin-leg):
+  subcodex       family=openai     agent=subcodex             switch=PANEL_CODEX_LEG
+
+Args:
+  TASK_FILE    markdown task/review brief (required)
+  REPO_DIR     repo to review (default: $PWD)
+  LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
+
+Options / env:
+  --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
+  --budget N                 explicit initial budget, 0..current pool size
+  --all                      explicit full-pool review (special high risk)
+  --track NAME               bind dispatch/observation to a typed track in the main repo
+  --no-track                 explicitly state that this review belongs to no track
+  --scoped-review            internal (panel-slice): the reviewer owns only an assigned slice/overall/
+                             verification scope. Results carry review_contract_version=2 and never
+                             count as full-review coverage; no --track, no --all, no chat fallback,
+                             the normal rotation cursor is left alone, and budget>0 needs --pin-leg.
+  --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
+                             (pool legs and role-only legs such as subcodex)
+  PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
+  PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
+  PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
+  PANEL_HEALTH_DEAD_STREAK   连续这么多轮 rc≠0 就**停止轮换**该腿,冷却过了也不放回
+                             (默认 3;0=关掉)。只有 rc≠0 计数——INCOMPLETE/DEGRADED
+                             是 rc=0,腿产出了东西,算进去会把干活的腿踢掉。
+                             放回:PANEL_HEALTH_OVERRIDE=<leg>=healthy(成功一次即清零)
+  (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
+                             convention file <tool-root>/tasks/<taskname>-my-review.md
+                             (taskname = TASK_FILE basename) and REFUSES to dispatch
+                             if it is absent - so forgetting to write your own review
+                             stops the panel instead of silently skipping the gate.
+  --require-my-review PATH   use PATH instead of the convention path (still must
+                             exist and live OUTSIDE REPO_DIR - the engine inlines
+                             untracked repo files into reviewer prompts).
+  --no-my-review             explicit opt-out: run without the gate (a conscious
+                             choice, e.g. a task that has no diff to self-review).
+  PANEL_ORACLE_CMD           if set, run it (in REPO_DIR) BEFORE dispatching and
+                             record 'ORACLE: <cmd> rc=<N>' + <prefix>.oracle.log.
+                             Records only, never blocks: 07-04 lesson - three
+                             reviewers PASSed a broken oracle nobody had run.
+
+The main agent reads ALL logs and makes the final call. Reviewers are advisors,
+not voters. A failure in one reviewer does not block the others.
+
+
+======================================================================
+FAIL: test_same_family_does_not_fill_high_budget_but_can_add_evidence (__main__.CandidateTest.test_same_family_does_not_fill_high_budget_but_can_add_evidence)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 125, in test_same_family_does_not_fill_high_budget_but_can_add_evidence
+    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+AssertionError: 2 != 0 : Usage:
+  panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
+
+Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
+Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO, an ineligible
+typed result, or conflict adds one healthy spare. `--all` requests the entire
+current reviewer pool: every enabled leg whose configured executable is available.
+
+Reviewer pool (from _panel-roster-lib.sh):
+  submimo        family=xiaomi     agent=submimo              switch=PANEL_MIMO_LEG
+  subdeepseek    family=deepseek   agent=subdeepseek-agent    switch=PANEL_DEEPSEEK_LEG; chat fallback=subdeepseek
+  subglm         family=zhipu      agent=subglm-agent         switch=PANEL_GLM_LEG; chat fallback=subglm
+  subkimi        family=moonshot   agent=subkimi              switch=PANEL_KIMI_LEG
+  subgemini      family=google     agent=subgemini            switch=PANEL_GEMINI_LEG
+  subgrok        family=xai        agent=subgrok              switch=PANEL_GROK_LEG
+  subcursor      family=xai        agent=subcursor            switch=PANEL_CURSOR_LEG
+
+Role-only legs (never rotated; panel-slice pins them via --scoped-review --pin-leg):
+  subcodex       family=openai     agent=subcodex             switch=PANEL_CODEX_LEG
+
+Args:
+  TASK_FILE    markdown task/review brief (required)
+  REPO_DIR     repo to review (default: $PWD)
+  LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
+
+Options / env:
+  --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
+  --budget N                 explicit initial budget, 0..current pool size
+  --all                      explicit full-pool review (special high risk)
+  --track NAME               bind dispatch/observation to a typed track in the main repo
+  --no-track                 explicitly state that this review belongs to no track
+  --scoped-review            internal (panel-slice): the reviewer owns only an assigned slice/overall/
+                             verification scope. Results carry review_contract_version=2 and never
+                             count as full-review coverage; no --track, no --all, no chat fallback,
+                             the normal rotation cursor is left alone, and budget>0 needs --pin-leg.
+  --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
+                             (pool legs and role-only legs such as subcodex)
+  PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
+  PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
+  PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
+  PANEL_HEALTH_DEAD_STREAK   连续这么多轮 rc≠0 就**停止轮换**该腿,冷却过了也不放回
+                             (默认 3;0=关掉)。只有 rc≠0 计数——INCOMPLETE/DEGRADED
+                             是 rc=0,腿产出了东西,算进去会把干活的腿踢掉。
+                             放回:PANEL_HEALTH_OVERRIDE=<leg>=healthy(成功一次即清零)
+  (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
+                             convention file <tool-root>/tasks/<taskname>-my-review.md
+                             (taskname = TASK_FILE basename) and REFUSES to dispatch
+                             if it is absent - so forgetting to write your own review
+                             stops the panel instead of silently skipping the gate.
+  --require-my-review PATH   use PATH instead of the convention path (still must
+                             exist and live OUTSIDE REPO_DIR - the engine inlines
+                             untracked repo files into reviewer prompts).
+  --no-my-review             explicit opt-out: run without the gate (a conscious
+                             choice, e.g. a task that has no diff to self-review).
+  PANEL_ORACLE_CMD           if set, run it (in REPO_DIR) BEFORE dispatching and
+                             record 'ORACLE: <cmd> rc=<N>' + <prefix>.oracle.log.
+                             Records only, never blocks: 07-04 lesson - three
+                             reviewers PASSed a broken oracle nobody had run.
+
+The main agent reads ALL logs and makes the final call. Reviewers are advisors,
+not voters. A failure in one reviewer does not block the others.
+
+
+======================================================================
+FAIL: test_two_cursor_models_one_run_and_subject (__main__.CandidateTest.test_two_cursor_models_one_run_and_subject)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 98, in test_two_cursor_models_one_run_and_subject
+    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+AssertionError: 2 != 0 : Usage:
+  panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
+
+Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
+Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO, an ineligible
+typed result, or conflict adds one healthy spare. `--all` requests the entire
+current reviewer pool: every enabled leg whose configured executable is available.
+
+Reviewer pool (from _panel-roster-lib.sh):
+  submimo        family=xiaomi     agent=submimo              switch=PANEL_MIMO_LEG
+  subdeepseek    family=deepseek   agent=subdeepseek-agent    switch=PANEL_DEEPSEEK_LEG; chat fallback=subdeepseek
+  subglm         family=zhipu      agent=subglm-agent         switch=PANEL_GLM_LEG; chat fallback=subglm
+  subkimi        family=moonshot   agent=subkimi              switch=PANEL_KIMI_LEG
+  subgemini      family=google     agent=subgemini            switch=PANEL_GEMINI_LEG
+  subgrok        family=xai        agent=subgrok              switch=PANEL_GROK_LEG
+  subcursor      family=xai        agent=subcursor            switch=PANEL_CURSOR_LEG
+
+Role-only legs (never rotated; panel-slice pins them via --scoped-review --pin-leg):
+  subcodex       family=openai     agent=subcodex             switch=PANEL_CODEX_LEG
+
+Args:
+  TASK_FILE    markdown task/review brief (required)
+  REPO_DIR     repo to review (default: $PWD)
+  LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
+
+Options / env:
+  --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
+  --budget N                 explicit initial budget, 0..current pool size
+  --all                      explicit full-pool review (special high risk)
+  --track NAME               bind dispatch/observation to a typed track in the main repo
+  --no-track                 explicitly state that this review belongs to no track
+  --scoped-review            internal (panel-slice): the reviewer owns only an assigned slice/overall/
+                             verification scope. Results carry review_contract_version=2 and never
+                             count as full-review coverage; no --track, no --all, no chat fallback,
+                             the normal rotation cursor is left alone, and budget>0 needs --pin-leg.
+  --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
+                             (pool legs and role-only legs such as subcodex)
+  PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
+  PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
+  PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
+  PANEL_HEALTH_DEAD_STREAK   连续这么多轮 rc≠0 就**停止轮换**该腿,冷却过了也不放回
+                             (默认 3;0=关掉)。只有 rc≠0 计数——INCOMPLETE/DEGRADED
+                             是 rc=0,腿产出了东西,算进去会把干活的腿踢掉。
+                             放回:PANEL_HEALTH_OVERRIDE=<leg>=healthy(成功一次即清零)
+  (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
+                             convention file <tool-root>/tasks/<taskname>-my-review.md
+                             (taskname = TASK_FILE basename) and REFUSES to dispatch
+                             if it is absent - so forgetting to write your own review
+                             stops the panel instead of silently skipping the gate.
+  --require-my-review PATH   use PATH instead of the convention path (still must
+                             exist and live OUTSIDE REPO_DIR - the engine inlines
+                             untracked repo files into reviewer prompts).
+  --no-my-review             explicit opt-out: run without the gate (a conscious
+                             choice, e.g. a task that has no diff to self-review).
+  PANEL_ORACLE_CMD           if set, run it (in REPO_DIR) BEFORE dispatching and
+                             record 'ORACLE: <cmd> rc=<N>' + <prefix>.oracle.log.
+                             Records only, never blocks: 07-04 lesson - three
+                             reviewers PASSed a broken oracle nobody had run.
+
+The main agent reads ALL logs and makes the final call. Reviewers are advisors,
+not voters. A failure in one reviewer does not block the others.
+
+
+======================================================================
+FAIL: test_wrong_model_in_same_family_never_counts (__main__.CandidateTest.test_wrong_model_in_same_family_never_counts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-model-selection/tests/test_panel_candidates.py", line 146, in test_wrong_model_in_same_family_never_counts
+    self.assertEqual(len(data), 1, r.stdout + r.stderr)
+AssertionError: 0 != 1 : Usage:
+  panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
+
+Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
+Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO, an ineligible
+typed result, or conflict adds one healthy spare. `--all` requests the entire
+current reviewer pool: every enabled leg whose configured executable is available.
+
+Reviewer pool (from _panel-roster-lib.sh):
+  submimo        family=xiaomi     agent=submimo              switch=PANEL_MIMO_LEG
+  subdeepseek    family=deepseek   agent=subdeepseek-agent    switch=PANEL_DEEPSEEK_LEG; chat fallback=subdeepseek
+  subglm         family=zhipu      agent=subglm-agent         switch=PANEL_GLM_LEG; chat fallback=subglm
+  subkimi        family=moonshot   agent=subkimi              switch=PANEL_KIMI_LEG
+  subgemini      family=google     agent=subgemini            switch=PANEL_GEMINI_LEG
+  subgrok        family=xai        agent=subgrok              switch=PANEL_GROK_LEG
+  subcursor      family=xai        agent=subcursor            switch=PANEL_CURSOR_LEG
+
+Role-only legs (never rotated; panel-slice pins them via --scoped-review --pin-leg):
+  subcodex       family=openai     agent=subcodex             switch=PANEL_CODEX_LEG
+
+Args:
+  TASK_FILE    markdown task/review brief (required)
+  REPO_DIR     repo to review (default: $PWD)
+  LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
+
+Options / env:
+  --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
+  --budget N                 explicit initial budget, 0..current pool size
+  --all                      explicit full-pool review (special high risk)
+  --track NAME               bind dispatch/observation to a typed track in the main repo
+  --no-track                 explicitly state that this review belongs to no track
+  --scoped-review            internal (panel-slice): the reviewer owns only an assigned slice/overall/
+                             verification scope. Results carry review_contract_version=2 and never
+                             count as full-review coverage; no --track, no --all, no chat fallback,
+                             the normal rotation cursor is left alone, and budget>0 needs --pin-leg.
+  --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
+                             (pool legs and role-only legs such as subcodex)
+  PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
+  PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
+  PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
+  PANEL_HEALTH_DEAD_STREAK   连续这么多轮 rc≠0 就**停止轮换**该腿,冷却过了也不放回
+                             (默认 3;0=关掉)。只有 rc≠0 计数——INCOMPLETE/DEGRADED
+                             是 rc=0,腿产出了东西,算进去会把干活的腿踢掉。
+                             放回:PANEL_HEALTH_OVERRIDE=<leg>=healthy(成功一次即清零)
+  (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
+                             convention file <tool-root>/tasks/<taskname>-my-review.md
+                             (taskname = TASK_FILE basename) and REFUSES to dispatch
+                             if it is absent - so forgetting to write your own review
+                             stops the panel instead of silently skipping the gate.
+  --require-my-review PATH   use PATH instead of the convention path (still must
+                             exist and live OUTSIDE REPO_DIR - the engine inlines
+                             untracked repo files into reviewer prompts).
+  --no-my-review             explicit opt-out: run without the gate (a conscious
+                             choice, e.g. a task that has no diff to self-review).
+  PANEL_ORACLE_CMD           if set, run it (in REPO_DIR) BEFORE dispatching and
+                             record 'ORACLE: <cmd> rc=<N>' + <prefix>.oracle.log.
+                             Records only, never blocks: 07-04 lesson - three
+                             reviewers PASSed a broken oracle nobody had run.
+
+The main agent reads ALL logs and makes the final call. Reviewers are advisors,
+not voters. A failure in one reviewer does not block the others.
+
+
+----------------------------------------------------------------------
+Ran 9 tests in 1.311s
+
+FAILED (failures=8)
+---------------- 输出结束 ----------------
+runlog: resume-candidates-red rc=1 commit=2d625b4 dirty=yes at=2026-09-21T01:54:08Z file=tracks/model-selection/evidence/20260921T015408Z-01-resume-candidates-red.txt

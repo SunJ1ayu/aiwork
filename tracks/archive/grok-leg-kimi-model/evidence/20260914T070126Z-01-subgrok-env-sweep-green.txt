@@ -1,0 +1,15 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    subgrok-env-sweep-green
+cmd:     python3 tests/test_subgrok.py
+cwd:     /root/aiwork(仓根)
+commit:  b7ff89f
+dirty:   no(跑之前采的;含未跟踪文件)
+started: 2026-09-14T07:01:26Z
+---------------- 输出开始 ----------------
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 8.554s
+
+OK
+---------------- 输出结束 ----------------
+runlog: subgrok-env-sweep-green rc=0 commit=b7ff89f dirty=no at=2026-09-14T07:01:26Z file=tracks/grok-leg-kimi-model/evidence/20260914T070126Z-01-subgrok-env-sweep-green.txt

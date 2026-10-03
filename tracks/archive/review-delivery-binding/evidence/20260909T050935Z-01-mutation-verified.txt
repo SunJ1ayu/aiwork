@@ -1,0 +1,18 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    mutation-verified
+cmd:     bash tests/mutation-review-delivery.sh
+cwd:     /root/aiwork(仓根)
+commit:  b7dc080
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-09T05:09:35Z
+---------------- 输出开始 ----------------
+  PASS: 基线(未变异)判据全绿
+  PASS: 归档比较恒真(任何评审都算绑定) ⇒ 打红了 test_archive_rejects_stale_review_and_accepts_closeout
+  PASS: v2 也当 legacy 早退(整道闸静默关掉) ⇒ 打红了 test_unbound_historical_review_does_not_authorize_v2
+  PASS: 整个 track 目录都不承重(前提探索否决过的宽豁免) ⇒ 打红了 test_source_and_oracle_changes_invalidate
+  PASS: tasks.md 归一化连正文一起抹掉 ⇒ 打红了 test_risk_task_text_and_fake_receipt_cannot_hide
+  PASS: 收据只看名字不看内容(塞什么都能豁免) ⇒ 打红了 test_risk_task_text_and_fake_receipt_cannot_hide
+  PASS: 收口豁免不看文件模式(可执行/符号链接也免检) ⇒ 打红了 test_closeout_symlink_or_executable_does_not_get_excluded
+---- 合计 PASS=7 FAIL=0 ----
+---------------- 输出结束 ----------------
+runlog: mutation-verified rc=0 commit=b7dc080 dirty=yes at=2026-09-09T05:09:35Z file=tracks/review-delivery-binding/evidence/20260909T050935Z-01-mutation-verified.txt

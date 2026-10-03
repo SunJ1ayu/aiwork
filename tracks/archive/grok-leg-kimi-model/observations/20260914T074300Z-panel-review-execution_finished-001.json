@@ -1,0 +1,244 @@
+{
+  "schema_version": 2,
+  "track": "grok-leg-kimi-model",
+  "run_id": "20260914-153324-12301-panel-review",
+  "controller": "panel-review",
+  "event": "execution_finished",
+  "label": "grok-leg-kimi-model-review-r3",
+  "started_at": "2026-09-14T07:33:24Z",
+  "finished_at": "2026-09-14T07:43:00Z",
+  "duration_ms": 576787,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "panel-review",
+    "model": null,
+    "risk": "high",
+    "degraded": false,
+    "work_exit_code": 0,
+    "legs": [
+      {
+        "adapter": "submimo",
+        "degraded": false,
+        "duration_ms": 365137,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:547202e13619d49e1cb59c46aa64154bb82e1f09bb1bc56c180e6aad19282898",
+          "ref": "file:///root/aiwork/logs/panel-grok-leg-kimi-model-review-r3-20260914-153323.submimo.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "xiaomi",
+        "model": {
+          "invoked": "xiaomi/mimo-v2.5-pro",
+          "reported": null,
+          "requested": "xiaomi/mimo-v2.5-pro"
+        },
+        "name": "submimo",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260914-153324-12301-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:9a42eda073544c1a522fc3b296fd5c21cccb19dfcfc8942690103dadce72ce6a",
+            "policy_version": 1,
+            "track": "grok-leg-kimi-model"
+          },
+          "digest": "sha256:035c4355ebb125e981f58f10ba323160bd96f9103793d1b2d5738091fbdbaae2",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "1907e0e64b6251218b24a973f3733c24aba76449",
+            "index_tree_oid": "e3469a01712f561946de1d720837618075552fa6",
+            "worktree_tree_oid": "e3469a01712f561946de1d720837618075552fa6"
+          },
+          "task_sha256": "sha256:13d78b2ec8b8bb621b644be18963ea05ccfe1bc45b838bb8e6fd9688de1e46bb"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subdeepseek-agent",
+        "degraded": false,
+        "duration_ms": 195218,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:e923a5f7487d244614d67fb4b395c6d07fcb1c2a99defd23d84da50bb2c04d55",
+          "ref": "file:///root/aiwork/logs/panel-grok-leg-kimi-model-review-r3-20260914-153323.subdeepseek.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "deepseek",
+        "model": {
+          "invoked": "deepseek-flash",
+          "reported": null,
+          "requested": "deepseek-flash"
+        },
+        "name": "subdeepseek",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260914-153324-12301-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:9a42eda073544c1a522fc3b296fd5c21cccb19dfcfc8942690103dadce72ce6a",
+            "policy_version": 1,
+            "track": "grok-leg-kimi-model"
+          },
+          "digest": "sha256:035c4355ebb125e981f58f10ba323160bd96f9103793d1b2d5738091fbdbaae2",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "1907e0e64b6251218b24a973f3733c24aba76449",
+            "index_tree_oid": "e3469a01712f561946de1d720837618075552fa6",
+            "worktree_tree_oid": "e3469a01712f561946de1d720837618075552fa6"
+          },
+          "task_sha256": "sha256:13d78b2ec8b8bb621b644be18963ea05ccfe1bc45b838bb8e6fd9688de1e46bb"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "api",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subglm-agent",
+        "degraded": false,
+        "duration_ms": 252229,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:5796d1281d8561546eef0c6b92c4b8574e0a4e7ef1342e4812590068bf386d32",
+          "ref": "file:///root/aiwork/logs/panel-grok-leg-kimi-model-review-r3-20260914-153323.subglm.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "zhipu",
+        "model": {
+          "invoked": "go/glm-5.3-flash",
+          "reported": null,
+          "requested": "go/glm-5.3-flash"
+        },
+        "name": "subglm",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260914-153324-12301-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:9a42eda073544c1a522fc3b296fd5c21cccb19dfcfc8942690103dadce72ce6a",
+            "policy_version": 1,
+            "track": "grok-leg-kimi-model"
+          },
+          "digest": "sha256:035c4355ebb125e981f58f10ba323160bd96f9103793d1b2d5738091fbdbaae2",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "1907e0e64b6251218b24a973f3733c24aba76449",
+            "index_tree_oid": "e3469a01712f561946de1d720837618075552fa6",
+            "worktree_tree_oid": "e3469a01712f561946de1d720837618075552fa6"
+          },
+          "task_sha256": "sha256:13d78b2ec8b8bb621b644be18963ea05ccfe1bc45b838bb8e6fd9688de1e46bb"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      },
+      {
+        "adapter": "subkimi",
+        "degraded": false,
+        "duration_ms": 562838,
+        "evidence": {
+          "completeness": "complete",
+          "digest": "sha256:ea4b0255f027a3a408d7d448a76598086651c1ae9f483e7ade2e46fe21f25ddb",
+          "ref": "file:///root/aiwork/logs/panel-grok-leg-kimi-model-review-r3-20260914-153323.subkimi.evidence.log"
+        },
+        "failure_kind": "none",
+        "family": "moonshot",
+        "model": {
+          "invoked": "kimi-code/kimi-for-coding",
+          "reported": null,
+          "requested": "kimi-code/kimi-for-coding"
+        },
+        "name": "subkimi",
+        "normalizer_version": 1,
+        "process": {
+          "exit_code": 0,
+          "state": "exited"
+        },
+        "review_contract_version": 1,
+        "run_id": "20260914-153324-12301-panel-review",
+        "schema_version": 2,
+        "subject": {
+          "delivery": {
+            "digest": "sha256:9a42eda073544c1a522fc3b296fd5c21cccb19dfcfc8942690103dadce72ce6a",
+            "policy_version": 1,
+            "track": "grok-leg-kimi-model"
+          },
+          "digest": "sha256:035c4355ebb125e981f58f10ba323160bd96f9103793d1b2d5738091fbdbaae2",
+          "manifest_version": 2,
+          "source": {
+            "git_object_format": "sha1",
+            "head_oid": "1907e0e64b6251218b24a973f3733c24aba76449",
+            "index_tree_oid": "e3469a01712f561946de1d720837618075552fa6",
+            "worktree_tree_oid": "e3469a01712f561946de1d720837618075552fa6"
+          },
+          "task_sha256": "sha256:13d78b2ec8b8bb621b644be18963ea05ccfe1bc45b838bb8e6fd9688de1e46bb"
+        },
+        "usage": {
+          "api_cost": null,
+          "billing_mode": "subscription",
+          "input_tokens": null,
+          "output_tokens": null,
+          "total_tokens": null
+        },
+        "verdict": "PASS",
+        "view": {
+          "delivery_state": "complete",
+          "mode": "full_snapshot"
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

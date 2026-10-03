@@ -1,0 +1,34 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    redcheck-r3
+cmd:     bash tests/mutation-dead-leg-streak.sh
+cwd:     /root/aiwork(仓根)
+commit:  30eb506
+dirty:   yes(跑之前采的;含未跟踪文件)
+head-before: 30eb506f43566fc55656ec60c7e12c4177d94bc8
+source-view-before: sha256:50887488c3be299e80241b243616e54283ad4e6d6693f2dfb027576b7f66a2ef
+started: 2026-08-25T08:50:25Z
+---------------- 输出开始 ----------------
+== 红检开始(连续硬失败的腿停止轮换)==
+  [OK]   M1 -> 靶子「V44a: 一轮硬失败之后 health.tsv 里有 streak 列且=1」如期红了
+  [OK]   M2 -> 靶子「V44h: 产出过东西的腿必须还在轮换里(这条红=我把好腿踢掉了)」如期红了
+  [OK]   M3 -> 靶子「V44c: 连续 3 轮失败之后不许再轮换到它(冷却已归零仍不许)」如期红了
+  [OK]   M4 -> 靶子「V44f: 提示里给出怎么把它放回来(不留死胡同)」如期红了
+  [OK]   M5 -> 靶子「V44j: 老三列 health.tsv 照跑不崩(缺第 4 列当 0)」如期红了
+  [OK]   M6 -> 靶子「V44k: PANEL_HEALTH_DEAD_STREAK=0 时机制整个关掉」如期红了
+  [OK]   M7 -> 靶子「V44l: 一次硬失败之后,冷却窗口内不许再派它(冷却没死)」如期红了
+  [OK]   M8 -> 靶子「V44o: PANEL_HEALTH_DEAD_STREAK=08 必须拒跑(fail-closed),不许静默失效」如期红了
+  [OK]   M9 -> 靶子「V44p: --all 照派,但那行「连续几轮」的提示照打」如期红了
+  [OK]   M10 -> 靶子「V44n: dead 提示指的日志必须真的存在(不是本轮那个永远不会产生的)」如期红了
+  [OK]   M11 -> 靶子「V44r: 一个冷却窗口内的连发失败只算一次(--all 不许压缩掉定阈前提)」如期红了
+  [OK]   M12 -> 靶子「V44s: 跨过冷却窗口的失败照样累计(修法不许是「干脆永远不计数」)」如期红了
+  [OK]   M13 -> 靶子「V44u: 派不满风险预算时说出这件事本身(不是只有一行数字)」如期红了
+  [OK]   M14 -> 靶子「V44w: override 生效那一轮,提示改口(不再叫人去做已经做过的事)」如期红了
+  [OK]   M15 -> 靶子「V44c: 连续 3 轮失败之后不许再轮换到它(冷却已归零仍不许)」如期红了
+== 红检结束:咬住 15,漏网 0 ==
+所有被变异的文件都逐字节还原了
+command-rc: 0
+head-after: 30eb506f43566fc55656ec60c7e12c4177d94bc8
+source-view-after:  sha256:50887488c3be299e80241b243616e54283ad4e6d6693f2dfb027576b7f66a2ef
+source-stable: yes
+---------------- 输出结束 ----------------
+runlog: redcheck-r3 rc=0 commit=30eb506 dirty=yes final=yes at=2026-08-25T08:50:25Z file=tracks/panel-dead-leg-streak/evidence/20260825T085025Z-01-redcheck-r3.txt

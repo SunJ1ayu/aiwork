@@ -1,0 +1,48 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    full-regression
+cmd:     bin/rust-check-review-tooling
+cwd:     /root/aiwork(仓根)
+commit:  42e33fc
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-21T02:28:19Z
+---------------- 输出开始 ----------------
+ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**,没扫 tests/ 与 track/templates/;只报不拦):
+    check-gateway-version disk-watch openclaw-up rotate-mimo-key tmp-sweeper triage
+🔴 有判据套件不在 SUITES 里(写了没人跑 = 从此静默腐烂): test-low-uncertainty-reason.sh
+❌ 工具链防锈失败(外部漂移/环境升级?先跑本地判据复现):
+--- review-result (rc=1) ---
+FAIL: test_scoped_slice_results_are_marked_in_data_and_never_old_coverage (__main__.ReviewResultTest.test_scoped_slice_results_are_marked_in_data_and_never_old_coverage)
+FAILED (failures=1)
+--- leg-quick-fixes (rc=1) ---
+FAIL: test_control_deepseek_chat_leg_sends_no_opencode_header (__main__.ChatSessionHeader.test_control_deepseek_chat_leg_sends_no_opencode_header)
+FAIL: test_glm_chat_leg_sends_stable_session_header_across_retry (__main__.ChatSessionHeader.test_glm_chat_leg_sends_stable_session_header_across_retry)
+FAILED (failures=2)
+--- review-tooling (rc=1) ---
+  FAIL: log still written on empty content
+  FAIL: reason on stderr (sidecar)
+  FAIL: log still written on null content
+  FAIL: reasoning_content fallback exits 0
+  FAIL: reasoning_content text lands in log
+  FAIL: explore mode exempt from verdict check
+  FAIL: --mode flag overrides REVIEW_MODE env
+  FAIL: verdict output exits 0
+  FAIL: V16: 工作区干净时 panel 自动把 diff 基线设成默认分支(否则 chat 腿空手评审)
+  FAIL: V18: 端点报错打印真实端点 URL
+  PASS: V22c: 死腿记 FAIL 且带 rc
+  FAIL: V23: submimo 说清是缺自审(不是别的报错)
+  FAIL: V23: realpath 不可用 ⇒ 拒跑并说明(不许静默跳过仓内检查)
+  FAIL: V24: submimo export PANEL_DISPATCH=1 **不再**能跳过闸
+  FAIL: V26: 聊天腿带自己的 User-Agent(urllib 默认 UA 会被 Cloudflare 403)
+=== total: 547 passed, 14 failed ===
+--- retry (rc=1) ---
+--- no-egress (rc=1) ---
+  FAIL: N3a: 每个判据套件都有一行**可执行的**守卫引入(缺: test-low-uncertainty-reason.sh)
+  FAIL: N3c: 隔离做不到时每个套件都当场拒跑(带着网跑起来的: test-low-uncertainty-reason.sh)
+=== total: 16 passed, 2 failed ===
+--- workflow-docs (rc=1) ---
+  FAIL: W1: CLAUDE.md == 部署 CLAUDE.md
+  FAIL: W1: skills/track/SKILL.md == 部署 .claude/skills/track/SKILL.md
+  FAIL: W1: skills/panel/SKILL.md == 部署 .claude/skills/panel/SKILL.md
+=== total: 34 passed, 3 failed ===
+---------------- 输出结束 ----------------
+runlog: full-regression rc=1 commit=42e33fc dirty=yes at=2026-09-21T02:28:19Z file=tracks/model-selection/evidence/20260921T022819Z-01-full-regression.txt

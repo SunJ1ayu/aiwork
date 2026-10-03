@@ -1,0 +1,151 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    smoke-final
+cmd:     env REVIEW_NO_MY_REVIEW=1 ZHIPU_INCLUDE=bin/subagent\ bin/panel-review PANEL_DIFF_BASE=da5d244 bin/subglm review tasks/opencode-go-leg-smoke.md logs/smoke-glm-final.log /root/aiwork
+cwd:     /root/aiwork(仓根)
+commit:  5b250c9
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-18T09:34:49Z
+---------------- 输出开始 ----------------
+## 评审报告
+
+### 问题 1:`AUTH_ENV` 表驱动认证 header 有没有改坏 deepseek 腿?
+
+**结论:没有改坏。**
+
+从 `bin/subagent` 完整文件可追溯 `AUTH_ENV` 的完整机制:
+
+**供应商表(第 97-130 行附近):**
+- deepseek: `AUTH_ENV="ANTHROPIC_AUTH_TOKEN"` —— 对应 `Authorization: Bearer` 头
+- zhipu: `AUTH_ENV="ANTHROPIC_API_KEY"` —— 对应 `x-api-key` 头
+
+**环境注入(第 200 行附近):**
+```bash
+env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+    "$AUTH_ENV=$API_KEY" \
+```
+
+逐步推演 deepseek 腿的执行路径:
+1. `env -u ANTHROPIC_API_KEY` → 擦掉父 harness 的真 key(防止劫持)—— 与改前一致
+2. `env -u ANTHROPIC_AUTH_TOKEN` → 擦掉旧值 —— **新增**,但紧接着第 3 步重新注入
+3. `"$AUTH_ENV=$API_KEY"` → 展开为 `ANTHROPIC_AUTH_TOKEN=<deepseek key>` → 重新注入
+
+净效果:deepseek 腿的最终环境状态(`ANTHROPIC_AUTH_TOKEN` 有值、`ANTHROPIC_API_KEY` 空)与改前完全一致。新增的 `-u ANTHROPIC_AUTH_TOKEN` 只是先清后填,比原来更安全(不会继承父进程的残留 Bearer)。
+
+zhipu 腿则从原来错误地共用 `ANTHROPIC_AUTH_TOKEN`(Bearer)修正为 `ANTHROPIC_API_KEY`(x-api-key),这是修 bug 不是引入 bug。
+
+**差异确实只活在供应商表里**,躯干共用部分(env 注入逻辑)对两条腿是同一份代码,没有 per-provider 分支泄漏到表外。
+
+判据佐证(`green-all` 收据,300 passed, 0 failed):
+- `V26: deepseek 仍走 Bearer(AUTH_TOKEN),没被 GLM 的 header 风格串味` — PASS
+- `V26: deepseek 那格 x-api-key 保持空` — PASS
+- `V26: deepseek 底座腿端点没被顺手改` — PASS
+- `V26: deepseek 聊天腿端点没被顺手改` — PASS
+
+变异红检(`mutant-default-agent`)也确认:把默认值偷偷改回 agent 时,`panel: GLM leg defaults to chat leg` 和 `panel: GLM 默认走聊天腿` 两条会红 —— 判据咬得住。
+
+### 问题 2:GLM 腿默认档从 agent 翻成 chat,关掉和强制切回的能力还在不在?
+
+**结论:都在。**
+
+`bin/panel-review` 第 129-135 行:
+
+```bash
+GLM_LEG="${PANEL_GLM_LEG:-chat}"
+GLM_CMD=""
+if [[ "$GLM_LEG" == "off" ]]; then
+  GLM_CMD=""                      # 关着:不派发、不报 rc
+elif [[ "$GLM_LEG" == "agent" && -x "$BIN/subglm-agent" ]]; then
+  GLM_CMD="$BIN/subglm-agent"
+else
+  GLM_CMD="$BIN/subglm"           # 要 agent 但没装 → 回落聊天腿
+fi
+```
+
+三档行为:
+| `PANEL_GLM_LEG` | `GLM_CMD` | 行为 |
+|---|---|---|
+| 未设(默认) | `$BIN/subglm` | 聊天腿 |
+| `off` | `""` | 不派发 |
+| `agent` | `$BIN/subglm-agent` | 底座腿(如已装) |
+
+判据佐证(`green-all`):
+- `panel: GLM leg defaults to chat leg` — PASS
+- `panel: PANEL_GLM_LEG=agent 仍能强制走底座腿` — PASS
+- `panel: PANEL_GLM_LEG=chat forces chat leg` — PASS
+- `panel: GLM 腿默认开着(OpenCode Go 之后)` — PASS
+- `panel: PANEL_GLM_LEG=off 还能把它关掉` — PASS
+
+报告字符串也同步更新了(第 379 行):
+```bash
+[[ -z "$GLM_CMD" ]] && GLM_REPORT=" subglm=off(是有人显式设了 PANEL_GLM_LEG=off)"
+```
+因为默认不再是 `off`,所以 `GLM_CMD` 为空唯一可能是显式设了 `off` —— 提示语跟着改对了。
+
+### 问题 3:默认走聊天腿的副作用 —— PANEL_INCLUDE HINT 常亮,够不够?
+
+**结论:够,且是正确的设计选择。**
+
+HINT 的触发条件(`bin/panel-review` 第 207-210 行):
+
+```bash
+if [[ -z "${PANEL_INCLUDE:-}" ]] \
+   && { [[ "$(basename "$GLM_CMD")" == "subglm" ]] || [[ "$(basename "$DEEPSEEK_CMD")" == "subdeepseek" ]]; }; then
+  echo "  HINT: chat leg in play and PANEL_INCLUDE is empty — it only sees the incremental diff."
+```
+
+改前:默认 `GLM_LEG=off` → `GLM_CMD=""` → `basename ""` = `""` ≠ `"subglm"` → HINT 不亮(除非显式设 chat)
+改后:默认 `GLM_LEG=chat` → `GLM_CMD="$BIN/subglm"` → `basename` = `"subglm"` → **HINT 默认亮**
+
+代码注释明确承认了这个代价(第 122-123 行):
+```
+# 代价要认:聊天腿看不见仓库,只看得见 diff ⇒ **派它时记得带 PANEL_INCLUDE**
+# (下面第 207 行那条 HINT 就是干这个的,默认走 chat 之后它会常亮)。
+```
+
+这够不够?够,理由:
+
+1. **HINT 是 nudge,不是 block** —— 这是 panel-review 的设计契约("the arbiter decides")。把它升级成硬拦会改变契约,且存在合理场景不需要 PANEL_INCLUDE(diff 本身已足够时)。
+2. **HINT 文本可操作** —— 它直接告诉用户该传什么:`PANEL_INCLUDE="tests/test_x.py tests/e2e/y.mjs"`,以及为什么:`it only sees the incremental diff`。
+3. **常亮不是噪音** —— 它只在"有聊天腿在跑 + PANEL_INCLUDE 为空"时亮;一旦传了 PANEL_INCLUDE 就灭。
+4. **替代方案更差** —— 默认走 agent 在这个后端上会每轮 400(注释里实测三档:无工具 200 / Anthropic 形状工具 400 / OpenAI 形状工具 200),看起来在跑其实每次都死,比常亮一个 HINT 坏得多。
+
+---
+
+### 附加发现
+
+- Severity: LOW
+- File: `bin/subchat`
+- Line: 95 (diff 中新增的注释)
+- Issue: 注释写「默认腿是底座腿 subglm-agent」,但 panel-review 的 GLM 默认档已翻成 chat,此句对 GLM 已不成立(对 DeepSeek 仍成立)。
+- Evidence: `bin/subchat` diff 第 95 行 `# 注意这是**聊天腿**(空 diff 会瞎),默认腿是底座腿 subglm-agent;` 与 `bin/panel-review` 第 129 行 `GLM_LEG="${PANEL_GLM_LEG:-chat}"` 矛盾。
+- Is this introduced by the current change: 是(同一笔改动里同时新增了这句注释和把默认值翻成 chat)
+- Suggested fix: 改为「panel-review 默认走聊天腿(OpenCode Go 后端不做工具格式转换,底座腿会 400);DeepSeek 仍默认走底座腿」或直接删掉这句关于默认档的判断。
+
+- Severity: LOW
+- File: `tracks/opencode-go-leg/design.md`
+- Line: 20
+- Issue: 表格里底座腿端点写成 `https://opencode.ai/zen/go/v1`,但实际代码用的是 `https://opencode.ai/zen/go`(不带 `/v1`)。代码注释解释了原因:claude CLI 自己补 `/v1/messages`,写 `/v1` 会变成 `/v1/v1/messages`(404)。
+- Evidence: `design.md` 第 20 行 `| 底座腿端点 | ... | https://opencode.ai/zen/go/v1 |` vs `bin/subagent` 第 113 行 `DEFAULT_BASE_URL="https://opencode.ai/zen/go"`。
+- Is this introduced by the current change: 是
+- Suggested fix: 把 design.md 表格里的 `https://opencode.ai/zen/go/v1` 改成 `https://opencode.ai/zen/go`(并加注:CLI 自己补 `/v1/messages`)。
+
+- Severity: LOW
+- File: `tracks/opencode-go-leg/evidence/20260818T093449Z-01-smoke-final.txt`
+- Line: 全文
+- Issue: 最终冒烟收据的输出段为空,且没有 `runlog:` 结尾行 —— 要么进程未完成,要么被中断。`tasks.md` 里「真跑冒烟」那条仍未勾选。不过早一份冒烟收据(`083955Z`)显示聊天腿 rc=0 且产出了完整评审,证明聊天腿在真端点上能跑通。
+- Evidence: `smoke-final.txt` 只有 `---------------- 输出开始 ----------------` 后跟空行,无 `---------------- 输出结束 ----------------` 也无 `runlog:` 行;`083955Z` 收据有 `rc=0` 和完整评审内容。
+- Is this introduced by the current change: 不是代码问题,是证据文件不完整
+- Suggested fix: 重跑最终冒烟并补齐收据,或在 verify.md 里认账「最终冒烟被中断,以 083955Z 那份为准」。
+
+---
+
+### 覆盖说明
+
+- Reviewed context: `bin/subagent` 全文、`bin/panel-review` 全文、`bin/subchat` diff、`bin/submimo-review` diff、`tests/test-review-tooling.sh` diff、`design.md`/`proposal.md`/`tasks.md`/`verify.md` 全文、全部 evidence 收据(含 green-all 300 passed/0 failed 和三份变异红检)。
+- Important context not available: `bin/subchat` 全文(只有 diff)、`bin/submimo-review` 全文(只有 diff)—— 但 diff 足以判断改动范围,且判据全绿覆盖了这两份文件的改动。`logs/smoke-glm-final.log` 不在供应范围内,无法确认最终冒烟的评审内容。
+
+Conclusion: PASS
+
+[full log written to /root/aiwork/logs/smoke-glm-final.log]
+---------------- 输出结束 ----------------
+runlog: smoke-final rc=0 commit=5b250c9 dirty=yes at=2026-08-18T09:34:49Z file=tracks/opencode-go-leg/evidence/20260818T093449Z-01-smoke-final.txt

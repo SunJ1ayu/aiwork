@@ -1,0 +1,19 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    mutation-grok-m8-before-oracle
+cmd:     bash tracks/grok-leg-kimi-model/mutation-grok.sh
+cwd:     /root/aiwork(仓根)
+commit:  4207d21
+dirty:   no(跑之前采的;含未跟踪文件)
+started: 2026-09-14T07:13:26Z
+---------------- 输出开始 ----------------
+✅ M1-模型身份不校验: 咬住(test_empty_or_failed_or_wrong_model_never_succeeds)
+✅ M2-子代理文本当报告: 咬住(test_decoder_rejects_tool_and_child_verdicts)
+✅ M3-不要求end_turn: 咬住(test_empty_or_failed_or_wrong_model_never_succeeds)
+✅ M4-超时不映射成timed_out: 咬住(test_timeout_preserves_report_without_coverage)
+✅ M5-不关联网搜索: 咬住(test_review_reads_dirty_snapshot_protects_source_and_cleans_home)
+✅ M6-不清理临时home: 咬住(test_review_reads_dirty_snapshot_protects_source_and_cleans_home)
+✅ M7-不要求is_error为False: 咬住(test_empty_or_failed_or_wrong_model_never_succeeds)
+❌ M8-只清测试点名的三个变量: 漏网(判据仍绿)
+✅ M9-不关规则文件扫描: 咬住(test_caller_grok_env_and_repo_instruction_scans_do_not_reach_cli)
+---------------- 输出结束 ----------------
+runlog: mutation-grok-m8-before-oracle rc=1 commit=4207d21 dirty=no at=2026-09-14T07:13:26Z file=tracks/grok-leg-kimi-model/evidence/20260914T071326Z-01-mutation-grok-m8-before-oracle.txt

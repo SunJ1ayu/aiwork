@@ -1,0 +1,31 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    mutation-red-check-v2
+cmd:     bash tests/mutation-review-delivery.sh
+cwd:     /root/aiwork(仓根)
+commit:  41198db
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-09-09T08:46:20Z
+---------------- 输出开始 ----------------
+  PASS: 基线(未变异)判据全绿
+  PASS: 归档比较恒真(任何评审都算绑定) ⇒ 打红了 test_archive_rejects_stale_review_and_accepts_closeout
+  PASS: v2 也当 legacy 早退(整道闸静默关掉) ⇒ 打红了 test_unbound_historical_review_does_not_authorize_v2
+  PASS: 整个 track 目录都不承重(前提探索否决过的宽豁免) ⇒ 打红了 test_source_and_oracle_changes_invalidate
+  PASS: tasks.md 归一化连正文一起抹掉 ⇒ 打红了 test_risk_task_text_and_fake_receipt_cannot_hide
+  PASS: 收据只看名字不看内容(塞什么都能豁免) ⇒ 打红了 test_risk_task_text_and_fake_receipt_cannot_hide
+  PASS: 收口豁免不看文件模式(可执行/符号链接也免检) ⇒ 打红了 test_closeout_symlink_or_executable_does_not_get_excluded
+  PASS: 归档复验退回锁第一次归档那棵树(D15 原样) ⇒ 打红了 test_t1_second_archive_is_not_authorized_by_the_first_archive_tree
+  PASS: 已归档 track 干脆不钉树(拿今天的源复验历史) ⇒ 打红了 test_t9_unrelated_repo_changes_after_archiving_stay_green
+  PASS: 归档后漂移比较恒真(单次生命周期也被拦) ⇒ 打红了 test_t2_single_lifecycle_archive_still_validates
+  PASS: 归档后漂移比较恒假(档案随便改) ⇒ 打红了 test_t3_delivered_content_edited_after_archiving_is_visible
+  PASS: 归档后漂移比较扩成全仓(历史档案会自己变红) ⇒ 打红了 test_t9_unrelated_repo_changes_after_archiving_stay_green
+  PASS: 归档漂移不再点名是哪份文件(只剩两个哈希) ⇒ 打红了 test_t10_archive_drift_names_the_changed_file_not_the_exempt_ones
+  PASS: 视图不等的诊断关掉(退回那句错药方) ⇒ 打红了 test_t5_view_mismatch_names_the_real_cause
+  PASS: 诊断照样把那句无效药方粘上 ⇒ 打红了 test_t5_view_mismatch_names_the_real_cause
+  PASS: track archive 不再拦视图不等(照旧先搬再炸) ⇒ 打红了 test_t6_cli_archive_refuses_before_moving_when_views_disagree
+  PASS: track archive 只看本 track 的子树(和另一处的答案对不上) ⇒ 打红了 test_t11_both_stations_name_the_same_files
+  PASS: track archive 见谁拦谁(干净仓也归不了档) ⇒ 打红了 test_t7_cli_archive_still_works_on_a_clean_repo
+  PASS: working 视图不再收未跟踪文件(两视图假装永远一致) ⇒ 打红了 test_t8_two_views_differ_exactly_on_the_dirty_worktree
+  PASS: 收口记录 verify.md 也算交付内容(归档后补写就被拦) ⇒ 打红了 test_t4_closeout_records_stay_editable_after_archiving
+---- 合计 PASS=20 FAIL=0 ----
+---------------- 输出结束 ----------------
+runlog: mutation-red-check-v2 rc=0 commit=41198db dirty=yes at=2026-09-09T08:46:20Z file=tracks/archive-tree-and-untracked-views/evidence/20260909T084620Z-01-mutation-red-check-v2.txt

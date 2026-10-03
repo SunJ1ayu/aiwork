@@ -1,0 +1,28 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    smoke-real-codex
+cmd:     bash tracks/codex-worktree-delegation/smoke-real-codex.sh
+cwd:     /root/aiwork(仓根)
+commit:  5bc2510
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-08-11T13:05:49Z
+---------------- 输出开始 ----------------
+判卷面 1 个文件:tests/
+=== 真派一发(真 codex,默认隔离)===
+  PASS: 真 codex 跑完 rc=0
+       收货三道闸一道都不能省 —— 先跑闸①:delegate-codex --receive /tmp/tmp.VYb6Ftl4hN/run.log.receipt.json
+       然后闸②亲跑 oracle+回归+build、闸③亲读 diff(盯 create mode 120000 符号链接)。
+       现场留在 /tmp/tmp.VYb6Ftl4hN/wt/task-20260811-210549(失败也不删 —— 自动删的代价是丢掉唯一一份改动)。
+  PASS: 回执里有隔离树
+  PASS: **真 codex 的改动落在树里**(不是主仓)
+  PASS: 主工作树逐字节没被碰(git status 空)
+  PASS: 主工作树里那个 bug 还在(证明腿没写主仓)
+  PASS: 树里的 bug 被真腿修好了
+=== 闸①(机械版)跑在那棵树上 ===
+  PASS: 闸① 通过 rc=0
+  PASS: 底账列出腿动的文件
+  PASS: 打印回收命令
+  PASS: 回执里机器写下的实际写集 == ['src/calc.py']
+=== total: 10 passed, 0 failed ===
+现场留在 /tmp/tmp.VYb6Ftl4hN(要收自己敲 rm -rf)
+---------------- 输出结束 ----------------
+runlog: smoke-real-codex rc=0 commit=5bc2510 dirty=yes at=2026-08-11T13:05:49Z file=tracks/codex-worktree-delegation/evidence/20260811T130549Z-01-smoke-real-codex.txt

@@ -1,0 +1,16 @@
+# 冒烟:换档前用 AGY_MODEL 覆盖跑真链(不改代码),证明 3.8 在这条腿的隔离环境里跑得动。
+# 关键是第 2 行 —— **运行中的目标自己回显了版本**,不是"文件躺在盘上"。
+
+=== subgemini review ===
+model:    gemini-3.8-flash-high
+repo:     /tmp/aiwork-review-workspaces/subgemini.rKsbwf2D/repo (disposable clone; source stays read-only)
+home:     /root/.cache/aiwork/agy-review-home
+started:  2026-09-04T14:07:22+08:00
+========================
+Conclusion: PASS
+
+### 1. 为什么硬性要求 `AGY_MODEL` 以 `gemini-` 开头
+这条腿在 panel 花名册中代表 Google 模型家族，而 `agy` 同时也提供 Claude / GPT 等模型；归档闸只校验腿名而查不出具体模型，若允许跑成其他模型，会让归档检查中「覆盖 N 个不同模型家族」的多样性约束沦为假话。
+
+### 2. 哪一类结果不计入“连续硬失败”的次数，为什么
+`INCOMPLETE` 与 `DEGRADED`（以及所有退出码 `rc=0` 的结果，如 `INELIGIBLE`）不计入连续硬失败次数。因为它们的进程均正常退出（`rc=0`），表明评审腿确实执行并产出了评审内容（只是裁决行未被严格匹配或回落到降级模式），若算入硬失败会导致正在正常干活的有效腿被误踢出轮换；同时，在同一冷却窗口内重复发生的硬失败也不重复计入连续失败次数，以防瞬时共模抖动误杀健康腿。

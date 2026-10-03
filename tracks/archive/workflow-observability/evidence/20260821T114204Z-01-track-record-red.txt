@@ -1,0 +1,13 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    track-record-red
+cmd:     bash tests/test-track-record.sh
+cwd:     /root/aiwork(仓根)
+commit:  ca6166f
+dirty:   no(跑之前采的;含未跟踪文件)
+started: 2026-08-21T11:42:04Z
+---------------- 输出开始 ----------------
+=== typed track record oracle ===
+  FAIL: R0: bin/track-record 存在且可执行
+=== total: 0 passed, 1 failed ===
+---------------- 输出结束 ----------------
+runlog: track-record-red rc=1 commit=ca6166f dirty=no at=2026-08-21T11:42:04Z file=tracks/workflow-observability/evidence/20260821T114204Z-01-track-record-red.txt

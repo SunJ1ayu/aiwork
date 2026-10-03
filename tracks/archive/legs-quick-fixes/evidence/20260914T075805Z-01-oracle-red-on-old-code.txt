@@ -1,0 +1,83 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    oracle-red-on-old-code
+cmd:     python3 tests/test_leg_quick_fixes.py
+cwd:     /root/aiwork(仓根)
+commit:  9661023
+dirty:   no(跑之前采的;含未跟踪文件)
+started: 2026-09-14T07:58:05Z
+---------------- 输出开始 ----------------
+/usr/lib/python3.12/unittest/case.py:669: ResourceWarning: unclosed <socket.socket fd=3, family=2, type=1, proto=0, laddr=('127.0.0.1', 39605)>
+  function, args, kwargs = self._cleanups.pop()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.F/usr/lib/python3.12/unittest/case.py:669: ResourceWarning: unclosed <socket.socket fd=3, family=2, type=1, proto=0, laddr=('127.0.0.1', 43379)>
+  function, args, kwargs = self._cleanups.pop()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.F.FFFFF
+======================================================================
+FAIL: test_glm_chat_leg_sends_stable_session_header_across_retry (__main__.ChatSessionHeader.test_glm_chat_leg_sends_stable_session_header_across_retry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 255, in test_glm_chat_leg_sends_stable_session_header_across_retry
+    self.assertTrue(sessions[0], seen)
+AssertionError: None is not true : [{'accept-encoding': 'identity', 'content-length': '1576', 'host': '127.0.0.1:43379', 'authorization': 'Bearer x', 'content-type': 'application/json', 'user-agent': 'aiwork-review/1.0', 'connection': 'close'}, {'accept-encoding': 'identity', 'content-length': '1576', 'host': '127.0.0.1:43379', 'authorization': 'Bearer x', 'content-type': 'application/json', 'user-agent': 'aiwork-review/1.0', 'connection': 'close'}]
+
+======================================================================
+FAIL: test_window_limit_does_not_grow_the_streak (__main__.DeadStreak.test_window_limit_does_not_grow_the_streak)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 192, in test_window_limit_does_not_grow_the_streak
+    self.assertEqual(row[3], "0", row)
+AssertionError: '3' != '0'
+- 3
++ 0
+ : ['subkimi', 'auth', '1789372690', '3', '1789372688', '/tmp/tmpl6ovewra/r2-state-4374424308558010115.subkimi.log']
+
+======================================================================
+FAIL: test_kimi_five_hour_window_is_a_rate_limit_not_auth_or_runtime (__main__.FailureKind.test_kimi_five_hour_window_is_a_rate_limit_not_auth_or_runtime)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 139, in test_kimi_five_hour_window_is_a_rate_limit_not_auth_or_runtime
+    self.assertEqual(self.emit(KIMI_LIMIT + "\n"), "rate_limit")
+AssertionError: 'auth' != 'rate_limit'
+- auth
++ rate_limit
+
+
+======================================================================
+FAIL: test_subkimi_surfaces_the_cli_error_line_in_its_diagnostic (__main__.FailureKind.test_subkimi_surfaces_the_cli_error_line_in_its_diagnostic)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 157, in test_subkimi_surfaces_the_cli_error_line_in_its_diagnostic
+    self.assertIn("5-hour usage limit", proc.stderr)
+AssertionError: '5-hour usage limit' not found in 'subkimi: kimi exited rc=1 (log: /tmp/tmp8bhwudgm/k.log)\n'
+
+======================================================================
+FAIL: test_rendered_config_continues_loop_on_deny (__main__.OpencodeDeny.test_rendered_config_continues_loop_on_deny)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 213, in test_rendered_config_continues_loop_on_deny
+    self.assertIs(config.get("experimental", {}).get("continue_loop_on_deny"), True)
+AssertionError: None is not True
+
+======================================================================
+FAIL: test_mimo_leg_message_states_contract (__main__.VerdictContract.test_mimo_leg_message_states_contract)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 115, in test_mimo_leg_message_states_contract
+    self.assertIn(CONTRACT, message)
+AssertionError: 'Conclusion: PASS | BLOCK | NEEDS_MORE_INFO' not found in 'Read the attached task file first. Review the repository inside a disposable writable snapshot. You may use Bash to run local tests, lint, build, interpreters, and diagnostics; their caches and outputs may be written only inside this disposable working directory. Treat the task file as self-contained: do NOT read or request access to paths outside the working directory. Do not call planning tools, create a plan file, spawn sub-agents, ask whether to continue, or wait for input. Do not intentionally edit source files, push, merge, install dependencies, access production systems, run migrations, or change credentials. Output the complete report now as plain text. If context is insufficient, output NEEDS_MORE_INFO with the missing context.'
+
+======================================================================
+FAIL: test_opencode_leg_restates_contract_after_task_body (__main__.VerdictContract.test_opencode_leg_restates_contract_after_task_body)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork/tests/test_leg_quick_fixes.py", line 102, in test_opencode_leg_restates_contract_after_task_body
+    self.assertGreater(prompt.rfind(CONTRACT), prompt.find(TASK_MARKER),
+AssertionError: 668 not greater than 1261 : the last statement of the verdict contract must come after the task body
+
+----------------------------------------------------------------------
+Ran 10 tests in 6.629s
+
+FAILED (failures=7)
+---------------- 输出结束 ----------------
+runlog: oracle-red-on-old-code rc=1 commit=9661023 dirty=no at=2026-09-14T07:58:05Z file=tracks/legs-quick-fixes/evidence/20260914T075805Z-01-oracle-red-on-old-code.txt
