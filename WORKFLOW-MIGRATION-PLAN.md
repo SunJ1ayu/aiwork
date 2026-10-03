@@ -2,7 +2,6 @@
 
 > 状态:待 GPT 复核。日期:2026-09-28。第 4.1 版:写入业主对第 7 节两项的决定,补 high 的第二家族评审入口。
 
-> 2026-10-03 角色改造分支（待云 Claude 审核，尚未启用）：本次改动与未验证边界见 `tracks/task-model-roles/`，审核工具接口见 `workflow-migration/phase-c-review-pr.md`。下文带日期的旧验收保持历史含义。
 > 由第 3 版按 GPT"第一性原理收敛"的意见缩减而来;第 3 版全文见本文件的上一个 commit(`087cabf`)。
 
 ---
@@ -42,7 +41,7 @@
 | G3 | **评审**:需要一条评审,由 `aiwork-review` 发出、针对当前 head、结论 PASS、完整、上下文非空、家族与作者家族不同 | P2 | 未审就合、审的是旧代码(D13)、自己审自己、没看代码就给 PASS | 独立评审变成可有可无 |
 | G4 | **作者**:PR 分支上的每次推送都来自机器账号 → 作者是 Claude;否则判为 UNKNOWN → 需业主批准,且当前 head 上仍须有至少一条 PASS | P3 | reviewer、本机 agent 或泄露的凭证追加未审 commit,并沿用之前的评审(PR #6 原样) | 混合作者的 PR 可以绕过评审 |
 | G5 | 当前 head 上**任何**一条 `aiwork-review` 给出 BLOCK → failure,除非业主批准 | P2 | 一条 BLOCK 被另一条 PASS 盖过 | 挑一个 PASS 就能过 |
-| G6 | **high 路径**(策略文件列出)→ 两个不同的非本次作者家族 PASS(都针对当前 head)+ 业主批准；作者 UNKNOWN 时保持对全部可能 Builder 家族的保守排除。**业主批准是风险决策,不能代替第二次技术审查**:没有第二家合格结论就不放行 | P2 | 高风险改动只有一家审过 | 高风险和普通改动同等放行(沿用现行 high = 2) |
+| G6 | **high 路径**(策略文件列出)→ 两个不同的非本次作者家族 PASS(都针对当前 head)+ 业主批准；作者 UNKNOWN 时保持对全部可能 Builder 家族的保守排除。**待 OpenDesign 关卡 [PR #21](https://github.com/SunJ1ayu/OpenDesign/pull/21) 合并后生效；此前仍排除全部 Builder 家族**。**业主批准是风险决策,不能代替第二次技术审查**:没有第二家合格结论就不放行 | P2 | 高风险改动只有一家审过 | 高风险和普通改动同等放行(沿用现行 high = 2) |
 | G7 | **人工例外** = SunJ1ayu 在**当前 head** 上的 Approve;可豁免 G2 / G4 / G5,**不能豁免 G1(CI)** | P3 | 旧的批准被沿用到新代码上 | UNKNOWN、判卷面、争议将永远卡住(这是唯一的出口) |
 | G8 | **失败即拒**:API 报错、分页不全、限流、活动记录读不到 → failure | 全部 | 缺数据被当成通过 | 数据缺失时误放行 |
 | M1 | **gate 运行方式**:由 `pull_request_target`(opened / synchronize / reopened / labeled)与 `workflow_run`(CI 完成)触发;只用 main 上的 gate 代码(放在 OpenDesign 的 `.github/aiwork-gate/`),不 checkout PR 代码;同一 PR 取消旧的运行,只保留最新一次;gate 私钥放在只允许 main 使用的 Environment secret | P3 | Builder 在 PR 里改 gate,或借 PR 的 workflow 伪造 gate 检查 | gate 可以被 PR 自己改写 |
@@ -98,7 +97,7 @@
 
 ### 阶段 C:最小 gate(先只报不拦,再拦截)
 
-- 交付:G1–G8、M1;`.aiwork/policy.yml`(判卷面清单、high 路径);`bin/review-pr <PR> [--leg <腿>]`:取当前 head 快照 → 运行一条现有评审腿 → 以 `aiwork-review` 发出 → 加 recheck 标签。默认 `subcodex`;**high 用的第二家族入口**就是同一命令显式指定另一条合格家族的现有腿（资格按 G3 / G6，本次作者决定排除谁），不做多腿调度、轮换或健康管理。第二腿失败或结论不合格时 gate 保持 failure,由人决定重跑或换腿。
+- 交付:G1–G8、M1;`.aiwork/policy.yml`(判卷面清单、high 路径);`bin/review-pr <PR> [--leg <腿>]`:取当前 head 快照 → 运行一条现有评审腿 → 以 `aiwork-review` 发出。默认 `subcodex`;**high 用的第二家族入口**就是同一命令显式指定另一条合格家族的现有腿（资格按 G3 / G6），不做多腿调度、轮换或健康管理。第二腿失败或结论不合格时 gate 保持 failure,由人决定重跑或换腿。
 - 先以 `aiwork-gate-shadow` 这个检查名只报不拦,再把必过检查从 `ci` 换成 `aiwork-gate` + `aiwork-gate/fuse`。用不同的名字,是为了避免切换时 neutral 被当作通过。
 - **验收**:第 5 节的对抗用例全部通过 + 第 4 节的 PR #6 端到端回放全部符合预期。
 - **进度(2026-09-29)**:关卡代码与对抗用例在 OpenDesign PR #10(`.github/aiwork-gate/`,20 条用例 + 8 处变异检查);策略用 `.aiwork/policy.json`(JSON,免装 YAML 解析器)。`aiwork-gate` App:App ID `5121026`,installation `166124786`,只有 Checks 读写;私钥放在只许 main 用、不设审批人的 environment `aiwork-gate`。读数据用 `GITHUB_TOKEN`,App 只用来发检查结果;另用 `GITHUB_TOKEN` 发保险丝 `aiwork-gate/fuse`(commit status,workflow 唯一的写权限 `statuses: write`):GitHub 上只有 App 改得动它发过的检查,App 私钥坏了时旧 success 靠保险丝挡(评审 5353990150 第 3 条)。aiwork-review 在当前 head 上发的评审,除"格式完整且结论不是 BLOCK"以外一律按 BLOCK 算(同一评审第 1 条)。评审后重算改由无权限的 `aiwork-review-ping`(pull_request_review)触发关卡的 workflow_run,`aiwork:recheck` 标签留作手动重算。关卡每次运行都重算全部开着的 PR(事件只是门铃,不从事件推"该算哪个 PR"),同一时间只有一次运行(固定并发组、不取消正在跑的、排队只留最新一个):后写的结论一定出自后读的数据(评审 5361623557)。`review-pr` 实现单:`workflow-migration/phase-c-review-pr.md`(本机 Codex 实现)。
