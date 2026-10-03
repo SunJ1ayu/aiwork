@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Review one OpenDesign PR head and publish a scoped App COMMENT review."""
+"""Review one repository's PR head and publish a scoped App COMMENT review."""
 
 from __future__ import annotations
 
@@ -18,13 +18,18 @@ from _review_result import leg_identity, load_result, sha256_file
 
 
 BIN = Path(__file__).resolve().parent
-REPO = "SunJ1ayu/OpenDesign"
-URL = f"https://github.com/{REPO}.git"
+DEFAULT_REPO = "SunJ1ayu/OpenDesign"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ReviewError(ValueError):
     pass
+
+
+def repository_name(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", value):
+        raise argparse.ArgumentTypeError("repository must be owner/name")
+    return value
 
 
 def choose_leg(name: str) -> tuple[str, str | None]:
@@ -76,8 +81,8 @@ def github(token: str, endpoint: str, payload: dict | None = None) -> dict:
     return value
 
 
-def pr_state(token: str, number: int) -> dict:
-    value = github(token, f"repos/{REPO}/pulls/{number}")
+def pr_state(token: str, number: int, *, repository: str = DEFAULT_REPO) -> dict:
+    value = github(token, f"repos/{repository}/pulls/{number}")
     head = value.get("head") or {}
     base = value.get("base") or {}
     if value.get("state") != "open":
@@ -86,6 +91,10 @@ def pr_state(token: str, number: int) -> dict:
         raise ReviewError("PR head/base SHA is missing or invalid")
     if not isinstance(head.get("ref"), str) or not isinstance(base.get("ref"), str):
         raise ReviewError("PR head/base ref is missing")
+    base_repository = base.get("repo") or {}
+    returned_repository = base_repository.get("full_name") if isinstance(base_repository, dict) else None
+    if not isinstance(returned_repository, str) or returned_repository.lower() != repository.lower():
+        raise ReviewError("PR base repository differs from the requested repository")
     return value
 
 
@@ -94,7 +103,7 @@ def check_current_head(expected: str, current: dict) -> None:
         raise ReviewError(f"PR head changed since review of {expected}; no review posted, rerun")
 
 
-def snapshot(token: str, pr: dict, directory: Path) -> tuple[Path, str, list[str], str]:
+def snapshot(token: str, pr: dict, directory: Path, *, repository: str = DEFAULT_REPO) -> tuple[Path, str, list[str], str]:
     repo = directory / "repo"
     repo.mkdir()
     run(["git", "init", "-q", str(repo)])
@@ -109,7 +118,7 @@ def snapshot(token: str, pr: dict, directory: Path) -> tuple[Path, str, list[str
     head = pr["head"]["sha"]
     base = pr["base"]["sha"]
     run(["git", "-C", str(repo), "-c", "credential.helper=", "fetch", "-q", "--no-tags",
-         URL, head, base, "refs/heads/main:refs/aiwork/main"], env=env)
+         f"https://github.com/{repository}.git", head, base, "refs/heads/main:refs/aiwork/main"], env=env)
     run(["git", "-C", str(repo), "checkout", "-q", "--detach", head])
     if run(["git", "-C", str(repo), "rev-parse", "HEAD"]).strip() != head:
         raise ReviewError("snapshot HEAD differs from PR head")
@@ -144,9 +153,9 @@ def main_document(repo: Path, path: str, *, required: bool = True) -> str:
 
 
 def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
-              review_rules: str, risks: str) -> str:
+              review_rules: str, risks: str, *, repository: str = DEFAULT_REPO) -> str:
     return (
-        f"# OpenDesign PR #{number} · 当前 HEAD 的完整评审\n\n"
+        f"# {repository} PR #{number} · 当前 HEAD 的完整评审\n\n"
         f"HEAD: {pr['head']['sha']} ({pr['head']['ref']})\n"
         f"Base: {pr['base']['sha']} ({pr['base']['ref']})\n"
         f"Merge base: {merge_base}\n\n"
@@ -214,7 +223,8 @@ def review_report(log: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pr", type=int, help="OpenDesign PR number")
+    parser.add_argument("pr", type=int, help="PR number in the selected repository")
+    parser.add_argument("--repo", type=repository_name, default=DEFAULT_REPO, help="target owner/name (default: %(default)s)")
     parser.add_argument("--leg", default="subcodex")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -222,18 +232,18 @@ def main() -> int:
         if args.pr < 1:
             raise ReviewError("PR number must be positive")
         family, frozen_model = choose_leg(args.leg)
-        token = run([str(BIN / "gh-app-token"), "review"]).strip()
+        token = run([str(BIN / "gh-app-token"), "review", "--repo", args.repo]).strip()
         if not token:
             raise ReviewError("review App returned an empty token")
-        pr = pr_state(token, args.pr)
+        pr = pr_state(token, args.pr, repository=args.repo)
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
             directory = Path(temporary)
-            repo, merge_base, files, diff = snapshot(token, pr, directory)
+            repo, merge_base, files, diff = snapshot(token, pr, directory, repository=args.repo)
             review_rules = main_document(repo, ".aiwork/review-rules.md")
             risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
             task = directory / "task.md"
             task.write_text(task_text(args.pr, pr, merge_base, files, diff,
-                                      review_rules, risks), encoding="utf-8")
+                                      review_rules, risks, repository=args.repo), encoding="utf-8")
             log = directory / "review.log"
             facts = directory / "facts.json"
             result_file = directory / "result.json"
@@ -249,7 +259,7 @@ def main() -> int:
                                  text=True, capture_output=True, env=env, check=False)
             diagnostic.write_text(leg.stderr, encoding="utf-8")
             command = [sys.executable, str(BIN / "_review_result.py"), "emit", "--result", str(result_file),
-                       "--run-id", f"pr-{args.pr}-{pr['head']['sha'][:12]}", "--name", args.leg,
+                       "--run-id", f"pr-{args.repo.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}", "--name", args.leg,
                        "--family", family, "--adapter", args.leg, "--exit-code", str(leg.returncode),
                        "--task-sha256", sha256_file(task), "--log", str(log), "--diagnostic", str(diagnostic)]
             if facts.is_file():
@@ -267,11 +277,11 @@ def main() -> int:
                      "model": model, "family": family, "completeness": completeness(result),
                      "files_read": files}
             body = build_body(args.leg, model, report, block)
-            check_current_head(pr["head"]["sha"], pr_state(token, args.pr))
+            check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=args.repo))
             if args.dry_run:
                 print(body, end="")
                 return 0
-            response = github(token, f"repos/{REPO}/pulls/{args.pr}/reviews",
+            response = github(token, f"repos/{args.repo}/pulls/{args.pr}/reviews",
                               {"commit_id": pr["head"]["sha"], "event": "COMMENT", "body": body})
             link = response.get("html_url")
             if not isinstance(link, str) or not link.startswith("https://github.com/"):
