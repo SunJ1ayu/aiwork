@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 import unittest
 
+from _test_settings import write_settings, set_model
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("grok_stream", ROOT / "bin/_grok-stream.py")
 decoder = importlib.util.module_from_spec(spec)
@@ -83,10 +85,11 @@ class GrokTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.d = Path(self.tmp.name)
+        self.config = write_settings(self.d / 'settings')
         self.bin = self.d/'bin'; self.bin.mkdir()
-        for name in ('subgrok','grok-model','_grok-stream.py','_review-workspace.sh',
+        for name in ('subgrok','aiwork-config', '_aiwork_config.py','_grok-stream.py','_review-workspace.sh',
                      '_review_result.py','_review_delivery.py','_my-review-gate.sh',
-                     'ro-repo-exec','panel-explore','panel-review','_panel-roster-lib.sh','cursor-model'):
+                     'ro-repo-exec','panel-explore','panel-review','_panel-roster-lib.sh'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         self.fake = self.d/'fake'; self.fake.mkdir()
         (self.fake/'grok').write_text(FAKE); (self.fake/'grok').chmod(0o755)
@@ -101,7 +104,7 @@ class GrokTest(unittest.TestCase):
         self.auth = self.d/'auth.json'; self.auth.write_text('{}')
         self.env = {k:v for k,v in os.environ.items()
                     if not k.startswith(('GROK_', 'PANEL_', 'AIWORK_REVIEW_', 'REVIEW_')) and k != 'XAI_API_KEY'}
-        self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'],
+        self.env.update(AIWORK_CONFIG_DIR=str(self.config), PATH=str(self.fake)+os.pathsep+os.environ['PATH'],
             GROK_AUTH_FILE=str(self.auth), REVIEW_NO_MY_REVIEW='1',
             REVIEW_WORKSPACE_BASE=str(self.d/'workspaces'),
             AIWORK_REVIEW_RESULT_BIN=str(self.bin/'_review_result.py'),
@@ -159,7 +162,7 @@ class GrokTest(unittest.TestCase):
         self.assertEqual(env.get('GROK_HOME'),json.loads((self.d/'leg.record.json').read_text())['home'])
 
     def test_model_upgrade_changes_only_config_for_both_modes(self):
-        (self.bin/'grok-model').write_text('grok-4.7\n')
+        set_model(self.config, 'grok', ('grok-4.7\n').strip())
         for mode in ('review','explore'):
             result = self.run_leg(mode, tag=mode)
             self.assertEqual(result.returncode,0,result.stderr)

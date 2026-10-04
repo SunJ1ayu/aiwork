@@ -15,6 +15,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _aiwork_config import ConfigError, model as configured_model
+
 
 # Transient-failure retry policy for call_model. Fanning three reviewers out in
 # parallel routinely trips provider tpm (tokens-per-minute) limits -> HTTP 429,
@@ -264,12 +267,20 @@ def chat_url() -> str:
     return f"{base}/v1/chat/completions"
 
 
+def selected_model() -> str:
+    try:
+        leg = os.environ.get('AIWORK_MODEL_LEG', 'mimo')
+        return configured_model(leg, os.environ.get('MIMO_MODEL')).removeprefix('xiaomi/')
+    except ConfigError as exc:
+        fail(str(exc))
+
+
 def call_model(prompt: str, timeout: int) -> str:
     api_key = os.environ.get("MIMO_API_KEY")
     if not api_key:
         fail("missing MIMO_API_KEY")
 
-    model = os.environ.get("MIMO_MODEL", "mimo-2.5")
+    model = selected_model()
     # The default system prompt drives convergent code review. panel-explore (and
     # any divergent-design use) overrides it via REVIEW_SYSTEM_PROMPT so the same
     # provider-agnostic engine can also run a divergent "propose one direction"
@@ -419,7 +430,7 @@ def write_adapter_facts() -> None:
     output = os.environ.get("AIWORK_REVIEW_FACTS_PATH")
     if not output:
         return
-    model = os.environ.get("MIMO_MODEL", "mimo-2.5")
+    model = selected_model()
     subprocess.run(
         [
             sys.executable,
@@ -475,7 +486,7 @@ def write_log(log_path: Path, content: str, prompt: str, dry_run: bool, warnings
         f"""\
         # {LABEL} log
         time: {now}
-        model: {os.environ.get("MIMO_MODEL", "mimo-2.5")}
+        model: {selected_model()}
         dry_run: {dry_run}
         视野: 聊天腿(chat-completions)—— 只看得见下面附上的 diff 与 INCLUDE 文件,
               **看不到仓库其余部分**,不能自己 Read/Grep 去查证。据此给这份结论定权重。

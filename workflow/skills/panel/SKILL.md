@@ -400,8 +400,8 @@ in the brief / Smallest first step)。**故意没有裁决——分歧的铺开�
 
 `panel-explore BRIEF_FILE [REPO_DIR] [LOG_PREFIX]`,同样只派发不决策。
 默认派 MiMo、DeepSeek、GLM、Grok 和 Cursor；`PANEL_GROK_LEG=off` / `PANEL_CURSOR_LEG=off` 分别关闭对应通道。
-Grok 的 review/explore 共用 `bin/grok-model`，升级模型只改这一个配置文件。
-Cursor 的两种模式同样共用 `bin/cursor-model`；`CURSOR_MODEL` 可单次覆盖，家族随所选模型变化。
+Grok 的 review/explore 共用 本机 `~/.config/aiwork/models.env` 的 `grok` 行，升级模型只改这一个配置文件。
+Cursor 的两种模式同样共用 本机 `~/.config/aiwork/models.env` 的 `cursor` 行；`CURSOR_MODEL` 可单次覆盖，家族随所选模型变化。
 
 同样的反锚定纪律:**主 agent 先把自己的方向写下来**,再把各份报告读作角度扩展 + 盲点网,然后
 **综合**。不要把分歧塌缩成一个答案,不要平均成假共识,不要让多份浅见洗成"很全面"。

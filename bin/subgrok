@@ -15,7 +15,7 @@ review requires a verdict; explore requires one direction and its tradeoffs.
 No implementation/fix mode and no chat fallback.
 
 Environment:
-  GROK_MODEL       exact Grok model ID (default from bin/grok-model)
+  GROK_MODEL       exact Grok model ID (default from ~/.config/aiwork/models.env)
   GROK_TIMEOUT     wall-clock seconds (default 900)
   GROK_MAX_TURNS   turn cap (default 80)
   GROK_AUTH_FILE   session credentials (default $HOME/.grok/auth.json)
@@ -38,8 +38,8 @@ LOG_FILE="$(realpath -m "$LOG_FILE")"
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 my_review_gate "$MODE" "$TASK_FILE" "$SOURCE_REPO" subgrok || exit 1
-MODEL="${GROK_MODEL:-$(cat "$BIN_DIR/grok-model")}" || die 'cannot read bin/grok-model'
-[[ "$MODEL" =~ ^grok-[A-Za-z0-9._-]+$ ]] || die 'GROK_MODEL must be an exact Grok model ID'
+MODEL="$("$BIN_DIR/aiwork-config" model grok "${GROK_MODEL:-}")" || exit 1
+"$BIN_DIR/aiwork-config" family subgrok "$MODEL" >/dev/null || die 'GROK_MODEL must be an exact Grok model ID'
 TIMEOUT_SECONDS="${GROK_TIMEOUT:-900}"
 MAX_TURNS="${GROK_MAX_TURNS:-80}"
 [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ && "$MAX_TURNS" =~ ^[1-9][0-9]*$ ]] \

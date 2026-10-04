@@ -5,10 +5,10 @@
 #   --repo:在角色配置内只要本次任务的仓库,并核实 GitHub 返回的完整仓库名。
 #
 # 三层:App = 角色和权限(GitHub 上建);本脚本 = 适配器(拿私钥换短期令牌);模型 = 谁来用这个令牌。
-# 换模型不碰这里;换 App 或收窄权限只改角色配置 /etc/aiwork/apps/<角色>.env:
+# 换模型不碰这里;换 App 或收窄权限只改角色配置 ~/.config/aiwork/apps/<角色>.env:
 #   APP_ID=5116249
 #   INSTALLATION_ID=165993669
-#   KEY=/etc/aiwork/apps/aiwork-review.pem
+#   KEY=aiwork-review.pem
 #   REPOS="OpenDesign"                                         # 令牌只对这些仓库有效(空格分隔)
 #   PERMISSIONS='{"contents":"read","pull_requests":"write"}'  # 令牌只带这些权限;App 以后多给了也不会带上
 #
@@ -32,7 +32,8 @@ while [ $# -gt 0 ]; do
     *) echo 'gh-app-token: 不认识的参数' >&2; exit 2 ;;
   esac
 done
-conf=${AIWORK_APPS_DIR:-/etc/aiwork/apps}/$role.env
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+conf="$("$BIN_DIR/aiwork-config" path apps)/$role.env"
 [ -r "$conf" ] || { echo "gh-app-token: 读不到角色配置 $conf" >&2; exit 2; }
 APP_ID= INSTALLATION_ID= KEY= REPOS= PERMISSIONS=
 # shellcheck disable=SC1090
@@ -40,6 +41,7 @@ APP_ID= INSTALLATION_ID= KEY= REPOS= PERMISSIONS=
 for v in APP_ID INSTALLATION_ID KEY REPOS PERMISSIONS; do
   [ -n "${!v}" ] || { echo "gh-app-token: $conf 里缺 $v" >&2; exit 2; }
 done
+KEY="$("$BIN_DIR/aiwork-config" app-key "$KEY")"
 [ -r "$KEY" ] || { echo "gh-app-token: 读不到私钥 $KEY" >&2; exit 2; }
 
 if [ -n "$repo_scope" ]; then

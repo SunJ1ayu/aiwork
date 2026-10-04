@@ -14,7 +14,7 @@ review requires a verdict; explore requires one direction and its tradeoffs.
 No fix mode, shell execution, or chat fallback.
 
 Environment:
-  CURSOR_MODEL       explicit model ID (default: bin/cursor-model)
+  CURSOR_MODEL       explicit model ID (default: ~/.config/aiwork/models.env)
   CURSOR_TIMEOUT     wall-clock seconds (default 900)
   CURSOR_AUTH_FILE   login credentials (default $XDG_CONFIG_HOME/cursor/auth.json,
                      or $HOME/.config/cursor/auth.json)
@@ -37,7 +37,7 @@ LOG_FILE="$(realpath -m "$LOG_FILE")"
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 my_review_gate "$MODE" "$TASK_FILE" "$SOURCE_REPO" subcursor || exit 1
-MODEL="${CURSOR_MODEL:-$(cat "$BIN_DIR/cursor-model")}" || die 'cannot read bin/cursor-model'
+MODEL="$("$BIN_DIR/aiwork-config" model cursor "${CURSOR_MODEL:-}")" || exit 1
 python3 "$BIN_DIR/_review_result.py" cursor-family "$MODEL" >/dev/null \
   || die 'CURSOR_MODEL must identify an explicit supported model family (no auto routing)'
 TIMEOUT_SECONDS="${CURSOR_TIMEOUT:-900}"

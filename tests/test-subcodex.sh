@@ -30,12 +30,12 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 echo "=== subcodex oracle ==="
 d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/bin" "$d/fake" "$d/ws" "$d/cap"
-for f in subcodex codex-model ro-repo-exec _review-workspace.sh _my-review-gate.sh _review_result.py _review-home-guard.sh; do
+for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec _review-workspace.sh _my-review-gate.sh _review_result.py _review-home-guard.sh; do
   [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$d/bin/"
 done
-check "C0: bin/subcodex 与单源模型文件 bin/codex-model 都在" \
-  $([[ -x "$ROOT/bin/subcodex" && -s "$ROOT/bin/codex-model" ]]; echo $?)
-MODEL="$(cat "$ROOT/bin/codex-model" 2>/dev/null)"
+check "C0: bin/subcodex 与本机设置读取入口都在" \
+  $([[ -x "$ROOT/bin/subcodex" && -x "$ROOT/bin/aiwork-config" ]]; echo $?)
+MODEL="$("$ROOT/bin/aiwork-config" model codex)"
 
 cat > "$d/fake/codex" <<'EOF'
 #!/usr/bin/env bash
@@ -149,7 +149,7 @@ REVIEW_NO_MY_REVIEW=1 sc c1 review "$d/task.md" "$d/c1.log" "$d/repo" >/dev/null
 check "C1: 正常 review rc=0" $([[ $rc -eq 0 ]]; echo $?)
 [[ $rc -eq 0 ]] || sed 's/^/    | /' "$d/c1.err" | tail -5
 argv_has c1 exec; check "C1: 走 codex exec" $?
-argv_pair c1 -m "$MODEL"; check "C1: -m 取自 bin/codex-model($MODEL)" $?
+argv_pair c1 -m "$MODEL"; check "C1: -m 取自 models.env 的 codex 行($MODEL)" $?
 argv_pair c1 -c project_doc_max_bytes=0; check "C1: 带 -c project_doc_max_bytes=0(不吞仓里的 AGENTS.md)" $?
 argv_has c1 --ignore-user-config; check "C1: --ignore-user-config(不加载业主的插件/MCP/配置)" $?
 argv_has c1 --ephemeral; check "C1: --ephemeral(不往业主的会话历史里落评审会话)" $?
@@ -170,15 +170,17 @@ check "C1: facts:请求/调用/上报模型一致、完整快照视野、exited�
 check "C1: 跑完可丢弃副本已清理" $([[ -z "$(ls -A "$d/ws" 2>/dev/null)" ]]; echo $?)
 
 echo "[C2] 模型单源 + 单次覆盖 + 非法值不派发"
-cp -r "$d/bin" "$d/bin2"; printf 'gpt-fixture-next\n' > "$d/bin2/codex-model"
+cp -r "$d/bin" "$d/bin2"
+test_model_set codex gpt-fixture-next
 SC_BIN="$d/bin2" REVIEW_NO_MY_REVIEW=1 sc c2a review "$d/task.md" "$d/c2a.log" "$d/repo" >/dev/null 2>&1
-argv_pair c2a -m gpt-fixture-next; check "C2: 只改 codex-model 一行 ⇒ 实际 -m 跟着变" $?
+argv_pair c2a -m gpt-fixture-next; check "C2: 只改 models.env 的 codex 一行 ⇒ 实际 -m 跟着变" $?
 SUBCODEX_MODEL=gpt-override REVIEW_NO_MY_REVIEW=1 sc c2b review "$d/task.md" "$d/c2b.log" "$d/repo" >/dev/null 2>&1
 argv_pair c2b -m gpt-override; check "C2: SUBCODEX_MODEL 单次覆盖" $?
-printf '\n' > "$d/bin2/codex-model"
+test_model_set codex ""
 SC_BIN="$d/bin2" REVIEW_NO_MY_REVIEW=1 sc c2c review "$d/task.md" "$d/c2c.log" "$d/repo" >/dev/null 2>"$d/c2c.err"; rc=$?
-check "C2: 模型文件为空 ⇒ 拒绝且没调用 codex(理由点名 codex-model)" \
-  $([[ $rc -ne 0 && ! -e "$d/cap/c2c.argv" ]] && grep -q 'codex-model' "$d/c2c.err"; echo $?)
+check "C2: codex 配置为空 ⇒ 拒绝且没调用 codex(理由点名 models.env)" \
+  $([[ $rc -ne 0 && ! -e "$d/cap/c2c.argv" ]] && grep -q 'models.env' "$d/c2c.err"; echo $?)
+test_model_set codex "$MODEL"
 SUBCODEX_MODEL=kimi-code/k3 REVIEW_NO_MY_REVIEW=1 sc c2d review "$d/task.md" "$d/c2d.log" "$d/repo" >/dev/null 2>"$d/c2d.err"; rc=$?
 check "C2: 非 gpt- 家族的模型名 ⇒ 拒绝且没调用 codex(理由点名 gpt-)" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c2d.argv" ]] && grep -q 'gpt-' "$d/c2d.err"; echo $?)

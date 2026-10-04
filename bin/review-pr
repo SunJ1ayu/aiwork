@@ -17,6 +17,7 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _review_result import leg_identity, load_result, sha256_file
+from _aiwork_config import ConfigError, model as configured_model
 
 
 BIN = Path(__file__).resolve().parent
@@ -41,12 +42,14 @@ def choose_leg(name: str) -> tuple[str, str | None]:
     A leg only has to be attributable to one family. Which families count for which
     PR is the gate's call (OpenDesign .github/aiwork-gate/decide.mjs), not this tool's.
     Cursor's model is frozen once here, from the same source as the panel
-    (CURSOR_MODEL, else bin/cursor-model), and decides the family.
+    (CURSOR_MODEL, else ~/.config/aiwork/models.env), and decides the family.
     """
     model = None
     if name == "subcursor":
-        model = (os.environ.get("CURSOR_MODEL")
-                 or (BIN / "cursor-model").read_text(encoding="utf-8").rstrip("\n"))
+        try:
+            model = configured_model('cursor', os.environ.get('CURSOR_MODEL'))
+        except ConfigError as exc:
+            raise ReviewError(str(exc)) from exc
     identity = leg_identity(name, model)
     if identity is None or not (BIN / name).is_file():
         raise ReviewError(f"unsupported review leg: {name}" + (f" (model {model!r})" if model else ""))

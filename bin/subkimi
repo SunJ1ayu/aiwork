@@ -55,7 +55,7 @@ The reviewer reads and tests a disposable clone; the source repo remains
 read-only and direct write tools stay blocked in an isolated KIMI_CODE_HOME.
 
 Environment:
-  KIMI_MODEL        optional, kimi-code/<model-id> (default from bin/kimi-model)
+  KIMI_MODEL        optional, kimi-code/<model-id> (default from ~/.config/aiwork/models.env)
                     (the seed config declares 1M context + effort=max for ANY model;
                     check the server's /models before switching)
   KIMI_TIMEOUT      optional, seconds before timeout (default 1500; 07-27 取证:
@@ -102,8 +102,8 @@ my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subkimi" || exit 1
 if [[ -n "${REVIEW_PRINT_HOME:-}" ]]; then printf '%s\n' "$REVIEW_HOME"; exit 0; fi
 
 # 模型选择只有一个源；CLI alias 与 API model ID 均从它派生。
-MODEL="${KIMI_MODEL:-$(cat "$BIN_DIR/kimi-model")}" || die 'cannot read bin/kimi-model'
-[[ "$MODEL" =~ ^kimi-code/[A-Za-z0-9._-]+$ ]] || die 'model must be one kimi-code/<model-id>'
+MODEL="$("$BIN_DIR/aiwork-config" model kimi "${KIMI_MODEL:-}")" || exit 1
+"$BIN_DIR/aiwork-config" family subkimi "$MODEL" >/dev/null || die 'model must be one kimi-code/<model-id>'
 
 # ── 运行期 home:种子同步 + 位置检查(track repo-write-audit,2026-08-19 第二轮)──
 # 仓内的 `kimi-review-home/` 继续留在版本控制里当**种子**:config.toml 和

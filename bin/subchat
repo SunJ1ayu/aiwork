@@ -26,7 +26,7 @@ ENGINE="$(dirname "$0")/submimo-review"
 
 usage() {
   local default_model
-  default_model="$(cat "$(dirname "$0")/deepseek-model")" || exit 1
+  default_model="$("$(dirname "$0")/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
   printf 'DeepSeek default model: %s\n\n' "$default_model" >&2
   cat >&2 <<'EOF'
 Usage:
@@ -34,8 +34,8 @@ Usage:
   subchat PROVIDER fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
 
 Providers (usually invoked via their shims):
-  deepseek   (shim: subdeepseek)  model from bin/deepseek-model, env DEEPSEEK_*
-  zhipu      (shim: subglm)    default model glm-5.3-flash,     env ZHIPU_*
+  deepseek   (shim: subdeepseek)  model from ~/.config/aiwork/models.env, env DEEPSEEK_*
+  zhipu      (shim: subglm)    model from ~/.config/aiwork/models.env,     env ZHIPU_*
 
 Runs the provider's model as a read-only review sub-agent over an OpenAI-
 compatible chat-completions endpoint. Automatically attaches `git diff` of
@@ -77,17 +77,18 @@ my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subchat" || exit 1
 # Provider table: everything that differs between employees lives here.
 case "$PROVIDER" in
   deepseek)
+    MODEL_LEG="deepseek"
     PREFIX="DEEPSEEK"
     # DeepSeek official API (same key file as subdeepseek-agent). Formerly this
     # leg rode SenseNova's chat API (provider "sensenova", retired 2026-07-18).
-    DEFAULT_MODEL="$(cat "$(dirname "$0")/deepseek-model")" || die "cannot read deepseek-model"
-    [[ -n "$DEFAULT_MODEL" ]] || die "empty deepseek-model"
+    DEFAULT_MODEL="$("$(dirname "$0")/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
     ENDPOINT_ENV_VAR="MIMO_BASE_URL"    # engine suffixes a base URL with /chat/completions
     ENDPOINT="${DEEPSEEK_API_BASE:-https://api.deepseek.com}"
     DEFAULT_AUTH_FILE="$HOME/.config/deepseek/auth.json"
     LABEL="subdeepseek-review"
     ;;
   zhipu)
+    MODEL_LEG="glm"
     PREFIX="ZHIPU"
     # GLM 后端沿革:bigmodel(余额不足 1113)→ 百炼(429)→ 火山方舟(07-17)
     # → 07-25 切回智谱开放平台 bigmodel → **2026-08-18 换到 OpenCode Go**
@@ -99,7 +100,7 @@ case "$PROVIDER" in
     # 回落到这里时记得带 ZHIPU_INCLUDE / PANEL_INCLUDE,否则它只看得见增量 diff。
     # 它走 OpenAI 兼容面,认证是 Authorization: Bearer；当前 agent 则把 key 放进
     # OpenCode provider 配置的 apiKey 字段。两个入口形状不同,别顺手统一。
-    DEFAULT_MODEL="glm-5.3-flash"
+    DEFAULT_MODEL="$("$(dirname "$0")/aiwork-config" model glm "${ZHIPU_MODEL:-}")" || exit 1
     ENDPOINT_ENV_VAR="MIMO_CHAT_COMPLETIONS_URL"  # exact URL, engine appends nothing
     ENDPOINT="${ZHIPU_CHAT_COMPLETIONS_URL:-https://opencode.ai/zen/go/v1/chat/completions}"
     DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"
@@ -144,6 +145,7 @@ unset MIMO_BASE_URL MIMO_CHAT_COMPLETIONS_URL MIMO_SESSION_HEADER
 export MIMO_API_KEY="$API_KEY"
 export "$ENDPOINT_ENV_VAR"="$ENDPOINT"
 export MIMO_MODEL="$MODEL"
+export AIWORK_MODEL_LEG="$MODEL_LEG"
 export MIMO_TIMEOUT="$TIMEOUT_SECONDS"
 export REVIEW_LABEL="$LABEL"
 

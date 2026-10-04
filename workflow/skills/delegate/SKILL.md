@@ -22,7 +22,7 @@ description: 把实现工作派给执行腿的完整规矩(分层选档:主 agen
 |---|---|
 | 小而明显的活 | **主 agent 直接干**(切碎反而更贵) |
 | 1-3 个文件的小修、测试、lint/类型修复 | **`submimo fix`**(微档,见下) |
-| PR 级实现 | **codex 腿**(默认模型 = `bin/codex-model`,现为 `gpt-6-sol`;与评审腿 subcodex 同一处) |
+| PR 级实现 | **codex 腿**(默认模型看本机 `~/.config/aiwork/models.env`;与评审腿 subcodex 同一处) |
 | 架构敏感 / 跨模块判断 | 升 **`gpt-5.6-sol`** |
 | **考卷需要开网络端口** | GPT 照派,**主 agent 当测试机**(有界 2 轮);或给 Claude 腿。见下"网络"一节 |
 | 需求不清 / 大架构没定 | **先 plan 或 panel-explore,不派活** |
@@ -202,7 +202,7 @@ Codex 退出后，仓外 receipt 先补齐 `run_id/started_at/finished_at/durati
 > 08-05 实证:手写桩红检 ⇒ 恒真前置是绿的,洞没露出来;真退回 build ⇒ 当场抓到。
 > **桩红不算数。**
 
-- **模型默认读 `bin/codex-model`**(现为 `gpt-6-sol`,业主 09-25 定;评审腿 subcodex 同一处);要单次换就给 `--model gpt-<id>`。
+- **模型默认看本机 `~/.config/aiwork/models.env`**(评审腿 subcodex 同一处);要单次换就给 `--model gpt-<id>`。
   `~/.codex/config.toml` 里的默认值是 `gpt-5.6-sol`,**别依赖它**——依赖默认值就等于
   以后改了配置这里会静默升档。`model_reasoning_effort=high`,可按活的难度调低省额度。
 - **要求它用中文回答**,否则默认英文。

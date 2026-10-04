@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 import unittest
 
+from _test_settings import write_settings, set_model
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'bin'))
 spec = importlib.util.spec_from_file_location("cursor_stream", ROOT / "bin/_cursor-stream.py")
@@ -115,12 +117,13 @@ class CursorTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.d = Path(self.tmp.name)
+        self.config = write_settings(self.d / 'settings')
         self.bin = self.d/'bin'; self.bin.mkdir()
-        for name in ('subcursor','cursor-model','_cursor-stream.py','_review-workspace.sh',
+        for name in ('subcursor','aiwork-config', '_aiwork_config.py','_cursor-stream.py','_review-workspace.sh',
                      '_review_result.py','_review_delivery.py','_my-review-gate.sh',
                      'ro-repo-exec','panel-explore','panel-review','_panel-roster-lib.sh'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
-        (self.bin/'cursor-model').write_text('composer-2.5\n')
+        set_model(self.config, 'cursor', ('composer-2.5\n').strip())
         self.fake = self.d/'fake'; self.fake.mkdir()
         (self.fake/'cursor-agent').write_text(FAKE); (self.fake/'cursor-agent').chmod(0o755)
         self.repo = self.d/'source'; self.repo.mkdir()
@@ -134,7 +137,7 @@ class CursorTest(unittest.TestCase):
         self.auth = self.d/'auth.json'; self.auth.write_text(json.dumps({'accessToken':'fake-access','refreshToken':'never-copy','apiKey':'never-copy'}))
         self.env = {k:v for k,v in os.environ.items()
                     if not k.startswith(('CURSOR_', 'PANEL_', 'AIWORK_REVIEW_', 'REVIEW_')) and k != 'CURSOR_API_KEY'}
-        self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'],
+        self.env.update(AIWORK_CONFIG_DIR=str(self.config), PATH=str(self.fake)+os.pathsep+os.environ['PATH'],
             CURSOR_AUTH_FILE=str(self.auth), REVIEW_NO_MY_REVIEW='1',
             REVIEW_WORKSPACE_BASE=str(self.d/'workspaces'),
             AIWORK_REVIEW_RESULT_BIN=str(self.bin/'_review_result.py'),
@@ -182,7 +185,7 @@ class CursorTest(unittest.TestCase):
         self.assertEqual(env['CURSOR_AUTH_TOKEN'], 'fake-access')
 
     def test_model_upgrade_changes_only_config_for_both_modes(self):
-        (self.bin/'cursor-model').write_text('composer-2.6\n')
+        set_model(self.config, 'cursor', ('composer-2.6\n').strip())
         for mode in ('review','explore'):
             result = self.run_leg(mode, tag=mode)
             self.assertEqual(result.returncode,0,result.stderr)
@@ -309,13 +312,13 @@ class CursorTest(unittest.TestCase):
         sys.path.insert(0,str(ROOT/'bin'))
         from _review_result import cursor_model_family, coverage_eligible
         for model, family in [('opus-4.6','anthropic'),('gpt-5.6','openai'),('gemini-3.8-flash','google'),('grok-4.6','xai'),('gpt-5.6-sol-xhigh','openai'),('cursor-grok-4.6-high','xai')]:
-            (self.bin/'cursor-model').write_text(model+'\n')
+            set_model(self.config, 'cursor', (model+'\n').strip())
             self.assertEqual(cursor_model_family(model),family)
             for mode in ('review','explore'):
                 result=self.run_leg(mode)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual(json.loads((self.d/'leg.record.json').read_text())['model'],model)
-        (self.bin/'cursor-model').write_text('opus-4.6\n')
+        set_model(self.config, 'cursor', ('opus-4.6\n').strip())
         env=dict(self.env,PANEL_MIMO_LEG='off',PANEL_DEEPSEEK_LEG='off',PANEL_GLM_LEG='off',
                  PANEL_KIMI_LEG='off',PANEL_GEMINI_LEG='off',PANEL_GROK_LEG='off')
         result=subprocess.run([str(self.bin/'panel-review'),'--no-track','--no-my-review','--budget','1',
@@ -335,7 +338,7 @@ class CursorTest(unittest.TestCase):
         self.assertFalse((self.d/'leg.record.json').exists())
 
     def test_duplicate_families_do_not_fill_budget_or_spare_but_all_runs_both(self):
-        (self.bin/'cursor-model').write_text('grok-4.6\n')
+        set_model(self.config, 'cursor', ('grok-4.6\n').strip())
         stub=self.bin/'subgrok'
         stub.write_text('#!/bin/sh\nprintf called > "$3"\nexit 1\n')
         stub.chmod(0o755)

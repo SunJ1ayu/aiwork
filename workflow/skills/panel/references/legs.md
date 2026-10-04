@@ -10,7 +10,7 @@ task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
 
 ## submimo (MiMo) — 第一条腿,且是唯一的 fix 腿
 
-`/root/aiwork/bin/submimo`,默认模型 `xiaomi/mimo-v2.6-pro`;换模型只改 `bin/mimo-model` 一行,`MIMO_CLI_MODEL` 单次覆盖。
+`/root/aiwork/bin/submimo`,默认模型看本机 `~/.config/aiwork/models.env` 的 `mimo` 行;换模型只改这一行,`MIMO_CLI_MODEL` 单次覆盖。
 MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not found`),submimo 运行时把 `xiaomi/` 模型登记给 CLI(只含 provider 段,不碰评审锁)。
 `submimo review TASK LOG REPO` 用于评审;`submimo fix` 的规矩见 **`delegate` skill**。
 
@@ -29,8 +29,8 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
   (`api.deepseek.com`),自动附上 REPO 的 `git diff`。
   加文件用 `DEEPSEEK_INCLUDE`(panel 里用 `PANEL_INCLUDE` 一次喂两条 chat 腿)。
 
-两条路径的默认模型统一读取 **`bin/deepseek-model`**（一行 API 模型名）。
-以后换 DS 默认档只改这个文件；agent、chat 回落和两条入口的 `--help` 自动跟随，
+两条路径的默认模型统一读取 **本机 `~/.config/aiwork/models.env` 的 `deepseek` 行**。
+以后换 DS 默认档只改这一行；agent、chat 回落和两条入口的 `--help` 自动跟随，
 无需修改测试里的版本号或本说明。`DEEPSEEK_MODEL` 非空时仍优先用于本次调用。
 测试用临时配置中的虚构模型名核对传参与事实记录，历史账本夹具不代表当前默认档。
 
@@ -45,7 +45,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 `/root/aiwork/bin/subglm-agent`(底座腿,默认)/ `bin/subglm`(聊天腿),**只读评审**。
 
 - **后端 = OpenCode Go**(2026-08-18 从智谱开放平台 bigmodel 换过来,业主的 $10/月订阅),
-  **默认模型 `glm-5.3-flash`**。换的理由是 bigmodel 那把 key 欠费(1113),这条腿 08-04 起
+  **默认模型看本机 `~/.config/aiwork/models.env` 的 `glm` 行**。换的理由是 bigmodel 那把 key 欠费(1113),这条腿 08-04 起
   默认关着、四审实际只有三腿两周。后端沿革:bigmodel → 百炼(429)→ 火山方舟(07-17)
   → 07-25 切回 bigmodel → **08-18 OpenCode Go**。
   旧 key 原样留在 `~/.config/zhipu/auth.json`(另一家的账,充值可切回),方舟 key 在
@@ -103,7 +103,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 ## subcursor (Cursor CLI) — 评审与发散
 
 `bin/subcursor <review|explore> TASK LOG REPO`，两个调度器默认接入，`PANEL_CURSOR_LEG=off` 关闭。
-换模型只改 `bin/cursor-model` 一行（默认 `grok-4.7-high`）；`CURSOR_MODEL` 单次覆盖。
+默认模型看本机 `~/.config/aiwork/models.env` 的 `cursor` 行，换模型只改这一行；`CURSOR_MODEL` 单次覆盖。
 支持明确的 Composer / Claude / GPT / Gemini / Grok / Kimi / DeepSeek / GLM 模型 ID；
 以 `cursor-agent models` 中可用的 ID 为准。自动路由和未知家族拒跑。
 花名册、typed coverage 按所选模型家族计数；预算轮换去重，`--all` 仍派全部启用通道。
@@ -132,7 +132,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 评审加入 `panel-review` 的 xai 家族轮换池；规划加入 `panel-explore`，输出一个方向，
 不要求裁决。`PANEL_GROK_LEG=off` 在两个调度器中关闭这条腿；无聊天回落或 fix 模式。
 
-- **模型是配置**：两个模式的默认模型只读 `bin/grok-model`（一行精确模型 ID）。
+- **模型是配置**：两个模式的默认模型看本机 `~/.config/aiwork/models.env` 的 `grok` 行。
   升级模型只改这个文件；单次调用用 `GROK_MODEL` 覆盖。文档与测试不复制默认版本号。
   测试用虚构的后续版本验证两种模式都随配置变化；实际调用还校验流中的模型身份。
 - **底座是官方 Grok Build CLI**，headless + `streaming-messages-json`；
@@ -161,7 +161,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 `kimi-code` CLI 的 headless 模式(`kimi -p`),评审员自己读仓库,无盲评、无需喂 INCLUDE。
 
 - `subkimi review TASK LOG REPO`,裁决 gate 为 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。
-  默认模型只读 `bin/kimi-model`（一行 `kimi-code/<model-id>`），升级只改这一行；
+  默认模型看本机 `~/.config/aiwork/models.env` 的 `kimi` 行，升级只改这一行；
   单次调用用 `KIMI_MODEL` 覆盖。CLI 参数、日志与运行期模型配置都由所选模型派生，
   文档和测试不复制默认版本号。超时 `KIMI_TIMEOUT`(默认 1500s)。
   **只有名字是单源的，能力声明不是**:种子模板对**任何**模型都声明 `max_context_size = 1048576`、
@@ -190,7 +190,8 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
 - **为什么不是 gemini-cli**:Google 已把 gemini-cli 转到 Antigravity CLI,
   且 **2026-06-18 起 gemini-cli 对免费 / AI Pro / Ultra 个人账号停止服务**。
   那条路是死的,别再走回去。
-- **默认模型 `gemini-3.8-flash-high`**(业主 2026-09-04 说换,track `gemini-leg-38`)。
+- **默认模型看本机 `~/.config/aiwork/models.env` 的 `gemini` 行**。
+  历史选型记录见 track `gemini-leg-38`(业主 2026-09-04 定)。
   **注意 Flash 档一路更新,而 Pro 最高停在 3.1** —— "用最新的"和
   "用最大的"在这里是两个方向。
   ⚠️ **3.8 的证据档次低于 3.7,这是业主明确拍板接受的,不是疏忽**:
@@ -204,7 +205,7 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
 - 判据只钉"必须是 `gemini-*` 且 `--model` 真被传给 agy"(V46①②),**不钉版本号** ——
   版本号是本文件与 `bin/subgemini` 的第二份拷贝,钉了就会过期
   (2026-09-04 实证:3.7→3.8 那天本文件就是错的,而它没让任何判据变红)。
-  现在 `tests/test-workflow-docs.sh` W3 加了 gemini 那一行,文档与代码对不上会红。
+  现在 `tests/test-workflow-docs.sh` W3 检查模型默认值指向本机设置，不再抄一份版本号。
 - **🔴 模型是硬闸,不是默认值**:`AGY_MODEL` 可覆盖,但 **非 `gemini-*` 一律拒跑**。
   `agy models` 同时供应 `claude-sonnet-4-6` / `claude-opus-4-6-thinking` /
   `gpt-oss-120b`。这条腿在花名册里代表 **Google 家族**,它跑成 Claude 会让归档闸的
@@ -305,7 +306,7 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
 登记在 `_panel-roster-lib.sh` 的 `PANEL_ROLE_LEG_SPECS`。**不进普通池**:GPT 同时是默认执行腿
 (delegate-codex),进池会轮到它审自家代码;订阅额度也会被普通 high 评审悄悄吃掉。
 
-- 模型单源 `bin/codex-model`(现 `gpt-6-sol`,09-23 业主定;之前 `gpt-6-astra`),`SUBCODEX_MODEL` 单次覆盖。
+- 模型默认看本机 `~/.config/aiwork/models.env` 的 `codex` 行,`SUBCODEX_MODEL` 单次覆盖。
 - 源仓 `ro-repo-exec` 物理只读,codex 在可丢弃副本里读、跑测试(`-s workspace-write`);任务书走 stdin。
 - `-c project_doc_max_bytes=0`(被评审仓里有 AGENTS.md 时它会自动吞)、`--ignore-user-config --ignore-rules --ephemeral`。
 - **子 agent 与联网 —— 09-13 真跑证伪过第一版(codex 0.154)**:`--disable multi_agent/multi_agent_v2`

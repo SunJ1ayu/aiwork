@@ -89,12 +89,12 @@ Things that are not aiwork live with their own owners:
   no chat fallback. `bin/subgemini-diag` extracts denied tools/commands from its
   local conversation database.
 - `bin/subcursor <review|explore>` — Cursor CLI with read/search/list tools in an
-  isolated workspace. Both modes read [`bin/cursor-model`](bin/cursor-model);
+  isolated workspace. Both modes read the `cursor` row in `~/.config/aiwork/models.env`;
   change that one model ID (or set `CURSOR_MODEL`) to switch models. Coverage
   follows the model family, not the Cursor transport. `PANEL_CURSOR_LEG=off`
   disables it in both dispatchers. Authenticate with `cursor-agent login`.
 - `bin/subgrok` — Grok Build CLI, `review` and `explore`; both read their default
-  model from [`bin/grok-model`](bin/grok-model). A model upgrade changes that one
+  model from the `grok` row in `~/.config/aiwork/models.env`. A model upgrade changes that one
   configuration line, not the adapter or panel; `GROK_MODEL` overrides one run.
   Uses an isolated runtime home and disposable snapshot with the source mounted
   read-only. Existing `~/.grok/auth.json` supplies session login; `XAI_API_KEY`
@@ -175,7 +175,7 @@ Explicit lists freeze each model, support several models through one adapter,
 and never rotate, add a spare or fall back. Review family minima still apply;
 exploration results never count as review coverage. Each run's plan preserves
 members and models for `panel-roster` recovery. Legacy commands remain compatible.
-Model defaults live in `bin/*-model`; environment overrides are frozen per member.
+Model defaults live in `~/.config/aiwork/models.env`; environment overrides are frozen per member.
 
 
 - `bin/panel-review --track NAME --risk self|standard|high TASK [REPO] [LOG_PREFIX]` —
@@ -202,7 +202,7 @@ Model defaults live in `bin/*-model`; environment overrides are frozen per membe
   (default `logs/slice-<manifest>-<ts>/`); `status` is rebuilt from disk and
   `findings.jsonl` is append-only.
 - `bin/subcodex <review|explore>` — GPT review leg on `codex exec`, model from
-  [`bin/codex-model`](bin/codex-model) (`SUBCODEX_MODEL` overrides one run). A
+  the `codex` row in `~/.config/aiwork/models.env` (`SUBCODEX_MODEL` overrides one run). A
   role-only leg (`PANEL_ROLE_LEG_SPECS`): never rotated into normal panel-review,
   because GPT is also the default implementation leg. Source repo read-only via
   `ro-repo-exec`, disposable snapshot, `--ignore-user-config --ephemeral`, prompt via
@@ -255,3 +255,18 @@ Dry run (writes the assembled prompt to the log without calling the API):
 The chat engine cannot read files by itself: use `--git-diff` / `--include`
 (or the wrapper INCLUDE env vars) to attach context. An empty diff with
 nothing attached triggers a loud BLIND-review warning.
+
+## 本机设置
+
+仓库只保存工作流；本机设置统一放在 `~/.config/aiwork/`（目录权限 700）：
+
+- `models.env`：Codex、Cursor、DeepSeek、Gemini、GLM、Grok、Kimi、MiMo 和 triage 的模型选择，每条腿一行。可参考 `templates/models.env.example`。
+- `typesafe.env`：triage 使用的 `TYPESAFE_API_KEY`，保留文件权限 600。
+- `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
+- `apps/*.pem`：GitHub App 私钥，文件权限 600。
+
+换机器时把整个目录复制过去并保持权限。`bin/aiwork-config` 是统一读取入口；
+`AIWORK_CONFIG_DIR` 可指定其他设置目录，测试只指向临时目录。
+`AIWORK_APPS_DIR` 仍可单独覆盖 App 配置目录，原有模型单次覆盖参数继续有效。
+缺少 `models.env` 或所需腿的模型行时明确报错并停止，不调用模型。
+本机数据统一放在 `~/.local/share/aiwork/`；数据目录迁移属于后续 PR，本 PR 不搬动数据。

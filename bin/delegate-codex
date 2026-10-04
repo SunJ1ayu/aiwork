@@ -19,7 +19,7 @@ set -uo pipefail
 # 用法:
 #   delegate-codex --task TASK.md --repo DIR --attack-log PATH \
 #                  --protect PATH [--protect PATH ...] \
-#                  [--track NAME] [--model gpt-<id>(默认 bin/codex-model)] [--log PATH] [--no-isolate] [--dry-run] \
+#                  [--track NAME] [--model gpt-<id>(默认 ~/.config/aiwork/models.env)] [--log PATH] [--no-isolate] [--dry-run] \
 #                  [-- <直通 codex 的参数>]
 #   delegate-codex --print-oracle-hash --repo DIR --protect PATH...
 #                  # 攻完题把这一行贴进攻题记录,否则派不出去
@@ -293,12 +293,10 @@ while [[ $# -gt 0 ]]; do
     *) die "不认识的参数:$1" ;;
   esac
 done
-# 默认模型与评审腿 subcodex 同一处单源 bin/codex-model(业主 09-25:干活腿也换 gpt-6-sol;09-23 只换了评审腿,
+# 默认模型与评审腿 subcodex 同一处单源 ~/.config/aiwork/models.env(业主 09-25:干活腿也换 gpt-6-sol;09-23 只换了评审腿,
 # 这里当时写死 gpt-5.5 没跟上 —— 两处各写一份迟早一新一旧)。--model 仍可单次覆盖。
-if [[ -z "$MODEL" ]]; then
-  MODEL="$(tr -d '[:space:]' < "$BIN_DIR/codex-model" 2>/dev/null)" || die '读不到 bin/codex-model(默认模型单源)'
-  [[ "$MODEL" =~ ^gpt-[A-Za-z0-9._-]+$ ]] || die "bin/codex-model 必须恰好一个 gpt-<model-id>,实得 '$MODEL'"
-fi
+MODEL="$("$BIN_DIR/aiwork-config" model codex "$MODEL")" || exit 2
+"$BIN_DIR/aiwork-config" family subcodex "$MODEL" >/dev/null || die "codex 模型必须为 gpt-<model-id>,实得 '$MODEL'"
 
 if [[ -n "$RECEIVE" ]]; then
   _receive_started_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"

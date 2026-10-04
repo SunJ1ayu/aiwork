@@ -26,14 +26,17 @@
   triage --track <track 目录>   # 自动拼 proposal.md + design.md
   triage ... --json             # 机器读;不加就是给人看的
 
-key 放 /root/.config/aiwork/typesafe.env(0600,`export TYPESAFE_API_KEY=...`)。
+key 放 ~/.config/aiwork/typesafe.env(0600,`export TYPESAFE_API_KEY=...`)。
+模型放同目录的 models.env;AIWORK_CONFIG_DIR 可覆盖本机设置目录。
 问题措辞和阈值全在 /root/aiwork/triage/questions.json —— 改那里,别改这里。
 """
 import json, os, re, sys, urllib.error, urllib.request
 from pathlib import Path
 
-QUESTIONS_FILE = Path("/root/aiwork/triage/questions.json")
-ENV_FILE = Path("/root/.config/aiwork/typesafe.env")
+from _aiwork_config import ConfigError, model as configured_model, setting_path
+
+QUESTIONS_FILE = Path(__file__).resolve().parent.parent / 'triage/questions.json'
+ENV_FILE = setting_path('typesafe.env')
 API = "https://api.typesafe.ai/v1/systemone"
 DISCLAIMER = "⚠️  以上是建议不是裁决,而且它只看见你喂的这段话、看不见仓库。拍板的是主 agent。"
 
@@ -118,7 +121,11 @@ def main():
     state = read_state(args).strip()
     if not state:
         die("state 是空的")
-    res = ask(load_key(), cfg["model"], state, cfg["questions"])
+    try:
+        model = configured_model('triage')
+    except ConfigError as exc:
+        die(str(exc))
+    res = ask(load_key(), model, state, cfg["questions"])
     answers = res.get("answers", {})
 
     th = cfg["thresholds"]

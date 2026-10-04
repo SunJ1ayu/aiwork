@@ -44,9 +44,7 @@
 # Freeze the Cursor model for this dispatcher and all its children. Changing the
 # config during a run cannot silently change the model behind the chosen family.
 _panel_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -z "${CURSOR_MODEL:-}" && -f "$_panel_bin/cursor-model" ]]; then
-  CURSOR_MODEL="$(cat "$_panel_bin/cursor-model")"
-fi
+CURSOR_MODEL="$("$_panel_bin/aiwork-config" model cursor "${CURSOR_MODEL:-}")" || return 1
 export CURSOR_MODEL
 _cursor_family="$(python3 "$_panel_bin/_review_result.py" cursor-family "${CURSOR_MODEL:-}" 2>/dev/null)" || _cursor_family=unknown
 PANEL_LEG_SPECS=(
