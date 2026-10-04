@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "rules-single-source",
+  "run_id": "20261004T160020Z-01-commit-audit",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "commit-audit",
+  "started_at": "2026-10-04T16:00:20Z",
+  "finished_at": "2026-10-04T16:00:35Z",
+  "duration_ms": 15554,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 0,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}
