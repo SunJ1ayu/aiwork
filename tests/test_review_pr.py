@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Safety checks for the GitHub PR review publisher."""
 
+import base64
 import importlib.machinery
 import importlib.util
 from contextlib import redirect_stderr, redirect_stdout
@@ -11,6 +12,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 
@@ -65,25 +67,63 @@ class ReviewPrTests(unittest.TestCase):
         with patch.dict("os.environ", {"CURSOR_MODEL": ""}):
             self.assertEqual(self.review.choose_leg("subcursor")[1], configured)
 
-    def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True, repository=None):
-        """Run main() on subcursor with a fake leg and GitHub; return (rc, calls, stdout, stderr)."""
-        calls = {"github_writes": []}
+    def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True,
+                                 repository=None, source_failure=None, project_rules=False,
+                                 local_rules="LOCAL WORKSPACE RULES", risks_present=True):
+        """Exercise the real source readers and task, with offline HTTP and review leg."""
+        calls = {"github_writes": [], "public_reads": [], "leg_runs": 0}
+        rules = "# aiwork main 规则\r\n必须以此为准。\r\n"
+        risks = "# project main 风险\r\n业主接受的平台上限。\r\n"
+        source_sha = "d" * 40
+        calls.update(rules=rules, risks=risks, source_sha=source_sha)
+        real_run = self.review.run
+        real_subprocess_run = subprocess.run
+
+        def fake_public_read(request, **kwargs):
+            url = request.full_url
+            calls["public_reads"].append(url)
+            self.assertNotIn("authorization", {key.lower() for key in request.headers})
+            self.assertGreater(kwargs["timeout"], 0)
+            if source_failure == "main_unreadable":
+                raise HTTPError(url, 403, "Forbidden", {}, None)
+            if url == "https://api.github.com/repos/SunJ1ayu/aiwork/commits/main":
+                value = {"sha": "invalid" if source_failure == "invalid_sha" else source_sha}
+            elif url == f"https://api.github.com/repos/SunJ1ayu/aiwork/contents/REVIEW-RULES.md?ref={source_sha}":
+                if source_failure == "rules_unreadable":
+                    raise HTTPError(url, 404, "Not Found", {}, None)
+                raw = rules.encode("utf-8")
+                value = {"type": "file", "encoding": "base64", "size": len(raw),
+                         "content": base64.encodebytes(raw).decode("ascii")}
+                if source_failure == "not_file":
+                    value["type"] = "symlink"
+                if source_failure == "invalid_content":
+                    value["content"] = "not base64!"
+                if source_failure == "truncated_content":
+                    value["size"] += 1
+            else:
+                self.fail(f"unexpected public source read: {url}")
+            return io.BytesIO(json.dumps(value).encode("utf-8"))
 
         def fake_github(token, endpoint, payload=None):
             if payload is not None:
                 calls["github_writes"].append(endpoint)
             return {"html_url": "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1"}
 
-        def fake_run(command, **_):
+        def fake_run(command, **kwargs):
             if command[0].endswith("gh-app-token"):
                 calls["token_command"] = command
                 return "fake-token"
+            if command[0] == "git":
+                return real_run(command, **kwargs)
             calls["emit"] = command
             return ""
 
         def fake_leg(command, **kwargs):
+            if command[0] != str(bin_dir / "subcursor"):
+                return real_subprocess_run(command, **kwargs)
+            calls["leg_runs"] += 1
+            calls["task"] = Path(command[2]).read_bytes().decode("utf-8")
             calls["leg_env"] = kwargs["env"]
-            # The config file changes mid-run; the frozen model must not.
             os.environ["CURSOR_MODEL"] = "gpt-other"
             return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -96,22 +136,96 @@ class ReviewPrTests(unittest.TestCase):
         }
         pr = {"state": "open", "head": {"sha": "a" * 40, "ref": "f"}, "base": {"sha": "b" * 40, "ref": "main"}}
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch("sys.argv", ["review-pr", "12", "--leg", "subcursor"]
-                   + (["--repo", repository] if repository else []) + (["--dry-run"] if dry_run else [])), \
-                patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
-                patch.object(self.review, "run", side_effect=fake_run), \
-                patch.object(self.review, "github", side_effect=fake_github), \
-                patch.object(self.review, "pr_state", return_value=pr) as state, \
-                patch.object(self.review, "snapshot", return_value=(Path("unused"), "c" * 40, ["src/a.py"], "diff")) as snapshot, \
-                patch.object(self.review, "main_document", return_value="rules"), \
-                patch.object(self.review, "load_result", return_value=result), \
-                patch.object(self.review, "review_report", return_value="Finding\nConclusion: PASS"), \
-                patch.object(self.review.subprocess, "run", side_effect=fake_leg), \
-                redirect_stdout(stdout), redirect_stderr(stderr):
-            rc = self.review.main()
-            calls["pr_state"] = state.call_args_list
-            calls["snapshot"] = snapshot.call_args
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            bin_dir = workspace / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "subcursor").touch()
+            (workspace / "REVIEW-RULES.md").write_text(local_rules, encoding="utf-8")
+            repo = workspace / "project"
+            repo.mkdir()
+            def git(*args):
+                return real_subprocess_run(["git", "-C", str(repo), *args], check=True,
+                                           capture_output=True)
+            git("init", "-q")
+            git("config", "core.autocrlf", "false")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.com")
+            (repo / ".aiwork").mkdir()
+            if risks_present:
+                (repo / ".aiwork/accepted-risks.md").write_bytes(risks.encode("utf-8"))
+            if project_rules:
+                (repo / ".aiwork/review-rules.md").write_text("PROJECT RULES DECOY", encoding="utf-8")
+            (repo / "file").touch()
+            git("add", ".")
+            git("commit", "-qm", "project main")
+            git("update-ref", "refs/aiwork/main", "HEAD")
+            (repo / ".aiwork/accepted-risks.md").write_text("PR RISK DECOY", encoding="utf-8")
+            with patch("sys.argv", ["review-pr", "12", "--leg", "subcursor"]
+                       + (["--repo", repository] if repository else []) + (["--dry-run"] if dry_run else [])), \
+                    patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
+                    patch.object(self.review, "BIN", bin_dir), \
+                    patch.object(self.review, "run", side_effect=fake_run), \
+                    patch("urllib.request.urlopen", side_effect=fake_public_read), \
+                    patch.object(self.review, "github", side_effect=fake_github), \
+                    patch.object(self.review, "pr_state", return_value=pr) as state, \
+                    patch.object(self.review, "snapshot", return_value=(repo, "c" * 40, ["src/a.py"], "diff")) as snapshot, \
+                    patch.object(self.review, "load_result", return_value=result), \
+                    patch.object(self.review, "review_report", return_value="Finding\nConclusion: PASS"), \
+                    patch.object(self.review.subprocess, "run", side_effect=fake_leg), \
+                    redirect_stdout(stdout), redirect_stderr(stderr):
+                rc = self.review.main()
+                calls["pr_state"] = state.call_args_list
+                calls["snapshot"] = snapshot.call_args
         return rc, calls, stdout.getvalue(), stderr.getvalue()
+
+    def test_task_rules_are_aiwork_main_verbatim_with_commit(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", project_rules=True)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls["public_reads"], [
+            "https://api.github.com/repos/SunJ1ayu/aiwork/commits/main",
+            f"https://api.github.com/repos/SunJ1ayu/aiwork/contents/REVIEW-RULES.md?ref={calls['source_sha']}",
+        ])
+        self.assertIn("SunJ1ayu/aiwork main", calls["task"])
+        self.assertIn("REVIEW-RULES.md", calls["task"])
+        self.assertIn(calls["source_sha"], calls["task"])
+        self.assertIn(calls["rules"], calls["task"])
+        self.assertNotIn("PROJECT RULES DECOY", calls["task"])
+
+    def test_project_without_rules_is_reviewed_and_published(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", dry_run=False)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls["leg_runs"], 1)
+        self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/OpenDesign/pulls/12/reviews"])
+
+    def test_unreadable_aiwork_rules_never_run_or_publish(self):
+        for failure in ("main_unreadable", "rules_unreadable", "invalid_sha",
+                        "not_file", "invalid_content", "truncated_content"):
+            with self.subTest(failure=failure):
+                rc, calls, stdout, stderr = self.run_main_with_leg_result(
+                    "gpt-5.6", dry_run=False, source_failure=failure, project_rules=True)
+                self.assertEqual(rc, 1)
+                self.assertEqual(calls["leg_runs"], 0)
+                self.assertEqual(calls["github_writes"], [])
+                self.assertEqual(stdout, "")
+                self.assertTrue(stderr)
+                self.assertTrue(calls["public_reads"])
+
+    def test_modified_local_rules_do_not_change_task(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result(
+            "gpt-5.6", local_rules="MODIFIED LOCAL REVIEW RULES")
+        self.assertEqual(rc, 0, stderr)
+        self.assertIn(calls["rules"], calls["task"])
+        self.assertNotIn("MODIFIED LOCAL REVIEW RULES", calls["task"])
+
+    def test_task_risks_are_project_main_and_missing_risks_are_none(self):
+        for present in (True, False):
+            with self.subTest(present=present):
+                rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", risks_present=present)
+                self.assertEqual(rc, 0, stderr)
+                section = calls["task"].split("## 项目 main 的 .aiwork/accepted-risks.md", 1)[1].split("## 改动文件", 1)[0]
+                self.assertIn(calls["risks"] if present else "无", section)
+                self.assertNotIn("PR RISK DECOY", section)
 
     def test_repository_routes_reads_snapshot_token_and_publication_together(self):
         target = "SunJ1ayu/aiwork"
@@ -122,6 +236,7 @@ class ReviewPrTests(unittest.TestCase):
         for call in calls["pr_state"]:
             self.assertEqual(call.kwargs["repository"], target)
         self.assertEqual(calls["snapshot"].kwargs["repository"], target)
+        self.assertTrue(calls["task"].startswith("# SunJ1ayu/aiwork PR #12"))
 
     def test_invalid_repository_is_rejected_before_getting_credentials(self):
         for target in ("../aiwork", "owner/repo/extra", "https://github.com/owner/repo", "owner/repo\nother", "owner/.."):
@@ -139,13 +254,6 @@ class ReviewPrTests(unittest.TestCase):
             with self.assertRaisesRegex(self.review.ReviewError, "repository"):
                 self.review.pr_state("fake-token", 12, repository="SunJ1ayu/aiwork")
             self.assertEqual(api.call_args.args[1], "repos/SunJ1ayu/aiwork/pulls/12")
-
-    def test_task_title_identifies_the_requested_repository(self):
-        pr = {"head": {"sha": "a" * 40, "ref": "f"}, "base": {"sha": "b" * 40, "ref": "main"}}
-        task = self.review.task_text(12, pr, "c" * 40, ["a.py"], "diff", "rules", "none",
-                                     repository="SunJ1ayu/aiwork")
-        self.assertTrue(task.startswith("# SunJ1ayu/aiwork PR #12"))
-        self.assertNotIn("# OpenDesign PR", task)
 
     def test_snapshot_fetches_the_selected_repository_and_its_main(self):
         pr = {"head": {"sha": "a" * 40}, "base": {"sha": "b" * 40}}
@@ -172,22 +280,10 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn("refs/heads/main:refs/aiwork/main", fetch)
         self.assertEqual((base, files), ("c" * 40, ["src/a.py"]))
 
-    def test_other_repository_missing_rules_never_runs_a_leg_or_posts(self):
-        with patch("sys.argv", ["review-pr", "12", "--repo", "SunJ1ayu/aiwork"]), \
-                patch.object(self.review, "run", return_value="fake-token"), \
-                patch.object(self.review, "pr_state", return_value={}), \
-                patch.object(self.review, "snapshot", return_value=(Path("unused"), "a" * 40, ["file"], "diff")), \
-                patch.object(self.review, "main_document", side_effect=self.review.ReviewError("required review document missing")), \
-                patch.object(self.review.subprocess, "run") as leg, \
-                patch.object(self.review, "github") as api, redirect_stderr(io.StringIO()):
-            self.assertEqual(self.review.main(), 1)
-            leg.assert_not_called()
-            api.assert_not_called()
-
     def test_cursor_model_is_frozen_for_leg_and_result(self):
         rc, calls, body, stderr = self.run_main_with_leg_result("gpt-5.6")
-        emit = calls["emit"]
         self.assertEqual(rc, 0, stderr)
+        emit = calls["emit"]
         self.assertEqual(calls["leg_env"]["CURSOR_MODEL"], "gpt-5.6")
         self.assertEqual(emit[emit.index("--expected-model") + 1], "gpt-5.6")
         self.assertEqual(emit[emit.index("--family") + 1], "openai")
@@ -225,18 +321,7 @@ class ReviewPrTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.review.check_current_head("a" * 40, {"state": "open", "head": {"sha": "b" * 40}})
 
-    def test_task_includes_both_documents_verbatim(self):
-        rules = "# 规则\r\n只有 P1 给 BLOCK。\r\n"
-        risks = "# 已接受风险\n原样保留 ``` 和引号。\n"
-        pr = {"head": {"sha": "a" * 40, "ref": "feature"},
-              "base": {"sha": "b" * 40, "ref": "other-base"}}
-        task = self.review.task_text(10, pr, "c" * 40, ["src/a.py"], "diff", rules, risks)
-        self.assertIn(rules, task)
-        self.assertIn(risks, task)
-        self.assertIn("项目 main 的 .aiwork/review-rules.md", task)
-        self.assertNotIn("REVIEW-RULES.md", task)
-
-    def test_both_documents_come_from_main_even_when_pr_changes_them(self):
+    def test_risks_come_from_project_main_even_when_pr_changes_them(self):
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary)
             def git(*args):
@@ -246,8 +331,7 @@ class ReviewPrTests(unittest.TestCase):
             git("config", "core.autocrlf", "false")
             git("config", "user.name", "Test")
             git("config", "user.email", "test@example.com")
-            documents = {".aiwork/review-rules.md": "# main 规则\r\n必须以此为准。\r\n",
-                         ".aiwork/accepted-risks.md": "# main 风险\r\n业主接受的平台上限。\r\n"}
+            documents = {".aiwork/accepted-risks.md": "# main 风险\r\n业主接受的平台上限。\r\n"}
             (repo / ".aiwork").mkdir()
             for path, trusted in documents.items():
                 (repo / path).write_bytes(trusted.encode("utf-8"))
@@ -264,27 +348,11 @@ class ReviewPrTests(unittest.TestCase):
             git("commit", "-qm", "main without risks")
             git("update-ref", "refs/aiwork/main", "HEAD")
             self.assertEqual(self.review.main_document(repo, ".aiwork/accepted-risks.md", required=False), "无")
-            git("rm", "-q", ".aiwork/review-rules.md")
-            git("commit", "-qm", "main without rules")
-            git("update-ref", "refs/aiwork/main", "HEAD")
-            with self.assertRaisesRegex(self.review.ReviewError, "required review document"):
-                self.review.main_document(repo, ".aiwork/review-rules.md")
 
     def test_failed_risk_lookup_is_not_treated_as_absence(self):
         with patch.object(self.review, "run", side_effect=self.review.ReviewError("fetch failed")):
             with self.assertRaises(self.review.ReviewError):
                 self.review.main_document(Path("unused"), ".aiwork/accepted-risks.md", required=False)
-
-    def test_missing_rules_prevent_running_a_leg(self):
-        stderr = io.StringIO()
-        with patch("sys.argv", ["review-pr", "12", "--dry-run"]), \
-                patch.object(self.review, "run", side_effect=["fake-token", ""]), \
-                patch.object(self.review, "pr_state", return_value={}), \
-                patch.object(self.review, "snapshot", return_value=(Path("unused"), "a" * 40, ["file"], "diff")), \
-                patch.object(self.review.subprocess, "run") as leg, redirect_stderr(stderr):
-            self.assertEqual(self.review.main(), 1)
-        leg.assert_not_called()
-        self.assertIn("main:.aiwork/review-rules.md is missing", stderr.getvalue())
 
     def test_unreadable_document_is_not_treated_as_absence(self):
         with patch.object(self.review, "run", return_value="100644 blob " + "a" * 40 + "\tfile"), \

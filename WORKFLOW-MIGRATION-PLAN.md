@@ -189,9 +189,8 @@
    业主不需要读技术细节:需要业主确认的事,由 OpenClaw 先写成一句大白话(改了什么、测试和评审结果、建议),业主只决定"发 / 不发"。
    发版与 high 的最后确认暂时仍是业主点一下;几次发版顺利后,业主可以改成交给 OpenClaw(去掉 `release` 环境的审批人、给 orchestrator 触发权限),代价是出错或被 PR 里的文字诱导时,坏更新会直接推到所有用户电脑上,中间没有人拦。
 
-6. **(2026-09-30)评审与修复按 OpenDesign 的 `.aiwork/review-rules.md`**,业主已接受的风险在同目录 `accepted-risks.md`。
-   各只有一份,`review-pr`、项目的 `AGENTS.md` / `CLAUDE.md`、OpenClaw 都只写指向,不写摘要(这里也不复述内容)。
-   放在项目 `.aiwork/` 下,是因为在那里 Builder 读得到、改它又属于判卷面要业主批准;接入第二个项目时再挪到共用处。
+6. **(2026-09-30 原决定已被取代)**：评审与修复统一引用 aiwork 根目录的 [REVIEW-RULES.md](REVIEW-RULES.md)，各项目已接受风险仍见该项目 main 的 `.aiwork/accepted-risks.md`。
+   `review-pr`、项目的 `AGENTS.md` / `CLAUDE.md`、OpenClaw 都只写指向，不写摘要、不复制规则。
    来历:OpenDesign PR #10 评审修改了 13 轮。
 
 ---
