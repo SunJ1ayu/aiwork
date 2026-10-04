@@ -1,0 +1,42 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    token-oracle-red
+cmd:     python3 tests/test_app_token_scope.py
+cwd:     /root/aiwork-task-roles(仓根)
+commit:  7ceea98
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-10-03T06:49:12Z
+---------------- 输出开始 ----------------
+..FFF.
+======================================================================
+FAIL: test_scoped_grant_reports_the_single_target_without_the_token (__main__.AppTokenScopeTest.test_scoped_grant_reports_the_single_target_without_the_token)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-task-roles/tests/test_app_token_scope.py", line 88, in test_scoped_grant_reports_the_single_target_without_the_token
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 2 != 0 : gh-app-token: 不认识的参数 --repo
+
+
+======================================================================
+FAIL: test_task_token_contains_only_the_requested_repository (__main__.AppTokenScopeTest.test_task_token_contains_only_the_requested_repository) (target='SunJ1ayu/aiwork')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-task-roles/tests/test_app_token_scope.py", line 58, in test_task_token_contains_only_the_requested_repository
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 2 != 0 : gh-app-token: 不认识的参数 --repo
+
+
+======================================================================
+FAIL: test_task_token_contains_only_the_requested_repository (__main__.AppTokenScopeTest.test_task_token_contains_only_the_requested_repository) (target='SunJ1ayu/OpenDesign')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/aiwork-task-roles/tests/test_app_token_scope.py", line 58, in test_task_token_contains_only_the_requested_repository
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 2 != 0 : gh-app-token: 不认识的参数 --repo
+
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.087s
+
+FAILED (failures=3)
+---------------- 输出结束 ----------------
+runlog: token-oracle-red rc=1 commit=7ceea98 dirty=yes at=2026-10-03T06:49:12Z file=tracks/task-model-roles/evidence/20261003T064912Z-02-token-oracle-red.txt
