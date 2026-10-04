@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _review_result import leg_identity, load_result, sha256_file
@@ -19,6 +21,7 @@ from _review_result import leg_identity, load_result, sha256_file
 
 BIN = Path(__file__).resolve().parent
 DEFAULT_REPO = "SunJ1ayu/OpenDesign"
+REVIEW_RULES_SOURCE = ("SunJ1ayu/aiwork", "REVIEW-RULES.md")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -152,8 +155,40 @@ def main_document(repo: Path, path: str, *, required: bool = True) -> str:
     return process.stdout.decode("utf-8")
 
 
+def public_github(endpoint: str) -> dict:
+    # Rules are public; the target-scoped review token must not be used here.
+    request = urllib.request.Request(f"https://api.github.com/{endpoint}", headers={
+        "User-Agent": "aiwork-review-pr", "Accept": "application/vnd.github+json",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            value = json.load(response)
+    except (OSError, ValueError) as exc:
+        raise ReviewError(f"cannot read public review source {endpoint}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ReviewError(f"GitHub returned a non-object for {endpoint}")
+    return value
+
+
+def aiwork_main_rules() -> tuple[str, str]:
+    repository, path = REVIEW_RULES_SOURCE
+    commit = public_github(f"repos/{repository}/commits/main").get("sha")
+    if not isinstance(commit, str) or not SHA.fullmatch(commit):
+        raise ReviewError("aiwork main review rules commit is missing or invalid")
+    document = public_github(f"repos/{repository}/contents/{path}?ref={commit}")
+    content = document.get("content")
+    if (document.get("type") != "file" or document.get("encoding") != "base64"
+            or not isinstance(content, str)):
+        raise ReviewError(f"{repository} main:{path} is not a readable regular file")
+    raw = base64.b64decode(content.replace("\n", ""), validate=True)
+    if not raw or len(raw) != document.get("size"):
+        raise ReviewError(f"{repository} main:{path} content is empty or incomplete")
+    return commit, raw.decode("utf-8")
+
+
 def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
-              review_rules: str, risks: str, *, repository: str = DEFAULT_REPO) -> str:
+              review_rules: str, risks: str, *, rules_sha: str, repository: str = DEFAULT_REPO) -> str:
+    rules_repository, rules_path = REVIEW_RULES_SOURCE
     return (
         f"# {repository} PR #{number} · 当前 HEAD 的完整评审\n\n"
         f"HEAD: {pr['head']['sha']} ({pr['head']['ref']})\n"
@@ -167,7 +202,8 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
         "文件证据用仓库相对路径，不要用临时目录的绝对路径或指向临时目录的链接。"
         "最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
         "Conclusion: NEEDS_MORE_INFO。\n\n"
-        "## 项目 main 的 .aiwork/review-rules.md（原文，现行评审口径）\n\n" + review_rules
+        f"## {rules_repository} main 的 {rules_path}（原文，现行评审口径）\n\n"
+        f"规则来源提交: {rules_sha}\n\n" + review_rules
         + "\n\n## 项目 main 的 .aiwork/accepted-risks.md（原文；不存在时为无）\n\n" + risks
         + "\n\n"
         "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
@@ -239,11 +275,11 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
             directory = Path(temporary)
             repo, merge_base, files, diff = snapshot(token, pr, directory, repository=args.repo)
-            review_rules = main_document(repo, ".aiwork/review-rules.md")
+            rules_sha, review_rules = aiwork_main_rules()
             risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
             task = directory / "task.md"
             task.write_text(task_text(args.pr, pr, merge_base, files, diff,
-                                      review_rules, risks, repository=args.repo), encoding="utf-8")
+                                      review_rules, risks, rules_sha=rules_sha, repository=args.repo), encoding="utf-8")
             log = directory / "review.log"
             facts = directory / "facts.json"
             result_file = directory / "result.json"

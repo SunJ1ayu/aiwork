@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "track": "rules-single-source",
+  "run_id": "20261004T154026Z-01-source-green",
+  "controller": "runlog",
+  "event": "execution_finished",
+  "label": "source-green",
+  "started_at": "2026-10-04T15:40:26Z",
+  "finished_at": "2026-10-04T15:40:27Z",
+  "duration_ms": 570,
+  "exit_code": 0,
+  "actual": {
+    "adapter": "runlog",
+    "model": null,
+    "risk": null,
+    "degraded": null,
+    "work_exit_code": 0,
+    "legs": null
+  },
+  "usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "api_cost": null,
+    "billing_mode": null
+  }
+}

@@ -1,0 +1,15 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    token-tests
+cmd:     unshare -n -- python3 tests/test_app_token_scope.py
+cwd:     /root/aiwork-rules-single-source(仓根)
+commit:  121c434
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-10-04T15:41:31Z
+---------------- 输出开始 ----------------
+.....
+----------------------------------------------------------------------
+Ran 5 tests in 0.388s
+
+OK
+---------------- 输出结束 ----------------
+runlog: token-tests rc=0 commit=121c434 dirty=yes at=2026-10-04T15:41:31Z file=tracks/rules-single-source/evidence/20261004T154131Z-01-token-tests.txt

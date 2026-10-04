@@ -13,14 +13,14 @@ review-pr <PR号> [--repo owner/name] [--leg <腿名>] [--dry-run]
 - 只接受认得出家族的腿(`bin/_review_result.py` 的 `leg_identity`):固定模型的腿查 `ADAPTER_IDENTITIES`;`subcursor` 是通道,家族跟着这次用的模型走 —— 开跑时冻结一次模型(`CURSOR_MODEL`,没设就读 `bin/cursor-model`,和评审组同一个来源),传给腿、事后按它核对;认不出家族的模型(`auto` 之类)直接拒绝。**不按家族拒绝**:哪一家的评审对哪个 PR 算数,由 OpenDesign 的关卡判(`.github/aiwork-gate/decide.mjs`),`review-pr` 只负责把家族如实写进结论块。
 - `--dry-run`:照常跑评审,但只把要发的评审正文打印出来,不发到 GitHub。
 - `--repo` 是本次任务的目标仓库，默认仍为 `SunJ1ayu/OpenDesign`；API、快照、任务标题和发布都用它。令牌用 `gh-app-token review --repo owner/name`，只在角色既有配置范围内收窄，不改变 App 权限或安装范围。
-- 目标仓库 main 必须有 `.aiwork/review-rules.md`；缺少时拒绝评审，不借用另一个项目的规范或已接受风险。aiwork 的正式规范接线及 App 安装仍待验收，不能把新增 `--repo` 当作接入已经完成。
+- 评审口径统一从 GitHub 上 aiwork 的 main 读取 `REVIEW-RULES.md`，任务书附来源提交号；读不到时拒绝评审、不发任何内容。目标项目无需保存规则副本，已接受风险仍从目标项目 main 的 `.aiwork/accepted-risks.md` 读取。
 - 放在 aiwork 的 `bin/review-pr`,按 aiwork 本机的正常流程提交;`gh-app-token` 也在这次一起收进 aiwork 的 `bin/`(阶段 B 时先放在 `/usr/local/bin`)。
 
 ## 2. 步骤
 
 1. **取 PR**:`GET /repos/<owner/name>/pulls/<PR号>`，核对响应的 base 仓库，记下 `head.sha`(下称 HEAD)、`head.ref`、`base.ref`。PR 不是 open 或仓库不符就退出。
 2. **快照**:在一个临时目录里拿到**正好是 HEAD** 的代码(`git fetch` 这个提交后检出,核对 `git rev-parse HEAD` 等于 HEAD),并算出相对 base 的改动(merge-base 起的 diff 和改动文件清单)。快照目录只读给评审腿用,用完删掉。
-3. **任务书**:写明这是目标仓库的 PR #N 在 HEAD 上的**完整评审**,附改动文件清单和 diff,要求评审腿读改动涉及的文件、按现行评审口径给出独占一行的 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。沿用 aiwork 现有评审任务书的写法,不另起一套口径。**任务书里原样附上 PR 所在仓库 main 上的两份文件**:`.aiwork/review-rules.md`(评审口径)和 `.aiwork/accepted-risks.md`(没有这个文件就写"无")。**从 main 读,不从 PR 里读**(PR 不能改评它自己的口径);`review-rules.md` 读不到就报错退出、不评审(没有口径的评审不算数)。
+3. **任务书**:写明这是目标仓库的 PR #N 在 HEAD 上的**完整评审**,附改动文件清单和 diff,要求评审腿读改动涉及的文件、按现行评审口径给出独占一行的 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。沿用 aiwork 现有评审任务书的写法,不另起一套口径。**任务书里原样附上 aiwork main 的 `REVIEW-RULES.md`（评审口径，标明完整提交号）和 PR 所在项目 main 的 `.aiwork/accepted-risks.md`（没有这个文件就写"无"）**。规则按先解析出的 aiwork main 提交读取，风险从项目 main 读取；不从本地工作区或 PR 里读（PR 不能改评它自己的口径）。`REVIEW-RULES.md` 读不到就报错退出、不评审、不发任何内容（没有口径的评审不算数）。
 4. **跑腿**:`bin/<腿名> review <任务书> <日志> <快照目录>`,然后用 `bin/_review_result.py` 规整出 ReviewLegResult(不在 `review-pr` 里自己解析结论行)。腿的日志 = 以 `# <腿名> <模式> log` 开头的表头 + 一个空行 + 模型原文;评审正文只取空行之后的原文。日志不是这个格式就报错、不发(不去猜哪一段是表头)。
 5. **组结论块**(第 3 节),字段全部由 `review-pr` 从 ReviewLegResult 和快照填,**不让模型自己写**:
    - `verdict`:ReviewLegResult 的 verdict;

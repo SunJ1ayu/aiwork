@@ -11,3 +11,5 @@
 测试策略：对真实 main() 边界拦截 GitHub 公共 GET，保留来源读取实现；用临时 Git 仓库存项目 main 和 PR 的风险差异，捕获真实传给腿的任务书；断言来源 URL/ref/SHA/原文、目标仓库无旧规则、工作区诱饵无效和所有失败零派发/零发布。保留原有发布/模型归属/HEAD 检查。
 
 独立挑战已完成：subcursor / grok-4.7-high，xai 家族。核实 refs/aiwork/main 是目标项目 main，不能复用为规则来源；公开读取不携带 review token，先固定提交再取普通文件的 base64 内容，验证解码及长度。公开 main 读取探针已通过。原始报告位于 Git 忽略目录，设计意见的可核实结论保留在此，不复制私人日志。保留当前任务书带 SHA 的约定；评审正文额外增加来源字段不属于本次要求，未引入新发布格式。
+
+公开 Contents API 探针通过：按 aiwork main 提交读取普通文件，base64 解码字节长度等于 GitHub size。正式实现只接收普通文件、完整内容和有效 UTF-8；不携带 Authorization。
