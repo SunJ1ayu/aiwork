@@ -17,19 +17,25 @@ Track evidence and observations are versioned alongside their change records.
 
 ## History and project separation
 
-The first-parent history of `main` is the original local history of
-`/root/aiwork` (675 commits up to `6f18738`), joined in by merge `be49728`.
-Tracks archived before the switch therefore keep their evidence and
-observations from their original archive commits; nothing in a completed
-track was re-added or edited. The second-parent line is the curated snapshot
-(`1f26cdf`) that briefly stood in for this repository, plus the changes made
-on it.
+This repository holds only the workflow: tools, tests, track records and
+their evidence. Its history was filtered on 2026-10-04, before the repository
+was made public: every commit keeps only workflow paths, so task briefs,
+reference notes, configuration backups, logs and project material are gone
+from all of history, and one private project name in three track records was
+replaced with "另一个项目".
 
-The old history was scanned for credentials before it was uploaded. Apart
-from fake test values it holds one real-looking key: a Xiaomi MiMo token-plan
-key in `refs/nodepath-fix-20260728-143246/switch-model.sh`, not used by the
-current configuration. The string stays in history, so revoking it in the
-MiMo console is what makes it harmless.
+Commit IDs therefore differ from the ones quoted in records written before the
+filter (track evidence, verify.md, review links). Those refer to the
+unfiltered history, kept read-only in the private repository
+`SunJ1ayu/aiwork-archive` together with the pull requests opened before the
+switch. Nothing new goes into the archive.
+
+The first-parent history of `main` is the original local history of
+`/root/aiwork` (639 commits after filtering, up to `a617d69`), joined in by
+merge `d2c5cb4`. Tracks archived before the switch therefore keep their
+evidence and observations from their original archive commits. The
+second-parent line is the curated snapshot (`2363e54`) that briefly stood in
+for this repository, plus the changes made on it.
 
 Things that are not aiwork live with their own owners:
 
@@ -40,8 +46,9 @@ Things that are not aiwork live with their own owners:
   removed.
 - The `opendesign-file-organizer` and `opendesign-ref-images` track records
   belong to OpenDesign (moved by `SunJ1ayu/OpenDesign` PR #20).
-- Project task briefs stay on the machine under `tasks/`, ignored by Git like
-  logs.
+- Local working files — task briefs, my-review files, reference notes, logs,
+  tool homes — stay on the machine, ignored by Git. This repository is
+  public: never commit private content.
 
 ## Layout
 
