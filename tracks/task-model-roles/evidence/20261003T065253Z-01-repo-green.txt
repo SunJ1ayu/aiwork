@@ -1,0 +1,15 @@
+# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
+slug:    repo-green
+cmd:     python3 tests/test_review_pr.py
+cwd:     /root/aiwork-task-roles(仓根)
+commit:  4733be9
+dirty:   yes(跑之前采的;含未跟踪文件)
+started: 2026-10-03T06:52:53Z
+---------------- 输出开始 ----------------
+....................
+----------------------------------------------------------------------
+Ran 20 tests in 0.124s
+
+OK
+---------------- 输出结束 ----------------
+runlog: repo-green rc=0 commit=4733be9 dirty=yes at=2026-10-03T06:52:53Z file=tracks/task-model-roles/evidence/20261003T065253Z-01-repo-green.txt
