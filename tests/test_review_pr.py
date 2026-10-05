@@ -249,6 +249,49 @@ class ReviewPrTests(unittest.TestCase):
         for secret in ('ghs_first', 'ghp_second', 'github_pat_third', 'ordinary-value', 'other-value', 'private-material'):
             self.assertNotIn(secret, str(error.exception))
 
+    def test_common_secret_assignments_headers_and_prefixes_are_redacted(self):
+        fake_key = 'sk-abcdefghijklmnop'
+        cases = (
+            (f'DEEPSEEK_API_KEY={fake_key}', 'DEEPSEEK_API_KEY=[redacted]'),
+            (f'export MIMO_API_KEY="{fake_key}"', 'export MIMO_API_KEY=[redacted]'),
+            (f'Authorization: Bearer {fake_key}', 'Authorization: Bearer [redacted]'),
+            ('GH_TOKEN=opaque-fixture', 'GH_TOKEN=[redacted]'),
+            ('service_secret: "opaque fixture"', 'service_secret: [redacted]'),
+            ("custom_PaSsWoRd='opaque fixture'", 'custom_PaSsWoRd=[redacted]'),
+            ('myKey: opaque-fixture', 'myKey: [redacted]'),
+            ('TOKEN: opaque-fixture', 'TOKEN: [redacted]'),
+            ('API-KEY=opaque-fixture', 'API-KEY=[redacted]'),
+            ('authorization: bearer opaque-fixture', 'authorization: bearer [redacted]'),
+            (f'provider echoed {fake_key}', 'provider echoed [redacted]'),
+            ('provider echoed sk-abcd_efgh-ijklmn', 'provider echoed [redacted]'),
+            ('provider echoed ghs_fixture', 'provider echoed [redacted]'),
+            ('provider echoed ghp_fixture', 'provider echoed [redacted]'),
+            ('provider echoed github_pat_fixture', 'provider echoed [redacted]'),
+            ('-----BEGIN PRIVATE KEY-----\nfixture-only\n-----END PRIVATE KEY-----', '[redacted]'),
+        )
+        for original, expected in cases:
+            with self.subTest(original=original):
+                self.assertEqual(self.review.redact(original), expected)
+
+    def test_secret_redaction_keeps_tool_errors_and_short_sk_text(self):
+        for message in ('gh-app-token: 目标仓库不在角色配置范围内',
+                        'fetch-key: 无法读取文件',
+                        'provider mentioned sk-abcdefghijklmno'):
+            with self.subTest(message=message):
+                self.assertEqual(self.review.redact(message), message)
+
+    def test_common_secrets_are_redacted_in_failed_leg_stderr(self):
+        fake_key = 'sk-abcdefghijklmnop'
+        diagnostic = f'DEEPSEEK_API_KEY={fake_key}\nexport MIMO_API_KEY="{fake_key}"\n' \
+                     f'Authorization: Bearer {fake_key}\ngh-app-token: 目标仓库不在角色配置范围内\n'
+        rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', leg_exit=1, leg_stderr=diagnostic)
+        self.assertEqual(rc, 1)
+        self.assertNotIn(fake_key, stderr)
+        self.assertIn('DEEPSEEK_API_KEY=[redacted]', stderr)
+        self.assertIn('Authorization: Bearer [redacted]', stderr)
+        self.assertIn('gh-app-token: 目标仓库不在角色配置范围内', stderr)
+        self.assertEqual(calls['github_writes'], [])
+
     def run_chat_engine(self, *, oversized=None, finish_reason='stop', content='Conclusion: PASS'):
         engine = load_script('submimo-review')
         with tempfile.TemporaryDirectory() as temporary:
