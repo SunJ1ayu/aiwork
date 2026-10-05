@@ -1116,11 +1116,13 @@ v13_subkimi_leg() {
   local tool_root; tool_root="$(cd "$BIN/.." && pwd -P)"
   local guard="$tool_root/kimi-review-home/hooks/guard.mjs"
 
-  # The public workflow repository excludes local runtime config (owner 10-04).
-  # Guard behavior is exercised below; credentials/config are never re-added to Git.
-  git -C "$tool_root" check-ignore -q \
+  # 2026-08-19:**守卫本体必须在版本控制里**。发现时它整个目录被 gitignore 挡着,
+  # 从来没进过库 ⇒ 这道判卷防线被改了**不留痕**,闸③(亲读 diff)也照不到它。
+  # 判据能测出它"行为对不对",测不出"它昨天是不是别的样子" —— 那要靠 git。
+  # (凭证/oauth/sessions 仍然一律不入库,gitignore 里是精确放行两个 hooks 文件。)
+  git -C "$tool_root" ls-files --error-unmatch \
       kimi-review-home/hooks/guard.mjs >/dev/null 2>&1
-  check "guard: 本机运行时守卫被公开仓库排除" $?
+  check "guard: 守卫本体在版本控制里(判卷防线改了必须留痕)" $?
   if [[ -f "$guard" ]]; then
     echo '{"tool_name":"Write","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: Write denied (rc=2)" $([[ $? -eq 2 ]]; echo $?)
@@ -3961,9 +3963,15 @@ PY
     bad "V40⑦: hook 指向运行期 home(前置不满足:真种子里没有 config.toml)"
   fi
 
-  # ⑧ 本机种子配置不进入公开仓库；上面的行为测试仍验证 hook 生效。
-  ( cd "$BIN/.." && git check-ignore -q kimi-review-home/config.toml ) >/dev/null 2>&1
-  check "V40⑧: 本机种子 config.toml 被公开仓库排除" $?
+  # ── ⑧ 种子 config.toml 必须**在版本控制里** ─────────────────────────────────
+  # 写 ⑦ 的时候自己撞见的,不是腿指出来的:`.gitignore` 里 `kimi-review-home/*`
+  # 只给 hooks/ 开了两个口子,**config.toml 不在其中**。而"hook 挂不挂、挂的是哪个
+  # 文件"整个写在 config.toml 里 —— 判卷防线最关键的那一行
+  # (`command = "node …/guard.mjs"`)从来没进过版本控制:改了不留痕,闸③ 亲读 diff
+  # 也照不到。.gitignore 里就记着同款账(guard.mjs 曾经也整个被忽略),
+  # **补了 hooks/ 却漏了决定 hooks 挂不挂的那个开关** —— 同一个坑补了一半。
+  ( cd "$BIN/.." && git ls-files --error-unmatch kimi-review-home/config.toml ) >/dev/null 2>&1
+  check "V40⑧: 种子 config.toml 在版本控制里(hook 挂不挂全写在它里面)" $?
 
   rm -rf "$d"
 }

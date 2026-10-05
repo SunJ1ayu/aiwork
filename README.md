@@ -263,10 +263,12 @@ nothing attached triggers a loud BLIND-review warning.
 - `models.env`：Codex、Cursor、DeepSeek、Gemini、GLM、Grok、Kimi、MiMo 和 triage 的模型选择，每条腿一行。可参考 `templates/models.env.example`。
 - `typesafe.env`：triage 使用的 `TYPESAFE_API_KEY`，保留文件权限 600。
 - `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
+  `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。
 
 换机器时把整个目录复制过去并保持权限。`bin/aiwork-config` 是统一读取入口；
 `AIWORK_CONFIG_DIR` 可指定其他设置目录，测试只指向临时目录。
-`AIWORK_APPS_DIR` 仍可单独覆盖 App 配置目录，原有模型单次覆盖参数继续有效。
+`AIWORK_APPS_DIR` 仍可单独覆盖 App 配置目录。
+`models.env` 必须完整，包含每条腿的模型行；原有模型单次覆盖参数只是在完整设置的基础上换一次，不能代替文件或补缺行。
 缺少 `models.env` 或所需腿的模型行时明确报错并停止，不调用模型。
 本机数据统一放在 `~/.local/share/aiwork/`；数据目录迁移属于后续 PR，本 PR 不搬动数据。

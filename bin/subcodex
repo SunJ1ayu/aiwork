@@ -17,7 +17,7 @@ set -uo pipefail
 #     **第一版的 `--disable multi_agent` 被真跑证伪过**;
 #   · 任务书走 stdin(argv 单参数上限 128KiB,delegate-codex 为此踩过 E2BIG)。
 
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 die() { echo "subcodex: $*" >&2; exit 1; }
 usage() {
   cat >&2 <<'EOF'

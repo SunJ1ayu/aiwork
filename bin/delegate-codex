@@ -51,7 +51,7 @@ set -uo pipefail
 #   **强度和它替换掉的那道一样**:不重攻、直接把哈希贴进去仍然过得去;它防的是**忘了重攻**,
 #   不是防伪造。
 
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 CODEX="${CODEX:-codex}"
 WT_ROOT="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
 TRACK_RECORD_BIN="${TRACK_RECORD_BIN:-$BIN_DIR/track-record}"

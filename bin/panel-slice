@@ -19,7 +19,7 @@ TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
 HELPER="$BIN/_panel_slice.py"
 
 . "$BIN/_panel-roster-lib.sh" || {
-  echo "panel-slice: 找不到 $BIN/_panel-roster-lib.sh —— 腿表在它里面,拒绝空跑。" >&2
+  echo "panel-slice: $BIN/_panel-roster-lib.sh 加载失败 —— 请检查上面的文件或模型设置错误,拒绝空跑。" >&2
   exit 70
 }
 [[ -f "$HELPER" ]] || { echo "panel-slice: 找不到 $HELPER,拒绝派发。" >&2; exit 70; }

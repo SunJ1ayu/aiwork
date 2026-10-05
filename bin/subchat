@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+
 # subchat - provider-parameterized chat-completions review executor.
 #
 # One body for every employee that is only reachable over an OpenAI-compatible
@@ -16,17 +18,17 @@ set -euo pipefail
 
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
-_GATE="$(dirname "$0")/_my-review-gate.sh"
+_GATE="$BIN_DIR/_my-review-gate.sh"
 [ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
 [ -f "$_GATE" ] || { echo "subchat: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_GATE"
 gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 
-ENGINE="$(dirname "$0")/submimo-review"
+ENGINE="$BIN_DIR/submimo-review"
 
 usage() {
   local default_model
-  default_model="$("$(dirname "$0")/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
+  default_model="$("$BIN_DIR/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
   printf 'DeepSeek default model: %s\n\n' "$default_model" >&2
   cat >&2 <<'EOF'
 Usage:
@@ -81,7 +83,7 @@ case "$PROVIDER" in
     PREFIX="DEEPSEEK"
     # DeepSeek official API (same key file as subdeepseek-agent). Formerly this
     # leg rode SenseNova's chat API (provider "sensenova", retired 2026-07-18).
-    DEFAULT_MODEL="$("$(dirname "$0")/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
+    DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
     ENDPOINT_ENV_VAR="MIMO_BASE_URL"    # engine suffixes a base URL with /chat/completions
     ENDPOINT="${DEEPSEEK_API_BASE:-https://api.deepseek.com}"
     DEFAULT_AUTH_FILE="$HOME/.config/deepseek/auth.json"
@@ -100,7 +102,7 @@ case "$PROVIDER" in
     # 回落到这里时记得带 ZHIPU_INCLUDE / PANEL_INCLUDE,否则它只看得见增量 diff。
     # 它走 OpenAI 兼容面,认证是 Authorization: Bearer；当前 agent 则把 key 放进
     # OpenCode provider 配置的 apiKey 字段。两个入口形状不同,别顺手统一。
-    DEFAULT_MODEL="$("$(dirname "$0")/aiwork-config" model glm "${ZHIPU_MODEL:-}")" || exit 1
+    DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model glm "${ZHIPU_MODEL:-}")" || exit 1
     ENDPOINT_ENV_VAR="MIMO_CHAT_COMPLETIONS_URL"  # exact URL, engine appends nothing
     ENDPOINT="${ZHIPU_CHAT_COMPLETIONS_URL:-https://opencode.ai/zen/go/v1/chat/completions}"
     DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"

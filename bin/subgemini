@@ -22,7 +22,7 @@ set -euo pipefail
 #   ③ 不给 workspace 时它读写自己的 ~/.gemini/antigravity-cli/scratch/,
 #      **不碰 cwd** ⇒ 必须显式 --add-dir,否则腿等于没看见被评审的仓。
 
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
 _GATE="$BIN_DIR/_my-review-gate.sh"

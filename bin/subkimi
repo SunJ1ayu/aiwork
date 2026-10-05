@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+
 # subkimi - Kimi (Moonshot) review employee on an AGENT base: kimi-code CLI
 # run headless (`kimi -p`). Like subglm-agent/subdeepseek-agent, the model
 # explores the repo itself (Read/Glob/Grep + Bash), so no blind reviews and no
@@ -24,7 +26,7 @@ set -euo pipefail
 
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
-_GATE="$(dirname "$0")/_my-review-gate.sh"
+_GATE="$BIN_DIR/_my-review-gate.sh"
 [ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
 [ -f "$_GATE" ] || { echo "subkimi: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_GATE"
@@ -33,7 +35,7 @@ gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
 # 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
-_RHG="$(dirname "$0")/_review-home-guard.sh"
+_RHG="$BIN_DIR/_review-home-guard.sh"
 [ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh   # 脚本被拷到别处跑时的家
 [ -f "$_RHG" ] || { echo "subkimi: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_RHG"
@@ -76,7 +78,6 @@ if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
 
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [[ "$MODE" == "review" ]]; then
   _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \

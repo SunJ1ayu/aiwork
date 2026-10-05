@@ -499,3 +499,24 @@ D15 / D16 的修复已落在 track `archive-tree-and-untracked-views`：历史�
 - **证据文件排序**：VOID 命名与 `ev_files` 最后收据排序的冲突仍待独立修复；不得将未收尾文件记成有效收据。
 - **评审腿与失败分类**：GLM 日志分类可能把引用正文的 billing_mode 当额度故障；chat 回退曾报 MissingSessionID；评审任务应明确临时实验放在自己的副本内。对应 A8/A9/A10 留在 verify，不算本单已修。
 - **历史路径消费者**：本单只修 typed/archive 三个目录入口；旧 `staged()` 在版本检测、工具路径和近期 verify 收集的逐行消费者未全部迁移，不能声称全仓任意文件名已支持。
+
+
+## 来源:本机设置迁移 PR #4（2026-10-05，第 1 轮裁定）
+
+- **P2：panel 初始化依赖 cursor 设置行**（DeepSeek 06:46 BLOCK；云端 Claude 核实）。
+  `_panel-roster-lib.sh` 缺 cursor 行时，`panel-review` 和 `panel-slice` 会拒跑，即使 cursor 被关闭。
+  这是 fail closed，不会空跑误放行；本轮只修正加载失败报错。后续再决定是否按实际选腿延迟读取。
+- **P2：单次模型覆盖仍要求基础设置**（DeepSeek；云端 Claude 同样指出）。
+  当前契约是完整的 `models.env`，覆盖只在它的基础上换一次；本轮已写清 README。
+  若将来需要独立于基础设置的覆盖，再单独评估契约与 panel 的一致性。
+- **Kimi 判卷种子先做隐私检查，再单独 PR 纳入版本控制**（云端 Claude；DeepSeek 独立报了断言反转）。
+  `kimi-review-home/hooks/guard.mjs` 与 `kimi-review-home/config.toml` 在 main 上未被跟踪，
+  对应两条断言原本就是红的。本轮原样恢复断言；不得通过反转断言消除红灯，也不在设置迁移中提交本机种子。
+- **P2：阶段 B 第 4 步同时处理 track commit-msg 钩子**（云端 Claude）。
+  见 `workflow-migration/phase-b-step4.md`；停用 track 时一起解除每个提交必须挂 track 的约束。
+- **P3：subagent/subchat 的帮助仍依赖设置**（DeepSeek）。本轮不改，择期让缺设置时也能看帮助。
+- **P3：subcodex 空参数数组兼容旧 Bash**（云端 Claude）。等 Mac 迁移时处理并在旧 Bash 上验证。
+- **triage 文档字符串的 /root 路径留给 PR B**（DeepSeek；云端 Claude 核实），本轮不混入数据路径迁移。
+
+DeepSeek 关于 `test_leg_quick_fixes` 未隔离设置的疑虑已排除：它导入 `_no_egress`，自动建立临时设置目录。
+关于 `test-workflow-docs` 仍读取已删除 `*-model` 文件的疑虑也已排除；两项无需修改。

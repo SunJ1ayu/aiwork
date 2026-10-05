@@ -49,11 +49,9 @@ def apps_dir() -> Path:
 
 
 def app_key(configured: str) -> Path:
-    """Copied legacy App configs keep working after the old directory is removed."""
+    """Relative keys live under the selected apps directory; absolute keys stay absolute."""
     path = Path(configured)
-    if path.parent == Path('/etc/aiwork/apps') or not path.is_absolute():
-        return apps_dir() / path.name
-    return path
+    return path if path.is_absolute() else apps_dir() / path
 
 
 def model_family(adapter: str, selected: str) -> str:

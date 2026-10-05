@@ -10,6 +10,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -141,6 +142,31 @@ class SettingsTest(unittest.TestCase):
                     self.assertFalse(marker.exists())
                 self.write_models()
 
+    def test_symlinked_settings_callers_report_the_real_missing_settings(self):
+        repo, task = self.repo_fixture()
+        installed = self.d / 'installed'
+        installed.mkdir()
+        callers = {'subcodex': [], 'subcursor': [], 'subgrok': [], 'subkimi': [],
+                   'submimo': [], 'subgemini': [], 'subagent': ['deepseek'],
+                   'subchat': ['deepseek']}
+        # Derive coverage from the shell callers so another migrated leg cannot be missed.
+        actual = {p.name for p in (ROOT / 'bin').iterdir()
+                  if p.is_file() and p.read_bytes().startswith(b'#!/usr/bin/env bash')
+                  and re.search(r'/aiwork-config" model ', p.read_text())}
+        self.assertEqual(actual, set(callers) | {'delegate-codex', '_panel-roster-lib.sh'})
+        (self.config / 'models.env').unlink()
+        for name, prefix in callers.items():
+            link = installed / name
+            link.symlink_to(ROOT / 'bin' / name)
+            result = subprocess.run([str(link), *prefix, 'review', str(task),
+                                     str(self.d / (name + '.log')), str(repo)],
+                                    env=dict(self.env, REVIEW_NO_MY_REVIEW='1'),
+                                    capture_output=True, text=True, timeout=10)
+            with self.subTest(caller=name):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(str(self.config / 'models.env'), result.stderr)
+                self.assertNotIn('No such file or directory', result.stderr)
+
     def test_codex_and_delegate_dry_runs_read_local_settings_and_keep_overrides(self):
         repo, task = self.repo_fixture()
         env = dict(self.env, REVIEW_NO_MY_REVIEW='1')
@@ -169,10 +195,75 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('model=gpt-override', result.stdout)
 
-    def test_copied_app_config_resolves_legacy_key_inside_selected_apps(self):
-        result = self.invoke_config('app-key', '/etc/aiwork/apps/aiwork-sync.pem')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), str(self.config / 'apps/aiwork-sync.pem'))
+        for command in (delegate, codex):
+            link = self.d / Path(command[0]).name
+            link.symlink_to(command[0])
+            result = subprocess.run([str(link), *command[1:]], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('model=gpt-fixture-next', result.stdout)
+
+    def test_app_keys_keep_absolute_paths_and_resolve_relative_paths_under_apps(self):
+        for override in (None, str(self.d / 'other-apps')):
+            if override:
+                self.env['AIWORK_APPS_DIR'] = override
+            else:
+                self.env.pop('AIWORK_APPS_DIR', None)
+            apps = Path(override) if override else self.config / 'apps'
+            cases = {'aiwork-sync.pem': apps / 'aiwork-sync.pem',
+                     'keys/aiwork-sync.pem': apps / 'keys/aiwork-sync.pem',
+                     '/etc/aiwork/apps/aiwork-sync.pem': Path('/etc/aiwork/apps/aiwork-sync.pem'),
+                     str(self.d / 'external/key.pem'): self.d / 'external/key.pem'}
+            for configured, expected in cases.items():
+                with self.subTest(override=override, configured=configured):
+                    result = self.invoke_config('app-key', configured)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), str(expected))
+
+    def test_untracked_judging_files_still_fail_the_original_assertions(self):
+        source = (ROOT / 'tests/test-review-tooling.sh').read_text()
+        fake = self.d / 'fake-git'
+        fake.mkdir()
+        git = fake / 'git'
+        git.write_text('#!/bin/sh\ncase "$*" in\n'
+                       '  *ls-files*) exit "$TRACKED_RC" ;;\n'
+                       '  *check-ignore*) exit 0 ;;\n'
+                       '  *) exit 99 ;;\nesac\n')
+        git.chmod(0o755)
+        for name in ('hooks/guard.mjs', 'config.toml'):
+            command = re.search(r'^.*git .*' + re.escape('kimi-review-home/' + name)
+                                + r'.*\n.*check .*', source, re.M)
+            if command is None:
+                command = re.search(r'^.*git .*\\\n.*' + re.escape('kimi-review-home/' + name)
+                                    + r'.*\n.*check .*', source, re.M)
+            self.assertIsNotNone(command, name)
+            script = 'check() { exit "$2"; }; tool_root="$1"; BIN="$1/bin";\n' + command.group()
+            for tracked_rc in ('0', '1'):
+                result = subprocess.run(['bash', '-c', script, 'judging-test', str(ROOT)],
+                                        env=dict(self.env, TRACKED_RC=tracked_rc,
+                                                 PATH=str(fake) + os.pathsep + self.env['PATH']),
+                                        capture_output=True, text=True)
+                with self.subTest(file=name, tracked_rc=tracked_rc):
+                    self.assertEqual(result.returncode, int(tracked_rc), result.stderr)
+
+    def test_panel_settings_failure_names_the_initialization_failure(self):
+        for missing_file in (True, False):
+            if missing_file:
+                (self.config / 'models.env').unlink()
+            else:
+                self.models.pop('cursor')
+                self.write_models()
+            for caller in ('panel-review', 'panel-slice'):
+                result = subprocess.run([str(ROOT / 'bin' / caller), '--help'],
+                                        env=dict(self.env, PANEL_CURSOR_LEG='off'),
+                                        capture_output=True, text=True, timeout=10)
+                with self.subTest(caller=caller, missing_file=missing_file):
+                    self.assertEqual(result.returncode, 70)
+                    self.assertIn(str(self.config / 'models.env'), result.stderr)
+                    self.assertIn('cursor', result.stderr)
+                    self.assertIn('加载失败', result.stderr)
+                    self.assertNotIn('找不到', result.stderr)
+            self.models['cursor'] = 'composer-2.5'
+            self.write_models()
 
     def cursor_fixture(self):
         import test_subcursor

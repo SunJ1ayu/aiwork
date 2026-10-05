@@ -43,13 +43,24 @@ print('201')
         self.env = dict(os.environ, AIWORK_APPS_DIR=str(config), FAKE_REQUEST=str(self.request),
                         PATH=str(fake) + os.pathsep + os.environ["PATH"])
 
-    def invoke(self, args, repos, permissions=None):
+    def invoke(self, args, repos, permissions=None, helper=None):
         grant = {"token": "fake-test-token", "expires_at": "2099-01-01T00:00:00Z",
                  "permissions": permissions or {"contents": "read", "pull_requests": "write", "metadata": "read"},
                  "repositories": [{"name": r.split('/')[1], "full_name": r} for r in repos]}
         env = dict(self.env, FAKE_GRANT=json.dumps(grant))
-        return subprocess.run([str(ROOT / "bin/gh-app-token"), "review", *args], env=env,
+        return subprocess.run([str(helper or ROOT / "bin/gh-app-token"), "review", *args], env=env,
                               capture_output=True, text=True, timeout=10)
+
+    def test_symlink_invocation_mints_the_same_scoped_token(self):
+        installed = self.root / "installed"
+        installed.mkdir()
+        link = installed / "gh-app-token"
+        link.symlink_to("../entry")
+        (self.root / "entry").symlink_to(ROOT / "bin/gh-app-token")
+        result = self.invoke(["--repo", "SunJ1ayu/aiwork"], ["SunJ1ayu/aiwork"], helper=link)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "fake-test-token")
+        self.assertEqual(json.loads(self.request.read_text())["repositories"], ["aiwork"])
 
     def test_task_token_contains_only_the_requested_repository(self):
         for target in ("SunJ1ayu/aiwork", "SunJ1ayu/OpenDesign"):

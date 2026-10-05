@@ -13,7 +13,7 @@ BIN="$(dirname "$0")"
 # verdict_of / roster 渲染 / 腿池都住在 _panel-roster-lib.sh —— **只许有一份**。
 # usage 也从它渲染成员；否则新增腿时最先撒谎的就是 `--help`。
 . "$BIN/_panel-roster-lib.sh" || {
-  echo "🔴 panel-review: 找不到 $BIN/_panel-roster-lib.sh —— 花名册与腿池都在它里面,拒绝空跑。" >&2
+  echo "🔴 panel-review: $BIN/_panel-roster-lib.sh 加载失败 —— 请检查上面的文件或模型设置错误,拒绝空跑。" >&2
   exit 70
 }
 REVIEW_RESULT_BIN="${PANEL_REVIEW_RESULT_BIN:-$BIN/_review_result.py}"

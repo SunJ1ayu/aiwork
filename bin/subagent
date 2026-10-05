@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+
 # subagent - 底座腿的**唯一躯干**:把 Claude Code headless(`claude -p`)指向某个
 # Anthropic 兼容端点,让模型自己读仓库并在 review 的可写副本里跑本地检查。
 # 今天服务 deepseek 与 zhipu 两条腿,经 `subdeepseek-agent` / `subglm-agent` 两个瘦
@@ -24,7 +26,7 @@ set -uo pipefail
 
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
-_GATE="$(dirname "$0")/_my-review-gate.sh"
+_GATE="$BIN_DIR/_my-review-gate.sh"
 [ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
 [ -f "$_GATE" ] || { echo "subagent: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_GATE"
@@ -33,16 +35,15 @@ gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
 # 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
-_RHG="$(dirname "$0")/_review-home-guard.sh"
+_RHG="$BIN_DIR/_review-home-guard.sh"
 [ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh   # 脚本被拷到别处跑时的家
 [ -f "$_RHG" ] || { echo "subagent: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_RHG"
 
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
   local default_model
-  default_model="$("$(dirname "$0")/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
+  default_model="$("$BIN_DIR/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
   printf 'DeepSeek default model: %s\n\n' "$default_model" >&2
   cat >&2 <<'EOF'
 Usage:
