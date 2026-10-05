@@ -16,7 +16,6 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 
 MAPPINGS=(
   "CLAUDE.md|CLAUDE.md"
-  "skills/track/SKILL.md|.claude/skills/track/SKILL.md"
   "skills/panel/SKILL.md|.claude/skills/panel/SKILL.md"
   "skills/panel/references/legs.md|.claude/skills/panel/references/legs.md"
   "skills/delegate/SKILL.md|.claude/skills/delegate/SKILL.md"
@@ -70,17 +69,22 @@ else
   bad "W2: bin/sync-workflow-docs 存在且可执行"
 fi
 
-echo "[W3] 文档说的默认预算、模型和 agent 档与实现一致"
-grep -q -- '--risk self|standard|high' "$ROOT/README.md"
-check "W3: README 公开 self/standard/high 风险档" $?
+echo "[W3] 流程规则只有一个来源:说明文档指向 REVIEW-RULES.md,且没有任何文档要求自定风险等级或评审预算"
+for f in "$SOURCE/CLAUDE.md" "$SOURCE/skills/panel/SKILL.md" "$SOURCE/skills/delegate/SKILL.md" "$ROOT/README.md"; do
+  grep -q 'REVIEW-RULES.md' "$f"
+  check "W3: ${f#$ROOT/} 指向 REVIEW-RULES.md" $?
+done
+for f in "$SOURCE/CLAUDE.md" "$SOURCE/skills/panel/SKILL.md" "$SOURCE/skills/panel/references/legs.md" "$SOURCE/skills/delegate/SKILL.md" "$ROOT/README.md"; do
+  ! grep -qE 'impact-risk|design-uncertainty|--risk |self=0|standard=1|high=2|评审预算' "$f"
+  check "W3: ${f#$ROOT/} 没有自定风险等级/评审预算的旧流程" $?
+done
+[[ ! -e "$SOURCE/skills/track/SKILL.md" ]] && ! grep -q 'skills/track' "$ROOT/bin/sync-workflow-docs"
+check "W3: track skill 已退役,且不在 sync-workflow-docs 清单里" $?
 grep -q -- '--all.*current reviewer pool' "$ROOT/README.md" \
   && grep -q '全池评审' "$SOURCE/skills/panel/SKILL.md"
 check "W3: README/panel skill 把 --all 表述为全池语义，不绑定四审或五审" $?
 
-for f in "$SOURCE/CLAUDE.md" "$SOURCE/skills/track/SKILL.md" "$SOURCE/skills/panel/SKILL.md"; do
-  grep -q 'impact-risk' "$f" && grep -q 'design-uncertainty' "$f" && grep -q 'high=2' "$f"
-  check "W3: ${f#$SOURCE/} 使用两个正交轴且 high=2" $?
-done
+echo "[W3] 文档说的默认模型和 agent 档与实现一致"
 
 # 🔴 2026-09-04(track gemini-leg-38,DeepSeek F1 抓到的):W3 给 glm / mimo 都钉了
 # 「文档说的默认档 == 代码里的默认档」,**唯独 gemini 没钉** ⇒ 3.7→3.8 那天
@@ -147,10 +151,6 @@ grep -q 'decision.json' "$ROOT/track/CONVENTION.md" \
   && ! grep -q 'verify.md → panel-review.*, by lane' "$ROOT/track/CONVENTION.md" \
   && ! grep -q 'verify 那边会填 `lane: full`' "$ROOT/track/templates/design.md"
 check "W5: convention/design 现行语义只讲双轴" $?
-grep -q 'decision.json' "$SOURCE/skills/track/SKILL.md" \
-  && grep -q 'track-record.*validate.*dispatch' "$SOURCE/skills/track/SKILL.md" \
-  && ! grep -q '`lane:` 和 `派给:` 守卫仍查非空' "$SOURCE/CLAUDE.md"
-check "W5: workflow 要求 dispatch 前填 decision 并机械校验" $?
 ! grep -q '唯一账本 = 各 track 的 `verify.md`' "$SOURCE/skills/delegate/SKILL.md" \
   && ! grep -q '只留原始事实.*返工 N 轮' "$SOURCE/skills/delegate/SKILL.md"
 check "W5: delegate 不再要求手工返工账或 verify 第二事实源" $?
