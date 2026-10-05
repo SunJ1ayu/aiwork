@@ -24,8 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin/review-pr"
 
 
-def load_script():
-    loader = importlib.machinery.SourceFileLoader("review_pr", str(SCRIPT))
+def load_script(name="review-pr"):
+    loader = importlib.machinery.SourceFileLoader(name.replace('-', '_'), str(ROOT / 'bin' / name))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
@@ -73,7 +73,8 @@ class ReviewPrTests(unittest.TestCase):
 
     def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True,
                                  repository=None, source_failure=None, project_rules=False,
-                                 local_rules="LOCAL WORKSPACE RULES", risks_present=True):
+                                 local_rules="LOCAL WORKSPACE RULES", risks_present=True,
+                                 leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False):
         """Exercise the real source readers and task, with offline HTTP and review leg."""
         calls = {"github_writes": [], "public_reads": [], "leg_runs": 0}
         rules = "# aiwork main 规则\r\n必须以此为准。\r\n"
@@ -111,6 +112,7 @@ class ReviewPrTests(unittest.TestCase):
         def fake_github(token, endpoint, payload=None):
             if payload is not None:
                 calls["github_writes"].append(endpoint)
+                calls['posted_block'] = json.loads(payload['body'].split('```json\n', 1)[1].split('\n```', 1)[0])
             return {"html_url": "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1"}
 
         def fake_run(command, **kwargs):
@@ -120,6 +122,8 @@ class ReviewPrTests(unittest.TestCase):
             if command[0] == "git":
                 return real_run(command, **kwargs)
             calls["emit"] = command
+            if emit_failure:
+                raise self.review.ReviewError("result producer failed")
             return ""
 
         def fake_leg(command, **kwargs):
@@ -128,14 +132,17 @@ class ReviewPrTests(unittest.TestCase):
             calls["leg_runs"] += 1
             calls["task"] = Path(command[2]).read_bytes().decode("utf-8")
             calls["leg_env"] = kwargs["env"]
+            calls["temporary"] = str(Path(command[2]).parent)
+            Path(command[3]).write_text("# fake review log\n\nConclusion: PASS\n")
+            Path(kwargs['env']['AIWORK_REVIEW_FACTS_PATH']).write_text('{"fixture":true}\n')
             os.environ["CURSOR_MODEL"] = "gpt-other"
-            return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, leg_exit, "", leg_stderr.replace("$LOG", command[3]))
 
         result = {
-            "process": {"state": "exited", "exit_code": 0},
+            "process": {"state": "exited", "exit_code": leg_exit},
             "verdict": "PASS", "failure_kind": "none", "degraded": False,
             "evidence": {"completeness": "complete"},
-            "view": {"delivery_state": "complete"},
+            "view": {"delivery_state": view_state},
             "model": {"requested": model_used, "invoked": model_used, "reported": None},
         }
         pr = {"state": "open", "head": {"sha": "a" * 40, "ref": "f"}, "base": {"sha": "b" * 40, "ref": "main"}}
@@ -181,7 +188,129 @@ class ReviewPrTests(unittest.TestCase):
                 rc = self.review.main()
                 calls["pr_state"] = state.call_args_list
                 calls["snapshot"] = snapshot.call_args
+            failures = workspace / 'logs/review-pr-failures'
+            calls['archives'] = {str(p): {str(f.relative_to(p)): f.read_bytes()
+                                         for f in p.rglob('*') if f.is_file()}
+                                 for p in failures.iterdir()} if failures.exists() else {}
+            calls['archive_modes'] = [p.stat().st_mode & 0o777 for p in failures.iterdir()] if failures.exists() else []
+            calls['temporary_exists'] = Path(calls.get('temporary', '/nonexistent')).exists()
         return rc, calls, stdout.getvalue(), stderr.getvalue()
+
+    def test_failed_leg_reports_only_last_40_lines_with_secrets_redacted(self):
+        diagnostic = ''.join(f'line-{i:02d}\n' for i in range(60)) + 'token: ghs_testsecret\n'
+        rc, calls, stdout, stderr = self.run_main_with_leg_result('gpt-5.6', dry_run=False,
+                                                                leg_exit=1, leg_stderr=diagnostic)
+        self.assertEqual(rc, 1)
+        self.assertEqual(stdout, '')
+        self.assertEqual(calls['github_writes'], [])
+        self.assertIn('line-21', stderr)
+        self.assertIn('line-59', stderr)
+        self.assertNotIn('line-20', stderr)
+        self.assertNotIn('ghs_testsecret', stderr)
+        self.assertIn('[redacted]', stderr)
+
+    def test_failed_leg_keeps_whole_directory_and_reports_a_live_log_path(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', leg_exit=1,
+                            leg_stderr='bad verdict; raw output kept in $LOG\n')
+        self.assertEqual(rc, 1)
+        self.assertFalse(calls['temporary_exists'])
+        self.assertEqual(len(calls['archives']), 1)
+        archive, files = next(iter(calls['archives'].items()))
+        for name in ('task.md', 'review.log', 'leg.stderr', 'facts.json'):
+            self.assertIn(name, files)
+        self.assertIn('raw output kept in ' + archive + '/review.log', stderr)
+        self.assertNotIn(calls['temporary'], stderr)
+        self.assertEqual(calls['archive_modes'], [0o700])
+
+    def test_success_does_not_keep_a_failure_directory(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6')
+        self.assertEqual(rc, 0, stderr)
+        self.assertFalse(calls['temporary_exists'])
+        self.assertEqual(calls['archives'], {})
+
+    def test_result_producer_failure_also_preserves_the_leg_diagnostic(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', emit_failure=True,
+                                                           leg_stderr='provider diagnostic\n')
+        self.assertEqual(rc, 1)
+        self.assertIn('provider diagnostic', stderr)
+        self.assertEqual(len(calls['archives']), 1)
+
+    def test_tool_name_token_is_not_redacted_but_actual_credentials_are(self):
+        diagnostic = 'gh-app-token: 目标仓库不在角色配置范围内'
+        with patch.object(self.review.subprocess, 'run', return_value=subprocess.CompletedProcess([], 2, '', diagnostic)):
+            with self.assertRaises(self.review.ReviewError) as error:
+                self.review.run(['gh-app-token', 'review'])
+        self.assertIn(diagnostic, str(error.exception))
+        secrets = 'ghs_first ghp_second github_pat_third token: ordinary-value token=other-value\n' \
+                  '-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----'
+        with patch.object(self.review.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', secrets)):
+            with self.assertRaises(self.review.ReviewError) as error:
+                self.review.run(['provider'])
+        for secret in ('ghs_first', 'ghp_second', 'github_pat_third', 'ordinary-value', 'other-value', 'private-material'):
+            self.assertNotIn(secret, str(error.exception))
+
+    def run_chat_engine(self, *, oversized=None, finish_reason='stop', content='Conclusion: PASS'):
+        engine = load_script('submimo-review')
+        with tempfile.TemporaryDirectory() as temporary:
+            d = Path(temporary)
+            repo = d / 'repo'
+            repo.mkdir()
+            for args in (('init', '-q'), ('config', 'user.name', 'Test'),
+                         ('config', 'user.email', 'test@example.invalid')):
+                subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+            (repo / 'file').write_text('base\n')
+            subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'base'],
+                           check=True, capture_output=True)
+            task = d / 'task.md'
+            task.write_text('Review this change.\n' + ('task\n' * 30000 if oversized == 'task' else ''))
+            (repo / 'file').write_text('base\n' + ('diff\n' * 100000 if oversized == 'diff' else 'change\n'))
+            facts, log = d / 'facts.json', d / 'review.log'
+            response = json.dumps({'choices': [{'message': {'content': content}, 'finish_reason': finish_reason}]})
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.dict(os.environ, {'AIWORK_REVIEW_FACTS_PATH': str(facts), 'PANEL_DIFF_BASE': '',
+                    'MIMO_API_KEY': 'fake-key', 'MIMO_BASE_URL': 'http://127.0.0.1',
+                    'AIWORK_MODEL_LEG': 'cursor', 'MIMO_MODEL': 'gpt-5.6'}), \
+                    patch('sys.argv', ['submimo-review', str(task), str(log), '--repo', str(repo), '--git-diff']), \
+                    patch.object(engine.urllib.request, 'urlopen', return_value=io.BytesIO(response.encode())), \
+                    redirect_stdout(stdout), redirect_stderr(stderr):
+                try:
+                    engine.main()
+                    rc = 0
+                except SystemExit as exc:
+                    rc = exc.code
+            return rc, json.loads(facts.read_text()), log.read_text() if log.exists() else '', stderr.getvalue()
+
+    def test_oversized_diff_and_task_publish_partial_completeness(self):
+        for oversized in ('diff', 'task'):
+            with self.subTest(oversized=oversized):
+                rc, facts, _, stderr = self.run_chat_engine(oversized=oversized)
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(facts['view']['delivery_state'], 'partial')
+                rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', dry_run=False,
+                                                        view_state=facts['view']['delivery_state'])
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(calls['posted_block']['completeness'], 'partial')
+
+    def test_untruncated_chat_delivery_stays_complete(self):
+        rc, facts, _, stderr = self.run_chat_engine()
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(facts['view']['delivery_state'], 'complete')
+
+    def test_length_finish_reason_reports_output_truncation_and_keeps_raw_text(self):
+        for content in ('missing verdict', 'Conclusion: PASS'):
+            with self.subTest(content=content):
+                rc, _, log, stderr = self.run_chat_engine(finish_reason='length', content=content)
+                self.assertNotEqual(rc, 0)
+                self.assertIn('模型输出被截断', stderr)
+                self.assertNotIn('no standalone', stderr)
+                self.assertIn(content, log)
+
+    def test_readme_documents_review_pr_network_credentials_and_sandbox(self):
+        readme = (ROOT / 'README.md').read_text()
+        self.assertIn('bin/review-pr', readme)
+        self.assertIn('需要联网、需要读取本机模型凭证', readme)
+        self.assertIn('必须在沙箱外运行', readme)
 
     def test_task_rules_are_aiwork_main_verbatim_with_commit(self):
         rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", project_rules=True)

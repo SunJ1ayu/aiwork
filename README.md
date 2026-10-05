@@ -106,6 +106,11 @@ Things that are not aiwork live with their own owners:
   remains partial evidence and never counts as completed review coverage.
 - `bin/submimo-iso` — concurrency-safe submimo for two simultaneous
   driver agents (e.g. Claude + Codex).
+- `bin/review-pr PR --repo owner/name --leg LEG` — review a PR head and publish
+  an aiwork-review COMMENT review. 需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。
+  Failed runs print the redacted last 40 stderr lines and retain their complete
+  temporary directory under `logs/review-pr-failures/<run-id>/`; successful runs
+  discard it. Truncated chat context is published with `completeness=partial`.
 
 All executors: `<tool> review TASK LOG REPO`. Output is evidence for the main
 agent to verify, never a verdict to adopt.
