@@ -59,9 +59,11 @@ def choose_leg(name: str) -> tuple[str, str | None]:
 
 def redact(text: str) -> str:
     text = re.sub(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", "[redacted]", text, flags=re.S)
-    text = re.sub(r'''(?i)(?<![\w-])(token|password|api[_-]?key|secret)(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)''',
+    value = r'''(?:"[^"]*"|'[^']*'|[^\s,;]+)'''
+    text = re.sub(r'''(?i)(?<![\w-])((?:[a-z_][a-z0-9_]*)?(?:token|key|secret|password)|api-key)(["']?\s*[:=]\s*)''' + value,
                   r"\1\2[redacted]", text)
-    return re.sub(r"\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+", "[redacted]", text)
+    text = re.sub(r"(?i)(\bBearer\s+)" + value, r"\1[redacted]", text)
+    return re.sub(r"\b(?:(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,})", "[redacted]", text)
 
 
 def report_failure(directory: Path, run_id: str) -> None:
