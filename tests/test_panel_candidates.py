@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 import unittest
 
+from _test_settings import write_settings, set_model
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'bin'))
 from _review_result import coverage_eligible, summarize_results
@@ -51,6 +53,7 @@ class CandidateTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.d = Path(self.temp.name)
+        self.config = write_settings(self.d / 'settings')
         self.bin = self.d / 'bin'
         shutil.copytree(ROOT / 'bin', self.bin, ignore=shutil.ignore_patterns('__pycache__'))
         # Every callable adapter is replaced before any controller runs.
@@ -72,7 +75,7 @@ class CandidateTest(unittest.TestCase):
         self.task = self.d / 'task.md'; self.task.write_text('Inspect app.\n')
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(('PANEL_', 'CURSOR_', 'AIWORK_REVIEW_', 'REVIEW_', 'MIMO_'))}
-        self.env.update(PATH=str(self.fake) + os.pathsep + os.environ['PATH'],
+        self.env.update(AIWORK_CONFIG_DIR=str(self.config), PATH=str(self.fake) + os.pathsep + os.environ['PATH'],
                         PANEL_STATE_DIR=str(self.d / 'state'), PANEL_STAGGER_MAX='0',
                         MIMO_CLI_MODEL='xiaomi/mimo-v2.5-pro')
         self.n = 0
@@ -222,7 +225,7 @@ class CandidateTest(unittest.TestCase):
         r, p = self.run_panel('subcursor@cursor-grok-4.6-high,subcursor@composer-2.5')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         before = Path(str(p) + '.roster').read_text().splitlines()[1:]
-        (self.bin / 'cursor-model').write_text('gpt-5.6\n')
+        set_model(self.config, 'cursor', ('gpt-5.6\n').strip())
         out = subprocess.check_output([str(self.bin / 'panel-roster'), str(p)], env=self.env, text=True)
         self.assertEqual(before, out.splitlines()[1:])
         data = self.results(p)

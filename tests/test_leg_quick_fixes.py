@@ -53,6 +53,7 @@ class LegCase(unittest.TestCase):
         for helper in BIN.glob("_*"):
             if helper.is_file():
                 shutil.copy2(helper, self.bin / helper.name)
+        shutil.copy2(BIN / "aiwork-config", self.bin / "aiwork-config")
         self.repo = self.d / "repo"
         self.repo.mkdir()
         for args in (("init", "-q"), ("config", "user.email", "t@t"), ("config", "user.name", "t")):
@@ -95,7 +96,7 @@ class VerdictContract(LegCase):
     """A1: every agent review leg states the verdict contract where the model reads it last."""
 
     def test_opencode_leg_restates_contract_after_task_body(self):
-        self.copy("subglm-agent", "subdeepseek-agent", "deepseek-model", "glm-model", "subagent", "ro-repo-exec")
+        self.copy("subglm-agent", "subdeepseek-agent", "subagent", "ro-repo-exec")
         self.fake("opencode", ARGV_CAPTURE)
         cap = self.d / "oc.json"
         proc = self.run_cmd(["bash", str(self.bin / "subglm-agent"), "review", str(self.task),
@@ -108,7 +109,7 @@ class VerdictContract(LegCase):
                            "the last statement of the verdict contract must come after the task body")
 
     def test_mimo_leg_message_states_contract(self):
-        self.copy("submimo", "mimo-model", "ro-repo-exec")
+        self.copy("submimo", "ro-repo-exec")
         self.fake("mimo", ARGV_CAPTURE)
         cap = self.d / "mimo.json"
         proc = self.run_cmd(["bash", str(self.bin / "submimo"), "review", str(self.task),
@@ -166,7 +167,7 @@ class FailureKind(LegCase):
         self.assertEqual(self.emit("Error: 401 unauthorized - invalid api key\n"), "auth")
 
     def test_subkimi_surfaces_the_cli_error_line_in_its_diagnostic(self):
-        self.copy("subkimi", "kimi-model", "ro-repo-exec")
+        self.copy("subkimi", "ro-repo-exec")
         home = self.d / "review-home"
         (home / "hooks").mkdir(parents=True)
         (home / "credentials").mkdir()
@@ -182,7 +183,7 @@ class FailureKind(LegCase):
     def test_subkimi_copies_only_cli_error_lines(self):
         # Review round one, Kimi F5: copying the whole log would bring model prose back into the
         # diagnostic, reviving the F1 path through the front door.
-        self.copy("subkimi", "kimi-model", "ro-repo-exec")
+        self.copy("subkimi", "ro-repo-exec")
         home = self.d / "review-home"
         (home / "hooks").mkdir(parents=True)
         (home / "credentials").mkdir()
@@ -277,7 +278,7 @@ class OpencodeDeny(LegCase):
     """A4: a denied tool call must not end the GLM round."""
 
     def test_rendered_config_continues_loop_on_deny(self):
-        self.copy("subglm-agent", "subdeepseek-agent", "deepseek-model", "glm-model", "subagent", "ro-repo-exec")
+        self.copy("subglm-agent", "subdeepseek-agent", "subagent", "ro-repo-exec")
         self.fake("opencode", ARGV_CAPTURE)
         home = self.d / "ochome"
         proc = self.run_cmd(["bash", str(self.bin / "subglm-agent"), "review", str(self.task),
@@ -332,7 +333,7 @@ class ChatSessionHeader(LegCase):
         self.assertEqual(sessions[0], sessions[1])
 
     def test_control_deepseek_chat_leg_sends_no_opencode_header(self):
-        self.copy("subdeepseek", "subchat", "submimo-review", "deepseek-model")
+        self.copy("subdeepseek", "subchat", "submimo-review")
         port, seen = self.serve()
         proc = self.run_cmd(["bash", str(self.bin / "subdeepseek"), "review", str(self.task),
                              str(self.d / "c.log"), str(self.repo)],

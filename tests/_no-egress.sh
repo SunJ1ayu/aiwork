@@ -70,3 +70,10 @@ unset AIWORK_NO_EGRESS_TRIED
 if __noeg_egress_open; then
   __noeg_die "已经进了命名空间,却**仍然连得出去** ⇒ 拒跑(这道闸没生效,别当它生效了)"
 fi
+
+# Test model defaults are disposable fixtures, never the owner's machine settings.
+_test_settings_py="$(dirname "${BASH_SOURCE[0]}")/_test_settings.py"
+if [[ -z "${AIWORK_CONFIG_DIR:-}" ]]; then
+  exec python3 "$_test_settings_py" "${BASH:-bash}" "$0" "$@"
+fi
+test_model_set() { python3 "$_test_settings_py" set-model "$@"; }

@@ -6,7 +6,6 @@
     "   triage 只在**我做决定之前**给一个读数,永远不 BLOCK,退出码永远 0。",
     "每条问题为什么在这:都对着一次真栽过的病,理由写在 why 里。理由失效即候删。"
   ],
-  "model": "jev-latest",
   "questions": {
     "unverified_premise": {
       "type": "noul",

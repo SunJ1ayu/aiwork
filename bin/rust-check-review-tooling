@@ -13,6 +13,7 @@
 set -uo pipefail
 
 SUITES=(
+  "local-settings|python3|/root/aiwork/tests/test_local_settings.py"
   "review-pr|python3|/root/aiwork/tests/test_review_pr.py"
   "app-token-scope|python3|/root/aiwork/tests/test_app_token_scope.py"
   "panel-candidates|python3|/root/aiwork/tests/test_panel_candidates.py"

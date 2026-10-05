@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 from _review_result import TOKEN_RE, cursor_model_family, leg_identity
+from _aiwork_config import model as configured_model
 
 BIN = Path(__file__).resolve().parent
 # Config stem, override variable, modes, repository-reading modes, invocation prefix.
@@ -45,7 +46,7 @@ def describe(row, mode, cursor_model=None):
     if name not in CAPABILITIES:
         raise ValueError(f'no capability description for {name}')
     stem, variable, modes, read_modes, prefix = CAPABILITIES[name]
-    raw_model = cursor_model or os.environ.get(variable) or (BIN / (stem + '-model')).read_text().strip()
+    raw_model = configured_model(stem, cursor_model or os.environ.get(variable))
     model = prefix + raw_model
     identity = leg_identity(adapter, model)
     if name == 'subcursor':

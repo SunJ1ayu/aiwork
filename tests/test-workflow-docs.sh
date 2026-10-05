@@ -86,14 +86,14 @@ done
 # 「文档说的默认档 == 代码里的默认档」,**唯独 gemini 没钉** ⇒ 3.7→3.8 那天
 # `workflow/skills/panel/references/legs.md` 还写着 3.7、还引着 3.7 的选型实测,
 # 而 W3 照样 36/36 全绿。文档是代码的第二份拷贝,没有闸盯着它就一定会过期。
-_gem_model="$(cat "$ROOT/bin/gemini-model")"
-grep -q "默认模型 \`$_gem_model\`" "$SOURCE/skills/panel/references/legs.md"
-check "W3: gemini 腿的默认档,文档($_gem_model)与 bin/subgemini 一致" $?
+grep -q 'model gemini' "$ROOT/bin/subgemini" \
+  && grep -q 'models.env.*gemini' "$SOURCE/skills/panel/references/legs.md"
+check "W3: Gemini 默认模型只指向本机设置，文档不复制版本号" $?
 
-grep -qx 'glm-5.3-flash' "$ROOT/bin/glm-model" \
+grep -q 'model glm' "$ROOT/bin/subagent" \
   && ! grep -q 'OC_MODEL_ID=' "$ROOT/bin/subagent" \
-  && grep -q '默认模型 `glm-5.3-flash`' "$SOURCE/skills/panel/references/legs.md"
-check "W3: GLM 默认是 5.3 Flash，agent 没有第二模型源" $?
+  && grep -q 'models.env.*glm' "$SOURCE/skills/panel/references/legs.md"
+check "W3: GLM 默认模型来自本机设置，agent 没有第二模型源" $?
 grep -q 'AGENT_BASE="opencode"' "$ROOT/bin/subagent" \
   && grep -q 'OC_BASE_URL="https://opencode.ai/zen/go/v1"' "$ROOT/bin/subagent" \
   && grep -q 'GLM_LEG="${PANEL_GLM_LEG:-agent}"' "$ROOT/bin/panel-explore" \
@@ -121,11 +121,10 @@ check "W3: DeepSeek 唯一源与实现都是 200 turns" $?
 grep -q 'KIMI_TIMEOUT:-1500' "$ROOT/bin/subkimi" \
   && grep -q 'KIMI_TIMEOUT.*默认 1500' "$SOURCE/skills/panel/references/legs.md"
 check "W3: Kimi 唯一源与实现都是 1500s" $?
-_mimo_model="$(cat "$ROOT/bin/mimo-model" 2>/dev/null || true)"
-[[ -n "$_mimo_model" ]] && grep -q '/mimo-model' "$ROOT/bin/submimo" \
+grep -q 'aiwork-config.*model mimo' "$ROOT/bin/submimo" \
   && ! grep -q 'DEFAULT_MODEL="xiaomi/' "$ROOT/bin/submimo" \
-  && grep -qF "$_mimo_model" "$SOURCE/skills/panel/references/legs.md"
-check "W3: MiMo 模型唯一源 bin/mimo-model 被实现读取、文档写的是同一个" $?
+  && grep -q 'models.env.*mimo' "$SOURCE/skills/panel/references/legs.md"
+check "W3: MiMo 默认模型来自本机设置，文档不复制版本号" $?
 
 echo "[W4] 唯一源与同步器本身属于 judging surface"
 . "$ROOT/bin/_tooling-paths.sh"

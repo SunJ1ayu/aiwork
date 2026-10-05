@@ -88,7 +88,7 @@ make_fixture() { # root
   local d="$1" b="$1/bin" repo="$1/repo"
   mkdir -p "$b" "$repo/tracks/current" "$repo/tests" "$d/raw" "$d/state"
   cp "$ROOT/bin/panel-review" "$ROOT/bin/_panel-roster-lib.sh" \
-     "$ROOT/bin/_review_result.py" "$ROOT/bin/cursor-model" "$ROOT/bin/track-record" "$b/"
+     "$ROOT/bin/_review_result.py" "$ROOT/bin/aiwork-config" "$ROOT/bin/_aiwork_config.py" "$ROOT/bin/track-record" "$b/"
   make_healthy_stubs "$b"
   printf '# PANEL_PROMPT_SENTINEL\n' > "$d/task.md"
   cat > "$repo/tracks/current/decision.json" <<'EOF'

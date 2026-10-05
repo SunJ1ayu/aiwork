@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Safety checks for the GitHub PR review publisher."""
 
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _no_egress  # noqa: E402,F401
+
 import base64
 import importlib.machinery
 import importlib.util
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -63,7 +67,7 @@ class ReviewPrTests(unittest.TestCase):
                 self.review.choose_leg("subcursor")
 
     def test_cursor_model_defaults_to_the_config_file(self):
-        configured = (ROOT / "bin/cursor-model").read_text(encoding="utf-8").rstrip("\n")
+        configured = self.review.configured_model("cursor")
         with patch.dict("os.environ", {"CURSOR_MODEL": ""}):
             self.assertEqual(self.review.choose_leg("subcursor")[1], configured)
 

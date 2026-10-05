@@ -22,7 +22,7 @@ set -euo pipefail
 #   ③ 不给 workspace 时它读写自己的 ~/.gemini/antigravity-cli/scratch/,
 #      **不碰 cwd** ⇒ 必须显式 --add-dir,否则腿等于没看见被评审的仓。
 
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
 _GATE="$BIN_DIR/_my-review-gate.sh"
@@ -39,7 +39,7 @@ _RHG="$BIN_DIR/_review-home-guard.sh"
 . "$_RHG"
 
 REVIEW_HOME="${AGY_REVIEW_HOME:-$HOME/.cache/aiwork/agy-review-home}"
-DEFAULT_MODEL="$(cat "$(dirname "$0")/gemini-model")" || exit 1
+DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model gemini "${AGY_MODEL:-}")" || exit 1
 OWNER_TOKEN="${AGY_OWNER_TOKEN:-$HOME/.gemini/antigravity-cli/antigravity-oauth-token}"
 TIMEOUT_SECONDS="${AGY_TIMEOUT:-1500}"
 
@@ -54,7 +54,7 @@ on the owner's Gemini membership. The reviewer reads a disposable writable clone
 the source repo stays read-only.
 
 Environment:
-  AGY_MODEL         optional, default gemini-3.8-flash-high.
+  AGY_MODEL         optional, default from ~/.config/aiwork/models.env.
                     MUST match ^gemini- : agy also serves claude-* / gpt-oss-*,
                     and a Claude-backed "Gemini leg" silently guts panel's
                     distinct-model-family coverage check.
@@ -87,14 +87,8 @@ my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subgemini" || exit 1
 # 它跑成 Claude 就等于:归档闸数到"两个不同家族"、实际上两条腿都是 Claude。
 # 闸查的是腿名,查不出模型 —— 所以只能在这里挡。
 MODEL="${AGY_MODEL:-$DEFAULT_MODEL}"
-case "$MODEL" in
-  gemini-*) ;;
-  *) die "AGY_MODEL='$MODEL' 不是 gemini-* ⇒ 拒跑。
-  这条腿在 panel 花名册里代表 Google 模型家族;跑成 claude-*/gpt-* 会让
-  归档闸的「覆盖 N 个不同模型家族」变成一句假话(那道闸查腿名,查不出模型)。
-  要换档请在 gemini-* 里选;当前可用档位跑 `agy models` 查(这里不写具体版本号 ——
-  版本号是别处事实的拷贝,写在这儿一定会过期,本单治的就是这个病)。" ;;
-esac
+"$BIN_DIR/aiwork-config" family subgemini "$MODEL" >/dev/null || die "AGY_MODEL='$MODEL' 不是 gemini-* ⇒ 拒跑。
+  这条腿在 panel 花名册里代表 Google 模型家族;跑成 claude-*/gpt-* 会破坏家族覆盖。"
 
 review_home_guard subgemini "$REVIEW_HOME" "$SOURCE_REPO" AGY_REVIEW_HOME || exit 1
 

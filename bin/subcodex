@@ -9,7 +9,7 @@ set -uo pipefail
 #
 # 与 delegate-codex 的区别:那边是**写代码**的执行腿(隔离 worktree、可写);这边是**评审**:
 #   · 源仓经 ro-repo-exec 物理只读;codex 在一份可丢弃副本里读、跑测试;
-#   · 模型单源 bin/codex-model(换模型只改那一行;SUBCODEX_MODEL 单次覆盖);
+#   · 模型单源 ~/.config/aiwork/models.env(SUBCODEX_MODEL 单次覆盖);
 #   · -c project_doc_max_bytes=0 每次都带(否则它会吞被评审仓里的 AGENTS.md 并向上递归找);
 #   · --ignore-user-config:不加载业主 ~/.codex/config.toml 里的插件/MCP/profile;
 #   · --ephemeral:评审会话不落进业主的会话历史;
@@ -17,11 +17,11 @@ set -uo pipefail
 #     **第一版的 `--disable multi_agent` 被真跑证伪过**;
 #   · 任务书走 stdin(argv 单参数上限 128KiB,delegate-codex 为此踩过 E2BIG)。
 
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 die() { echo "subcodex: $*" >&2; exit 1; }
 usage() {
   cat >&2 <<'EOF'
-Usage: subcodex <review|explore> TASK_FILE LOG_FILE [REPO_DIR]
+Usage: subcodex [--dry-run] <review|explore> TASK_FILE LOG_FILE [REPO_DIR]
 
 GPT review leg on the codex CLI. codex reads and tests a disposable snapshot;
 the source repo stays physically read-only. review requires a standalone
@@ -29,7 +29,7 @@ the source repo stays physically read-only. review requires a standalone
 No fix mode (use delegate-codex for implementation work).
 
 Environment:
-  SUBCODEX_MODEL    exact gpt-<model-id> (default: bin/codex-model)
+  SUBCODEX_MODEL    exact gpt-<model-id> (default: ~/.config/aiwork/models.env)
   SUBCODEX_EFFORT   model_reasoning_effort (default: high)
   SUBCODEX_TIMEOUT  wall-clock seconds (default: 1500)
   CODEX_BIN         codex executable (default: codex on PATH)
@@ -41,6 +41,12 @@ EOF
 
 . "$BIN_DIR/_my-review-gate.sh" || die 'missing _my-review-gate.sh (fail closed)'
 gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
+DRY_RUN=0
+ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" == --dry-run ]]; then DRY_RUN=1; else ARGS+=("$arg"); fi
+done
+set -- "${ARGS[@]}"
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
 [[ $# -ge 3 && $# -le 4 ]] || { usage; exit 2; }
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
@@ -52,13 +58,12 @@ SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" || 
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 my_review_gate "$MODE" "$TASK_FILE" "$SOURCE_REPO" subcodex || exit 1
 
-if [[ -n "${SUBCODEX_MODEL:-}" ]]; then
-  MODEL="$SUBCODEX_MODEL"
-  [[ "$MODEL" =~ ^gpt-[A-Za-z0-9._-]+$ ]] || die "SUBCODEX_MODEL must be one exact gpt-<model-id>, got '$MODEL'"
-else
-  MODEL="$(tr -d '[:space:]' < "$BIN_DIR/codex-model" 2>/dev/null)" || die 'cannot read bin/codex-model'
-  [[ "$MODEL" =~ ^gpt-[A-Za-z0-9._-]+$ ]] \
-    || die "bin/codex-model must hold exactly one gpt-<model-id>, got '$MODEL'"
+MODEL="$("$BIN_DIR/aiwork-config" model codex "${SUBCODEX_MODEL:-}")" || exit 1
+"$BIN_DIR/aiwork-config" family subcodex "$MODEL" >/dev/null \
+  || die "SUBCODEX_MODEL must be one exact gpt-<model-id>, got '$MODEL'"
+if [[ "$DRY_RUN" == 1 ]]; then
+  printf 'subcodex: model=%s settings=%s (dry-run; no dispatch)\n' "$MODEL" "$("$BIN_DIR/aiwork-config" path models.env)"
+  exit 0
 fi
 EFFORT="${SUBCODEX_EFFORT:-high}"
 [[ "$EFFORT" =~ ^[a-z]+$ ]] || die "SUBCODEX_EFFORT must be a lowercase word, got '$EFFORT'"

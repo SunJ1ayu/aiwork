@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Read machine settings from AIWORK_CONFIG_DIR or ~/.config/aiwork."""
+import argparse
+import sys
+
+from _aiwork_config import ConfigError, app_key, apps_dir, model, model_family, setting_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    models = commands.add_parser('model')
+    models.add_argument('leg')
+    models.add_argument('override', nargs='?')
+    paths = commands.add_parser('path')
+    paths.add_argument('name', choices=('models.env', 'typesafe.env', 'apps'))
+    keys = commands.add_parser('app-key')
+    keys.add_argument('configured')
+    families = commands.add_parser('family')
+    families.add_argument('adapter')
+    families.add_argument('model')
+    args = parser.parse_args()
+    try:
+        if args.command == 'model':
+            value = model(args.leg, args.override)
+        elif args.command == 'app-key':
+            value = app_key(args.configured)
+        elif args.command == 'family':
+            value = model_family(args.adapter, args.model)
+        else:
+            value = apps_dir() if args.name == 'apps' else setting_path(args.name)
+    except ConfigError as exc:
+        print(f'aiwork-config: {exc}', file=sys.stderr)
+        return 2
+    print(value)
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

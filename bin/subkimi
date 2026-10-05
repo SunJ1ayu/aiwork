@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+
 # subkimi - Kimi (Moonshot) review employee on an AGENT base: kimi-code CLI
 # run headless (`kimi -p`). Like subglm-agent/subdeepseek-agent, the model
 # explores the repo itself (Read/Glob/Grep + Bash), so no blind reviews and no
@@ -24,7 +26,7 @@ set -euo pipefail
 
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
-_GATE="$(dirname "$0")/_my-review-gate.sh"
+_GATE="$BIN_DIR/_my-review-gate.sh"
 [ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
 [ -f "$_GATE" ] || { echo "subkimi: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_GATE"
@@ -33,7 +35,7 @@ gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
 # 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
-_RHG="$(dirname "$0")/_review-home-guard.sh"
+_RHG="$BIN_DIR/_review-home-guard.sh"
 [ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh   # 脚本被拷到别处跑时的家
 [ -f "$_RHG" ] || { echo "subkimi: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_RHG"
@@ -55,7 +57,7 @@ The reviewer reads and tests a disposable clone; the source repo remains
 read-only and direct write tools stay blocked in an isolated KIMI_CODE_HOME.
 
 Environment:
-  KIMI_MODEL        optional, kimi-code/<model-id> (default from bin/kimi-model)
+  KIMI_MODEL        optional, kimi-code/<model-id> (default from ~/.config/aiwork/models.env)
                     (the seed config declares 1M context + effort=max for ANY model;
                     check the server's /models before switching)
   KIMI_TIMEOUT      optional, seconds before timeout (default 1500; 07-27 取证:
@@ -76,7 +78,6 @@ if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
 
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [[ "$MODE" == "review" ]]; then
   _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
@@ -102,8 +103,8 @@ my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subkimi" || exit 1
 if [[ -n "${REVIEW_PRINT_HOME:-}" ]]; then printf '%s\n' "$REVIEW_HOME"; exit 0; fi
 
 # 模型选择只有一个源；CLI alias 与 API model ID 均从它派生。
-MODEL="${KIMI_MODEL:-$(cat "$BIN_DIR/kimi-model")}" || die 'cannot read bin/kimi-model'
-[[ "$MODEL" =~ ^kimi-code/[A-Za-z0-9._-]+$ ]] || die 'model must be one kimi-code/<model-id>'
+MODEL="$("$BIN_DIR/aiwork-config" model kimi "${KIMI_MODEL:-}")" || exit 1
+"$BIN_DIR/aiwork-config" family subkimi "$MODEL" >/dev/null || die 'model must be one kimi-code/<model-id>'
 
 # ── 运行期 home:种子同步 + 位置检查(track repo-write-audit,2026-08-19 第二轮)──
 # 仓内的 `kimi-review-home/` 继续留在版本控制里当**种子**:config.toml 和

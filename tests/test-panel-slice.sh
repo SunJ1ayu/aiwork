@@ -113,7 +113,7 @@ chmod +x "$STUB"
 make_fixture() {  # make_fixture <root>
   local d="$1" b="$1/bin" spec name family agent chat switch f
   mkdir -p "$b" "$d/repo/tracks/current" "$d/state" "$d/tasks" "$d/modes" "$d/runs"
-  for f in panel-slice _panel_slice.py panel-review _panel-roster-lib.sh cursor-model _review_result.py track-record; do
+  for f in panel-slice _panel_slice.py panel-review _panel-roster-lib.sh aiwork-config _aiwork_config.py _review_result.py track-record; do
     [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$b/"
   done
   # 桩名单从两张表长出来(底座腿 + 聊天腿两种二进制都铺)。

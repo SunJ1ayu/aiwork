@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+
 # subagent - 底座腿的**唯一躯干**:把 Claude Code headless(`claude -p`)指向某个
 # Anthropic 兼容端点,让模型自己读仓库并在 review 的可写副本里跑本地检查。
 # 今天服务 deepseek 与 zhipu 两条腿,经 `subdeepseek-agent` / `subglm-agent` 两个瘦
@@ -24,7 +26,7 @@ set -uo pipefail
 
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
-_GATE="$(dirname "$0")/_my-review-gate.sh"
+_GATE="$BIN_DIR/_my-review-gate.sh"
 [ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
 [ -f "$_GATE" ] || { echo "subagent: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_GATE"
@@ -33,16 +35,15 @@ gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
 # 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
-_RHG="$(dirname "$0")/_review-home-guard.sh"
+_RHG="$BIN_DIR/_review-home-guard.sh"
 [ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh   # 脚本被拷到别处跑时的家
 [ -f "$_RHG" ] || { echo "subagent: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_RHG"
 
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
   local default_model
-  default_model="$(cat "$(dirname "$0")/deepseek-model")" || exit 1
+  default_model="$("$BIN_DIR/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
   printf 'DeepSeek default model: %s\n\n' "$default_model" >&2
   cat >&2 <<'EOF'
 Usage:
@@ -50,8 +51,8 @@ Usage:
   subagent <provider> explore TASK_FILE LOG_FILE [REPO_DIR]
 
 Providers (thin shims in parentheses; callers normally use the shim):
-  deepseek  (subdeepseek-agent)  model from bin/deepseek-model, env DEEPSEEK_*
-  zhipu     (subglm-agent)       default glm-5.3-flash,     env ZHIPU_*
+  deepseek  (subdeepseek-agent)  model from ~/.config/aiwork/models.env, env DEEPSEEK_*
+  zhipu     (subglm-agent)       model from ~/.config/aiwork/models.env,     env ZHIPU_*
 
 Environment (PREFIX = DEEPSEEK | ZHIPU):
   <PREFIX>_MODEL          model id
@@ -94,8 +95,7 @@ case "$PROVIDER" in
   deepseek)
     PREFIX="DEEPSEEK"; LABEL="subdeepseek-agent"
     BILLING_MODE="api"
-    DEFAULT_MODEL="$(cat "$BIN_DIR/deepseek-model")" || die "cannot read deepseek-model"
-    [[ -n "$DEFAULT_MODEL" ]] || die "empty deepseek-model"
+    DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
     DEFAULT_BASE_URL="https://api.deepseek.com/anthropic"
     DEFAULT_AUTH_FILE="$HOME/.config/deepseek/auth.json"
     # 轮次预算**凭测量**:08-03 实测「只看一个文件」的琐碎评审就用掉 56 轮
@@ -124,7 +124,7 @@ case "$PROVIDER" in
     # 模型只解析一次:下面的公共查表把 DEFAULT_MODEL / ZHIPU_MODEL 收敛成 MODEL，
     # opencode 与将来可能切回的 claude 底座都只消费 MODEL。不要再给 opencode 另立
     # 一份模型字段——那会让环境变量看似支持、实际主路径继续跑硬编码旧模型。
-    DEFAULT_MODEL="$(cat "$BIN_DIR/glm-model")" || die "cannot read glm-model"
+    DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model glm "${ZHIPU_MODEL:-}")" || exit 1
     # **不带尾部 /v1**:claude CLI 自己会补 `/v1/messages`。写成 .../go/v1 会发到
     # /zen/go/v1/v1/messages(实测 404),而 CLI 把 404 报成"模型不存在",
     # 于是看起来像模型名错了 —— 实际是地址多了一层。

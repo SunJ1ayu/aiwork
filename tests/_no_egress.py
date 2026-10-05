@@ -77,3 +77,6 @@ def _enforce():
 
 
 _enforce()
+
+from _test_settings import ensure_settings
+ensure_settings()
