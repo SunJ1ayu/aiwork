@@ -11,7 +11,7 @@ the main agent (sole arbiter) follows **with judgment**. Artifact depth is not a
 rigid state machine, but `track-guard`, commit trailers, evidence checks and safe
 archive behavior are mechanical gates, not optional prose. Small/obvious work
 may skip creating a track entirely; once a track exists, its guards tell the
-truth about that track. Full convention: `/root/aiwork/track/CONVENTION.md`.
+truth about that track. Full convention: `aiwork/track/CONVENTION.md`.
 
 CLI helper (assume `/root/aiwork/bin` is on PATH, else call by full path):
 

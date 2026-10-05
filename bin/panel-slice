@@ -14,8 +14,8 @@ set -uo pipefail
 #
 # 所有「为什么这么判」都在 bin/_panel_slice.py;本文件不解释 verdict、不算覆盖。
 
-BIN="$(cd "$(dirname "$0")" && pwd)"
-TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
+BIN="$(dirname "$(realpath "$0")")"
+DATA_ROOT="$("$BIN/aiwork-config" data-path)" || exit 2
 HELPER="$BIN/_panel_slice.py"
 
 . "$BIN/_panel-roster-lib.sh" || {
@@ -71,7 +71,7 @@ and exit 3 before any leg starts.
 
 Env: PANEL_STATE_DIR / PANEL_HEALTH_OVERRIDE / PANEL_<LEG>_LEG as in panel-review;
      PANEL_STAGGER_MAX (default 2) between launches; PANEL_SLICE_ASSIGN_START fixes the
-     rotation offset; PANEL_SLICE_RUN_ROOT (default <tool-root>/logs) for default RUN_DIR.
+     rotation offset; PANEL_SLICE_RUN_ROOT (default <data-dir>/logs) for default RUN_DIR.
 EOF
 }
 
@@ -187,12 +187,12 @@ cmd_run() {
     || refuse repo "not a Git worktree: ${pos[1]:-$PWD}"
   REPO="$(realpath "$REPO")"
   stem="$(basename "${manifest%.*}")"
-  RUN_DIR="${pos[2]:-${PANEL_SLICE_RUN_ROOT:-$TOOL_ROOT/logs}/slice-$stem-$(date +%Y%m%d-%H%M%S)}"
+  RUN_DIR="${pos[2]:-${PANEL_SLICE_RUN_ROOT:-$DATA_ROOT/logs}/slice-$stem-$(date +%Y%m%d-%H%M%S)}"
   RUN_DIR="$(realpath -m "$RUN_DIR")"
   if [[ "$no_my_review" -eq 1 ]]; then
     my_review=""; MR_ARGS=(--no-my-review)
   else
-    [[ -n "$my_review" ]] || my_review="$TOOL_ROOT/tasks/$stem-my-review.md"
+    [[ -n "$my_review" ]] || my_review="$DATA_ROOT/tasks/$stem-my-review.md"
     MR_ARGS=(--require-my-review "$my_review")
   fi
   python3 "$HELPER" check --run-dir "$RUN_DIR" --manifest "$manifest" --repo "$REPO" --my-review "$my_review" || exit 3

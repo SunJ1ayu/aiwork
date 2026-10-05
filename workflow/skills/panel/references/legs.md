@@ -3,20 +3,20 @@
 平时不用读。改模型 / 换 key / 某条腿死了排查时再看。
 
 **所有腿共同的安全姿态**:输出只是**证据**,不是决定;绝不让它自己拍板;
-task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
+task 存 `~/.local/share/aiwork/tasks/`,log 存 `~/.local/share/aiwork/logs/`。
 **`fix` 只由 `submimo fix` 承担**——其余各腿的 `fix` 都是**故意不支持**的,评审员保持只读。
 
 ---
 
 ## submimo (MiMo) — 第一条腿,且是唯一的 fix 腿
 
-`/root/aiwork/bin/submimo`,默认模型看本机 `~/.config/aiwork/models.env` 的 `mimo` 行;换模型只改这一行,`MIMO_CLI_MODEL` 单次覆盖。
+`aiwork/bin/submimo`,默认模型看本机 `~/.config/aiwork/models.env` 的 `mimo` 行;换模型只改这一行,`MIMO_CLI_MODEL` 单次覆盖。
 MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not found`),submimo 运行时把 `xiaomi/` 模型登记给 CLI(只含 provider 段,不碰评审锁)。
 `submimo review TASK LOG REPO` 用于评审;`submimo fix` 的规矩见 **`delegate` skill**。
 
 ## subdeepseek (DeepSeek) — 第二条腿
 
-`/root/aiwork/bin/subdeepseek`,DeepSeek 官方 API,两条腿共用一把 key
+`aiwork/bin/subdeepseek`,DeepSeek 官方 API,两条腿共用一把 key
 (`~/.config/deepseek/auth.json`)。**只读评审**。
 旧名(`subsense`、`PANEL_SENSE_LEG`、provider `sensenova`)**已彻底删除,没有别名**。
 
@@ -42,7 +42,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 当前池里只有 DeepSeek 还借 Claude Code 当壳,其余 agent 腿都跑各自的原生底座
 (它的 Anthropic 面做工具格式转换,借壳对它是通的)。
 
-`/root/aiwork/bin/subglm-agent`(底座腿,默认)/ `bin/subglm`(聊天腿),**只读评审**。
+`aiwork/bin/subglm-agent`(底座腿,默认)/ `bin/subglm`(聊天腿),**只读评审**。
 
 - **后端 = OpenCode Go**(2026-08-18 从智谱开放平台 bigmodel 换过来,业主的 $10/月订阅),
   **默认模型看本机 `~/.config/aiwork/models.env` 的 `glm` 行**。换的理由是 bigmodel 那把 key 欠费(1113),这条腿 08-04 起
@@ -94,7 +94,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
      直接跑正常、经 runlog(走 tee 管道)就挂死 12 分钟,而日志头已写好、像在跑;
   ③ **默认 provider 是按量付费网关**(`Insufficient balance`),订阅要自定义 provider
      指到 `/zen/go/v1`;首次在全新的隔离 home 里跑会下 ~156M 运行时,会明显慢一次。
-- 隔离:`OPENCODE_REVIEW_HOME`(默认 `~/.cache/aiwork/opencode-review-home`)——
+- 隔离:`OPENCODE_REVIEW_HOME`(默认 `~/.local/share/aiwork/opencode-review-home`)——
   换 HOME 即整体重定向配置/数据/状态,和 subkimi 的 `KIMI_CODE_HOME` 同形。
   配置每次重写(它就是只读锁本身,不留隔夜残留),权限 600(里面有 key)。
 - 轮次上限在配置的 `steps` 字段(opencode 没有命令行开关,schema 里 `maxSteps` 已废弃),
@@ -128,7 +128,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 
 ## subgrok (Grok Build) — 评审与规划
 
-`/root/aiwork/bin/subgrok <review|explore> TASK LOG REPO`。
+`aiwork/bin/subgrok <review|explore> TASK LOG REPO`。
 评审加入 `panel-review` 的 xai 家族轮换池；规划加入 `panel-explore`，输出一个方向，
 不要求裁决。`PANEL_GROK_LEG=off` 在两个调度器中关闭这条腿；无聊天回落或 fix 模式。
 
@@ -157,7 +157,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 
 ## subkimi (月之暗面 Kimi) — 轮换池成员
 
-`/root/aiwork/bin/subkimi`,Kimi 会员 OAuth,**从第一天起就是 agent 底座**:跑原生
+`aiwork/bin/subkimi`,Kimi 会员 OAuth,**从第一天起就是 agent 底座**:跑原生
 `kimi-code` CLI 的 headless 模式(`kimi -p`),评审员自己读仓库,无盲评、无需喂 INCLUDE。
 
 - `subkimi review TASK LOG REPO`,裁决 gate 为 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO`。
@@ -169,7 +169,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
   `display_name=K2.8 Preview`、`context_length=1048576`);同一份回显里本账号 `k3` 只有 262144、
   highspeed 也是 262144 —— 换成它们只改模型文件,配置照样声明 1M/max,测试照样绿。
   **换模型前先核对服务端 `/models`**;让声明自动跟随服务端是修腿单的活。
-- **隔离**:跑在 `KIMI_CODE_HOME=/root/aiwork/kimi-review-home`(绝不碰全局 `~/.kimi-code`)。
+- **隔离**:跑在 `KIMI_CODE_HOME=~/.local/share/aiwork/kimi-review-home`(绝不碰全局 `~/.kimi-code`)。
   该 home 的配置带一个 PreToolUse 守卫 hook(`hooks/guard.mjs`,**默认 DENY**):只放行
   Read/Glob/Grep/todo 类工具 + 不含元字符的只读 git;Write/Edit/Agent/AgentSwarm/Skill/
   Cron*/FetchURL/WebSearch 及任何未知工具一律拦截。
@@ -182,7 +182,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 
 ## subgemini (Gemini,跑在 Antigravity CLI 上) — 轮换池成员,2026-08-25 起加入
 
-`/root/aiwork/bin/subgemini`,**只读评审**,没有 chat 回落。骑业主的 **Gemini 会员**
+`aiwork/bin/subgemini`,**只读评审**,没有 chat 回落。骑业主的 **Gemini 会员**
 OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
 底座是 **Antigravity CLI(`agy`)** 的 headless 模式(`agy -p`),和 subkimi 的
 `kimi -p` 同形 —— 评审员自己读仓库,无盲评、无需喂 INCLUDE。
@@ -211,7 +211,7 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
   `gpt-oss-120b`。这条腿在花名册里代表 **Google 家族**,它跑成 Claude 会让归档闸的
   「覆盖 N 个不同模型家族」变成一句假话 —— **而那道闸查的是腿名,查不出模型**。
 - **隔离靠换 `HOME`**:agy 没有专用 home 变量(路径从 `$HOME` 拼),
-  所以 `AGY_REVIEW_HOME`(默认 `~/.cache/aiwork/agy-review-home`,**仓外**)
+  所以 `AGY_REVIEW_HOME`(默认 `~/.local/share/aiwork/agy-review-home`,**仓外**)
   整体重定向配置/数据/状态,与 subglm 的 `OPENCODE_REVIEW_HOME` 同形。
 - **凭证用「复制」不用「符号链接」**,600,每次派发前重拷一份最新的,**跑完即删**。
   链接是通向沙箱外的写通道,`panel-kimi-credential-wipe` 的根因就是它;

@@ -161,7 +161,7 @@ PY
 
 slice() {  # slice <fixture> <panel-slice args...>
   local d="$1"; shift
-  SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" \
+  AIWORK_DATA_DIR="$d" SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" \
     PANEL_STAGGER_MAX=0 PANEL_SLICE_ASSIGN_START=0 bash "$d/bin/panel-slice" "$@"
 }
 # 拒绝一律要说出机器可读的理由:`panel-slice: REFUSED <rule>`。只看「rc≠0 且零调用」的话,
@@ -464,7 +464,7 @@ echo "[S7] 控制器被整组砍掉 ⇒ 说 unknown 不说 failed;腿自己跑�
 d="$TMP_ROOT/s7"; make_fixture "$d"; write_manifest "$d" 2 2
 for _i in s1 s2 overall; do printf 'sleep:4\n' > "$d/modes/$_i"; done
 run="$d/runs/r"
-SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" \
+AIWORK_DATA_DIR="$d" SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" \
   PANEL_STAGGER_MAX=0 PANEL_SLICE_ASSIGN_START=0 \
   setsid bash "$d/bin/panel-slice" run "$d/m/manifest.json" "$d/repo" "$run" >"$d/run.out" 2>&1 &
 ctl=$!
@@ -522,7 +522,7 @@ d="$TMP_ROOT/s9"; make_fixture "$d"
 printf 'scoped task\n' > "$d/task.md"
 pr() {  # pr <prefix-leaf> <panel-review args...>
   local leaf="$1"; shift
-  SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
+  AIWORK_DATA_DIR="$d" SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
     bash "$d/bin/panel-review" "$@" "$d/task.md" "$d/repo" "$d/p/$leaf/items/x/attempt-1/panel"
 }
 mkdir -p "$d/p"
@@ -570,13 +570,13 @@ _off=()
 for _spec in "${PANEL_LEG_SPECS[@]}"; do
   IFS='|' read -r _n _f _a _c _w <<<"$_spec"; [[ "$_n" == subdeepseek ]] || _off+=("$_w=off")
 done
-env "${_off[@]}" SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
+env "${_off[@]}" AIWORK_DATA_DIR="$d" SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
   bash "$d/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
   "$d/task.md" "$d/repo" "$d/p/fb/items/x/attempt-1/panel" >/dev/null 2>&1
 check "S9: 对照组:普通模式 agent 腿失败会回落聊天腿(2 次调用)" \
   $([[ "$(ncalls "$d")" -eq 2 ]] && cut -f1 "$d/calls" | grep -qx subdeepseek; echo $?)
 : > "$d/calls"; mkdir -p "$d/p/nofb/items/x/attempt-1"
-PANEL_HEALTH_OVERRIDE=subdeepseek=healthy SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" \
+PANEL_HEALTH_OVERRIDE=subdeepseek=healthy AIWORK_DATA_DIR="$d" SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" \
   PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
   bash "$d/bin/panel-review" --scoped-review --no-track --no-my-review --risk standard --budget 1 \
   --pin-leg subdeepseek "$d/task.md" "$d/repo" "$d/p/nofb/items/x/attempt-1/panel" >/dev/null 2>&1

@@ -26,7 +26,6 @@ BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sy
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
 _GATE="$BIN_DIR/_my-review-gate.sh"
-[ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh
 [ -f "$_GATE" ] || { echo "subgemini: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_GATE"
 gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
@@ -34,11 +33,10 @@ gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 # 「运行期 home 不许在被评审的仓里」的共享闸。缺件就拒跑:少了它 = 这条腿没有这道
 # 检查,而"腿被自家防线弄死"的错误信息长得像额度耗尽。
 _RHG="$BIN_DIR/_review-home-guard.sh"
-[ -f "$_RHG" ] || _RHG=/root/aiwork/bin/_review-home-guard.sh
 [ -f "$_RHG" ] || { echo "subgemini: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_RHG"
 
-REVIEW_HOME="${AGY_REVIEW_HOME:-$HOME/.cache/aiwork/agy-review-home}"
+REVIEW_HOME="${AGY_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path agy-review-home)}"
 DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model gemini "${AGY_MODEL:-}")" || exit 1
 OWNER_TOKEN="${AGY_OWNER_TOKEN:-$HOME/.gemini/antigravity-cli/antigravity-oauth-token}"
 TIMEOUT_SECONDS="${AGY_TIMEOUT:-1500}"
@@ -54,12 +52,13 @@ on the owner's Gemini membership. The reviewer reads a disposable writable clone
 the source repo stays read-only.
 
 Environment:
+  AIWORK_DATA_DIR  optional, overrides the common machine data directory
   AGY_MODEL         optional, default from ~/.config/aiwork/models.env.
                     MUST match ^gemini- : agy also serves claude-* / gpt-oss-*,
                     and a Claude-backed "Gemini leg" silently guts panel's
                     distinct-model-family coverage check.
   AGY_TIMEOUT       optional, seconds (default 1500)
-  AGY_REVIEW_HOME   optional, default $HOME/.cache/aiwork/agy-review-home (仓外)
+  AGY_REVIEW_HOME   optional, default $HOME/.local/share/aiwork/agy-review-home (仓外)
 EOF
 }
 
@@ -304,7 +303,6 @@ set -e
 # 腿自己用宽松正则、terminal producer 用严格正则 = 腿自认成功而结果记 UNKNOWN,
 # 「同一个事实存两处、只更新其中一个」正是本机反复记账的老毛病。
 _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
-[ -f "$_RR" ] || _RR=/root/aiwork/bin/_review_result.py
 [ -f "$_RR" ] || die '找不到 _review_result.py ⇒ 拒绝派发(fail-closed:裁决判定没有唯一源)'
 VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
   || die "typed verdict normalization failed (log: $LOG_FILE)"

@@ -13,7 +13,7 @@ are outside that manifest.
 EOF
 }
 
-CHECK=0; FORCE=0; TARGET_ROOT="/root"
+CHECK=0; FORCE=0; TARGET_ROOT="$HOME"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) CHECK=1; shift ;;
@@ -31,7 +31,7 @@ done
   echo "sync-workflow-docs: target root must be a real directory: $TARGET_ROOT" >&2; exit 2; }
 TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd -P)" || exit 2
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
 SOURCE="$ROOT/workflow"
 MAPPINGS=(
   "CLAUDE.md|CLAUDE.md"

@@ -28,7 +28,7 @@
 
 key 放 ~/.config/aiwork/typesafe.env(0600,`export TYPESAFE_API_KEY=...`)。
 模型放同目录的 models.env;AIWORK_CONFIG_DIR 可覆盖本机设置目录。
-问题措辞和阈值全在 /root/aiwork/triage/questions.json —— 改那里,别改这里。
+问题措辞和阈值全在 triage/questions.json（相对工具仓库根目录） —— 改那里,别改这里。
 """
 import json, os, re, sys, urllib.error, urllib.request
 from pathlib import Path

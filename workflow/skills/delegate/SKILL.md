@@ -119,7 +119,7 @@ fork 把它判成"评审腿篡改",恢复了文件并 kill 掉主 agent 的判�
 
 **安全边界(所有外部执行腿通用)**:不许 push、merge、删文件、装依赖、碰生产系统、
 跑数据库迁移、改密钥。需要危险操作时**先问用户**。
-task 存 `/root/aiwork/tasks/`,log 存 `/root/aiwork/logs/`。
+task 存 `~/.local/share/aiwork/tasks/`,log 存 `~/.local/share/aiwork/logs/`。
 外部腿的输出是**待评估的证据**,不是自动生效的决定。
 
 ## codex (GPT) 执行腿 — 2026-07-26 起
@@ -154,7 +154,7 @@ Codex 退出后，仓外 receipt 先补齐 `run_id/started_at/finished_at/durati
 但绝不能覆盖 Codex 或收货闸原本的 rc。`--no-track` 和 `--dry-run` 都不伪造事件。
 
 **默认隔离(2026-08-11,track codex-worktree-delegation)**:每单一棵
-`/root/aiwork/worktrees/<任务名>-<时间戳>` + 一个 `delegate/<同名>` 分支,从派活时的 HEAD 建。
+`~/.local/share/aiwork/worktrees/<任务名>-<时间戳>` + 一个 `delegate/<同名>` 分支,从派活时的 HEAD 建。
 买到的是**归因**:闸① 的基线是派活时 HEAD,而"腿说考卷错了 ⇒ 我改考卷并提交"是常规路径 ——
 同一棵树上那些提交会让闸① **判红在我自己头上**,而误报的守卫活不过一周。
 收货通过后它**只打印**集成 / `create mode 120000` 自查 / `worktree remove` 命令,
@@ -175,7 +175,7 @@ Codex 退出后，仓外 receipt 先补齐 `run_id/started_at/finished_at/durati
 - **隔离不是沙箱边界。** `-s workspace-write` 的可写范围是它自己向上解析出的"项目根" ——
   worktree 的 `.git` 是文件,于是它一路走到**主仓**,能往主仓写;`/tmp` 也敞;读完全不管。
   所以卷宗(攻题记录/日志/回执)仍然**不许落进「仓 ∪ worktree 根」**;
-  **派 `/root/aiwork` 自己的活时,`/root/aiwork/logs/` 也在禁区里**,要显式 `--log` 到仓外。
+  默认日志位于本机数据目录，派 aiwork 自己的活时也在源码仓外。
 - **判卷路径必须先 commit 干净**才派得出去(树从基线建,腿看到的是已提交那版)。
 - 直通参数里带 `-C`/`-s` 会 last-wins 撤销隔离 ⇒ 隔离下直接拒发。
 

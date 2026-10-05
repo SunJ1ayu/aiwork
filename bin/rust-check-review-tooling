@@ -11,54 +11,56 @@
 # 是同一种病:病根不是缺哪条检查,是缺一个把它们全串起来的入口。
 # **新增判据套件 = 往下面这张表里加一行。**
 set -uo pipefail
+ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
 
 SUITES=(
-  "local-settings|python3|/root/aiwork/tests/test_local_settings.py"
-  "review-pr|python3|/root/aiwork/tests/test_review_pr.py"
-  "app-token-scope|python3|/root/aiwork/tests/test_app_token_scope.py"
-  "panel-candidates|python3|/root/aiwork/tests/test_panel_candidates.py"
-  "review-delivery|python3|/root/aiwork/tests/test_review_delivery.py"
-  "review-result|python3|/root/aiwork/tests/test_review_result.py"
-  "subgrok|python3|/root/aiwork/tests/test_subgrok.py"
-  "subcursor|python3|/root/aiwork/tests/test_subcursor.py"
-  "leg-quick-fixes|python3|/root/aiwork/tests/test_leg_quick_fixes.py"
-  "review-tooling|bash|/root/aiwork/tests/test-review-tooling.sh"
-  "panel-observation|bash|/root/aiwork/tests/test-panel-observation.sh"
-  "panel-roster|bash|/root/aiwork/tests/test-panel-roster.sh"
-  "panel-slice|bash|/root/aiwork/tests/test-panel-slice.sh"
-  "panel-round-discipline|bash|/root/aiwork/tests/test-panel-round-discipline.sh"
-  "subcodex|bash|/root/aiwork/tests/test-subcodex.sh"
-  "fix-oracle|bash|/root/aiwork/tests/test-submimo-fix-oracle.sh"
-  "retry|python3|/root/aiwork/tests/test_submimo_retry.py"
-  "track-guard|bash|/root/aiwork/tests/test-track-guard.sh"
-  "track-record|bash|/root/aiwork/tests/test-track-record.sh"
-  "track-preflight|python3|/root/aiwork/tests/test_track_preflight.py"
-  "ledger|bash|/root/aiwork/tests/test-ledger.sh"
-  "track-links|bash|/root/aiwork/tests/test-track-links.sh"
-  "delegate-entry|bash|/root/aiwork/tests/test-delegate-entry.sh"
-  "delegate-observation|bash|/root/aiwork/tests/test-delegate-observation.sh"
-  "delegate-isolate|bash|/root/aiwork/tests/test-delegate-isolate.sh"
-  "worktree-sweep|bash|/root/aiwork/tests/test-worktree-sweep.sh"
-  "hooks-installed|bash|/root/aiwork/tests/test-hooks-installed.sh"
-  "runlog|bash|/root/aiwork/tests/test-runlog.sh"
-  "no-egress|bash|/root/aiwork/tests/test-no-egress.sh"
-  "evidence-lifetime|bash|/root/aiwork/tests/test-evidence-lifetime.sh"
-  "review-workspace|bash|/root/aiwork/tests/test-review-workspace.sh"
-  "workflow-docs|bash|/root/aiwork/tests/test-workflow-docs.sh"
-  "mimo-key|bash|/root/aiwork/tests/test-mimo-key-single-source.sh"
+  "local-data|python3|$ROOT/tests/test_local_data.py"
+  "local-settings|python3|$ROOT/tests/test_local_settings.py"
+  "review-pr|python3|$ROOT/tests/test_review_pr.py"
+  "app-token-scope|python3|$ROOT/tests/test_app_token_scope.py"
+  "panel-candidates|python3|$ROOT/tests/test_panel_candidates.py"
+  "review-delivery|python3|$ROOT/tests/test_review_delivery.py"
+  "review-result|python3|$ROOT/tests/test_review_result.py"
+  "subgrok|python3|$ROOT/tests/test_subgrok.py"
+  "subcursor|python3|$ROOT/tests/test_subcursor.py"
+  "leg-quick-fixes|python3|$ROOT/tests/test_leg_quick_fixes.py"
+  "review-tooling|bash|$ROOT/tests/test-review-tooling.sh"
+  "panel-observation|bash|$ROOT/tests/test-panel-observation.sh"
+  "panel-roster|bash|$ROOT/tests/test-panel-roster.sh"
+  "panel-slice|bash|$ROOT/tests/test-panel-slice.sh"
+  "panel-round-discipline|bash|$ROOT/tests/test-panel-round-discipline.sh"
+  "subcodex|bash|$ROOT/tests/test-subcodex.sh"
+  "fix-oracle|bash|$ROOT/tests/test-submimo-fix-oracle.sh"
+  "retry|python3|$ROOT/tests/test_submimo_retry.py"
+  "track-guard|bash|$ROOT/tests/test-track-guard.sh"
+  "track-record|bash|$ROOT/tests/test-track-record.sh"
+  "track-preflight|python3|$ROOT/tests/test_track_preflight.py"
+  "ledger|bash|$ROOT/tests/test-ledger.sh"
+  "track-links|bash|$ROOT/tests/test-track-links.sh"
+  "delegate-entry|bash|$ROOT/tests/test-delegate-entry.sh"
+  "delegate-observation|bash|$ROOT/tests/test-delegate-observation.sh"
+  "delegate-isolate|bash|$ROOT/tests/test-delegate-isolate.sh"
+  "worktree-sweep|bash|$ROOT/tests/test-worktree-sweep.sh"
+  "hooks-installed|bash|$ROOT/tests/test-hooks-installed.sh"
+  "runlog|bash|$ROOT/tests/test-runlog.sh"
+  "no-egress|bash|$ROOT/tests/test-no-egress.sh"
+  "evidence-lifetime|bash|$ROOT/tests/test-evidence-lifetime.sh"
+  "review-workspace|bash|$ROOT/tests/test-review-workspace.sh"
+  "workflow-docs|bash|$ROOT/tests/test-workflow-docs.sh"
+  "mimo-key|bash|$ROOT/tests/test-mimo-key-single-source.sh"
   # 守的是**仓外**那份 ~/.claude/switch-model.sh 的原子写。它原本住在 track 目录里,
   # 归档后就没有任何入口叫得动 —— 正是本文件开头骂的那种孤儿脚本(09-01 断线接手时自己抓到)。
-  "switch-model-atomic|bash|/root/aiwork/tests/test-switch-model-atomic.sh"
+  "switch-model-atomic|bash|$ROOT/tests/test-switch-model-atomic.sh"
 )
 
 # ── 名单漏网报告(2026-08-06)────────────────────────────────────────────
 # 规矩4 的名单是**手列**的 ⇒ 新起一个不匹配的工具名就漏,而且漏的时候没人会知道。
 # 硬堵不行(把运维脚本也拖进来 = 误报 = 守卫被绕过),所以只**报**不拦:
 # 每次总跑列一次「bin/ 里哪些可执行文件不在名单内」,让清单腐烂时有人吭一声。
-. "$(dirname "$0")/_tooling-paths.sh" 2>/dev/null || true
+. "$ROOT/bin/_tooling-paths.sh" 2>/dev/null || true
 uncovered=""
 if declare -f is_judging_surface >/dev/null; then
-  for f in "${COVERAGE_BIN_DIR:-$(dirname "$0")}"/*; do
+  for f in "${COVERAGE_BIN_DIR:-$ROOT/bin}"/*; do
     [ -f "$f" ] && [ -x "$f" ] || continue
     is_judging_surface "bin/$(basename "$f")" || uncovered="$uncovered $(basename "$f")"
   done
@@ -70,7 +72,7 @@ fi
 # 靠"记得加"就等于没有闸,和 bin/ 名单那条债是同一笔。
 # 和 bin/ 名单**不同的是这里硬红**:`tests/test-*` 没有"运维脚本"那种歧义,
 # 一个判据套件不进总跑,没有任何正当理由。
-TESTS_DIR="${COVERAGE_TESTS_DIR:-$(dirname "$0")/../tests}"
+TESTS_DIR="${COVERAGE_TESTS_DIR:-$ROOT/bin/../tests}"
 orphans=""
 for f in "$TESTS_DIR"/test-*.sh "$TESTS_DIR"/test_*.sh "$TESTS_DIR"/test-*.py "$TESTS_DIR"/test_*.py; do
   [ -f "$f" ] || continue

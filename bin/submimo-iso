@@ -34,18 +34,20 @@
 #   submimo-iso <agent> <review|fix> <task_file> <repo_dir> [log_file]
 #     agent      short id, e.g. claude | codex (becomes the private home name)
 #     review|fix forwarded to submimo
-#     task_file  task markdown under /root/aiwork/tasks/
+#     task_file  task markdown under the aiwork data directory tasks/
 #     repo_dir   ABSOLUTE path to this agent's git worktree (required, must exist)
-#     log_file   optional; default /root/aiwork/logs/<agent>-<UTC>-<task>.log
+#     log_file   optional; default <data-dir>/logs/<agent>-<UTC>-<task>.log
 #
 # Exit status: forwards submimo's exit status (or 2 on usage/setup error).
 
 set -euo pipefail
 
-SUBMIMO="/root/aiwork/bin/submimo"
+BIN_DIR="$(dirname "$(realpath "$0")")"
+DATA_ROOT="$("$BIN_DIR/aiwork-config" data-path)" || exit 2
+SUBMIMO="$BIN_DIR/submimo"
 CANON_HOME="/root/.local/share/mimocode"          # canonical mimo data home
-HOMES_ROOT="/root/aiwork/mimo-home"               # per-agent isolated homes
-LOGS_DIR="/root/aiwork/logs"
+HOMES_ROOT="$DATA_ROOT/mimo-home"               # per-agent isolated homes
+LOGS_DIR="$DATA_ROOT/logs"
 CRED_FILES=(auth.json mimo-free-client mimo-key-name installation_id)
 
 die() { echo "submimo-iso: $*" >&2; exit 2; }

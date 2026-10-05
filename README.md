@@ -2,9 +2,9 @@
 
 Multi-model review/execution tooling for the main agent (the frontier model
 driving the session). The full workflow doctrine — when to use what, panel
-protocol, safety rules — is versioned under `workflow/`; `/root/CLAUDE.md` and
-`/root/.claude/skills/{track,panel,delegate}` are deployment copies checked by
-`bin/sync-workflow-docs --check`. `/root/AGENTS.md` is
+protocol, safety rules — is versioned under `workflow/`; `~/CLAUDE.md` and
+`~/.claude/skills/{track,panel,delegate}` are deployment copies checked by
+`bin/sync-workflow-docs --check`. `~/AGENTS.md` is
 deliberately absent so Codex does not automatically load these Claude-specific
 instructions; this README only maps the machinery.
 
@@ -53,16 +53,16 @@ Things that are not aiwork live with their own owners:
 ## Layout
 
 - `bin/` executors and panel tools (below)
-- `tasks/` local task/brief files sent to reviewers (main-agent-authored, gitignored)
-- `logs/` local reviewer output, `.err` sidecars, my-review/arbitration records (gitignored)
+- Data directory `tasks/` holds local task/brief files sent to reviewers (main-agent-authored)
+- Data directory `logs/` holds reviewer output, `.err` sidecars and arbitration records
 - `templates/` starter task files (`review-task.md`, `fix-task.md`)
 - `tests/` regression oracles for this tooling itself
 - `track/` lightweight change-workflow convention + templates (`bin/track` CLI)
 - `tracks/` workflow change records with their `evidence/` and `observations/`
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
-- `worktrees/` per-job isolated checkouts created by `delegate-codex` (gitignored)
-- `mimo-home/`, `kimi-review-home/`, `.mimocode/`, `etc/` local reviewer runtime state and configuration (gitignored)
-- `out/`, `refs/` local build output and reference copies (gitignored)
+- Data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
+- `kimi-review-home/config.toml` and `hooks/` are local seeds; reviewer runtime homes use the data directory
+- Existing `out/`, `refs/`, `.mimocode/`, `etc/` and other ignored local data await migration after merge
 
 ## Core engine
 
@@ -109,7 +109,7 @@ Things that are not aiwork live with their own owners:
 - `bin/review-pr PR --repo owner/name --leg LEG` — review a PR head and publish
   an aiwork-review COMMENT review. 需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。
   Failed runs print the redacted last 40 stderr lines and retain their complete
-  temporary directory under `logs/review-pr-failures/<run-id>/`; successful runs
+  temporary directory under the data path `logs/review-pr-failures/<run-id>/`; successful runs
   discard it. Truncated chat context is published with `completeness=partial`.
 
 All executors: `<tool> review TASK LOG REPO`. Output is evidence for the main
@@ -123,7 +123,7 @@ agent to verify, never a verdict to adopt.
   a `--protect` judging list is given, and the attack-log carries the CURRENT
   `oracle-sha256:` of that judging surface (`--print-oracle-hash` emits the line).
   **Each job runs in its own git worktree by default** (`--no-isolate` opts out):
-  `worktrees/<task>-<ts>` on branch `delegate/<same>`, created from the HEAD at
+  data path `worktrees/<task>-<ts>` on branch `delegate/<same>`, created from the HEAD at
   dispatch. `--receive <receipt>` runs gate ① against that tree (plus a check for
   uncommitted judging changes in the MAIN tree, which the leg can still reach),
   records the machine-computed write set into the receipt, and PRINTS the
@@ -204,7 +204,7 @@ Model defaults live in `~/.config/aiwork/models.env`; environment overrides are 
   isolation, task freezing, setsid survival, typed results and health all stay in
   panel-review. Scoped results carry `review_contract_version=2` and never count as
   archive coverage; panel-slice never binds a track. Run dirs live outside the repo
-  (default `logs/slice-<manifest>-<ts>/`); `status` is rebuilt from disk and
+  (default data path `logs/slice-<manifest>-<ts>/`); `status` is rebuilt from disk and
   `findings.jsonl` is append-only.
 - `bin/subcodex <review|explore>` — GPT review leg on `codex exec`, model from
   the `codex` row in `~/.config/aiwork/models.env` (`SUBCODEX_MODEL` overrides one run). A
@@ -220,8 +220,8 @@ Both stagger launches and the engine retries 429/5xx with bounded backoff.
 ## Tests (run before trusting any tooling change)
 
 ```bash
-bash /root/aiwork/bin/rust-check-review-tooling   # THE runner: every suite below, one summary line
-bash /root/aiwork/bin/rust-check-review-tooling --coverage-only   # just the "who is not covered" report
+bash bin/rust-check-review-tooling   # THE runner: every suite below, one summary line
+bash bin/rust-check-review-tooling --coverage-only   # just the "who is not covered" report
 ```
 
 The runner is list-driven (`SUITES`) and hard-reds when a `tests/test-*` file is
@@ -253,8 +253,8 @@ export MIMO_MODEL='mimo-2.5'
 Dry run (writes the assembled prompt to the log without calling the API):
 
 ```bash
-/root/aiwork/bin/submimo-review /root/aiwork/templates/review-task.md \
-  /root/aiwork/logs/dry-run.log --repo /path/to/repo --git-diff --dry-run
+bin/submimo-review templates/review-task.md \
+  ~/.local/share/aiwork/logs/dry-run.log --repo /path/to/repo --git-diff --dry-run
 ```
 
 The chat engine cannot read files by itself: use `--git-diff` / `--include`
@@ -276,4 +276,22 @@ nothing attached triggers a loud BLIND-review warning.
 `AIWORK_APPS_DIR` 仍可单独覆盖 App 配置目录。
 `models.env` 必须完整，包含每条腿的模型行；原有模型单次覆盖参数只是在完整设置的基础上换一次，不能代替文件或补缺行。
 缺少 `models.env` 或所需腿的模型行时明确报错并停止，不调用模型。
-本机数据统一放在 `~/.local/share/aiwork/`；数据目录迁移属于后续 PR，本 PR 不搬动数据。
+本机数据由 `bin/aiwork-config data-path [相对路径]` 统一定位，默认 `~/.local/share/aiwork/`；
+`AIWORK_DATA_DIR` 可覆盖该入口（例如离线测试使用临时目录）。供应商隔离运行时会改写
+`XDG_*`，因此 aiwork 数据入口不随供应商的 XDG 设置变化。查询路径本身不创建目录。
+
+`tasks/`、`logs/`（包括面板健康状态和失败日志）、`worktrees/`、`mimo-home/` 以及各评审腿的运行期 home
+都使用该数据入口；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
+`bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。
+
+`kimi-review-home/config.toml` 和 `hooks/` 是种子，留在仓内原处且继续忽略；后续单独做隐私检查后入 Git。
+运行期配置和 hooks 只从种子同步这两类文件；凭证、缓存、会话、日志、索引和遥测留在数据目录，
+不会从旧种子目录整份复制。未搬迁或认证前，新运行目录缺少凭证会明确拒绝运行。
+
+`out/`、`refs/`、`.mimocode/`、`etc/` 的备份属于本机数据，当前 B 范围内的代码没有读取这些备份。
+本 PR 不搬动已有本机数据；合并后由云端 Claude 提供搬迁命令。
+正式切换新默认值前须完成搬迁（包括各评审 cache home、面板健康状态、任务与日志）；
+worktree 的 Git 注册路径也须修复。归档发现旧位置仍有本轮注册的树时拒绝继续，
+明确给出旧树和新根；`--keep-trees` 或既有专用路径覆盖仍可显式保留旧树。
+`tmp-sweeper`、`disk-watch`、`openclaw-up`、`check-gateway-version`、MiMo 密钥位置清单及 cron 留给 PR C。
+普通缓存 `__pycache__`、`.pytest_cache`、`.mutation-state` 保持现状。

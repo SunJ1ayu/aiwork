@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 from _review_result import TOKEN_RE, cursor_model_family, leg_identity
-from _aiwork_config import model as configured_model
+from _aiwork_config import data_path, model as configured_model
 
 BIN = Path(__file__).resolve().parent
 # Config stem, override variable, modes, repository-reading modes, invocation prefix.
@@ -35,7 +35,7 @@ def roster():
 
 
 def health_rows():
-    path = Path(os.environ.get('PANEL_STATE_DIR', str(BIN.parent / 'logs/.panel-state'))) / 'health.tsv'
+    path = Path(os.environ.get('PANEL_STATE_DIR', str(data_path('logs/.panel-state')))) / 'health.tsv'
     if not path.exists():
         return {}
     return {row[0]: row[1:] for line in path.read_text().splitlines() if len(row := line.split('\t')) >= 3}

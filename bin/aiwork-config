@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Read machine settings from AIWORK_CONFIG_DIR or ~/.config/aiwork."""
+"""Read machine settings and locate machine data through the aiwork entries."""
 import argparse
 import sys
 
-from _aiwork_config import ConfigError, app_key, apps_dir, model, model_family, setting_path
+from _aiwork_config import ConfigError, app_key, apps_dir, data_path, model, model_family, setting_path
 
 
 def main():
@@ -14,6 +14,8 @@ def main():
     models.add_argument('override', nargs='?')
     paths = commands.add_parser('path')
     paths.add_argument('name', choices=('models.env', 'typesafe.env', 'apps'))
+    data = commands.add_parser('data-path')
+    data.add_argument('name', nargs='?', default='')
     keys = commands.add_parser('app-key')
     keys.add_argument('configured')
     families = commands.add_parser('family')
@@ -23,6 +25,8 @@ def main():
     try:
         if args.command == 'model':
             value = model(args.leg, args.override)
+        elif args.command == 'data-path':
+            value = data_path(args.name)
         elif args.command == 'app-key':
             value = app_key(args.configured)
         elif args.command == 'family':

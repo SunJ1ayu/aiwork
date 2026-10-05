@@ -10,11 +10,12 @@
 #
 # project-dir defaults to the current directory. No phases are enforced — write
 # proposal/design/tasks/verify when they earn their keep; panel hooks live in
-# the templates. See /root/aiwork/track/CONVENTION.md.
+# the templates. See track/CONVENTION.md in the tool checkout.
 
 set -euo pipefail
 
-TEMPLATES="/root/aiwork/track/templates"
+TRACK_BIN="$(dirname "$(realpath "$0")")"
+TEMPLATES="$TRACK_BIN/../track/templates"
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -69,7 +70,32 @@ _track_archive_sweep_worktrees() {  # <track> <keep:0|1> <discard-ignored:0|1> <
   # 0 = 归档时不会挡 / 1 = 会挡 / 3 = 只差 --discard-ignored。移除树、删分支、rmdir 在这个模式下不可达。
   local track="$1" keep="$2" discard_ignored="$3" proj_abs="$4" mode="${5:-archive}"
   local root track_dir tree entry base total=0 tree_repo
-  root="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
+  root="${DELEGATE_WORKTREE_ROOT:-$("$TRACK_BIN/aiwork-config" data-path worktrees)}"
+  # Registered paths survive changing checkouts and data defaults. This check
+  # only applies to Git projects; plain-directory tracks remain supported.
+  local project_top
+  if [[ -z "${DELEGATE_WORKTREE_ROOT:-}" ]] \
+      && project_top="$(git -C "$proj_abs" rev-parse --show-toplevel 2>/dev/null)" \
+      && [[ "$(realpath -m "$project_top")" == "$(realpath -m "$proj_abs")" ]]; then
+    local registered
+    while IFS= read -r -d '' entry; do
+      case "$entry" in
+        "worktree "*)
+          registered="${entry#worktree }"
+          case "$registered" in
+            "$root"/*) ;;
+            */worktrees/"$track"/*)
+              echo "worktree-sweep: 旧位置仍有本轮注册的树:$registered" >&2
+              echo "  新 worktree 根:$root；先按合并后搬迁命令处理并修复 Git 注册路径。" >&2
+              [[ "$keep" -eq 1 ]] && { echo "  --keep-trees: 明确保留旧树，不阻断归档。" >&2; return 0; }
+              return 1 ;;
+          esac ;;
+        registration-error)
+          echo "worktree-sweep: 读取 Git worktree 注册信息失败，拒绝归档。" >&2
+          return 1 ;;
+      esac
+    done < <(git -C "$proj_abs" worktree list --porcelain -z || printf 'registration-error\0')
+  fi
   [[ -d "$root" ]] || return 0
   track_dir="$root/$track"
 
@@ -262,7 +288,7 @@ case "$cmd" in
           "$TEMPLATES/$f.md" > "$dir/$f.md"
     done
     sed -e "s|__NAME__|$name|g" "$TEMPLATES/decision.json" > "$dir/decision.json"
-    if ! "$(dirname "$0")/track-record" validate --phase shape "$dir" >/dev/null; then
+    if ! "$TRACK_BIN/track-record" validate --phase shape "$dir" >/dev/null; then
       echo "ERROR: 新建 decision.json 未通过 shape 校验:$dir" >&2
       exit 1
     fi
@@ -284,7 +310,7 @@ case "$cmd" in
     [ -d "$src" ] || { echo "ERROR: $src not found" >&2; exit 1; }
     # typed facts 是唯一机器事实源；必须在 evidence 检查、worktree sweep 和 mv 之前判。
     # 无 decision 的旧 track 由 validator 明示为 legacy，继续走下面的旧 verify 规则。
-    if ! "$(dirname "$0")/track-record" validate --phase archive "$src"; then
+    if ! "$TRACK_BIN/track-record" validate --phase archive "$src"; then
       echo "🔴 拒绝归档:typed decision 未完成。目录留在原地,尚未触碰 worktree。" >&2
       exit 1
     fi
@@ -305,7 +331,7 @@ sys.exit(0 if data.get("schema_version") == 2
 ' "$src/decision.json" 2>/dev/null; then
       repo_root="$(git -C "$proj" rev-parse --show-toplevel 2>/dev/null)" || repo_root=""
       if [ -n "$repo_root" ]; then
-        if ! views="$(python3 "$(dirname "$0")/_review_delivery.py" --repo "$repo_root" --track "$name" --explain-views 2>&1)"; then
+        if ! views="$(python3 "$TRACK_BIN/_review_delivery.py" --repo "$repo_root" --track "$name" --explain-views 2>&1)"; then
           echo "🔴 拒绝归档:算不出两个交付视图($views)。目录留在原地。" >&2
           exit 1
         fi
@@ -344,7 +370,7 @@ sys.exit(0 if data.get("schema_version") == 2
     # 的半截状态。5d(证据进没进 git)不在这儿查 —— 归档时收据常常还没 add,
     # 那一条属于提交那一刻,由 pre-commit 查。
     # shellcheck source=/root/aiwork/bin/_evidence.sh
-    . "$(dirname "$0")/_evidence.sh" 2>/dev/null || {
+    . "$TRACK_BIN/_evidence.sh" 2>/dev/null || {
       echo "🔴 找不到 _evidence.sh —— 归档检查缺件,拒绝归档(fail closed)" >&2; exit 1; }
     if ! ev_check "$src" "$v" archive "track archive"; then
       echo "🔴 拒绝归档:机器证据没对齐(见上)。目录留在原地,没有半归档状态。" >&2
@@ -354,7 +380,7 @@ sys.exit(0 if data.get("schema_version") == 2
     # 这时必须要么进仓,要么逐行写明「不承重」。放在 worktree sweep 前,是因为 sweep
     # 可能会清理本轮树;先判叙述证据,避免后续动作掩盖真正的拒绝理由。
     # shellcheck source=/root/aiwork/bin/_ephemeral-refs.sh
-    . "$(dirname "$0")/_ephemeral-refs.sh" 2>/dev/null || {
+    . "$TRACK_BIN/_ephemeral-refs.sh" 2>/dev/null || {
       echo "🔴 找不到 _ephemeral-refs.sh —— 归档检查缺件,拒绝归档(fail closed)" >&2; exit 1; }
     if ! eph_check "$src" "track archive"; then
       echo "🔴 拒绝归档:工件引用了会话临时目录(见上)。目录留在原地,没有半归档状态。" >&2
@@ -399,7 +425,7 @@ sys.exit(0 if data.get("schema_version") == 2
     fi
     src="$proj/tracks/$name"
     [ -d "$src" ] || { echo "ERROR: $src not found" >&2; exit 2; }
-    here="$(dirname "$0")"
+    here="$TRACK_BIN"
     n_ok=0; n_block=0; n_pending=0; n_error=0
     pf_report() {  # <OK|BLOCK|PENDING|ERROR> <check> <message> [detail]
       printf '  %-7s %s: %s\n' "$1" "$2" "$3"
@@ -529,7 +555,7 @@ else: print("bound")
     for t in $(ls -1 "$proj/tracks" 2>/dev/null | grep -v '^archive$'); do
       v="$proj/tracks/$t/verify.md"
       if [ -f "$proj/tracks/$t/decision.json" ]; then
-        if ! "$(dirname "$0")/track-record" validate --phase archive "$proj/tracks/$t" >/dev/null 2>&1; then
+        if ! "$TRACK_BIN/track-record" validate --phase archive "$proj/tracks/$t" >/dev/null 2>&1; then
           echo "  $t  ⚠️ typed outcome/coverage 还没满足归档条件"
         else
           echo "  $t"

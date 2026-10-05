@@ -176,6 +176,7 @@ class ReviewPrTests(unittest.TestCase):
                        + (["--repo", repository] if repository else []) + (["--dry-run"] if dry_run else [])), \
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
                     patch.object(self.review, "BIN", bin_dir), \
+                    patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data")), \
                     patch.object(self.review, "run", side_effect=fake_run), \
                     patch("urllib.request.urlopen", side_effect=fake_public_read), \
                     patch.object(self.review, "github", side_effect=fake_github), \
@@ -188,7 +189,7 @@ class ReviewPrTests(unittest.TestCase):
                 rc = self.review.main()
                 calls["pr_state"] = state.call_args_list
                 calls["snapshot"] = snapshot.call_args
-            failures = workspace / 'logs/review-pr-failures'
+            failures = workspace / 'data/logs/review-pr-failures'
             calls['archives'] = {str(p): {str(f.relative_to(p)): f.read_bytes()
                                          for f in p.rglob('*') if f.is_file()}
                                  for p in failures.iterdir()} if failures.exists() else {}

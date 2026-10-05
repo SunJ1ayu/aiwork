@@ -35,6 +35,10 @@ def set_model(directory, leg, model):
 
 
 def ensure_settings():
+    if not os.environ.get('AIWORK_DATA_DIR'):
+        data = tempfile.TemporaryDirectory(prefix='aiwork-test-data-')
+        atexit.register(data.cleanup)
+        os.environ['AIWORK_DATA_DIR'] = data.name
     if not os.environ.get('AIWORK_CONFIG_DIR'):
         temp = tempfile.TemporaryDirectory(prefix='aiwork-test-settings-')
         atexit.register(temp.cleanup)
@@ -45,6 +49,11 @@ if __name__ == '__main__':
     if sys.argv[1] == 'set-model':
         set_model(os.environ['AIWORK_CONFIG_DIR'], *sys.argv[2:])
     else:
-        with tempfile.TemporaryDirectory(prefix='aiwork-test-settings-') as directory:
-            env = dict(os.environ, AIWORK_CONFIG_DIR=str(write_settings(directory)))
+        with tempfile.TemporaryDirectory(prefix='aiwork-test-settings-') as directory, \
+                tempfile.TemporaryDirectory(prefix='aiwork-test-data-') as data:
+            env = dict(os.environ)
+            if not env.get('AIWORK_CONFIG_DIR'):
+                env['AIWORK_CONFIG_DIR'] = str(write_settings(directory))
+            if not env.get('AIWORK_DATA_DIR'):
+                env['AIWORK_DATA_DIR'] = data
             raise SystemExit(subprocess.call(sys.argv[1:], env=env))

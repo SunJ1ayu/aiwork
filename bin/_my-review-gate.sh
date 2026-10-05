@@ -11,7 +11,7 @@
 #   就变成先发出评审、后写 verify —— 自己的 findings 和腿的结论同一次写下去,
 #   **反锚定在 fast lane 上等于没执行**。同一条规矩,两条路,一条有闸一条没有。
 #
-# 约定路径与 panel-review 完全一致:/root/aiwork/tasks/<taskname>-my-review.md
+# 约定路径与 panel-review 完全一致:<data-dir>/tasks/<taskname>-my-review.md
 # 显式退出:`REVIEW_NO_MY_REVIEW=1`(清醒的选择,比如给别人的仓做一次性评审)。
 # panel-review 派发各腿时在**命令行**上带 `--panel-dispatch` —— 它在自己那层已经查过,
 # 这里不再重复挡(否则四审整个派不出去)。
@@ -22,15 +22,19 @@
 my_review_gate() {  # my_review_gate <mode> <task_file> <repo_dir> <label>
   local mode="$1" task="$2" repo="$3" label="${4:-review}"
   [[ "$mode" == "review" ]] || return 0
+  local gate_bin tasks_dir
+  gate_bin="$(dirname "${BASH_SOURCE[0]}")"
   if [[ "${GATE_PANEL_DISPATCH:-0}" == "1" ]]; then
     # panel-review 已在自己那层查过,这里不重复拦;但自审文件确实不存在时留一行痕。
-    local _mr="${REVIEW_MY_REVIEW:-/root/aiwork/tasks/$(basename "${task%.*}")-my-review.md}"
+    tasks_dir="$("$gate_bin/aiwork-config" data-path tasks)" || return 1
+    local _mr="${REVIEW_MY_REVIEW:-$tasks_dir/$(basename "${task%.*}")-my-review.md}"
     [[ -f "$_mr" ]] || echo "$label: 注意 —— --panel-dispatch 跳过了反锚定闸,而 $_mr 并不存在。" >&2
     return 0
   fi
   [[ "${REVIEW_NO_MY_REVIEW:-0}" == "1" ]] && return 0
 
-  local mr="${REVIEW_MY_REVIEW:-/root/aiwork/tasks/$(basename "${task%.*}")-my-review.md}"
+  tasks_dir="$("$gate_bin/aiwork-config" data-path tasks)" || return 1
+  local mr="${REVIEW_MY_REVIEW:-$tasks_dir/$(basename "${task%.*}")-my-review.md}"
   if [[ ! -f "$mr" ]]; then
     echo "$label: 先写你自己的一遍 —— 找不到 $mr" >&2
     echo "  评审腿是第二意见,**永远不能替代主 agent 自己的第一遍**;先读腿会锚定判断。" >&2
