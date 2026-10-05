@@ -19,7 +19,6 @@ BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sy
 
 # 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
 _GATE="$BIN_DIR/_my-review-gate.sh"
-[ -f "$_GATE" ] || _GATE=/root/aiwork/bin/_my-review-gate.sh   # 脚本被拷到别处跑时的家
 [ -f "$_GATE" ] || { echo "subchat: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
 . "$_GATE"
 gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
@@ -59,7 +58,7 @@ Environment (PREFIX = DEEPSEEK or ZHIPU):
                       (default: HEAD->worktree, i.e. staged + unstaged)
 
 Examples:
-  subchat zhipu review /root/aiwork/tasks/001-review.md /root/aiwork/logs/001-review.log /path/to/repo
+  subchat zhipu review ~/.local/share/aiwork/tasks/001-review.md ~/.local/share/aiwork/logs/001-review.log /path/to/repo
 EOF
 }
 

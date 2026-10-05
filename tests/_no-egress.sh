@@ -73,7 +73,7 @@ fi
 
 # Test model defaults are disposable fixtures, never the owner's machine settings.
 _test_settings_py="$(dirname "${BASH_SOURCE[0]}")/_test_settings.py"
-if [[ -z "${AIWORK_CONFIG_DIR:-}" ]]; then
+if [[ -z "${AIWORK_CONFIG_DIR:-}" || -z "${AIWORK_DATA_DIR:-}" ]]; then
   exec python3 "$_test_settings_py" "${BASH:-bash}" "$0" "$@"
 fi
 test_model_set() { python3 "$_test_settings_py" set-model "$@"; }

@@ -39,7 +39,7 @@ Sacrifices / Blind spots in the brief / Smallest first step). No PASS/BLOCK.
 Args:
   BRIEF_FILE   markdown design brief / open question (required)
   REPO_DIR     repo for context (default: $PWD)
-  LOG_PREFIX   log path prefix (default: /root/aiwork/logs/explore-<briefname>-<ts>)
+  LOG_PREFIX   log path prefix (default: <data-dir>/logs/explore-<briefname>-<ts>)
 
 The main agent reads ALL reports, then SYNTHESISES - it never averages them into a
 verdict. A failure in one model does not block the others.
@@ -49,14 +49,15 @@ EOF
 # Explicit exploration shares member/session machinery, but has its own non-review contract.
 for _arg in "$@"; do
   if [[ "$_arg" == --members ]]; then
-    exec "$(dirname "$0")/panel-review" --explore-members "$@"
+    exec "$(dirname "$(realpath "$0")")/panel-review" --explore-members "$@"
   fi
 done
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
 if [[ $# -lt 1 || $# -gt 3 ]]; then usage; exit 2; fi
 
-BIN="$(dirname "$0")"
+BIN="$(dirname "$(realpath "$0")")"
+DATA_ROOT="$("$BIN/aiwork-config" data-path)" || exit 2
 BRIEF_FILE="$1"
 REPO_DIR="${2:-$PWD}"
 
@@ -65,7 +66,7 @@ REPO_DIR="${2:-$PWD}"
 
 TS="$(date +%Y%m%d-%H%M%S)"
 BRIEFNAME="$(basename "${BRIEF_FILE%.*}")"
-LOG_PREFIX="${3:-/root/aiwork/logs/explore-${BRIEFNAME}-${TS}}"
+LOG_PREFIX="${3:-$DATA_ROOT/logs/explore-${BRIEFNAME}-${TS}}"
 mkdir -p "$(dirname "$LOG_PREFIX")"
 
 SUBMIMO_LOG="${LOG_PREFIX}.submimo.log"

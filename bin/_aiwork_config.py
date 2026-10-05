@@ -14,6 +14,16 @@ def config_dir() -> Path:
     return Path(os.environ.get('AIWORK_CONFIG_DIR') or Path.home() / '.config/aiwork').expanduser()
 
 
+def data_dir() -> Path:
+    # Provider wrappers override XDG_* for their own isolation. Keep aiwork's
+    # machine data stable across those child environments.
+    return Path(os.environ.get('AIWORK_DATA_DIR') or Path.home() / '.local/share/aiwork').expanduser().resolve()
+
+
+def data_path(name: str = '') -> Path:
+    return data_dir() / name
+
+
 def setting_path(name: str) -> Path:
     return config_dir() / name
 

@@ -145,7 +145,8 @@ done
 
 # 隔离树:submimo-iso 每次跑都从源头 re-seed,本来会自愈。这里顺手刷一遍,
 # 只是免得盘上躺着一份过期凭证让人误判。路径是 glob 出来的,不是手抄的第二份清单。
-for f in /root/aiwork/mimo-home/*/data/mimocode/auth.json; do
+isolated_homes="$("$HERE/aiwork-config" data-path mimo-home)" || exit 2
+for f in "$isolated_homes"/*/data/mimocode/auth.json; do
   [[ -f "$f" ]] || continue
   # 失败不阻断(它下次派活会自愈),但**不许一声不吭** ——
   # "盘上躺着一份过期凭证让人误判"正是上面那段注释自己说要避免的。

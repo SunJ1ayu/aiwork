@@ -31,7 +31,7 @@ from pathlib import Path
 # Importing the engine from bin/ would otherwise litter bin/__pycache__.
 sys.dont_write_bytecode = True
 
-ENGINE = Path("/root/aiwork/bin/submimo-review")
+ENGINE = Path(__file__).resolve().parents[1] / "bin/submimo-review"
 
 # Make retries instant + deterministic for the test.
 os.environ["MIMO_API_KEY"] = "test-key"

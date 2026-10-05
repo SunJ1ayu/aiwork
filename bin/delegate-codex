@@ -34,7 +34,7 @@ set -uo pipefail
 #   不存在),是**归因**:闸① 的基线是派活时 HEAD,而"腿说考卷错了 ⇒ 我改考卷并提交"
 #   是常规路径 —— 在同一棵树上,那两笔判据修复会让闸① 判红**在我自己头上**。
 #   08-11 note-source 那单真实处于这个状态。会响的报警器变成经常误报的报警器,活不过一周。
-#   树建在 ${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}/<任务名>-<时间戳>,
+#   树建在 ${DELEGATE_WORKTREE_ROOT:-<data-dir>/worktrees}/<任务名>-<时间戳>,
 #   分支 delegate/<同名>。**环境变量只为判据能用临时目录**,如实写在这儿,不假装它不存在。
 #
 #   **隔离不是沙箱边界,别把它读成边界**(2026-08-11 真 codex 探针实测,收据在 track 的
@@ -53,7 +53,8 @@ set -uo pipefail
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 CODEX="${CODEX:-codex}"
-WT_ROOT="${DELEGATE_WORKTREE_ROOT:-/root/aiwork/worktrees}"
+DATA_ROOT="$("$BIN_DIR/aiwork-config" data-path)" || exit 2
+WT_ROOT="${DELEGATE_WORKTREE_ROOT:-$DATA_ROOT/worktrees}"
 TRACK_RECORD_BIN="${TRACK_RECORD_BIN:-$BIN_DIR/track-record}"
 
 die()  { echo "delegate-codex: $*" >&2; exit 2; }
@@ -506,7 +507,7 @@ grep -Fq "$HASH_LINE" "$ATTACK" || die "攻题记录对不上当前这版判卷,
     $HASH_LINE
   (拿现成的:delegate-codex --print-oracle-hash --repo $REPO ${PROTECT[*]/#/--protect })"
 
-LOG="${LOG:-/root/aiwork/logs/delegate-${NAME}-${TS}.log}"
+LOG="${LOG:-$DATA_ROOT/logs/delegate-${NAME}-${TS}.log}"
 mkdir -p "$(dirname "$LOG")"
 RECEIPT="${LOG}.receipt.json"
 # 回执/日志同理(四审 subdeepseek F15 / subkimi F3):它们是闸① 的卷宗,
@@ -514,8 +515,7 @@ RECEIPT="${LOG}.receipt.json"
 for _l in "$(realpath -m "$LOG")" "$(realpath -m "$RECEIPT")"; do
   if _in_forbidden "$_l"; then
     die "日志/回执落在${_legwhat}:$_l
-  执行腿**改得到**它(实测,见上)⇒ 闸① 变成自证。挪出去(默认就在 /root/aiwork/logs/;
-  但派 aiwork 自己的活时那儿也在禁区里,得显式 --log 到 /root/aiwork 之外)。"
+  执行腿**改得到**它(实测,见上)⇒ 闸① 变成自证。挪出去(默认在本机数据目录的 logs/ 下)。"
   fi
 done
 HEAD_AT_DISPATCH="$(git -C "$REPO" rev-parse HEAD)"

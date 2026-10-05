@@ -8,7 +8,7 @@ set -uo pipefail
 # Each reviewer writes its own log; this script does NOT decide anything - it just
 # fans out the work and reports where the reports landed.
 
-BIN="$(dirname "$0")"
+BIN="$(dirname "$(realpath "$0")")"
 
 # verdict_of / roster 渲染 / 腿池都住在 _panel-roster-lib.sh —— **只许有一份**。
 # usage 也从它渲染成员；否则新增腿时最先撒谎的就是 `--help`。
@@ -52,7 +52,7 @@ EOF
 Args:
   TASK_FILE    markdown task/review brief (required)
   REPO_DIR     repo to review (default: $PWD)
-  LOG_PREFIX   log path prefix (default: <tool-root>/logs/panel-<taskname>-<ts>)
+  LOG_PREFIX   log path prefix (default: <data-dir>/logs/panel-<taskname>-<ts>)
 
 Options / env:
   --members ID[,ID...]        select exactly these candidates (see panel-candidates); no spare/fallback
@@ -68,14 +68,14 @@ Options / env:
   --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
                              (pool legs and role-only legs such as subcodex)
   PANEL_HEALTH_OVERRIDE      comma list, e.g. subkimi=quota,subglm=auth
-  PANEL_STATE_DIR            rotation/health state (default: <tool-root>/logs/.panel-state)
+  PANEL_STATE_DIR            rotation/health state (default: <data-dir>/logs/.panel-state)
   PANEL_HEALTH_COOLDOWN_SEC  failed/degraded leg cooldown (default: 21600)
   PANEL_HEALTH_DEAD_STREAK   连续这么多轮 rc≠0 就**停止轮换**该腿,冷却过了也不放回
                              (默认 3;0=关掉)。只有 rc≠0 计数——INCOMPLETE/DEGRADED
                              是 rc=0,腿产出了东西,算进去会把干活的腿踢掉。
                              放回:PANEL_HEALTH_OVERRIDE=<leg>=healthy(成功一次即清零)
   (my-review gate is DEFAULT-ON) With no flag, panel-review looks for the
-                             convention file <tool-root>/tasks/<taskname>-my-review.md
+                             convention file <data-dir>/tasks/<taskname>-my-review.md
                              (taskname = TASK_FILE basename) and REFUSES to dispatch
                              if it is absent - so forgetting to write your own review
                              stops the panel instead of silently skipping the gate.
@@ -222,7 +222,7 @@ if [[ -n "$MEMBERS" ]]; then
   unset _members_rows _member_families _name _family _adapter _switch _env _value _model
 fi
 
-TOOL_ROOT="$(cd "$BIN/.." && pwd -P)"
+DATA_ROOT="$("$BIN/aiwork-config" data-path)" || exit 2
 TASK_FILE="$1"
 REPO_DIR="${2:-$PWD}"
 
@@ -377,7 +377,7 @@ unset _decision _typed_active
 # the task name. Then require it to exist and to live outside the repo. This flips
 # the anti-anchoring discipline from "remember to arm it" to "forgetting stops you".
 if [[ $NO_MY_REVIEW -eq 0 && -z "$MY_REVIEW" ]]; then
-  MY_REVIEW="$TOOL_ROOT/tasks/$(basename "${TASK_FILE%.*}")-my-review.md"
+  MY_REVIEW="$DATA_ROOT/tasks/$(basename "${TASK_FILE%.*}")-my-review.md"
 fi
 if [[ $NO_MY_REVIEW -eq 0 ]]; then
   if [[ ! -f "$MY_REVIEW" ]]; then
@@ -398,7 +398,7 @@ if [[ $NO_MY_REVIEW -eq 0 ]]; then
         echo "panel-review: my-review file is INSIDE the repo under review: $MRV" >&2
         echo "  the engine inlines untracked repo files into reviewer prompts and would leak it" >&2
         echo "  (a symlink physically in the repo counts too). Move it outside," >&2
-        echo "  e.g. $TOOL_ROOT/tasks/<name>-my-review.md" >&2
+        echo "  e.g. $DATA_ROOT/tasks/<name>-my-review.md" >&2
         exit 1 ;;
     esac
   done
@@ -409,7 +409,7 @@ PANEL_RUN_ID="$TS-$$-panel-review"
 PANEL_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PANEL_START_NS="$(date +%s%N)"
 TASKNAME="$(basename "${TASK_FILE%.*}")"
-LOG_PREFIX="${3:-$TOOL_ROOT/logs/panel-${TASKNAME}-${TS}}"
+LOG_PREFIX="${3:-$DATA_ROOT/logs/panel-${TASKNAME}-${TS}}"
 mkdir -p "$(dirname "$LOG_PREFIX")"
 
 # Freeze the exact task bytes before any leg starts.  A mutable task path cannot be
@@ -482,7 +482,7 @@ unset _leg _agent _chat _switch _mode _cmd
 
 # ── 健康池 + 轮换选择 ────────────────────────────────────────────────────
 # 不额外发探活请求；只吃显式状态和最近一次真实评审结果。未知视为可尝试。
-PANEL_STATE_DIR="${PANEL_STATE_DIR:-$TOOL_ROOT/logs/.panel-state}"
+PANEL_STATE_DIR="${PANEL_STATE_DIR:-$DATA_ROOT/logs/.panel-state}"
 HEALTH_FILE="$PANEL_STATE_DIR/health.tsv"
 CURSOR_FILE="$PANEL_STATE_DIR/cursor"
 HEALTH_COOLDOWN="${PANEL_HEALTH_COOLDOWN_SEC:-21600}"

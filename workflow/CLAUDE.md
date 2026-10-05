@@ -2,11 +2,11 @@
 
 本机是单人多 agent 工作站:主 agent(会话里的 frontier 模型)是**唯一的控制者与最终仲裁者**,
 外部模型(MiMo / DeepSeek / GLM / Kimi / Gemini / Grok / GPT-Codex)都是**员工**——它们的输出是待评估的证据,
-永远不是自动生效的决定。工具在 `/root/aiwork/bin/`,任务存 `/root/aiwork/tasks/`,
-日志存 `/root/aiwork/logs/`。
-本文件的唯一规范源在 `/root/aiwork/workflow/CLAUDE.md`；这里是 Claude Code 的部署副本。
-工作流 skill 同理以 `/root/aiwork/workflow/skills/` 为准，用
-`/root/aiwork/bin/sync-workflow-docs --check` 查逐字节漂移。
+永远不是自动生效的决定。工具在 aiwork 源码的 `bin/`（建议加入 PATH），任务存 `~/.local/share/aiwork/tasks/`,
+日志存 `~/.local/share/aiwork/logs/`。
+本文件的唯一规范源在 `aiwork/workflow/CLAUDE.md`；这里是 Claude Code 的部署副本。
+工作流 skill 同理以 `aiwork/workflow/skills/` 为准，用
+`aiwork/bin/sync-workflow-docs --check` 查逐字节漂移。
 
 ## 随身规矩(这几条不看抽屉也必须守)
 
@@ -55,7 +55,7 @@ coverage-eligible 的不同模型家族腿满足；v1、UNKNOWN/NMI、timeout、
 **oracle 是我写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
 
 **bump 版本号、或动判卷防线的 commit,必须挂在一个 track 下**(归进现成 track 也算)。
-这条 pre-commit 守卫 `/root/aiwork/bin/track-guard` 会机械查(新仓库要自己装 hook),
+这条 pre-commit 守卫 `aiwork/bin/track-guard` 会机械查(新仓库要自己装 hook),
 我只需记住它查不了的那件:**harness 自带的任务清单会话结束就没了,不许拿它顶替 track。**
 
 **外部执行腿一律不许**:push、merge、删文件、装依赖、碰生产系统、跑数据库迁移、改密钥。
@@ -85,7 +85,7 @@ panel 是第二意见,**永远不能替代我自己的第一遍工作**。
 gateway 内存里跑 6.8 而装好的 dist 是 6.10(07-07 全 cron 崩)。同一种病,不同运行时。
 
 所以:任何部署类改动之后,**跑一条能让运行中的目标自己打印版本/身份的命令**,和你发出去的
-东西对一遍。gateway 有现成脚本(`/root/aiwork/bin/check-gateway-version`);浏览器等其他目标,
+东西对一遍。gateway 有现成脚本(`aiwork/bin/check-gateway-version`);浏览器等其他目标,
 在任务的验证环节加一个等价的"回显活版本"检查再宣布完成。**盘上和运行时对不上 = BLOCK,不是警告。**
 
 ## 抽屉(用到再打开)
@@ -95,5 +95,5 @@ gateway 内存里跑 6.8 而装好的 dist 是 6.10(07-07 全 cron 崩)。同一
 - **多模型评审/发散** → `panel` skill:`panel-review` 健康池预算与五步协议、
   `panel-explore` 纪律、三条护栏、信任校准;各腿后端细节在它的 `references/legs.md`。
 - **track 轻量工作流**(一个 PR 级改动的工件链 proposal→design→tasks→verify→archive)
-  → `/track` skill;完整约定在 `/root/aiwork/track/CONVENTION.md`。
+  → `/track` skill;完整约定在 `aiwork/track/CONVENTION.md`。
   CLI:`track new|archive|list <name> [project-dir]`。

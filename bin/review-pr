@@ -18,7 +18,7 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _review_result import leg_identity, load_result, sha256_file
-from _aiwork_config import ConfigError, model as configured_model
+from _aiwork_config import ConfigError, data_path, model as configured_model
 
 
 BIN = Path(__file__).resolve().parent
@@ -67,7 +67,7 @@ def redact(text: str) -> str:
 
 
 def report_failure(directory: Path, run_id: str) -> None:
-    destination = BIN.parent / "logs/review-pr-failures" / run_id
+    destination = data_path("logs/review-pr-failures") / run_id
     try:
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         destination.parent.chmod(0o700)

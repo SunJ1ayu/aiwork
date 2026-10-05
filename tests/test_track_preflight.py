@@ -30,6 +30,7 @@ import copy  # noqa: E402
 import hashlib  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
+import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import unittest  # noqa: E402
@@ -272,7 +273,11 @@ class PreflightTest(unittest.TestCase):
         fake = Path(self.tmp.name) / "fakebin"
         fake.mkdir()
         for entry in BIN.iterdir():
-            if entry.name != "track-record":
+            if entry.name == "track":
+                # This fixture owns its checker stub. A launcher symlink resolves
+                # back to the real tool set and never calls that stub.
+                shutil.copy2(entry, fake / entry.name)
+            elif entry.name != "track-record":
                 (fake / entry.name).symlink_to(entry)
         stub = fake / "track-record"
         stub.write_text("#!/bin/sh\necho 'Traceback (most recent call last): boom' >&2\nexit 1\n")

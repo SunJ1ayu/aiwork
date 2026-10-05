@@ -70,17 +70,13 @@ review/explore 共用选择与会话执行,但 explore 的结果契约为 3,永�
 ### 1. 主 agent 先审并落盘自己的发现
 读真 diff/代码,写下 PASS/BLOCK/NEEDS_MORE_INFO + 具体条目,**在读任何评审报告之前**。
 **这道闸在工具里是 DEFAULT-ON,不是要你记得加的 flag**:运行 `panel-review --track NAME TASK REPO PREFIX`
-会自动找 `/root/aiwork/tasks/<taskname>-my-review.md`,**找不到就拒绝派发**(或它躺在被审
+会自动找 `~/.local/share/aiwork/tasks/<taskname>-my-review.md`,**找不到就拒绝派发**(或它躺在被审
 仓库里也拒——那会经 `collect_untracked` 泄漏)。非约定路径用 `--require-my-review PATH`;
 `--no-my-review` 只作为清醒的例外(比如根本没有 diff 可自审的任务)。
 
 **硬规矩:my-review 文件必须放在被审仓库之外。** 引擎会把仓库里每个未跟踪文件内联进评审
 prompt,仓内自审 = 喂给评审员 = 反锚定作废。
-> ⚠️ **审 aiwork 自己时,约定路径必然用不了**:约定路径是 `/root/aiwork/tasks/<name>-my-review.md`,
-> 而被审的仓就是 `/root/aiwork` ⇒ 它必然在仓内 ⇒ 闸拒绝派发,**而它给的建议路径正是它拒绝的那个**。
-> 这时只能 `--require-my-review /root/panel-my-reviews/<name>-my-review.md`(仓外),
-> 正本仍可留在仓里当工件。08-23 在这上面卡过一次;拒绝时 `rc=1`(fail-closed 是对的,
-> 别被 `| tail` 吃掉的 0 骗了)。
+> 自审约定路径位于本机数据目录，审 aiwork 自己时也在源码仓外；可用 `--require-my-review` 覆盖。
 
 ### 2. 评审员独立审
 实施前先按 **4c** 检查目标到方案的翻译,再记录两个轴:
@@ -155,7 +151,7 @@ predicate 判定为 coverage-eligible 的不同外部模型家族腿；v1、UNKN
 完整日志仍在仓外，不复制进 Git。单事件最多 64 KiB；实际腿数量由当轮花名册派生，
 不在 observation schema 里再设一个会漂移的数字上限。
 每条实际派出的腿各写各的
-`<prefix>.<leg>.log`(默认前缀 `/root/aiwork/logs/panel-<task>-<ts>`)。一条腿失败不阻断
+`<prefix>.<leg>.log`(默认前缀 `~/.local/share/aiwork/logs/panel-<task>-<ts>`)。一条腿失败不阻断
 其他腿;只有所有实际派出的腿都失败才非零退出。主自审必须在派发前已落盘，DEFAULT-ON
 闸会机械检查；不能为了省等待把顺序倒过来。
 
@@ -407,7 +403,7 @@ Cursor 的两种模式同样共用 本机 `~/.config/aiwork/models.env` 的 `cur
 **综合**。不要把分歧塌缩成一个答案,不要平均成假共识,不要让多份浅见洗成"很全面"。
 **brief 要写得更精简**——过度规定"好答案应该覆盖哪些点",模型就会锚定、不再发散。
 
-brief 放 `/root/aiwork/tasks/`,日志放 `/root/aiwork/logs/`。两个 `panel-*` 工具都做了
+brief 放 `~/.local/share/aiwork/tasks/`,日志放 `~/.local/share/aiwork/logs/`。两个 `panel-*` 工具都做了
 启动错峰,共享引擎对 429/5xx 有带上限的退避,并行扇出不会再静默丢腿。
 
 ## panel-slice — 切片评审(试点,2026-09-13 起)
@@ -440,8 +436,7 @@ panel-slice decide RUN_DIR FINDING confirmed|rejected|accepted-risk|inconclusive
 - `run_state=clean` 只是事实汇总(都收齐了、BLOCK 都登记并处置了),**不是 PASS**。
 - 登记 finding 的 `source` 写**哪一次尝试**(`dispatch#1`、`overall#2`),不是只写项名:
   一条 finding 只确认那一次的 BLOCK/NMI,同一项两次 BLOCK 要登记两条。
-- 审 aiwork 自己时:RUN_DIR 默认在 `logs/`(仓内,会被拒),自审默认在 `tasks/`(同样仓内)——
-  两个都显式给仓外路径。
+- RUN_DIR 和自审默认位于本机数据目录，审 aiwork 自己时也在源码仓外；可显式覆盖。
 - 清单格式/分配/预算/状态语义:`panel-slice --help`;为什么这么设计、各腿「不许派子 agent」
   逐腿核实表:track `sliced-panel-review` 的 design.md;GPT 腿细节:legs.md 的 subcodex 一节。
 

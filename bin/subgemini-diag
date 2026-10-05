@@ -8,9 +8,10 @@
 # 找最新会话 db → 连 -wal 一起复制(只读模式读不到还在 WAL 里的数据,
 # 这一步漏了就会得到"没找到失败记录"的假结论,我栽过一次)→ 翻 steps 表的 blob。
 #
-# 用法: subgemini-diag [评审home]     (默认 $HOME/.cache/aiwork/agy-review-home)
+# 用法: subgemini-diag [评审home]     (默认 $HOME/.local/share/aiwork/agy-review-home)
 set -uo pipefail
-HOME_DIR="${1:-${AGY_REVIEW_HOME:-$HOME/.cache/aiwork/agy-review-home}}"
+BIN_DIR="$(dirname "$(realpath "$0")")"
+HOME_DIR="${1:-${AGY_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path agy-review-home)}}"
 CONV="$HOME_DIR/.gemini/antigravity-cli/conversations"
 [ -d "$CONV" ] || { echo "subgemini-diag: 找不到会话目录 $CONV" >&2; exit 2; }
 BASE="$(ls -t "$CONV" 2>/dev/null | grep '\.db$' | head -1)"
