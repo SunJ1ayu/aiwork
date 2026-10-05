@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,33 @@ def choose_leg(name: str) -> tuple[str, str | None]:
     return identity[0], model
 
 
+def redact(text: str) -> str:
+    text = re.sub(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", "[redacted]", text, flags=re.S)
+    text = re.sub(r'''(?i)(?<![\w-])(token|password|api[_-]?key|secret)(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)''',
+                  r"\1\2[redacted]", text)
+    return re.sub(r"\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+", "[redacted]", text)
+
+
+def report_failure(directory: Path, run_id: str) -> None:
+    destination = BIN.parent / "logs/review-pr-failures" / run_id
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination.parent.chmod(0o700)
+        shutil.copytree(directory, destination, symlinks=True)
+        print(f"review-pr: failure artifacts kept in {destination}", file=sys.stderr)
+    except OSError as exc:
+        print(f"review-pr: could not preserve failure artifacts: {redact(str(exc))}", file=sys.stderr)
+        destination = None
+    diagnostic = directory / "leg.stderr"
+    if diagnostic.is_file():
+        text = diagnostic.read_text(encoding="utf-8", errors="replace")
+        if destination is not None:
+            text = text.replace(str(directory), str(destination))
+        tail = "\n".join(redact(text).splitlines()[-40:])
+        if tail:
+            print("--- leg stderr (last 40 lines) ---\n" + tail, file=sys.stderr)
+
+
 def run(command: list[str], *, env: dict[str, str] | None = None,
         input_text: str | None = None, cwd: Path | None = None) -> str:
     process = subprocess.run(command, input=input_text, text=True, capture_output=True,
@@ -63,11 +91,7 @@ def run(command: list[str], *, env: dict[str, str] | None = None,
     if process.returncode:
         reason = process.stderr.strip() or process.stdout.strip() or f"exit {process.returncode}"
         # Provider and Git errors are diagnostics, never a place to echo credentials.
-        reason = re.sub(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", "[redacted]", reason,
-                        flags=re.S)
-        reason = re.sub(r"(?i)\b(token|password|api[_-]?key|secret)\s*[:=]\s*\S+",
-                        r"\1=[redacted]", reason)
-        reason = re.sub(r"\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+", "[redacted]", reason)
+        reason = redact(reason)
         raise ReviewError(f"{Path(command[0]).name} failed (rc={process.returncode}): {reason[:800]}")
     return process.stdout
 
@@ -277,59 +301,65 @@ def main() -> int:
         pr = pr_state(token, args.pr, repository=args.repo)
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
             directory = Path(temporary)
-            repo, merge_base, files, diff = snapshot(token, pr, directory, repository=args.repo)
-            rules_sha, review_rules = aiwork_main_rules()
-            risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
-            task = directory / "task.md"
-            task.write_text(task_text(args.pr, pr, merge_base, files, diff,
-                                      review_rules, risks, rules_sha=rules_sha, repository=args.repo), encoding="utf-8")
-            log = directory / "review.log"
-            facts = directory / "facts.json"
-            result_file = directory / "result.json"
-            diagnostic = directory / "leg.stderr"
-            env = dict(os.environ)
-            for key in ("GH_TOKEN", "GITHUB_TOKEN", "AIWORK_REVIEW_GIT_TOKEN", "GIT_ASKPASS"):
-                env.pop(key, None)
-            env.update(AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_RESULT_BIN=str(BIN / "_review_result.py"),
-                       PANEL_DIFF_BASE=merge_base)
-            if frozen_model is not None:
-                env["CURSOR_MODEL"] = frozen_model
-            leg = subprocess.run([str(BIN / args.leg), "review", str(task), str(log), str(repo)],
-                                 text=True, capture_output=True, env=env, check=False)
-            diagnostic.write_text(leg.stderr, encoding="utf-8")
-            command = [sys.executable, str(BIN / "_review_result.py"), "emit", "--result", str(result_file),
-                       "--run-id", f"pr-{args.repo.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}", "--name", args.leg,
-                       "--family", family, "--adapter", args.leg, "--exit-code", str(leg.returncode),
-                       "--task-sha256", sha256_file(task), "--log", str(log), "--diagnostic", str(diagnostic)]
-            if facts.is_file():
-                command += ["--facts", str(facts)]
-            if frozen_model is not None:
-                command += ["--expected-model", frozen_model]
-            run(command)
-            result = load_result(result_file)
-            model = publishable_model(result)
-            identity = leg_identity(args.leg, model)
-            if identity is None or identity[0] != family or not model.startswith(identity[1]):
-                raise ReviewError("review leg model does not match selected family")
-            report = review_report(log)
-            block = {"verdict": result["verdict"], "head_sha": pr["head"]["sha"],
-                     "model": model, "family": family, "completeness": completeness(result),
-                     "files_read": files}
-            body = build_body(args.leg, model, report, block)
-            check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=args.repo))
-            if args.dry_run:
-                print(body, end="")
+            run_id = f"pr-{args.repo.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}-{directory.name.removeprefix('aiwork-review-pr-')}"
+            try:
+                repo, merge_base, files, diff = snapshot(token, pr, directory, repository=args.repo)
+                rules_sha, review_rules = aiwork_main_rules()
+                risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
+                task = directory / "task.md"
+                task.write_text(task_text(args.pr, pr, merge_base, files, diff,
+                                          review_rules, risks, rules_sha=rules_sha, repository=args.repo), encoding="utf-8")
+                log = directory / "review.log"
+                facts = directory / "facts.json"
+                result_file = directory / "result.json"
+                diagnostic = directory / "leg.stderr"
+                env = dict(os.environ)
+                for key in ("GH_TOKEN", "GITHUB_TOKEN", "AIWORK_REVIEW_GIT_TOKEN", "GIT_ASKPASS"):
+                    env.pop(key, None)
+                env.update(AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_RESULT_BIN=str(BIN / "_review_result.py"),
+                           PANEL_DIFF_BASE=merge_base)
+                if frozen_model is not None:
+                    env["CURSOR_MODEL"] = frozen_model
+                leg = subprocess.run([str(BIN / args.leg), "review", str(task), str(log), str(repo)],
+                                     text=True, capture_output=True, env=env, check=False)
+                diagnostic.write_text(leg.stderr, encoding="utf-8")
+                command = [sys.executable, str(BIN / "_review_result.py"), "emit", "--result", str(result_file),
+                           "--run-id", run_id, "--name", args.leg,
+                           "--family", family, "--adapter", args.leg, "--exit-code", str(leg.returncode),
+                           "--task-sha256", sha256_file(task), "--log", str(log), "--diagnostic", str(diagnostic)]
+                if facts.is_file():
+                    command += ["--facts", str(facts)]
+                if frozen_model is not None:
+                    command += ["--expected-model", frozen_model]
+                run(command)
+                result = load_result(result_file)
+                model = publishable_model(result)
+                identity = leg_identity(args.leg, model)
+                if identity is None or identity[0] != family or not model.startswith(identity[1]):
+                    raise ReviewError("review leg model does not match selected family")
+                report = review_report(log)
+                block = {"verdict": result["verdict"], "head_sha": pr["head"]["sha"],
+                         "model": model, "family": family, "completeness": completeness(result),
+                         "files_read": files}
+                body = build_body(args.leg, model, report, block)
+                check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=args.repo))
+                if args.dry_run:
+                    print(body, end="")
+                    return 0
+                response = github(token, f"repos/{args.repo}/pulls/{args.pr}/reviews",
+                                  {"commit_id": pr["head"]["sha"], "event": "COMMENT", "body": body})
+                link = response.get("html_url")
+                if not isinstance(link, str) or not link.startswith("https://github.com/"):
+                    raise ReviewError("review POST succeeded but returned no review link")
+                # The gate wakes on the review itself (OpenDesign aiwork-review-ping); no second doorbell.
+                print(link)
                 return 0
-            response = github(token, f"repos/{args.repo}/pulls/{args.pr}/reviews",
-                              {"commit_id": pr["head"]["sha"], "event": "COMMENT", "body": body})
-            link = response.get("html_url")
-            if not isinstance(link, str) or not link.startswith("https://github.com/"):
-                raise ReviewError("review POST succeeded but returned no review link")
-            # The gate wakes on the review itself (OpenDesign aiwork-review-ping); no second doorbell.
-            print(link)
-            return 0
+            except (ReviewError, OSError, ValueError):
+                report_failure(directory, run_id)
+                raise
+
     except (ReviewError, OSError, ValueError) as exc:
-        print(f"review-pr: {exc}", file=sys.stderr)
+        print(f"review-pr: {redact(str(exc))}", file=sys.stderr)
         return 1
 
 

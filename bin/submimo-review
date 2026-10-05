@@ -87,12 +87,18 @@ def fail(message: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
-def read_text(path: Path, max_bytes: int) -> str:
+class ModelOutputTruncated(Exception):
+    pass
+
+
+def read_text(path: Path, max_bytes: int, truncations: list[str] | None = None) -> str:
     data = path.read_bytes()
     truncated = len(data) > max_bytes
     data = data[:max_bytes]
     text = data.decode("utf-8", errors="replace")
     if truncated:
+        if truncations is not None:
+            truncations.append(str(path))
         text += f"\n\n[TRUNCATED: file exceeded {max_bytes} bytes]\n"
     return text
 
@@ -167,7 +173,7 @@ def resolve_diff_target(repo: Path) -> str | None:
     return out.strip() if rc == 0 else None
 
 
-def clip_text(text: str, max_bytes: int, label: str) -> str:
+def clip_text(text: str, max_bytes: int, label: str, truncations: list[str] | None = None) -> str:
     """Cap a git output before it goes into the prompt. Oversized diffs are a
     root cause of weak-model empty responses and 900s timeouts; the marker
     tells the reviewer (and the arbiter reading the log) it saw a partial view."""
@@ -175,10 +181,13 @@ def clip_text(text: str, max_bytes: int, label: str) -> str:
     if len(data) <= max_bytes:
         return text
     clipped = data[:max_bytes].decode("utf-8", errors="replace")
+    if truncations is not None:
+        truncations.append(label)
     return clipped + f"\n[TRUNCATED: {label} exceeded {max_bytes} bytes]\n"
 
 
-def collect_includes(patterns: list[str], repo: Path, max_file_bytes: int) -> list[tuple[str, str]]:
+def collect_includes(patterns: list[str], repo: Path, max_file_bytes: int,
+                     truncations: list[str] | None = None) -> list[tuple[str, str]]:
     files: list[Path] = []
     for pattern in patterns:
         base_pattern = pattern if os.path.isabs(pattern) else str(repo / pattern)
@@ -195,11 +204,12 @@ def collect_includes(patterns: list[str], repo: Path, max_file_bytes: int) -> li
             label = str(path.relative_to(repo))
         except ValueError:
             label = str(path)
-        collected.append((label, read_text(path, max_file_bytes)))
+        collected.append((label, read_text(path, max_file_bytes, truncations)))
     return collected
 
 
-def collect_untracked(repo: Path, max_file_bytes: int, max_total_bytes: int) -> list[tuple[str, str]]:
+def collect_untracked(repo: Path, max_file_bytes: int, max_total_bytes: int,
+                      truncations: list[str] | None = None) -> list[tuple[str, str]]:
     """Return (label, content) for files git considers untracked, so that newly
     added files (absent from `git diff`) are still shown for review.
 
@@ -222,12 +232,14 @@ def collect_untracked(repo: Path, max_file_bytes: int, max_total_bytes: int) -> 
             omitted.append(rel)
             continue
         try:
-            content = read_text(path, max_file_bytes)
+            content = read_text(path, max_file_bytes, truncations)
         except Exception as exc:
             content = f"[could not read: {exc}]"
         total += len(content.encode("utf-8"))
         collected.append((rel, content))
     if omitted:
+        if truncations is not None:
+            truncations.append('untracked files')
         collected.append((
             "[untracked budget exhausted]",
             f"[TRUNCATED: untracked files exceeded {max_total_bytes} bytes total; "
@@ -345,7 +357,8 @@ def call_model(prompt: str, timeout: int) -> str:
 
     try:
         data = json.loads(body)
-        message = data["choices"][0]["message"]
+        choice = data["choices"][0]
+        message = choice["message"]
         content = message.get("content")
         reasoning = message.get("reasoning_content")
     except Exception:
@@ -355,18 +368,22 @@ def call_model(prompt: str, timeout: int) -> str:
     # recovered instead of failing validation as "empty output". A raw None here
     # used to crash write_log with a TypeError and no log at all; normalize so
     # whatever remains flows into validate_result.
-    return content or reasoning or ""
+    output = content or reasoning or ""
+    if choice.get("finish_reason") == "length":
+        raise ModelOutputTruncated(output)
+    return output
 
 
-def build_prompt(args: argparse.Namespace) -> tuple[str, list[str]]:
+def build_prompt(args: argparse.Namespace) -> tuple[str, list[str], bool]:
     task_path = Path(args.task_file).expanduser().resolve()
     if not task_path.is_file():
         fail(f"task file not found: {task_path}")
 
     repo = Path(args.repo).expanduser().resolve()
+    truncations: list[str] = []
     parts = [
         "# Task",
-        read_text(task_path, args.max_file_bytes),
+        read_text(task_path, args.max_file_bytes, truncations),
     ]
     warnings: list[str] = []
 
@@ -379,13 +396,14 @@ def build_prompt(args: argparse.Namespace) -> tuple[str, list[str]]:
             run_git(repo, ["diff", "--find-renames", *target_args]),
             args.max_diff_bytes,
             "git diff",
+            truncations,
         )
         parts.extend(
             [
                 "# Git Status",
-                "```text\n" + clip_text(run_git(repo, ["status", "--short"]), args.max_file_bytes, "git status") + "\n```",
+                "```text\n" + clip_text(run_git(repo, ["status", "--short"]), args.max_file_bytes, "git status", truncations) + "\n```",
                 "# Git Diff Stat",
-                "```text\n" + clip_text(run_git(repo, ["diff", "--stat", *target_args]), args.max_file_bytes, "git diff --stat") + "\n```",
+                "```text\n" + clip_text(run_git(repo, ["diff", "--stat", *target_args]), args.max_file_bytes, "git diff --stat", truncations) + "\n```",
                 "# Git Diff" + (f" (vs {target})" if target else ""),
                 "```diff\n" + diff_text + "\n```",
             ]
@@ -393,7 +411,7 @@ def build_prompt(args: argparse.Namespace) -> tuple[str, list[str]]:
         # `git diff` only shows tracked changes; untracked/new files appear as
         # `??` names in status with NO content. Inline their content here so a
         # review of newly-added files is not a silent blind spot.
-        untracked = collect_untracked(repo, args.max_file_bytes, args.max_untracked_total_bytes)
+        untracked = collect_untracked(repo, args.max_file_bytes, args.max_untracked_total_bytes, truncations)
         if untracked:
             parts.append(
                 "# Untracked / New Files (content not in the diff above)\n"
@@ -403,7 +421,7 @@ def build_prompt(args: argparse.Namespace) -> tuple[str, list[str]]:
             for label, content in untracked:
                 parts.append(f"## {label}\n```text\n{content}\n```")
 
-    includes = collect_includes(args.include, repo, args.max_file_bytes)
+    includes = collect_includes(args.include, repo, args.max_file_bytes, truncations)
     if includes:
         parts.append("# Included Files")
         for label, content in includes:
@@ -419,14 +437,14 @@ def build_prompt(args: argparse.Namespace) -> tuple[str, list[str]]:
             "attach files via --include / DEEPSEEK_INCLUDE / ZHIPU_INCLUDE."
         )
 
-    return "\n\n".join(parts), warnings
+    return "\n\n".join(parts), warnings, bool(truncations)
 
 
 def review_result_helper() -> Path:
     return Path(os.environ.get("AIWORK_REVIEW_RESULT_BIN", Path(__file__).with_name("_review_result.py")))
 
 
-def write_adapter_facts() -> None:
+def write_adapter_facts(*, truncated: bool = False) -> None:
     output = os.environ.get("AIWORK_REVIEW_FACTS_PATH")
     if not output:
         return
@@ -443,7 +461,7 @@ def write_adapter_facts() -> None:
             "--invoked-model",
             model,
             "--view-delivery-state",
-            "complete",
+            "partial" if truncated else "complete",
             "--view-mode",
             "diff_bundle",
             "--billing-mode",
@@ -523,14 +541,19 @@ def main() -> None:
         # argparse checks choices only for explicit flags, not env-sourced defaults
         fail(f"invalid REVIEW_MODE '{args.mode}' (want review or explore)")
 
-    prompt, warnings = build_prompt(args)
-    write_adapter_facts()
+    prompt, warnings, truncated = build_prompt(args)
+    write_adapter_facts(truncated=truncated)
     for w in warnings:
         print(f"{LABEL}: WARNING: {w}", file=sys.stderr)
     if args.dry_run:
         result = ""
     else:
-        result = call_model(prompt, args.timeout)
+        try:
+            result = call_model(prompt, args.timeout)
+        except ModelOutputTruncated as exc:
+            log_path = Path(args.log_file).expanduser().resolve()
+            write_log(log_path, str(exc), prompt, False, warnings)
+            fail(f"模型输出被截断 (finish_reason=length); raw output kept in {log_path}")
 
     log_path = Path(args.log_file).expanduser().resolve()
     write_log(log_path, result, prompt, args.dry_run, warnings)
