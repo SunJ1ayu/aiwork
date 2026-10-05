@@ -1,99 +1,39 @@
 # Agent Instructions
 
-本机是单人多 agent 工作站:主 agent(会话里的 frontier 模型)是**唯一的控制者与最终仲裁者**,
-外部模型(MiMo / DeepSeek / GLM / Kimi / Gemini / Grok / GPT-Codex)都是**员工**——它们的输出是待评估的证据,
-永远不是自动生效的决定。工具在 aiwork 源码的 `bin/`（建议加入 PATH），任务存 `~/.local/share/aiwork/tasks/`,
-日志存 `~/.local/share/aiwork/logs/`。
-本文件的唯一规范源在 `aiwork/workflow/CLAUDE.md`；这里是 Claude Code 的部署副本。
-工作流 skill 同理以 `aiwork/workflow/skills/` 为准，用
-`aiwork/bin/sync-workflow-docs --check` 查逐字节漂移。
+本文件是 aiwork 源码 `workflow/CLAUDE.md` 的部署副本。工具位于源码的 `bin/`，可加入 PATH。
+工作流 skill 的源码位于 `workflow/skills/`；`bin/sync-workflow-docs --check` 检查部署漂移。
 
-## 随身规矩(这几条不看抽屉也必须守)
+## 规则入口
 
-**oracle 永远由主 agent 亲自写,绝不外包。** 弱模型最可能的失败方式是**改考卷让自己及格**
-(删断言、写死期望值、加 skip)。
+评审与修复规则：[aiwork main 的 REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md)。
+项目已接受风险见项目 main 的 `.aiwork/accepted-risks.md`；正式评审与合并条件见项目关卡策略。
+需要判断时读取这些来源，说明文件只提供入口。
 
-**收货时执行腿的自述一概不作数**,三道闸每次都走(① diff / ② 亲跑 / ③ 亲读)。
-每道闸挡的是什么、`--protect` 清单、以及闸① 的机械版 `delegate-codex --receive`,
-全在 delegate 抽屉里 —— **派活前本来就得开那个抽屉**,这里不留第二份
-(2026-08-08 退场:这里那份已经比抽屉旧,它还在讲手工流程)。
+## 一个任务的走法
 
-**判据红了,先问「是不是真 bug」,不许先怀疑判据。** 尤其是行为考卷那种带方差的:
-"它只是抖" 是最舒服的解释,而顺着它走下一步就是**调钝报警器**——那和弱模型
-"改考卷让自己及格" 是同一个动作,只是理由体面。08-04 实证:我把 resolver_eval 的抖动
-归成噪音、准备加"重复跑取多数",用户一句「抖动实际上是我们的 bug」掰回来;
-真因是助手在心算日期、工具层零日期能力,业主的截止日当时就是错的。
-**判"我改劣化了没有"要对 baseline 也连跑几遍比失败数**,不是看单次绿没绿。
-> 反过来也有一条,别用它掩护上面这条:**连红三遍、而模型的答案讲得通 ⇒ 先怀疑题面**。
-> 08-04 同日实证:我把两步行为的断言写进单选路由器考卷,红了两轮才想明白错在题面。
-> 区别在**证据方向**:改题面前必须说清"这份考卷结构上问不出这件事",
-> 并把断言**搬到问得出的地方**(更强、且重新红检);说不清就是在放水。
+1. 从最新 main 拉分支。
+2. 先写能够在旧实现上失败的测试，再实现。
+3. 全跑项目 `tests/`，核对结果及已明确允许的例外。
+4. 用机器人提交和推送，以机器人身份开 PR，然后停下。
+5. PR 开好后，由主评审和 `review-pr` 派出的另一家族评审腿完成正式评审。
+   `review-pr` 必须在沙箱外运行；使用目标仓库当前 PR head 和 main 的规则来源。
+6. 修改时读取 `REVIEW-RULES.md`，按一轮修完、推一次的约定处理。
+   合并由项目关卡或业主完成。
 
-**判据先单独 commit,再 commit 修复。** 中途自己补判据也一样。
-闸①问的是「执行腿有没有动判卷」,不是「文件有没有变过」——判据和它的修复揉进一个
-commit,闸①就退化成翻执行腿日志人工找补,而且 git 历史里再也证明不了「红过」。
+## 做事的方法
 
-**风险和方向不确定性是两个轴，别再让 lane 一词兼任两件事。**
-`impact-risk`:self / standard / high，外部评审预算分别是 self=0、standard=1、high=2；
-新写口 / 权限 / auth / 钱 / 数据一致性默认 high。新任务先用 `panel-candidates` 查看候选,由主裁以 `--members` 显式选择;high 至少两个不同模型家族。旧入口保留轮换，
-失败、降级、冲突、NEEDS_MORE_INFO 或我仍不确定才追加第三腿(旧入口遇冲突自动补的那条同组,解决不了分裂);
-**一家 PASS 一家 BLOCK(分裂)不靠加腿或重派,由我裁**(panel skill 第 4 节;挡不住假想实现 / 手改才有 / 老版本就有的「锤子砸墙」类当场驳回或延期)；判卷/沙箱/权限边界等
-特殊控制面才显式 `panel-review --all`。绑定 typed track 时，`--budget` 只能加证据，不能低于
-该 risk 的 0/1/2 预算绕闸。**先查方案,再写实现判据或动手**:新增/改变用户必经步骤、
-默认自动动作、失败退路或数据/权限/跨模块契约,以及选错需跨模块/迁移/部署撤回的方案,
-先做不同家族的独立方案挑战;关键未知先用最小实验验证。局部可逆且沿用已验证契约的修改保持轻量。
-`design-uncertainty`:low / high 是检查后的判断;需求明确、自报 low 或 Jev 低分都不是免检凭据,
-也不因实现风险高就自动全池规划。触发、独立输入、证据与预算的唯一详细协议在 panel skill **4c**。
-新 track 的机器字段只写同目录 `decision.json`，unknown 用 null，不在 verify.md 复制
-`Verdict:` / `lane:` / `派给:`。真实 controller dispatch 前先跑
-`track-record validate --phase dispatch tracks/<name>`；缺字段、高危因子降档、high uncertainty
-却没有持久 premise evidence 都会打印 rule/path/actual/expected 并 BLOCK。旧 track 继续 legacy，
-不从旧自由文本猜新字段。PASS 归档还会从 compact panel observation 机械核对
-self/standard/high 是否由同一次成功 panel、同一 subject digest 下 0/1/2 个
-coverage-eligible 的不同模型家族腿满足；v1、UNKNOWN/NMI、timeout、降级、证据不完整、
-跨 run 拼接或**未经裁决记录**的 PASS/BLOCK 分裂都不能补预算。缺腿时 archive 与成功成本聚合都 BLOCK。
-**oracle 是我写的、可能本身就错**——过审只证明"合乎规格",不证明规格对。
+- 判据红了，先用具体输入复现，确认是实现问题还是测试题面的问题；不改考卷让自己及格。
+- 自己写的判据也可能错；检查它能否区分正确和错误行为，必要时对旧实现或基线做对照。
+- 收货不信执行腿的自述：看真实 diff 和未跟踪文件，自己跑检查，再读实际改动。
+- 委托只给清晰的任务、文件范围和验证命令；判据留给主 agent，详见 `delegate` skill。
+- 大改动开工前方向未定时，可选 `panel-explore` 发散方案，用法见 `panel` skill。
+- 部署验证看运行中的目标是否加载了预期版本；源码更新、部署副本和运行状态分别核对。
 
-**bump 版本号、或动判卷防线的 commit,必须挂在一个 track 下**(归进现成 track 也算)。
-这条 pre-commit 守卫 `aiwork/bin/track-guard` 会机械查(新仓库要自己装 hook),
-我只需记住它查不了的那件:**harness 自带的任务清单会话结束就没了,不许拿它顶替 track。**
+## 本机设置与数据
 
-**外部执行腿一律不许**:push、merge、删文件、装依赖、碰生产系统、跑数据库迁移、改密钥。
-需要危险操作**先问用户**。**沙箱网络保持关闭**——三道闸查的都是「它改了什么」,
-没有一道查得了「它往外发了什么」,网络是唯一无痕的出口。
+本机设置位于 `~/.config/aiwork/`，包含 `models.env`、GitHub App 角色配置及私钥。
+本机运行数据位于 `~/.local/share/aiwork/`，包含 tasks、logs、worktrees、运行期 home 和 archive。
+统一入口是 `bin/aiwork-config`；凭证、配置备份、会话及原始日志留在本机。
 
-**要第二意见**开 `panel` skill:实施前按 **4c** 选实验/独立挑战/探索,实现后选 review。
-局部已验证修改保持轻量,不能只因两种 panel 都不像就跳过命中的方案检查。
-panel 是第二意见,**永远不能替代我自己的第一遍工作**。
-
-**新硬规矩的准入与退场**:刹车类(要我停下来做某事)= 真出过事 + git 一眼可查;
-信任/安全类(闸、断网这种)= 查工件不查自述 + 防不可逆损害,**允许事前推演准入,
-不必等出事**。两类都够不上的只能进抽屉当建议。每条硬规矩要说得出理由;
-理由失效即候删——总量不许只进不出。
-> 退场是真会发生的,不是场面话。2026-08-08 退过一轮:收货三闸细节与 `--protect` →
-> delegate 抽屉(那里更新、这里已旧);「lane/派给 空着=没判过」「bump 必挂 track」的
-> 机械部分 → track-guard 守卫;AGENTS.md 那段重复 → 只留全局那一份。
-> **判断标准就一条:这件事已经有机器在查、或抽屉里有更新的全文,这里就不该有第二份。**
-
-## 在使用现场验证(部署目标规矩)
-
-交付物跑在你改的仓库之外时——浏览器(Tampermonkey)、systemd 服务、OpenClaw gateway、
-另一台机器的安装——**"做完了"的标准是运行中的目标回显出预期版本/状态,不是新文件躺在盘上。**
-没被加载/重启/重装的新文件不算部署。
-
-一周内栽过两次:GLM 抢购脚本浏览器里跑 v2.9 而 v3.0 躺在盘上(输掉一次实盘);
-gateway 内存里跑 6.8 而装好的 dist 是 6.10(07-07 全 cron 崩)。同一种病,不同运行时。
-
-所以:任何部署类改动之后,**跑一条能让运行中的目标自己打印版本/身份的命令**,和你发出去的
-东西对一遍。gateway 有现成脚本(`aiwork/bin/check-gateway-version`);浏览器等其他目标,
-在任务的验证环节加一个等价的"回显活版本"检查再宣布完成。**盘上和运行时对不上 = BLOCK,不是警告。**
-
-## 抽屉(用到再打开)
-
-- **派活给执行腿** → `delegate` skill:分层选档、oracle 先行、派活三件套、收货三闸、
-  `submimo fix` 的全部参数与边界、codex(GPT)腿怎么调。
-- **多模型评审/发散** → `panel` skill:`panel-review` 健康池预算与五步协议、
-  `panel-explore` 纪律、三条护栏、信任校准;各腿后端细节在它的 `references/legs.md`。
-- **track 轻量工作流**(一个 PR 级改动的工件链 proposal→design→tasks→verify→archive)
-  → `/track` skill;完整约定在 `aiwork/track/CONVENTION.md`。
-  CLI:`track new|archive|list <name> [project-dir]`。
+可用通道包括 Codex、Cursor、DeepSeek、GLM、Gemini、Kimi、MiMo、Grok；默认模型读取本机设置。
+正式评审入口是 `review-pr`；实现委托和可选方案工具分别见 `delegate`、`panel` skill。

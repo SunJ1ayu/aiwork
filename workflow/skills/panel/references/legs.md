@@ -1,6 +1,8 @@
 # 各评审腿的后端细节
 
-平时不用读。改模型 / 换 key / 某条腿死了排查时再看。
+工具使用与故障排查参考。评审与修复规则见 [REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md)，
+项目已接受风险见项目 main 的 `.aiwork/accepted-risks.md`，正式评审与合并条件见项目关卡策略。
+正式评审在 PR 上通过沙箱外的 `review-pr` 发布；这里描述通道行为与诊断方式。
 
 **所有腿共同的安全姿态**:输出只是**证据**,不是决定;绝不让它自己拍板;
 task 存 `~/.local/share/aiwork/tasks/`,log 存 `~/.local/share/aiwork/logs/`。
@@ -106,7 +108,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 默认模型看本机 `~/.config/aiwork/models.env` 的 `cursor` 行，换模型只改这一行；`CURSOR_MODEL` 单次覆盖。
 支持明确的 Composer / Claude / GPT / Gemini / Grok / Kimi / DeepSeek / GLM 模型 ID；
 以 `cursor-agent models` 中可用的 ID 为准。自动路由和未知家族拒跑。
-花名册、typed coverage 按所选模型家族计数；预算轮换去重，`--all` 仍派全部启用通道。
+花名册按所选模型家族计数；轮换去重，`--all` 仍派全部启用通道。
 
 - Linux 登录：`cursor-agent login`，凭证默认 `~/.config/cursor/auth.json`，可用 `CURSOR_AUTH_FILE` 指定。
   每轮只读取 accessToken，经 CLI 的 CURSOR_AUTH_TOKEN 注入，不复制/刷新 refreshToken，不改用户登录；令牌过期先由正常 CLI 刷新登录。
@@ -116,7 +118,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
   每轮独立 HOME/config/data 与 PID namespace，CLI 退出/超时结束所有子进程后清理。--trust 只标记本次临时工作目录及副本，不自动批准工具。
 - `.stream.jsonl` 留原始事件，`.stream-summary.json` 留完成/模型/usage 事实，`.log` 只留助手正文。
   requested/invoked 记录 --model 的实际 ID；init 仅报告显示名，检查其家族并保留原文，reported ID 为 unknown。支持目录中的 cursor-grok-* ID，不把别名当精确身份。
-  超时、截断、空回答、家族不符不能计成功；review 需要裁决，explore 需要七个方向段落。
+  超时、截断、空回答、家族不符会记为调用失败；review 与 explore 的输出格式见工具帮助。
 - timeout 默认 900 秒，`CURSOR_TIMEOUT` 覆盖。无 fix、无聊天回落。
 - 当前使用本机 CLI 支持的隐藏工具白名单/配置隔离参数；升级 CLI 后重跑真实探针。
   --exclude-workspace-context 被当前服务端拒绝，未启用；不承诺排除所有仓库规则上下文。
@@ -153,7 +155,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
 - **证据**：`.log` 仅含主代理文本；`.stream.jsonl` 保留工具事件，
   `.stream-summary.json` 记录模型、完成状态、轮数和报告的 usage/cost。
   必须有正常完成事件；超时、撞轮次、模型不符、截断流与无裁决评审均失败。
-  部分报告会保留，但不能充当完成的评审覆盖。
+  部分报告保留用于诊断，调用完成状态按真实结果记录。
 
 ## subkimi (月之暗面 Kimi) — 轮换池成员
 
@@ -177,8 +179,7 @@ MiMo CLI 自带模型表跟不上新模型时(2.6 发布当天报 `Model not fou
   一次 canary Write 预检守卫,**不 DENY 就拒绝派发**——沙箱坏了要让工具停,而不是悄悄变弱。
 - auth:Kimi 会员 OAuth token,通过 `credentials` 符号链接共享进评审 home(`kimi login`
   刷新一次即可)。烧 Kimi 会员额度,不烧 Claude。
-- `panel-review` 把它纳入健康轮换池(`PANEL_KIMI_LEG=off` 关闭)，只有被预算选中或条件
-  升级时才实际派出；**没有 chat 回落**。
+- `panel-review` 把它纳入健康轮换池(`PANEL_KIMI_LEG=off` 关闭)；**没有 chat 回落**。
 
 ## subgemini (Gemini,跑在 Antigravity CLI 上) — 轮换池成员,2026-08-25 起加入
 
@@ -191,25 +192,14 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
   且 **2026-06-18 起 gemini-cli 对免费 / AI Pro / Ultra 个人账号停止服务**。
   那条路是死的,别再走回去。
 - **默认模型看本机 `~/.config/aiwork/models.env` 的 `gemini` 行**。
-  历史选型记录见 track `gemini-leg-38`(业主 2026-09-04 定)。
-  **注意 Flash 档一路更新,而 Pro 最高停在 3.1** —— "用最新的"和
-  "用最大的"在这里是两个方向。
-  ⚠️ **3.8 的证据档次低于 3.7,这是业主明确拍板接受的,不是疏忽**:
-  3.7 当初过了**埋雷考卷**才定(同一份卷连考两轮,`gemini-3.7-flash-high` 抓 5 / 7 条,
-  `gemini-3.1-pro-high` 抓 3 / 4 条,两轮同向);**3.8 只过了"存在 + 真链冒烟"**,没重考。
-  **2026-09-04 业主决定:① 就用 3.8,不重考;② 以后同为 gemini 家族内换档,
-  改一行即可,不必再走 track。** 这两条是业主签的字 ——
-  评审腿(DeepSeek F2)当时的意见正是"这个取舍不能由提出放松的人自己认下",故记在此处。
-  代价说清:**"默认档够不够强"从此不由机器保证**;真出现"评审突然变水"的现象,
-  第一个该看的就是这里。
 - 判据只钉"必须是 `gemini-*` 且 `--model` 真被传给 agy"(V46①②),**不钉版本号** ——
   版本号是本文件与 `bin/subgemini` 的第二份拷贝,钉了就会过期
   (2026-09-04 实证:3.7→3.8 那天本文件就是错的,而它没让任何判据变红)。
   现在 `tests/test-workflow-docs.sh` W3 检查模型默认值指向本机设置，不再抄一份版本号。
 - **🔴 模型是硬闸,不是默认值**:`AGY_MODEL` 可覆盖,但 **非 `gemini-*` 一律拒跑**。
   `agy models` 同时供应 `claude-sonnet-4-6` / `claude-opus-4-6-thinking` /
-  `gpt-oss-120b`。这条腿在花名册里代表 **Google 家族**,它跑成 Claude 会让归档闸的
-  「覆盖 N 个不同模型家族」变成一句假话 —— **而那道闸查的是腿名,查不出模型**。
+  `gpt-oss-120b`。这条腿在花名册里代表 **Google 家族**,它跑成 Claude 会让
+  「N 个不同模型家族参与评审」变成一句假话 —— 而花名册查的是腿名,查不出模型。
 - **隔离靠换 `HOME`**:agy 没有专用 home 变量(路径从 `$HOME` 拼),
   所以 `AGY_REVIEW_HOME`(默认 `~/.local/share/aiwork/agy-review-home`,**仓外**)
   整体重定向配置/数据/状态,与 subglm 的 `OPENCODE_REVIEW_HOME` 同形。
@@ -290,9 +280,9 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
 - **敞账:`agy` 是闭源 Go 二进制,而且会在日常运行中后台自我更新**
   (`agy update` 子命令 + 安装脚本自述)。**判卷防线上出现了一个会自己变的构件**,
   这笔账还没还(track subgemini-review-leg 的 D1)。
-- 超时 `AGY_TIMEOUT`(默认 1500s):**超时但裁决已落盘 = 收下**,同时往报告里追加一条
+- 超时 `AGY_TIMEOUT`(默认 1500s):**超时后保留已落盘的输出**,同时往报告里追加一条
   「这是部分运行」的横幅 —— 一份写完裁决就被砍的报告,长得和完整评审一模一样,
-  而它以后会被单独读到(归档、断线重连),那时终端上那句 stderr 早没了。判据 V46⑯。
+  而它以后会被单独读到(排障、断线重连),那时终端上那句 stderr 早没了。判据 V46⑯。
 - **任务文件不存在 ⇒ 拒跑**(判据 V46⑮)。原来是 `cat … 2>/dev/null || true`:路径写错
   时腿拿到一份没有任务的提示词,照样可能吐一个裁决行 ⇒ 收一个 PASS,而它什么都没审。
 - 派发不再按腿名分支:`panel-review` 从 `_panel-roster-lib.sh` 的 `PANEL_LEG_SPECS`
@@ -304,7 +294,7 @@ OAuth(`auth_method=consumer`),不烧 Claude 额度、也不需要 API key。
 
 只由 `panel-slice` 以 `panel-review --scoped-review --pin-leg subcodex` 钉住派发(默认整体腿),
 登记在 `_panel-roster-lib.sh` 的 `PANEL_ROLE_LEG_SPECS`。**不进普通池**:GPT 同时是默认执行腿
-(delegate-codex),进池会轮到它审自家代码;订阅额度也会被普通 high 评审悄悄吃掉。
+(delegate-codex),进池会轮到它审自家代码;订阅额度也会被普通轮换调用悄悄吃掉。
 
 - 模型默认看本机 `~/.config/aiwork/models.env` 的 `codex` 行,`SUBCODEX_MODEL` 单次覆盖。
 - 源仓 `ro-repo-exec` 物理只读,codex 在可丢弃副本里读、跑测试(`-s workspace-write`);任务书走 stdin。

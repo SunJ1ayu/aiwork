@@ -35,7 +35,6 @@ ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
 SOURCE="$ROOT/workflow"
 MAPPINGS=(
   "CLAUDE.md|CLAUDE.md"
-  "skills/track/SKILL.md|.claude/skills/track/SKILL.md"
   "skills/panel/SKILL.md|.claude/skills/panel/SKILL.md"
   "skills/panel/references/legs.md|.claude/skills/panel/references/legs.md"
   "skills/delegate/SKILL.md|.claude/skills/delegate/SKILL.md"

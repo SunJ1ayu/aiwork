@@ -16,7 +16,6 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 
 MAPPINGS=(
   "CLAUDE.md|CLAUDE.md"
-  "skills/track/SKILL.md|.claude/skills/track/SKILL.md"
   "skills/panel/SKILL.md|.claude/skills/panel/SKILL.md"
   "skills/panel/references/legs.md|.claude/skills/panel/references/legs.md"
   "skills/delegate/SKILL.md|.claude/skills/delegate/SKILL.md"
@@ -32,7 +31,10 @@ done
 
 echo "[W2] 同步器只管固定清单，漂移默认拒绝、显式 force 才覆盖"
 if [[ -x "$SYNC" ]]; then
-  d="$(mktemp -d)"; outside="$(mktemp)"; printf 'outside\n' > "$outside"
+  d="$(mktemp -d)"; outside="$(mktemp)"
+  mkdir -p "$d/.claude/skills/track"
+  printf 'retired deployed skill: cleanup after merge\n' > "$d/.claude/skills/track/SKILL.md"
+  printf 'outside\n' > "$outside"
   "$SYNC" --target-root "$d" --check >/dev/null 2>&1; rc=$?
   check "W2: 空部署根 --check 必须报漂移" $([[ $rc -ne 0 ]]; echo $?)
 
@@ -57,6 +59,8 @@ if [[ -x "$SYNC" ]]; then
   check "W2: force 后回到唯一源字节" $?
   grep -qx 'settings-sentinel' "$d/.claude/settings.json"
   check "W2: settings 等非清单现场零触碰" $?
+  grep -qx 'retired deployed skill: cleanup after merge' "$d/.claude/skills/track/SKILL.md"
+  check "W2: 退役 track 部署副本留给合并后清理，同步器不删除它" $?
   "$SYNC" --target-root "$d" --check >/dev/null 2>&1; rc=$?
   check "W2: 同步后的 --check 通过" $([[ $rc -eq 0 ]]; echo $?)
 
@@ -70,17 +74,22 @@ else
   bad "W2: bin/sync-workflow-docs 存在且可执行"
 fi
 
-echo "[W3] 文档说的默认预算、模型和 agent 档与实现一致"
-grep -q -- '--risk self|standard|high' "$ROOT/README.md"
-check "W3: README 公开 self/standard/high 风险档" $?
+echo "[W3] 流程规则只有一个来源:说明文档指向 REVIEW-RULES.md,且没有任何文档要求自定风险等级或评审预算"
+for f in "$ROOT/README.md" "$SOURCE/CLAUDE.md" "$SOURCE"/skills/*/SKILL.md "$SOURCE"/skills/*/references/*.md; do
+  grep -q 'REVIEW-RULES.md' "$f"
+  check "W3: ${f#$ROOT/} 指向 REVIEW-RULES.md" $?
+done
+for f in "$ROOT/README.md" "$SOURCE/CLAUDE.md" "$SOURCE"/skills/*/SKILL.md "$SOURCE"/skills/*/references/*.md; do
+  ! grep -qE 'impact-risk|design-uncertainty|--risk |self/standard/high|self=0|standard=1|high=2|评审预算|decision\.json|lane:|必须挂.*track|--track NAME' "$f"
+  check "W3: ${f#$ROOT/} 没有自定风险等级/评审预算的旧流程" $?
+done
+[[ ! -e "$SOURCE/skills/track/SKILL.md" ]] && ! grep -q 'skills/track' "$ROOT/bin/sync-workflow-docs"
+check "W3: track skill 已退役,且不在 sync-workflow-docs 清单里" $?
 grep -q -- '--all.*current reviewer pool' "$ROOT/README.md" \
   && grep -q '全池评审' "$SOURCE/skills/panel/SKILL.md"
 check "W3: README/panel skill 把 --all 表述为全池语义，不绑定四审或五审" $?
 
-for f in "$SOURCE/CLAUDE.md" "$SOURCE/skills/track/SKILL.md" "$SOURCE/skills/panel/SKILL.md"; do
-  grep -q 'impact-risk' "$f" && grep -q 'design-uncertainty' "$f" && grep -q 'high=2' "$f"
-  check "W3: ${f#$SOURCE/} 使用两个正交轴且 high=2" $?
-done
+echo "[W3] 文档说的默认模型和 agent 档与实现一致"
 
 # 🔴 2026-09-04(track gemini-leg-38,DeepSeek F1 抓到的):W3 给 glm / mimo 都钉了
 # 「文档说的默认档 == 代码里的默认档」,**唯独 gemini 没钉** ⇒ 3.7→3.8 那天
@@ -126,34 +135,25 @@ grep -q 'aiwork-config.*model mimo' "$ROOT/bin/submimo" \
   && grep -q 'models.env.*mimo' "$SOURCE/skills/panel/references/legs.md"
 check "W3: MiMo 默认模型来自本机设置，文档不复制版本号" $?
 
-echo "[W4] 唯一源与同步器本身属于 judging surface"
-. "$ROOT/bin/_tooling-paths.sh"
-is_judging_surface "bin/sync-workflow-docs"
-check "W4: 同步写口受 track 归属守卫保护" $?
-is_judging_surface "workflow/CLAUDE.md" \
-  && is_judging_surface "workflow/skills/panel/SKILL.md"
-check "W4: 唯一规范源受 track 归属守卫保护" $?
-
-echo "[W5] typed decision 是新 track 唯一机器事实源，旧 lane 不再混进现行模板"
-d="$(mktemp -d)"; mkdir -p "$d/typed-doc"
-sed 's/__NAME__/typed-doc/g' "$ROOT/track/templates/decision.json" > "$d/typed-doc/decision.json"
-"$ROOT/bin/track-record" validate --phase shape "$d/typed-doc" >/dev/null 2>&1
-check "W5: decision 模板本身通过 shape validator" $?
-rm -rf "$d"
-
-! grep -qE '^-[[:space:]]*(Verdict|lane|派给):' "$ROOT/track/templates/verify.md"
-check "W5: 新 verify 模板不复制 verdict/lane/派给" $?
-grep -q 'decision.json' "$ROOT/track/CONVENTION.md" \
-  && ! grep -q 'verify.md → panel-review.*, by lane' "$ROOT/track/CONVENTION.md" \
-  && ! grep -q 'verify 那边会填 `lane: full`' "$ROOT/track/templates/design.md"
-check "W5: convention/design 现行语义只讲双轴" $?
-grep -q 'decision.json' "$SOURCE/skills/track/SKILL.md" \
-  && grep -q 'track-record.*validate.*dispatch' "$SOURCE/skills/track/SKILL.md" \
-  && ! grep -q '`lane:` 和 `派给:` 守卫仍查非空' "$SOURCE/CLAUDE.md"
-check "W5: workflow 要求 dispatch 前填 decision 并机械校验" $?
-! grep -q '唯一账本 = 各 track 的 `verify.md`' "$SOURCE/skills/delegate/SKILL.md" \
-  && ! grep -q '只留原始事实.*返工 N 轮' "$SOURCE/skills/delegate/SKILL.md"
-check "W5: delegate 不再要求手工返工账或 verify 第二事实源" $?
+echo "[W4] 操作流程与保留的方法"
+grep -q '最新 main' "$SOURCE/CLAUDE.md" \
+  && grep -q 'tests/' "$SOURCE/CLAUDE.md" \
+  && grep -q '机器人' "$SOURCE/CLAUDE.md" \
+  && grep -q '停下' "$SOURCE/CLAUDE.md"
+check "W4: 任务通过分支、实现、全测、机器人 PR 收尾" $?
+grep -q '另一家族' "$SOURCE/CLAUDE.md" \
+  && grep -q 'review-pr.*沙箱外' "$SOURCE/CLAUDE.md" \
+  && grep -q 'review-pr' "$SOURCE/skills/panel/SKILL.md"
+check "W4: 正式评审在 PR 上使用沙箱外 review-pr" $?
+grep -q '不改考卷让自己及格' "$SOURCE/CLAUDE.md" \
+  && grep -q '不信执行腿的自述' "$SOURCE/CLAUDE.md"
+check "W4: 保留判据核实与收货方法" $?
+grep -q -- '--no-track' "$SOURCE/skills/delegate/SKILL.md" \
+  && grep -q -- '--receive' "$SOURCE/skills/delegate/SKILL.md"
+check "W4: 委托保留隔离收货，用 --no-track" $?
+grep -q '~/.config/aiwork/' "$SOURCE/CLAUDE.md" \
+  && grep -q '~/.local/share/aiwork/' "$SOURCE/CLAUDE.md"
+check "W4: 设置与运行数据的本机目录明确" $?
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

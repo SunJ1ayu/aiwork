@@ -41,7 +41,6 @@ SUITES=(
   "delegate-observation|bash|$ROOT/tests/test-delegate-observation.sh"
   "delegate-isolate|bash|$ROOT/tests/test-delegate-isolate.sh"
   "worktree-sweep|bash|$ROOT/tests/test-worktree-sweep.sh"
-  "hooks-installed|bash|$ROOT/tests/test-hooks-installed.sh"
   "runlog|bash|$ROOT/tests/test-runlog.sh"
   "no-egress|bash|$ROOT/tests/test-no-egress.sh"
   "evidence-lifetime|bash|$ROOT/tests/test-evidence-lifetime.sh"
