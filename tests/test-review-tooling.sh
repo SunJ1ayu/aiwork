@@ -215,6 +215,19 @@ BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 # **不用全局 export**(四审两腿都点名这是脚枪:以后新写的用例会静默跳过闸)——
 # 改成在下面的调用处逐个显式关掉,谁关的一眼看得见,新用例默认闸是开着的。
 
+# Fake credentials are generated at runtime, never stored as literal values.
+FIXTURE_CHAT_KEY="$(printf '\170')"
+FIXTURE_DS_KEY="$(printf '%s%s' d k)"
+FIXTURE_GLM_KEY="$(printf '%s%s' z k)"
+FIXTURE_SHORT_KEY="$(printf '%s%s' s k)"
+FIXTURE_DUMMY_KEY="$(printf '%s%s' dum my)"
+FIXTURE_GLM_DUMMY_KEY="$(printf '%s-%s' "$FIXTURE_GLM_KEY" dummy)"
+FIXTURE_ANTHROPIC_KEY="$(printf '%s-%s-%s' real anthropic key)"
+FIXTURE_DS_ENV_KEY="$(printf '%s-%s' "$FIXTURE_DS_KEY" env)"
+FIXTURE_GLM_FILE_KEY="$(printf '%s-%s-%s' file key zhipu)"
+FIXTURE_DS_FILE_KEY="$(printf '%s-%s-%s' file key ds)"
+FIXTURE_DS_AUTH_KEY="$(printf '%s-%s' "$FIXTURE_DS_KEY" file)"
+
 PASS=0; FAIL=0
 
 # ── V45:判卷工具自己不许碰业主的真实评审环境(兜底报警器)──────────────────
@@ -325,7 +338,7 @@ v1_untracked_content() {
     echo '*.log' > .gitignore
     printf 'should_not_leak\n' > ignore_me.log )
   printf '# review\ncheck new file\n' > "$d/t.md"
-  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+  MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
     "$d/t.md" "$d/out.log" --repo "$repo" --git-diff --dry-run >/dev/null 2>&1
 
   grep -q SECRET_NEW_FILE_CONTENT_LINE "$d/out.log"; check "untracked content present" $?
@@ -343,13 +356,13 @@ v1_no_untracked_and_nonrepo() {
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo a > f; git add f; git commit -qm init )
   printf '# t\n' > "$d/t.md"
-  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+  MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
     "$d/t.md" "$d/out.log" --repo "$repo" --git-diff --dry-run >/dev/null 2>&1
   if grep -q "Untracked / New Files" "$d/out.log"; then bad "no header when no untracked"; else ok "no header when no untracked"; fi
 
   local nd; nd="$(mktemp -d)"   # not a git repo
   printf '# t\n' > "$nd/t.md"
-  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+  MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
     "$nd/t.md" "$nd/out.log" --repo "$nd" --git-diff --dry-run >/dev/null 2>&1
   check "non-repo dry-run exits 0 (no crash)" $?
   rm -rf "$d" "$nd"
@@ -373,7 +386,7 @@ PYEOF
   # decoy files in subdeepseek's CWD that *.py would expand to if globbing leaks.
   ( cd "$d"; touch decoy_a.py decoy_b.py
     printf '# t\n' > t.md
-    DEEPSEEK_API_KEY=dummy DEEPSEEK_INCLUDE="*.py" \
+    DEEPSEEK_API_KEY="$FIXTURE_DUMMY_KEY" DEEPSEEK_INCLUDE="*.py" \
       bash "$stub_bin/subdeepseek" review "$d/t.md" "$d/out.log" "$d" >/dev/null 2>&1 )
 
   if [[ -f "$d/argv.txt" ]]; then
@@ -471,7 +484,7 @@ run_engine_against() { # url task log [VAR=VAL...] [engine-args...] -> engine rc
   local url="$1" task="$2" log="$3"; shift 3
   local envs=()
   while [[ "${1:-}" == *=* ]]; do envs+=("$1"); shift; done
-  env "${envs[@]}" MIMO_API_KEY=x MIMO_CHAT_COMPLETIONS_URL="$url" \
+  env "${envs[@]}" MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_CHAT_COMPLETIONS_URL="$url" \
     python3 "$BIN/submimo-review" "$task" "$log" --git-diff "$@" 2>"${log}.stderr"
 }
 
@@ -526,7 +539,7 @@ v4_output_validation() {
   kill "$STUB_PID" 2>/dev/null
 
   # dry-run produces result="" by design and must stay exempt
-  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+  MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
     "$d/t.md" "$d/dry.log" --repo "$d" --git-diff --dry-run >/dev/null 2>&1
   check "dry-run still exits 0" $?
   rm -rf "$d"
@@ -536,7 +549,7 @@ v4_output_validation() {
 dry_prompt() { # task log repo extra-args/env... (env VAR=VAL pairs first)
   local envs=()
   while [[ "${1:-}" == *=* ]]; do envs+=("$1"); shift; done
-  env "${envs[@]}" MIMO_API_KEY=x MIMO_BASE_URL=http://x \
+  env "${envs[@]}" MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_BASE_URL=http://x \
     python3 "$BIN/submimo-review" "$@" --git-diff --dry-run
 }
 
@@ -606,7 +619,7 @@ v7_blind_warning() {
 
   # attaching an include silences the warning
   echo content > "$repo/x.py"; ( cd "$repo"; git add x.py; git commit -qm x )
-  MIMO_API_KEY=x MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
+  MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_BASE_URL=http://x python3 "$BIN/submimo-review" \
     "$d/t.md" "$d/inc.log" --repo "$repo" --git-diff --include x.py --dry-run >/dev/null 2>"$d/stderr2.txt"
   if grep -q "BLIND" "$d/stderr2.txt"; then bad "no warning when include attached"; else ok "no warning when include attached"; fi
   rm -rf "$d"
@@ -647,7 +660,7 @@ PYEOF
   # EMPTY (set-but-null) model var must still fall back to the default
   env CAPTURE="$d/c1.json" DEEPSEEK_MODEL= DEEPSEEK_TIMEOUT= \
     DEEPSEEK_API_BASE= DEEPSEEK_INCLUDE= \
-    MIMO_CHAT_COMPLETIONS_URL=http://stray.example/chat DEEPSEEK_API_KEY=sk-dummy \
+    MIMO_CHAT_COMPLETIONS_URL=http://stray.example/chat DEEPSEEK_API_KEY="$(printf '%s-%s' sk dummy)" \
     bash "$b/subchat" deepseek review "$d/t.md" "$d/o1.log" "$d" >/dev/null 2>&1; rc=$?
   check "subchat deepseek review exits 0" $([[ $rc -eq 0 ]]; echo $?)
   [[ "$(envget "$d/c1.json" MIMO_BASE_URL)" == "https://api.deepseek.com" ]]
@@ -660,7 +673,7 @@ PYEOF
   check "deepseek: default timeout 900" $?
   [[ "$(envget "$d/c1.json" REVIEW_LABEL)" == "subdeepseek-review" ]]
   check "deepseek: REVIEW_LABEL preserved" $?
-  [[ "$(envget "$d/c1.json" MIMO_API_KEY)" == "sk-dummy" ]]
+  [[ "$(envget "$d/c1.json" MIMO_API_KEY)" == "$(printf '%s-%s' sk dummy)" ]]
   check "deepseek: env key wins" $?
   [[ -z "$(envget "$d/c1.json" MIMO_CHAT_COMPLETIONS_URL)" ]]
   check "deepseek: stray MIMO_CHAT_COMPLETIONS_URL scrubbed" $?
@@ -668,7 +681,7 @@ PYEOF
   # zhipu leg: exact chat-URL style endpoint, label; model override; stray
   # MIMO_BASE_URL from the caller must be scrubbed likewise
   env CAPTURE="$d/c2.json" MIMO_BASE_URL=http://stray.example/v1 \
-    ZHIPU_API_KEY=zk-dummy ZHIPU_MODEL=glm-custom ZHIPU_TIMEOUT=123 \
+    ZHIPU_API_KEY="$FIXTURE_GLM_DUMMY_KEY" ZHIPU_MODEL=glm-custom ZHIPU_TIMEOUT=123 \
     bash "$b/subchat" zhipu review "$d/t.md" "$d/o2.log" "$d" >/dev/null 2>&1; rc=$?
   check "subchat zhipu review exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18:后端从智谱开放平台 bigmodel 换到 **OpenCode Go**(业主的 $10/月订阅)。
@@ -686,17 +699,17 @@ PYEOF
   check "zhipu: ZHIPU_TIMEOUT override honored" $?
 
   # auth-file fallback: no *_API_KEY in env -> key read from JSON auth file
-  printf '{"key":"file-key-zhipu"}' > "$d/zauth.json"
+  printf '{"key":"%s"}' "$FIXTURE_GLM_FILE_KEY" > "$d/zauth.json"
   env -u ZHIPU_API_KEY CAPTURE="$d/c3.json" ZHIPU_AUTH_FILE="$d/zauth.json" \
     bash "$b/subchat" zhipu review "$d/t.md" "$d/o3.log" "$d" >/dev/null 2>&1; rc=$?
   check "zhipu auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
-  [[ "$(envget "$d/c3.json" MIMO_API_KEY)" == "file-key-zhipu" ]]
+  [[ "$(envget "$d/c3.json" MIMO_API_KEY)" == "$FIXTURE_GLM_FILE_KEY" ]]
   check "zhipu: key loaded from auth file" $?
-  printf '{"key":"file-key-ds"}' > "$d/sauth.json"
+  printf '{"key":"%s"}' "$FIXTURE_DS_FILE_KEY" > "$d/sauth.json"
   env -u DEEPSEEK_API_KEY CAPTURE="$d/c4.json" DEEPSEEK_MODEL=deepseek-fixture-override DEEPSEEK_AUTH_FILE="$d/sauth.json" \
     bash "$b/subchat" deepseek review "$d/t.md" "$d/o4.log" "$d" >/dev/null 2>&1; rc=$?
   check "deepseek auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
-  [[ "$(envget "$d/c4.json" MIMO_API_KEY)" == "file-key-ds" ]]
+  [[ "$(envget "$d/c4.json" MIMO_API_KEY)" == "$FIXTURE_DS_FILE_KEY" ]]
   check "deepseek: key loaded from auth file" $?
   [[ "$(envget "$d/c4.json" MIMO_MODEL)" == "deepseek-fixture-override" ]]
   check "deepseek: explicit model overrides shared default" $?
@@ -716,16 +729,16 @@ PYEOF
   grep -q "Usage" "$d/h.out" "$d/h.err" 2>/dev/null; check "subdeepseek -h prints usage" $?
 
   # fix stays refused, on subchat and through a shim
-  env CAPTURE="$d/c6.json" ZHIPU_API_KEY=zk \
+  env CAPTURE="$d/c6.json" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$b/subchat" zhipu fix "$d/t.md" "$d/o6.log" "$d" >/dev/null 2>&1; rc=$?
   check "subchat zhipu fix refused" $([[ $rc -ne 0 ]]; echo $?)
-  env CAPTURE="$d/c7.json" DEEPSEEK_API_KEY=sk \
+  env CAPTURE="$d/c7.json" DEEPSEEK_API_KEY="$FIXTURE_SHORT_KEY" \
     bash "$b/subdeepseek" fix "$d/t.md" "$d/o7.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subdeepseek shim fix refused" $([[ $rc -ne 0 ]]; echo $?)
 
   # subglm shim end-to-end: literal include glob survives the shim->subchat chain
   ( cd "$d"; touch decoy_c.py
-    env CAPTURE="$d/c8.json" ZHIPU_API_KEY=zk ZHIPU_INCLUDE="*.py" \
+    env CAPTURE="$d/c8.json" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" ZHIPU_INCLUDE="*.py" \
       bash "$b/subglm" review "$d/t.md" "$d/o8.log" "$d/repo" >/dev/null 2>&1 )
   if [[ -f "$d/c8.json" ]]; then
     python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];sys.exit(0 if '*.py' in a else 1)" "$d/c8.json"
@@ -777,8 +790,8 @@ PYEOF
   argvhas() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];sys.exit(0 if sys.argv[2] in ' '.join(a) else 1)" "$1" "$2"; }
 
   # env-key path: token, base url, model mapping, API_KEY scrubbed
-  env PATH="$b:$PATH" CAPTURE="$d/a1.json" ANTHROPIC_API_KEY=real-anthropic-key \
-    DEEPSEEK_API_KEY=dk-env DEEPSEEK_MODEL=ds-test-model \
+  env PATH="$b:$PATH" CAPTURE="$d/a1.json" ANTHROPIC_API_KEY="$FIXTURE_ANTHROPIC_KEY" \
+    DEEPSEEK_API_KEY="$FIXTURE_DS_ENV_KEY" DEEPSEEK_MODEL=ds-test-model \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent review (env key) exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18 后端换成 OpenCode Go 之后,**认证 header 也换了**:
@@ -787,7 +800,7 @@ PYEOF
   # 两格各自被钉死,谁被顺手统一了这里就红。
   # 所以这里断言的是**表驱动的 header 风格**,不是"key 有没有传进去":
   # 传对了 key、传错了 header,腿一样是死的,而日志上看起来只是"模型没回话"。
-  [[ "$(agentget "$d/a1.json" ANTHROPIC_AUTH_TOKEN)" == "dk-env" ]]
+  [[ "$(agentget "$d/a1.json" ANTHROPIC_AUTH_TOKEN)" == "$FIXTURE_DS_ENV_KEY" ]]
   check "agent: deepseek 走 Bearer(ANTHROPIC_AUTH_TOKEN)拿 DEEPSEEK_API_KEY" $?
   [[ -z "$(agentget "$d/a1.json" ANTHROPIC_API_KEY)" ]]
   check "agent: deepseek 那格 x-api-key 必须是空的(别被 GLM 的风格串味)" $?
@@ -905,20 +918,20 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   argvhas "$d/a1.json" "--max-turns";       check "agent: turn cap present" $?
 
   # auth-file fallback
-  printf '{"key":"dk-file"}' > "$d/auth.json"
+  printf '{"key":"%s"}' "$FIXTURE_DS_AUTH_KEY" > "$d/auth.json"
   env -u DEEPSEEK_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" DEEPSEEK_AUTH_FILE="$d/auth.json" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18:env-key 那条路已经换成 x-api-key,**这条 auth-file 路当时被漏掉了**
   # —— 是判据自己在这儿红了一次才发现的。所以这里不止把变量名跟着改,还补上
   # "Bearer 那格必须是空的":只改名字的话,两条路各走各的 header 又会看不出来。
-  [[ "$(agentget "$d/a2.json" ANTHROPIC_AUTH_TOKEN)" == "dk-file" ]]
+  [[ "$(agentget "$d/a2.json" ANTHROPIC_AUTH_TOKEN)" == "$FIXTURE_DS_AUTH_KEY" ]]
   check "agent: key loaded from auth file" $?
   [[ -z "$(agentget "$d/a2.json" ANTHROPIC_API_KEY)" ]]
   check "agent: auth-file 这条路的 header 风格也必须对(两条路各走各的会看不出来)" $?
 
   # verdict gate: no Conclusion -> non-zero, log still written
-  env PATH="$b:$PATH" CAPTURE="$d/a3.json" DEEPSEEK_API_KEY=dk \
+  env PATH="$b:$PATH" CAPTURE="$d/a3.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     STUB_REVIEW_OUT="looks fine to me" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: verdict-less output exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
@@ -926,13 +939,13 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
 
   # verdict gate: Chinese 「结论：PASS」 (full-width colon) accepted — the drift
   # that bit subdeepseek twice (Track B + client-tools)
-  env PATH="$b:$PATH" CAPTURE="$d/a3b.json" DEEPSEEK_API_KEY=dk \
+  env PATH="$b:$PATH" CAPTURE="$d/a3b.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     STUB_REVIEW_OUT=$'review body\n结论：PASS' \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3b.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: Chinese 结论+full-width colon accepted" $([[ $rc -eq 0 ]]; echo $?)
 
   # fix refused; -h ok
-  env PATH="$b:$PATH" CAPTURE="$d/a4.json" DEEPSEEK_API_KEY=dk \
+  env PATH="$b:$PATH" CAPTURE="$d/a4.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     bash "$b/subdeepseek-agent" fix "$d/t.md" "$d/a4.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: fix refused" $([[ $rc -ne 0 ]]; echo $?)
   bash "$b/subdeepseek-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
@@ -1422,10 +1435,10 @@ print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", 
 PYEOF
   chmod +x "$ab/claude"
   turns() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];print(a[a.index('--max-turns')+1])" "$1"; }
-  env -u DEEPSEEK_MAX_TURNS PATH="$ab:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY=dk     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d/repo" >/dev/null 2>&1
+  env -u DEEPSEEK_MAX_TURNS PATH="$ab:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY"     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d/repo" >/dev/null 2>&1
   [[ "$(turns "$d/ds1.json")" -ge 80 ]]
   check "V14: subdeepseek-agent 默认轮次上限 ≥80(40 撞墙实事故)" $?
-  env PATH="$ab:$PATH" CAPTURE="$d/ds2.json" DEEPSEEK_API_KEY=dk DEEPSEEK_MAX_TURNS=25     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds2.log" "$d/repo" >/dev/null 2>&1
+  env PATH="$ab:$PATH" CAPTURE="$d/ds2.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" DEEPSEEK_MAX_TURNS=25     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/ds2.log" "$d/repo" >/dev/null 2>&1
   [[ "$(turns "$d/ds2.json")" == "25" ]]
   check "V14: DEEPSEEK_MAX_TURNS 仍可覆盖" $?
   rm -rf "$d"
@@ -1608,7 +1621,7 @@ PYEOF
   # 参数、约束住在生成的配置里,claude 那套 argv/stdin 断言对它整块问错了对象。
   # GLM 的同名五件事在下面 ①b 用 opencode 的形状重问 —— **一件都没少**。
   for leg in subdeepseek; do
-    local keyenv=(DEEPSEEK_API_KEY=dk)
+    local keyenv=(DEEPSEEK_API_KEY="$FIXTURE_DS_KEY")
     env PATH="$b:$PATH" CAPTURE="$d/$leg.e1.json" "${keyenv[@]}" \
       bash "$b/$leg-agent" explore "$d/brief.md" "$d/$leg.e1.log" "$d/repo" >/dev/null 2>&1; rc=$?
     check "V17: $leg-agent 接受 explore 模式且无裁决输出仍 rc=0" $([[ $rc -eq 0 ]]; echo $?)
@@ -1644,7 +1657,7 @@ PYEOF
 import sys
 blob=open(sys.argv[1],'rb').read().decode('utf-8','replace')
 sys.exit(0 if sys.argv[2] in blob else 1)" "$1" "$2"; }
-  env PATH="$b:$PATH" CAPTURE="$d/glm.e1.argv" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" CAPTURE="$d/glm.e1.argv" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     STUB_OC_OUT="Direction: 单一看法" \
     bash "$b/subglm-agent" explore "$d/brief.md" "$d/glm.e1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "V17: subglm-agent(opencode 底座)接受 explore 且无裁决输出仍 rc=0" $([[ $rc -eq 0 ]]; echo $?)
@@ -1678,12 +1691,12 @@ sys.exit(0 if sys.argv[2] in blob else 1)" "$1" "$2"; }
     bad "V17: subglm-agent explore 下 bash 也留着(换模式不许把腿弄瞎)"
   fi
   # review 模式的裁决闸不许被放松(opencode 报错也 rc=0,这道闸是唯一的活口)
-  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk STUB_OC_OUT="看着还行" \
+  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" STUB_OC_OUT="看着还行" \
     bash "$b/subglm-agent" review "$d/brief.md" "$d/glm.r1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "V17: subglm-agent review 无裁决仍判失败(闸没被放松)" $([[ $rc -ne 0 ]]; echo $?)
 
   # ---- ⑤ 发散的系统提示词必须真的送达底座腿(单一真相源:panel-explore 导出它)
-  env PATH="$b:$PATH" CAPTURE="$d/sysp.argv" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" CAPTURE="$d/sysp.argv" OPENCODE_REVIEW_HOME="$ge" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     REVIEW_SYSTEM_PROMPT="ANGLE_NOT_CONSENSUS_MARKER" \
     bash "$b/subglm-agent" explore "$d/brief.md" "$d/sysp.log" "$d/repo" >/dev/null 2>&1
   if [[ -f "$d/sysp.argv" ]]; then
@@ -1771,7 +1784,7 @@ PY
   for _ in $(seq 1 50); do [[ -s "$d/port.txt" ]] && break; sleep 0.1; done
   local port; port="$(cat "$d/port.txt")"
 
-  REVIEW_LABEL="subglm-review" MIMO_API_KEY=x MIMO_RETRIES=1 \
+  REVIEW_LABEL="subglm-review" MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_RETRIES=1 \
     MIMO_CHAT_COMPLETIONS_URL="http://127.0.0.1:$port/v1/chat/completions" \
     python3 "$BIN/submimo-review" "$d/t.md" "$d/out.log" >/dev/null 2>"$d/err.txt"
   kill "$srv_pid" 2>/dev/null; wait "$srv_pid" 2>/dev/null
@@ -1826,7 +1839,7 @@ v19_chat_leg_declares_its_blindness() {
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo a > f; git add f; git commit -qm init; echo b >> f )
   printf '# t\n' > "$d/t.md"
-  REVIEW_LABEL="subglm-review" MIMO_API_KEY=x MIMO_BASE_URL=http://x \
+  REVIEW_LABEL="subglm-review" MIMO_API_KEY="$FIXTURE_CHAT_KEY" MIMO_BASE_URL=http://x \
     python3 "$BIN/submimo-review" "$d/t.md" "$d/out.log" --repo "$repo" --git-diff --dry-run >/dev/null 2>&1
   grep -qi "视野\|scope:" "$d/out.log"; check "V19: 日志头有视野字段" $?
   grep -qi "看不到\|cannot read\|only" "$d/out.log"; check "V19: 视野字段说明看不到仓库其余部分" $?
@@ -1853,7 +1866,7 @@ FAKE
   chmod +x "$fake/claude"
   printf '# t\n' > "$d/t.md"
   fixture_git_repo "$d/repo"
-  printf '{"key":"x"}\n' > "$d/auth.json"
+  printf '{"key":"%s"}\n' "$FIXTURE_CHAT_KEY" > "$d/auth.json"
   PATH="$fake:$PATH" DEEPSEEK_AUTH_FILE="$d/auth.json" \
     "$BIN/subdeepseek-agent" review "$d/t.md" "$d/a.log" "$d/repo" >/dev/null 2>"$d/a.err"
 
@@ -1905,7 +1918,7 @@ CAPEOF
   # 预算顺手翻倍"立的;换底座把上限弄丢,是同一种病的新形态。
   oc_stub "$ab"
   local zochome="$d/ochome21"
-  env -u ZHIPU_MAX_TURNS PATH="$ab:$PATH" OPENCODE_REVIEW_HOME="$zochome" ZHIPU_API_KEY=zk \
+  env -u ZHIPU_MAX_TURNS PATH="$ab:$PATH" OPENCODE_REVIEW_HOME="$zochome" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$ab/subglm-agent" review "$d/t.md" "$d/z.log" "$d/repo" >/dev/null 2>&1
   local zcfg="$zochome/.config/opencode/opencode.json"
   if [[ -f "$zcfg" ]]; then
@@ -1915,7 +1928,7 @@ CAPEOF
     bad "V21: zhipu 默认轮次上限仍是历史值 40(换底座不许把上限弄丢)"
     echo "    (没生成 opencode 配置 ⇒ 这条是在测空气)"
   fi
-  env -u DEEPSEEK_MAX_TURNS PATH="$ab:$PATH" CAPTURE="$d/s.json" DEEPSEEK_API_KEY=dk \
+  env -u DEEPSEEK_MAX_TURNS PATH="$ab:$PATH" CAPTURE="$d/s.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/s.log" "$d/repo" >/dev/null 2>&1
   # deepseek 的上限是**凭测量**定的:08-03 实测一个只看单文件的琐碎任务就用掉 56 轮
   # (log: scratchpad/smoke.log),而它 07-21 撞过 40、08-03 撞过 80。翻倍法到此为止。
@@ -2295,7 +2308,7 @@ PYEOF2
   # claude 专用值留着是为了将来切回,**不是活路径**,所以不许再拿它们当断言对象)。
   oc_stub "$b"
   local m1home="$d/ochome26"
-  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$m1home" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$m1home" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$b/subglm-agent" review "$d/t.md" "$d/m1.log" "$d/repo" >/dev/null 2>&1
   local m1cfg="$m1home/.config/opencode/opencode.json"
   if [[ -f "$m1cfg" ]]; then
@@ -2304,7 +2317,7 @@ PYEOF2
   else
     bad "V26: 底座腿默认模型 glm-5.3-flash(在 opencode 配置里)"; echo "    (没生成配置 ⇒ 测空气)"
   fi
-  env PATH="$b:$PATH" CAPTURE="$d/m2.json" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" CAPTURE="$d/m2.json" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$b/subglm" review "$d/t.md" "$d/m2.log" "$d/repo" >/dev/null 2>&1
   [[ "$(get "$d/m2.json" MIMO_MODEL)" == "glm-5.3-flash" ]]
   check "V26: 聊天腿默认模型 glm-5.3-flash" $?
@@ -2326,15 +2339,15 @@ PYEOF2
   check "V26: 聊天腿默认 key 文件 = ~/.config/opencode-go/auth.json" $?
 
   # ── ③ deepseek 腿一个字都没被顺手改(同一份躯干,差异只准活在供应商表里)
-  env PATH="$b:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY=dk \
+  env PATH="$b:$PATH" CAPTURE="$d/ds1.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds1.log" "$d/repo" >/dev/null 2>&1
   [[ "$(get "$d/ds1.json" ANTHROPIC_BASE_URL)" == "https://api.deepseek.com/anthropic" ]]
   check "V26: deepseek 底座腿端点没被顺手改" $?
-  [[ "$(get "$d/ds1.json" ANTHROPIC_AUTH_TOKEN)" == "dk" ]]
+  [[ "$(get "$d/ds1.json" ANTHROPIC_AUTH_TOKEN)" == "$FIXTURE_DS_KEY" ]]
   check "V26: deepseek 仍走 Bearer(AUTH_TOKEN),没被 GLM 的 header 风格串味" $?
   [[ -z "$(get "$d/ds1.json" ANTHROPIC_API_KEY)" ]]
   check "V26: deepseek 那格 x-api-key 保持空" $?
-  env PATH="$b:$PATH" CAPTURE="$d/ds2.json" DEEPSEEK_API_KEY=dk \
+  env PATH="$b:$PATH" CAPTURE="$d/ds2.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     bash "$b/subdeepseek" review "$d/t.md" "$d/ds2.log" "$d/repo" >/dev/null 2>&1
   [[ "$(get "$d/ds2.json" MIMO_BASE_URL)" == "https://api.deepseek.com" ]]
   check "V26: deepseek 聊天腿端点没被顺手改" $?
@@ -2398,7 +2411,7 @@ PYUA
   local port; port="$(cat "$d/ua.port" 2>/dev/null)"
   # **必须用真的那条腿**($BIN,不是 $b):$b/submimo-review 是本节自己造的桩,
   #  桩根本不发 HTTP —— 拿桩问"发出去的请求带没带 UA",问的是空气。
-  ZHIPU_API_KEY=zk ZHIPU_INCLUDE="$d/t.md" \
+  ZHIPU_API_KEY="$FIXTURE_GLM_KEY" ZHIPU_INCLUDE="$d/t.md" \
     ZHIPU_CHAT_COMPLETIONS_URL="http://127.0.0.1:$port/v1/chat/completions" \
     bash "$BIN/subglm" review "$d/t.md" "$d/ua.log" "$d" >/dev/null 2>&1
   wait $stubpid 2>/dev/null
@@ -2456,7 +2469,7 @@ EOF
   grep -q 'AUTH_ENV=""' "$b/subagent"
   check "V27: 前置——挖空 AUTH_ENV 这一刀真的切中了(不然下面三条是在测空气)" $?
   rm -f "$d/c1.flag"
-  env PATH="$b:$PATH" CAPTURE="$d/c1.flag" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" CAPTURE="$d/c1.flag" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$b/subglm-agent" review "$d/t.md" "$d/c1.log" "$d/repo" >/dev/null 2>"$d/c1.err"; rc=$?
   [[ $rc -ne 0 ]]
   check "V27: AUTH_ENV 漏填时硬失败(env 会静默放过,所以守卫必须在我们这边)" $?
@@ -2541,7 +2554,7 @@ EOF
 
   rm -f "$d/oc.txt" "$d/claude.txt"
   env PATH="$b:$PATH" CAPTURE="$d/oc.txt" CAPTURE_CLAUDE="$d/claude.txt" \
-    OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+    OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$b/subglm-agent" review "$d/t.md" "$d/g1.log" "$d/repo" >/dev/null 2>"$d/g1.err"; rc=$?
 
   # ── ① 调的是 opencode,不是 claude
@@ -2566,7 +2579,7 @@ EOF
   # 实际无效。配置 provider map / agent model / CLI argv / 日志身份四处必须一起跟随。
   local override_home="$d/ochome-override"
   env PATH="$b:$PATH" CAPTURE="$d/oc-override.txt" CAPTURE_CLAUDE="$d/claude-override.txt" \
-    OPENCODE_REVIEW_HOME="$override_home" ZHIPU_API_KEY=zk ZHIPU_MODEL=glm-custom \
+    OPENCODE_REVIEW_HOME="$override_home" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" ZHIPU_MODEL=glm-custom \
     bash "$b/subglm-agent" review "$d/t.md" "$d/g-override.log" "$d/repo" >/dev/null 2>"$d/g-override.err"; rc=$?
   [[ $rc -eq 0 ]]
   check "V28: ZHIPU_MODEL override 下 agent 腿仍正常收尾" $?
@@ -2655,7 +2668,7 @@ echo "Error: Insufficient balance. Manage your billing here: https://opencode.ai
 exit 0
 EOF
   chmod +x "$b/opencode"
-  env PATH="$b:$PATH" CAPTURE="$d/oc2.txt" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" CAPTURE="$d/oc2.txt" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$b/subglm-agent" review "$d/t.md" "$d/g2.log" "$d/repo" >/dev/null 2>"$d/g2.err"; rc=$?
   [[ $rc -ne 0 ]]
   check "V28: opencode 没给裁决行时必须硬失败(它报错也 rc=0,信不得)" $?
@@ -2678,7 +2691,7 @@ EOF
   chmod +x "$b/opencode"
   rm -f "$d/oc4.txt" "$d/claude4.txt"
   env PATH="$b:$PATH" CAPTURE="$d/oc4.txt" CAPTURE_CLAUDE="$d/claude4.txt" \
-    DEEPSEEK_API_KEY=dk bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds.log" "$d/repo" >/dev/null 2>&1
+    DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds.log" "$d/repo" >/dev/null 2>&1
   [[ -f "$d/claude4.txt" ]]
   check "V28: deepseek 腿仍走 claude 壳(换底座不许串味到隔壁)" $?
   if [[ -f "$d/oc4.txt" ]]; then bad "V28: deepseek 腿不许被顺手改成 opencode 底座"
@@ -2712,7 +2725,7 @@ EOF
   cp "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$nb/"
   cp "$BIN/ro-repo-exec" "$nb/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   oc_stub "$nb"        # 只有 opencode,**没有 claude**
-  env PATH="$nb:/usr/bin:/bin" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+  env PATH="$nb:/usr/bin:/bin" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$nb/subglm-agent" review "$d/t.md" "$d/g12.log" "$d/repo" >/dev/null 2>"$d/g12.err"; rc=$?
   [[ $rc -eq 0 ]]
   check "V28: 机器上没装 claude 也不影响 opencode 底座的腿" $?
@@ -2768,7 +2781,7 @@ EOF
   rm -f "$d/stdin.txt"
   # 故意把 stdin 接成一个**开着的管道**,模拟 runlog 那种现场
   ( sleep 30 ) | env PATH="$b:$PATH" CAPTURE_STDIN="$d/stdin.txt" \
-      OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+      OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
       bash "$b/subglm-agent" review "$d/t.md" "$d/g9.log" "$d/repo" >/dev/null 2>&1
   if [[ -f "$d/stdin.txt" ]]; then
     grep -q "^/dev/null$" "$d/stdin.txt"
@@ -2794,7 +2807,7 @@ echo "TOOL-TRACE-Read calc.py" >&2
 echo "Conclusion: PASS"
 EOF
   chmod +x "$b/opencode"
-  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk \
+  env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     bash "$b/subglm-agent" review "$d/t.md" "$d/g11.log" "$d/repo" >/dev/null 2>&1
   grep -q "TOOL-TRACE-Read calc.py" "$d/g11.log" 2>/dev/null
   check "V28: 工具轨迹落进腿自己的日志(四审读的是它,不是收据)" $?
@@ -3286,7 +3299,7 @@ PWN
   #    于是只测了一条腿就收工。**"共用躯干"不等于"共用路径"** —— 见 ①b。
   rm -f "$d/o1" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1" CAPTURE="$d/c1.json" \
-    DEEPSEEK_API_KEY=dk DEEPSEEK_MODEL= REVIEW_NO_MY_REVIEW=1 AIWORK_REVIEW_FACTS_PATH="$d/deepseek.facts.json" \
+    DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" DEEPSEEK_MODEL= REVIEW_NO_MY_REVIEW=1 AIWORK_REVIEW_FACTS_PATH="$d/deepseek.facts.json" \
     AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l1.log" "$repo" >/dev/null 2>&1; rc=$?
   grep -q '^work=WROTE$' "$d/o1" 2>/dev/null \
@@ -3320,7 +3333,7 @@ PY
   local ochome="$d/ochome"; mkdir -p "$ochome"
   rm -f "$d/o1b" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1b" \
-    OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY=zk REVIEW_NO_MY_REVIEW=1 \
+    OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" REVIEW_NO_MY_REVIEW=1 \
     AIWORK_REVIEW_FACTS_PATH="$d/glm.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/subglm-agent" review "$d/t.md" "$repo/logs/l1b.log" "$repo" >/dev/null 2>&1; rc=$?
   grep -q '^work=WROTE$' "$d/o1b" 2>/dev/null \
@@ -3478,7 +3491,7 @@ PWN2
   # ── ① 腿日志确实写得出来(这条立住了,写口才可以去掉)
   rm -f "$repo/logs/l.log" "$d/o"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o" CAPTURE="$d/c.json" \
-    DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
+    DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" REVIEW_NO_MY_REVIEW=1 \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l.log" "$repo" >/dev/null 2>&1
   [[ -s "$repo/logs/l.log" ]]
   check "V37: 腿日志不靠写口也写得出(fd 在父 namespace 打开)" $?
@@ -3495,7 +3508,7 @@ RECORD
   chmod +x "$b/ro-repo-exec"
   rm -f "$d/argv.txt"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o" CAPTURE="$d/c.json" \
-    RO_ARGV_OUT="$d/argv.txt" DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
+    RO_ARGV_OUT="$d/argv.txt" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" REVIEW_NO_MY_REVIEW=1 \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
   ! grep -q -- '^--rw$' "$d/argv.txt" 2>/dev/null
   check "V37: wrapper 一个 --rw 都不传(写口为零 —— 多余的写口正是那两条 bug 的来源)" $?
@@ -3804,14 +3817,14 @@ RECORD
 
   rm -f "$d/argv1.txt"
   env PATH="$b:$PATH" RO_ARGV_OUT="$d/argv1.txt" CAPTURE="$d/c1.json" \
-    DEEPSEEK_API_KEY=dk REVIEW_NO_MY_REVIEW=1 \
+    DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" REVIEW_NO_MY_REVIEW=1 \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/a1.log" "$repo" >/dev/null 2>&1
   [[ -s "$d/argv1.txt" ]] && ! grep -q -- '^--rw$' "$d/argv1.txt"
   check "V40①: subdeepseek-agent 的 argv 里没有 --rw(且真抄到了 argv)" $?
 
   rm -f "$d/argv2.txt"
   env PATH="$b:$PATH" RO_ARGV_OUT="$d/argv2.txt" OPENCODE_REVIEW_HOME="$ochome" \
-    ZHIPU_API_KEY=zk REVIEW_NO_MY_REVIEW=1 \
+    ZHIPU_API_KEY="$FIXTURE_GLM_KEY" REVIEW_NO_MY_REVIEW=1 \
     bash "$b/subglm-agent" review "$d/t.md" "$repo/logs/a2.log" "$repo" >/dev/null 2>&1
   [[ -s "$d/argv2.txt" ]] && ! grep -q -- '^--rw$' "$d/argv2.txt"
   check "V40①: subglm-agent(opencode 底座)的 argv 里没有 --rw" $?
@@ -3835,7 +3848,7 @@ RECORD
   # ── ② 运行期 home 落在被评审的仓里 ⇒ 三条腿**都**拒跑,而且说得出为什么 ──────
   local o_out m_out k_out o_rc m_rc k_rc
   mkdir -p "$repo/inrepo-oc" "$repo/inrepo-mi" "$repo/inrepo-ki"
-  o_out="$(env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$repo/inrepo-oc" ZHIPU_API_KEY=zk \
+  o_out="$(env PATH="$b:$PATH" OPENCODE_REVIEW_HOME="$repo/inrepo-oc" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
     REVIEW_NO_MY_REVIEW=1 bash "$b/subglm-agent" review "$d/t.md" "$d/o.log" "$repo" 2>&1)"; o_rc=$?
   m_out="$(env PATH="$b:$PATH" MIMO_REVIEW_HOME="$repo/inrepo-mi" \
     REVIEW_NO_MY_REVIEW=1 bash "$b/submimo" review "$d/t.md" "$d/m.log" "$repo" 2>&1)"; m_rc=$?

@@ -19,6 +19,7 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _review_result import ADAPTER_IDENTITIES, DEFAULT_CHAT_MAX_FILE_BYTES, leg_identity, load_result, sha256_file
 from _aiwork_config import ConfigError, data_path, model as configured_model
+from _secret_shapes import redact_shapes
 
 
 BIN = Path(__file__).resolve().parent
@@ -67,12 +68,12 @@ def choose_leg(name: str) -> tuple[str, str | None]:
 
 
 def redact(text: str) -> str:
-    text = re.sub(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", "[redacted]", text, flags=re.S)
+    text = redact_shapes(text)
     value = r'''(?:"[^"]*"|'[^']*'|[^\s,;]+)'''
     text = re.sub(r'''(?i)(?<![\w-])((?:[a-z_][a-z0-9_]*)?(?:token|key|secret|password)|api-key)(["']?\s*[:=]\s*)''' + value,
                   r"\1\2[redacted]", text)
     text = re.sub(r"(?i)(\bBearer\s+)" + value, r"\1[redacted]", text)
-    return re.sub(r"\b(?:(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,})", "[redacted]", text)
+    return text
 
 
 def route_task(leg: str, task: Path, family: str) -> tuple[str, str | None]:

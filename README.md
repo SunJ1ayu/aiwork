@@ -56,7 +56,7 @@ Things that are not aiwork live with their own owners:
 - `tracks/` existing historical records, retained unchanged
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - Machine data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
-- `kimi-review-home/config.toml` and `hooks/` are local seeds; reviewer runtime homes use the data directory
+- `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use the data directory
 - `out/`, `refs/`, `.mimocode/`, `etc/` and other local data live outside the checkout
 
 ## Core engine
@@ -194,6 +194,28 @@ Both stagger launches and the engine retries 429/5xx with bounded backoff.
 
 ## Tests (run for tooling changes)
 
+推送前启用仓内隐私钩子（在仓库根目录执行，每台机器设置一次）：
+
+```bash
+git config core.hooksPath .githooks
+install -d -m 700 ~/.config/aiwork
+touch ~/.config/aiwork/private-terms
+chmod 600 ~/.config/aiwork/private-terms
+# 自己编辑 private-terms，一行一个私人词；不要提交词表。
+bin/privacy-check origin/main..HEAD
+bin/privacy-check --all
+bin/privacy-check --files kimi-review-home/config.toml kimi-review-home/hooks/guard.mjs
+bin/privacy-check HEAD  # 当前分支可达的全部历史，含根提交
+```
+
+`aiwork-config path private-terms` 定位本机词表；词表缺失时检查失败，空表只检查密钥形状。
+范围检查每个提交新增的行、新增文件路径、提交说明、作者和提交者的名字与邮箱；
+`--all` 检查当前已跟踪和未忽略的工作树文件（包括路径）。钩子检查实际推送的提交，删除分支不检查。
+新分支以本机已获取的远端 refs 排除已有历史；没有远端 refs 时检查全部历史。
+命中只报 `文件:行号` 和类型，路径本身命中时隐藏路径；路径用 `:0`，提交元数据用 `commit/<SHA>/<字段>:行号`。
+返回码 `0` 为干净，`1` 为命中，`2` 为检查失败。密钥形状只有 `bin/_secret-shapes` 一份定义，供日志脱敏和检查共用。
+不许用 `--no-verify` 绕过；误报修改本机词表或在运行时拼接测试夹具。
+
 ```bash
 bash bin/rust-check-review-tooling   # THE runner: every suite below, one summary line
 bash bin/rust-check-review-tooling --coverage-only   # just the "who is not covered" report
@@ -259,7 +281,7 @@ nothing attached triggers a loud BLIND-review warning.
 都使用该数据入口；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。
 
-`kimi-review-home/config.toml` 和 `hooks/` 是种子，留在仓内原处且继续忽略；后续单独做隐私检查后入 Git。
+`kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。
 运行期配置和 hooks 只从种子同步这两类文件；凭证、缓存、会话、日志、索引和遥测留在数据目录，
 不会从种子目录整份复制。运行目录缺少凭证会明确拒绝运行。
 

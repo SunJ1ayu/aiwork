@@ -29,8 +29,10 @@ set -uo pipefail
 die() { printf 'runlog: %s\n' "$*" >&2; exit 64; }
 
 has_secret_shape() {
-  LC_ALL=C grep -aEq \
-    'sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  LC_ALL=C grep -aEq -f "$(dirname "$(realpath "$0")")/_secret-shapes" 2>/dev/null
+  # A missing/unreadable shape file must also refuse argv/output, never emit
+  # an unchecked receipt. Only grep's explicit no-match status is safe.
+  [ "$?" -ne 1 ]
 }
 
 source_view_repo() {  # source_view_repo <repo> [排除的仓内路径]

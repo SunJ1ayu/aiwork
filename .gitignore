@@ -1,5 +1,4 @@
-# Local reviewer seed and caches
-kimi-review-home/
+# Local caches
 .mutation-state/
 __pycache__/
 *.pyc
