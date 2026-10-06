@@ -7,7 +7,7 @@ SETTINGS=~/.claude/settings.json
 case "$1" in
   mimo)
     # key 不再内嵌(2026-09-01,track mimo-key-single-source):从全机唯一源头读。
-    # 源头 = /root/.local/share/mimocode/auth.json,清单见 aiwork/bin/_mimo-key-locations.sh。
+    # 源头 = /root/.local/share/mimocode/auth.json。
     # 读不到就**不写 settings**:写出一份认证注定失败的配置,比不写更难查。
     MIMO_KEY="$(grep -oE 'tp-[a-z0-9]{40,60}' /root/.local/share/mimocode/auth.json 2>/dev/null | head -1)"
     if [ -z "$MIMO_KEY" ]; then

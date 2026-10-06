@@ -8,7 +8,7 @@ Multi-model implementation and PR review tooling.
 `~/CLAUDE.md` 和 `~/.claude/skills/{panel,delegate}` 是由 `bin/sync-workflow-docs` 管理的部署副本。
 
 GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；原始日志、配置、会话及本机资料
-留在机器的数据目录。现存 `track/`、`tracks/` 及相关命令是兼容资产。
+留在机器的数据目录。现存 `track/`、`tracks/` 及相关命令是暂留的兼容资产，后续单独拆除。
 
 ## History and project separation
 
@@ -245,7 +245,6 @@ nothing attached triggers a loud BLIND-review warning.
 - `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。
-- `mimo-key-locations.sh`：本机 MiMo 密钥位置清单，供 `rotate-mimo-key` 使用；缺失时明确报错并停止。
 
 换机器时把整个目录复制过去并保持权限。`bin/aiwork-config` 是统一读取入口；
 `AIWORK_CONFIG_DIR` 可指定其他设置目录，测试只指向临时目录。
@@ -260,7 +259,7 @@ nothing attached triggers a loud BLIND-review warning.
 都使用该数据入口；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。
 
-`kimi-review-home/config.toml` 和 `hooks/` 是本机种子，留在仓内原处且继续忽略。
+`kimi-review-home/config.toml` 和 `hooks/` 是种子，留在仓内原处且继续忽略；后续单独做隐私检查后入 Git。
 运行期配置和 hooks 只从种子同步这两类文件；凭证、缓存、会话、日志、索引和遥测留在数据目录，
 不会从种子目录整份复制。运行目录缺少凭证会明确拒绝运行。
 
