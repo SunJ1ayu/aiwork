@@ -1,17 +1,8 @@
-# Runtime output and local credentials
-logs/
-out/
-worktrees/
-refs/
-attack-logs/
-etc/
-mimo-home/
+# Local reviewer seed and caches
 kimi-review-home/
-.mimocode/
 .mutation-state/
 __pycache__/
 *.pyc
 *.raw
 node_modules/
 .pytest_cache/
-tasks/

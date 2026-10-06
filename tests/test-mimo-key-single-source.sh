@@ -16,7 +16,7 @@
 # 这份判据问的三件事(都不需要外网,key 有效性不在此处判):
 #   ① 源头唯一且形状对;所有**已知副本**与源头逐字节一致
 #   ② **不许有游离副本** —— 扫描面里冒出清单外的 key,红
-#   ③ 清单只有一份 —— 工具和判据共享 `bin/_mimo-key-locations.sh`,不许两处手抄
+#   ③ 工具经 aiwork-config 读取本机清单;本套件只用临时设置目录里的假清单
 #
 # 为什么不在这里验 key 真的能用:判卷面**不许有外网出口**(track no-egress-judging)。
 # 「这把 key 小米认不认」由 `bin/rotate-mimo-key` 在换的当下验,那是运维不是判卷。
@@ -30,8 +30,43 @@ ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOCATIONS="$REPO/bin/_mimo-key-locations.sh"
 ROTATE="$REPO/bin/rotate-mimo-key"
+fixture="$(mktemp -d)"
+trap 'rm -rf "$fixture"' EXIT
+export HOME="$fixture/home" AIWORK_CONFIG_DIR="$fixture/settings" AIWORK_DATA_DIR="$fixture/data"
+export MIMO_KEY_FIXTURE_ROOT="$fixture"
+export MIMO_KEY_CRON_DB="$fixture/cron.sqlite"
+mkdir -p "$HOME/.openclaw" "$AIWORK_CONFIG_DIR"
+LOCATIONS="$AIWORK_CONFIG_DIR/mimo-key-locations.sh"
+cat > "$LOCATIONS" <<'EOF'
+MIMO_KEY_SOURCE="$MIMO_KEY_FIXTURE_ROOT/auth.json"
+MIMO_KEY_SOURCE_SELECTOR="xiaomi.key"
+MIMO_KEY_COPIES=("json|$MIMO_KEY_FIXTURE_ROOT/copy.json|api_key")
+MIMO_KEY_CONDITIONAL_COPIES=("$MIMO_KEY_FIXTURE_ROOT/conditional.json")
+MIMO_KEY_ENDPOINT_FIELDS=("$MIMO_KEY_FIXTURE_ROOT/copy.json|api_base|model")
+MIMO_KEY_FORBIDDEN=("$MIMO_KEY_FIXTURE_ROOT/profile")
+MIMO_KEY_SCAN_DIRS=("$MIMO_KEY_FIXTURE_ROOT/auth.json" "$MIMO_KEY_FIXTURE_ROOT/copy.json" "$MIMO_KEY_FIXTURE_ROOT/conditional.json" "$MIMO_KEY_FIXTURE_ROOT/profile")
+MIMO_KEY_SCAN_EXCLUDES=()
+MIMO_KEY_SCAN_EXCLUDE_DIRS=()
+mimo_key_shape_ok() { [[ "${1:-}" =~ ^tp-[a-z0-9]{40,60}$ ]]; }
+mimo_key_read_source() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["xiaomi"]["key"])' "$MIMO_KEY_SOURCE"
+}
+EOF
+python3 - "$fixture" <<'PY'
+import json, sqlite3, sys
+from pathlib import Path
+d = Path(sys.argv[1])
+key = 'tp-' + 'a' * 48
+(d / 'auth.json').write_text(json.dumps({'xiaomi': {'key': key}}))
+(d / 'copy.json').write_text(json.dumps({'api_key': key, 'api_base': 'https://mimo.invalid/v1', 'model': 'fixture'}))
+(d / 'conditional.json').write_text('{}')
+(d / 'profile').write_text('# no credentials here\n')
+(d / 'home/.openclaw/openclaw.json').write_text(json.dumps({'models': {'providers': {'xiaomi-coding': {'baseUrl': 'https://mimo.invalid/v1'}}}}))
+with sqlite3.connect(d / 'cron.sqlite') as db:
+    db.execute('create table cron_jobs (prompt text)')
+    db.execute('insert into cron_jobs values (?)', ('fixture job',))
+PY
 
 echo "=== mimo key single-source oracle ==="
 
@@ -39,7 +74,7 @@ echo "=== mimo key single-source oracle ==="
 # 先问"清单在不在",因为后面每一条都靠它。清单缺席时必须硬红并停,
 # 否则下面的循环会 0 次迭代、然后 FAIL=0 报绿 —— 那是假绿的经典形状。
 if [[ -f "$LOCATIONS" ]]; then
-  ok "清单文件存在:bin/_mimo-key-locations.sh"
+  ok "临时设置目录里的假清单存在"
 else
   bad "清单文件**不存在**:$LOCATIONS(工具和判据共享的唯一一份)"
   echo "=== total: $PASS passed, $FAIL failed ==="
@@ -166,7 +201,7 @@ done
 # 09-01 实测:提示词里那个 `LLM_API_KEY=***` 非空,把 watch.py 的配置文件回落路径
 # 整条挡死。这条断言问的是"有没有人往提示词里塞凭证变量",不是"塞的是不是真 key" ——
 # 塞 `***` 造成的破坏比塞真 key 还大(真 key 至少能用)。
-CRON_DB="${MIMO_KEY_CRON_DB:-/root/.openclaw/state/openclaw.sqlite}"
+CRON_DB="$MIMO_KEY_CRON_DB"
 if [[ -f "$CRON_DB" ]]; then
   hits="$(python3 -c '
 import sqlite3,sys,re
@@ -313,10 +348,13 @@ fi
 
 # 工具必须**用同一份清单**,不许自己再抄一遍位置。
 if [[ -f "$ROTATE" ]]; then
-  if grep -q '_mimo-key-locations.sh' "$ROTATE"; then
-    ok "工具 source 了共享清单(位置只有一份)"
+  # 清单缺失时必须指出设置路径并停在写入、联网之前。
+  missing="$fixture/missing-settings"
+  out="$(AIWORK_CONFIG_DIR="$missing" "$ROTATE" not-a-key 2>&1)"; rc=$?
+  if [[ $rc -eq 64 ]] && [[ "$out" == *"$missing/mimo-key-locations.sh"* ]]; then
+    ok "清单缺失时拒跑并给出本机设置路径(rc=64)"
   else
-    bad "工具没有 source 共享清单 —— 位置抄了第二份,清单会漂"
+    bad "清单缺失时未明确拒跑(rc=$rc)"
   fi
   # 形状不对的 key 必须被拒,且**一个字节都不许写**(fail-closed)。
   if [[ -x "$ROTATE" ]]; then
@@ -339,6 +377,17 @@ if [[ -f "$ROTATE" ]]; then
     if [[ "$before" == "$after" ]]; then ok "被拒时源头文件没被动过"; else bad "被拒时源头文件**被改了** —— 不是 fail-closed"; fi
   fi
 fi
+
+# 临时 HOME 的 provider 配置和假清单都必须被工具实际使用。
+new_key="tp-$(printf 'b%.0s' {1..48})"
+out="$(MIMO_KEY_DRY_RUN=1 "$ROTATE" "$new_key" 2>&1)"; rc=$?
+if [[ $rc -eq 0 ]] && [[ "$out" == *"$MIMO_KEY_SOURCE"* ]] && [[ "$out" == *"$fixture/copy.json"* ]]; then
+  ok "dry-run 使用假清单和临时 HOME 的 provider 配置"
+else
+  bad "dry-run 没读到假清单或临时 HOME 配置(rc=$rc)"
+fi
+after_key="$(mimo_key_read_source)"
+[[ "$after_key" == "$SRC_KEY" ]] && ok "dry-run 不写源头" || bad "dry-run 写了源头"
 
 # ── ⑦ 写/恢复的原语必须单独成文件,并且**恢复路径也得是原子的** ──────────
 # 由来(自审抓到的):前进路径专门做了临时文件+fsync+replace,理由白纸黑字写着

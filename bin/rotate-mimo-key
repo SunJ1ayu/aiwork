@@ -17,8 +17,7 @@
 #   ③ 改完**让运行中的目标自己回话**:重启 gateway、真跑一条 cron 看它 ok。
 #      盘上和运行时对不上 = BLOCK,不是警告。
 #
-# 位置清单**不在本文件里**,在 bin/_mimo-key-locations.sh —— 全机唯一一份,
-# 判据读的是同一份。抄第二份就等于把本单要治的病又犯一遍。
+# 位置清单在本机设置目录的 mimo-key-locations.sh,由 aiwork-config 定位。
 #
 # 环境变量:
 #   MIMO_KEY_DRY_RUN=1   只走校验、打印计划,一个字节都不写(判据用)
@@ -26,8 +25,10 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCATIONS="$("$HERE/aiwork-config" path mimo-key-locations.sh)" || exit 64
+[[ -r "$LOCATIONS" ]] || { echo "rotate-mimo-key: 读不到本机位置清单 $LOCATIONS; 请在 aiwork 设置目录安装 mimo-key-locations.sh" >&2; exit 64; }
 # shellcheck source=/dev/null
-. "$HERE/_mimo-key-locations.sh" || { echo "rotate-mimo-key: 读不到位置清单" >&2; exit 64; }
+. "$LOCATIONS" || { echo "rotate-mimo-key: 位置清单加载失败 $LOCATIONS" >&2; exit 64; }
 # shellcheck source=/dev/null
 . "$HERE/_mimo-key-io.sh"        || { echo "rotate-mimo-key: 读不到写/恢复原语" >&2; exit 64; }
 
@@ -59,9 +60,9 @@ fi
 # ── ② 先验它真的能用 ─────────────────────────────────────────────────────
 # 端点从 openclaw 的 provider 配置读,不在这里再写死一份地址。
 BASE_URL="$(python3 -c '
-import json
+import json,os
 try:
-    d=json.load(open("/root/.openclaw/openclaw.json"))
+    d=json.load(open(os.path.join(os.environ["HOME"], ".openclaw", "openclaw.json")))
     print(d["models"]["providers"]["xiaomi-coding"]["baseUrl"])
 except Exception:
     print("")' 2>/dev/null)"
@@ -167,7 +168,7 @@ say "⑤ 重启 gateway…"
 systemctl --user restart openclaw-gateway || die "gateway 重启失败" 8
 gw_ok=0
 for _ in $(seq 1 15); do
-  out="$("$HERE/check-gateway-version" 2>&1)" && { gw_ok=1; break; }
+  out="$("$HOME/.local/bin/check-gateway-version" 2>&1)" && { gw_ok=1; break; }
   sleep 4
 done
 say "   $out"

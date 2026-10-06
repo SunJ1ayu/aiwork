@@ -8,7 +8,7 @@ Multi-model implementation and PR review tooling.
 `~/CLAUDE.md` 和 `~/.claude/skills/{panel,delegate}` 是由 `bin/sync-workflow-docs` 管理的部署副本。
 
 GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；原始日志、配置、会话及本机资料
-留在机器的数据目录。现存 `track/`、`tracks/` 及相关命令是暂留的兼容资产，后续单独拆除。
+留在机器的数据目录。现存 `track/`、`tracks/` 及相关命令是兼容资产。
 
 ## History and project separation
 
@@ -42,22 +42,22 @@ Things that are not aiwork live with their own owners:
 - The `opendesign-file-organizer` and `opendesign-ref-images` track records
   belong to OpenDesign (moved by `SunJ1ayu/OpenDesign` PR #20).
 - Local working files — task briefs, my-review files, reference notes, logs,
-  tool homes — stay on the machine, ignored by Git. This repository is
+  tool homes — stay in the machine data directory outside this checkout. This repository is
   public: never commit private content.
 
 ## Layout
 
 - `bin/` executors and panel tools (below)
-- Data directory `tasks/` holds local task/brief files sent to reviewers (main-agent-authored)
-- Data directory `logs/` holds reviewer output, `.err` sidecars and arbitration records
+- Machine data directory `tasks/` holds local task/brief files sent to reviewers (main-agent-authored)
+- Machine data directory `logs/` holds reviewer output, `.err` sidecars and arbitration records
 - `templates/` starter task files (`review-task.md`, `fix-task.md`)
 - `tests/` regression oracles for this tooling itself
 - `track/` legacy convention and templates, retained for compatibility
 - `tracks/` existing historical records, retained unchanged
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
-- Data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
+- Machine data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
 - `kimi-review-home/config.toml` and `hooks/` are local seeds; reviewer runtime homes use the data directory
-- Existing `out/`, `refs/`, `.mimocode/`, `etc/` and other ignored local data await migration after merge
+- `out/`, `refs/`, `.mimocode/`, `etc/` and other local data live outside the checkout
 
 ## Core engine
 
@@ -245,6 +245,7 @@ nothing attached triggers a loud BLIND-review warning.
 - `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。
+- `mimo-key-locations.sh`：本机 MiMo 密钥位置清单，供 `rotate-mimo-key` 使用；缺失时明确报错并停止。
 
 换机器时把整个目录复制过去并保持权限。`bin/aiwork-config` 是统一读取入口；
 `AIWORK_CONFIG_DIR` 可指定其他设置目录，测试只指向临时目录。
@@ -259,14 +260,11 @@ nothing attached triggers a loud BLIND-review warning.
 都使用该数据入口；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。
 
-`kimi-review-home/config.toml` 和 `hooks/` 是种子，留在仓内原处且继续忽略；后续单独做隐私检查后入 Git。
+`kimi-review-home/config.toml` 和 `hooks/` 是本机种子，留在仓内原处且继续忽略。
 运行期配置和 hooks 只从种子同步这两类文件；凭证、缓存、会话、日志、索引和遥测留在数据目录，
-不会从旧种子目录整份复制。未搬迁或认证前，新运行目录缺少凭证会明确拒绝运行。
+不会从种子目录整份复制。运行目录缺少凭证会明确拒绝运行。
 
-`out/`、`refs/`、`.mimocode/`、`etc/` 的备份属于本机数据，当前 B 范围内的代码没有读取这些备份。
-本 PR 不搬动已有本机数据；合并后由云端 Claude 提供搬迁命令。
-正式切换新默认值前须完成搬迁（包括各评审 cache home、面板健康状态、任务与日志）；
-worktree 的 Git 注册路径也须修复。归档发现旧位置仍有本轮注册的树时拒绝继续，
+`out/`、`refs/`、`.mimocode/`、`etc/` 的备份属于仓外本机数据。
+归档发现旧位置仍有本轮注册的树时拒绝继续，
 明确给出旧树和新根；`--keep-trees` 或既有专用路径覆盖仍可显式保留旧树。
-`tmp-sweeper`、`disk-watch`、`openclaw-up`、`check-gateway-version`、MiMo 密钥位置清单及 cron 留给 PR C。
 普通缓存 `__pycache__`、`.pytest_cache`、`.mutation-state` 保持现状。

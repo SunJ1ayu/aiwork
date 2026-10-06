@@ -13,7 +13,7 @@ def main():
     models.add_argument('leg')
     models.add_argument('override', nargs='?')
     paths = commands.add_parser('path')
-    paths.add_argument('name', choices=('models.env', 'typesafe.env', 'apps'))
+    paths.add_argument('name', choices=('models.env', 'typesafe.env', 'apps', 'mimo-key-locations.sh'))
     data = commands.add_parser('data-path')
     data.add_argument('name', nargs='?', default='')
     keys = commands.add_parser('app-key')

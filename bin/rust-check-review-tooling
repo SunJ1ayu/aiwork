@@ -14,6 +14,7 @@ set -uo pipefail
 ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
 
 SUITES=(
+  "machine-bits|python3|$ROOT/tests/test_machine_bits.py"
   "local-data|python3|$ROOT/tests/test_local_data.py"
   "local-settings|python3|$ROOT/tests/test_local_settings.py"
   "review-pr|python3|$ROOT/tests/test_review_pr.py"
