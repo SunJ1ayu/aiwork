@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlparse
 
 
 SCHEMA_VERSION = 2
+DEFAULT_CHAT_MAX_FILE_BYTES = 120000
 SUBJECT_MANIFEST_VERSION = 1
 NORMALIZER_VERSION = 1
 REVIEW_CONTRACT_VERSION = 1
@@ -45,6 +46,7 @@ FAILURE_KINDS = frozenset(
         "rate_limit",
         "timeout",
         "no_verdict",
+        "output_truncated",
         "runtime",
         "identity_mismatch",
         "snapshot",

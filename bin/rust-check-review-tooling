@@ -17,6 +17,7 @@ SUITES=(
   "local-data|python3|$ROOT/tests/test_local_data.py"
   "local-settings|python3|$ROOT/tests/test_local_settings.py"
   "review-pr|python3|$ROOT/tests/test_review_pr.py"
+  "review-leg-reliability|python3|$ROOT/tests/test_review_leg_reliability.py"
   "app-token-scope|python3|$ROOT/tests/test_app_token_scope.py"
   "panel-candidates|python3|$ROOT/tests/test_panel_candidates.py"
   "review-delivery|python3|$ROOT/tests/test_review_delivery.py"

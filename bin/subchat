@@ -39,8 +39,8 @@ Providers (usually invoked via their shims):
   zhipu      (shim: subglm)    model from ~/.config/aiwork/models.env,     env ZHIPU_*
 
 Runs the provider's model as a read-only review sub-agent over an OpenAI-
-compatible chat-completions endpoint. Automatically attaches `git diff` of
-REPO_DIR.
+compatible chat-completions endpoint. Attaches `git diff` of REPO_DIR unless
+review-pr already supplied the complete diff in its task.
 
 Environment (PREFIX = DEEPSEEK or ZHIPU):
   <PREFIX>_MODEL      optional, model id (per-provider default above)
@@ -158,5 +158,7 @@ set -f
 for pat in $INCLUDE_PATTERNS; do INCLUDE_ARGS+=(--include "$pat"); done
 set +f
 
+DIFF_ARGS=()
+[[ "${AIWORK_REVIEW_PR:-}" == 1 ]] || DIFF_ARGS+=(--git-diff)
 exec python3 "$ENGINE" "$TASK_FILE" "$LOG_FILE" \
-  --repo "$REPO_DIR" --git-diff "${INCLUDE_ARGS[@]}"
+  --repo "$REPO_DIR" "${DIFF_ARGS[@]}" "${INCLUDE_ARGS[@]}"

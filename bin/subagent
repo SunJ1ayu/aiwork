@@ -527,8 +527,11 @@ if [[ "$MODE" == "review" ]]; then
     _BASE_CMD="claude"; [[ "$AGENT_BASE" == "opencode" ]] && _BASE_CMD="opencode"
     die "$_BASE_CMD exited rc=$RC (partial work kept in $LOG_FILE)"
   fi
-  [[ "$VERDICT" != "UNKNOWN" ]] \
-    || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+  if [[ "$VERDICT" == "UNKNOWN" ]]; then
+    review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
+      exited partial no_verdict "$VERDICT" || exit 78
+    die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+  fi
   review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
     exited complete "" "$VERDICT" || exit 78
 elif [[ $RC -ne 0 ]]; then

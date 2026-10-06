@@ -285,8 +285,11 @@ if [[ $RC -ne 0 ]]; then
 fi
 [[ $RC -eq 0 ]] || die "kimi exited rc=$RC (log: $LOG_FILE)"
 
-[[ "$VERDICT" != "UNKNOWN" ]] \
-  || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+if [[ "$VERDICT" == "UNKNOWN" ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    exited partial no_verdict "$VERDICT" || exit 78
+  die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+fi
 review_workspace_write_facts "$MODEL" "$MODEL" subscription \
   exited complete "" "$VERDICT" || exit 78
 

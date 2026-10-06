@@ -363,8 +363,13 @@ fi
 
 # 🔴 这两行的顺序是有意的:**先看裁决行,再看 rc**。
 # agy 未登录/软拒绝都会 rc=0,rc 在这条腿上不是死活的证据。
-[[ $HAS_VERDICT -eq 1 ]] \
-  || die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; rc=$RC; log: $LOG_FILE)"
+if [[ $HAS_VERDICT -ne 1 ]]; then
+  if [[ $RC -eq 0 ]]; then
+    review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+      exited partial no_verdict "$VERDICT" || exit 78
+  fi
+  die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; rc=$RC; log: $LOG_FILE)"
+fi
 if [[ $RC -ne 0 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" subscription \
     exited partial runtime "$VERDICT" "$DEGRADED" || exit 78
