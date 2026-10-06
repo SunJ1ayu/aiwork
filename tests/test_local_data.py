@@ -30,6 +30,24 @@ class LocalDataTests(unittest.TestCase):
         return subprocess.run([str(self.tool / 'bin' / name), *args],
                               env=env or self.env, capture_output=True, text=True, timeout=20)
 
+    def test_submimo_iso_seeds_credentials_from_home(self):
+        canonical = self.home / '.local/share/mimocode'
+        canonical.mkdir(parents=True)
+        (canonical / 'auth.json').write_text('fixture credential')
+        stub = self.tool / 'bin/submimo'
+        stub.write_text('#!/bin/bash\ncp "$XDG_DATA_HOME/mimocode/auth.json" "$3"\n')
+        project = self.d / 'project'
+        project.mkdir()
+        subprocess.run(['git', 'init', '-q', str(project)], check=True, capture_output=True)
+        task = self.d / 'task.md'
+        task.write_text('fixture task')
+        log = self.d / 'review.log'
+        result = self.run_tool('submimo-iso', 'fixture', 'review', str(task), str(project), str(log))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(log.read_text() == 'fixture credential', 'credentials did not come from HOME')
+        self.assertTrue((self.data / 'mimo-home/fixture/data/mimocode/auth.json').read_text()
+                        == 'fixture credential', 'isolated home was not seeded from HOME')
+
     def test_data_default_override_and_query_do_not_create_directories(self):
         env = dict(self.env)
         env.pop('AIWORK_DATA_DIR', None)

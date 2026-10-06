@@ -45,7 +45,7 @@ set -euo pipefail
 BIN_DIR="$(dirname "$(realpath "$0")")"
 DATA_ROOT="$("$BIN_DIR/aiwork-config" data-path)" || exit 2
 SUBMIMO="$BIN_DIR/submimo"
-CANON_HOME="/root/.local/share/mimocode"          # canonical mimo data home
+CANON_HOME="$HOME/.local/share/mimocode"        # canonical mimo data home
 HOMES_ROOT="$DATA_ROOT/mimo-home"               # per-agent isolated homes
 LOGS_DIR="$DATA_ROOT/logs"
 CRED_FILES=(auth.json mimo-free-client mimo-key-name installation_id)

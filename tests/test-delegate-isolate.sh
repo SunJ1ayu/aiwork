@@ -369,14 +369,14 @@ i_isolate_refusals() {
       --protect tests/ --log "$d/g.log" >"$d/o6" 2>&1; rc=$?
   check "I2: 树落在仓里、又没被 gitignore ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
   check "I2: 那次也没启动 codex" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
-  # 被 ignore 了就允许 —— `--repo /root/aiwork` 自己就是这形状(.gitignore 里早写着 worktrees/)
+  # 显式被 ignore 了就允许。
   printf 'wtdir/\n' > "$repo/.gitignore"; git -C "$repo" add -A
   git -C "$repo" commit -qm "ignore 掉 worktree 根"
   stamp_hash "$d/attack.md" "$repo" tests/ .gitignore
   env PATH="$b:$PATH" DELEGATE_WORKTREE_ROOT="$repo/wtdir" bash "$BIN/delegate-codex" \
       --task "$d/task.md" --repo "$repo" --attack-log "$d/attack.md" \
       --protect tests/ --log "$d/h.log" >"$d/o7" 2>&1; rc=$?
-  check "I2: 树落在仓里但被 gitignore ⇒ 放行(aiwork 自己就是这形状)" $([[ $rc -eq 0 ]]; echo $?)
+  check "I2: 树落在仓里但被 gitignore ⇒ 放行" $([[ $rc -eq 0 ]]; echo $?)
   check "I2: 主树 status 没被那棵树污染" \
     $([[ -z "$(git -C "$repo" status --porcelain -uall)" ]]; echo $?)
 

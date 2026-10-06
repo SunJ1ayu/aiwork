@@ -466,7 +466,7 @@ for _a in "$(realpath "$ATTACK")" "$(realpath -s "$ATTACK")"; do
   if _in_forbidden "$_a"; then
     die "攻题记录在${_legwhat}:$_a
   执行腿**读得到**它(实测:写沙箱管不了读)= 把考卷的洞递给考生。
-  挪到仓外,例如 /root/attack-logs/<name>.md;派 aiwork 自己的活时,'仓外'就是 /root/aiwork 之外。"
+  挪到仓外,例如 $HOME/.local/share/aiwork/attack-logs/<name>.md;派 aiwork 自己的活时,'仓外'就是 $_rp 之外。"
   fi
 done
 

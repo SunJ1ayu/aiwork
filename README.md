@@ -42,22 +42,22 @@ Things that are not aiwork live with their own owners:
 - The `opendesign-file-organizer` and `opendesign-ref-images` track records
   belong to OpenDesign (moved by `SunJ1ayu/OpenDesign` PR #20).
 - Local working files — task briefs, my-review files, reference notes, logs,
-  tool homes — stay on the machine, ignored by Git. This repository is
+  tool homes — stay in the machine data directory outside this checkout. This repository is
   public: never commit private content.
 
 ## Layout
 
 - `bin/` executors and panel tools (below)
-- Data directory `tasks/` holds local task/brief files sent to reviewers (main-agent-authored)
-- Data directory `logs/` holds reviewer output, `.err` sidecars and arbitration records
+- Machine data directory `tasks/` holds local task/brief files sent to reviewers (main-agent-authored)
+- Machine data directory `logs/` holds reviewer output, `.err` sidecars and arbitration records
 - `templates/` starter task files (`review-task.md`, `fix-task.md`)
 - `tests/` regression oracles for this tooling itself
 - `track/` legacy convention and templates, retained for compatibility
 - `tracks/` existing historical records, retained unchanged
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
-- Data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
+- Machine data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
 - `kimi-review-home/config.toml` and `hooks/` are local seeds; reviewer runtime homes use the data directory
-- Existing `out/`, `refs/`, `.mimocode/`, `etc/` and other ignored local data await migration after merge
+- `out/`, `refs/`, `.mimocode/`, `etc/` and other local data live outside the checkout
 
 ## Core engine
 
@@ -261,12 +261,9 @@ nothing attached triggers a loud BLIND-review warning.
 
 `kimi-review-home/config.toml` 和 `hooks/` 是种子，留在仓内原处且继续忽略；后续单独做隐私检查后入 Git。
 运行期配置和 hooks 只从种子同步这两类文件；凭证、缓存、会话、日志、索引和遥测留在数据目录，
-不会从旧种子目录整份复制。未搬迁或认证前，新运行目录缺少凭证会明确拒绝运行。
+不会从种子目录整份复制。运行目录缺少凭证会明确拒绝运行。
 
-`out/`、`refs/`、`.mimocode/`、`etc/` 的备份属于本机数据，当前 B 范围内的代码没有读取这些备份。
-本 PR 不搬动已有本机数据；合并后由云端 Claude 提供搬迁命令。
-正式切换新默认值前须完成搬迁（包括各评审 cache home、面板健康状态、任务与日志）；
-worktree 的 Git 注册路径也须修复。归档发现旧位置仍有本轮注册的树时拒绝继续，
+`out/`、`refs/`、`.mimocode/`、`etc/` 的备份属于仓外本机数据。
+归档发现旧位置仍有本轮注册的树时拒绝继续，
 明确给出旧树和新根；`--keep-trees` 或既有专用路径覆盖仍可显式保留旧树。
-`tmp-sweeper`、`disk-watch`、`openclaw-up`、`check-gateway-version`、MiMo 密钥位置清单及 cron 留给 PR C。
 普通缓存 `__pycache__`、`.pytest_cache`、`.mutation-state` 保持现状。
