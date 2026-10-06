@@ -104,8 +104,17 @@ Things that are not aiwork live with their own owners:
 - `bin/review-pr PR --repo owner/name --leg LEG` — review a PR head and publish
   an aiwork-review COMMENT review. 需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。
   Failed runs print the redacted last 40 stderr lines and retain their complete
-  temporary directory under the data path `logs/review-pr-failures/<run-id>/`; successful runs
-  discard it. Truncated chat context is published with `completeness=partial`.
+  temporary directory under the data path `logs/review-pr-failures/<run-id>/`.
+  The task contains the sole PR diff and repeats the conclusion requirement after it.
+  Tasks exceeding `MIMO_MAX_FILE_BYTES` (default 120000 bytes) switch from chat to
+  an available repository reader of the same family; the switch is disclosed in
+  the terminal and published review. Without a reader, the run stops. Truncated
+  chat context is refused before requesting a model response.
+  Repository readers default to 2400 seconds for this command; their existing
+  timeout environment variables override that default. Only a missing verdict
+  or `finish_reason=length` triggers one retry, disclosed in the terminal and
+  review. Each failed attempt is preserved, including when the retry succeeds;
+  other failures and HTTP errors are not retried by this command.
 
 All executors: `<tool> review TASK LOG REPO`. Output is evidence for the main
 agent to verify, never a verdict to adopt.

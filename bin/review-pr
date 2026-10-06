@@ -17,7 +17,7 @@ import tempfile
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _review_result import leg_identity, load_result, sha256_file
+from _review_result import ADAPTER_IDENTITIES, DEFAULT_CHAT_MAX_FILE_BYTES, leg_identity, load_result, sha256_file
 from _aiwork_config import ConfigError, data_path, model as configured_model
 
 
@@ -25,6 +25,15 @@ BIN = Path(__file__).resolve().parent
 DEFAULT_REPO = "SunJ1ayu/OpenDesign"
 REVIEW_RULES_SOURCE = ("SunJ1ayu/aiwork", "REVIEW-RULES.md")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+CONCLUSION_REQUIREMENT = ("最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
+                          "Conclusion: NEEDS_MORE_INFO。")
+CHAT_LEGS = frozenset({"subdeepseek", "subglm"})
+READER_TIMEOUT_ENV = {
+    "subdeepseek-agent": "DEEPSEEK_TIMEOUT", "subglm-agent": "ZHIPU_TIMEOUT",
+    "subcodex": "SUBCODEX_TIMEOUT", "subcursor": "CURSOR_TIMEOUT",
+    "submimo": "MIMO_CLI_TIMEOUT", "subkimi": "KIMI_TIMEOUT",
+    "subgemini": "AGY_TIMEOUT", "subgrok": "GROK_TIMEOUT",
+}
 
 
 class ReviewError(ValueError):
@@ -64,6 +73,25 @@ def redact(text: str) -> str:
                   r"\1\2[redacted]", text)
     text = re.sub(r"(?i)(\bBearer\s+)" + value, r"\1[redacted]", text)
     return re.sub(r"\b(?:(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,})", "[redacted]", text)
+
+
+def route_task(leg: str, task: Path, family: str) -> tuple[str, str | None]:
+    """A chat leg must receive the whole task, or yield to its family's reader."""
+    if leg not in CHAT_LEGS:
+        return leg, None
+    limit = int(os.environ.get("MIMO_MAX_FILE_BYTES", DEFAULT_CHAT_MAX_FILE_BYTES))
+    if limit <= 0:
+        raise ReviewError("MIMO_MAX_FILE_BYTES must be a positive integer")
+    size = task.stat().st_size
+    if size <= limit:
+        return leg, None
+    readers = [name for name, identity in ADAPTER_IDENTITIES.items()
+               if name.endswith("-agent") and identity[0] == family and (BIN / name).is_file()]
+    if not readers:
+        raise ReviewError(f"task is {size} bytes, exceeding {leg}'s {limit}-byte limit; "
+                          f"no available same-family repository reader ({family}); no model called or review posted")
+    reader = readers[0]
+    return reader, f"task is {size} bytes, exceeding the {limit}-byte chat limit; switched {leg} → {reader}"
 
 
 def report_failure(directory: Path, run_id: str) -> None:
@@ -229,14 +257,14 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
         "上下文不够就指出缺口并给 NEEDS_MORE_INFO。\n\n"
         "每条发现写严重程度、file:line 证据、触发条件及影响；列出实际检查过的文件。"
         "文件证据用仓库相对路径，不要用临时目录的绝对路径或指向临时目录的链接。"
-        "最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
-        "Conclusion: NEEDS_MORE_INFO。\n\n"
+        + CONCLUSION_REQUIREMENT + "\n\n"
         f"## {rules_repository} main 的 {rules_path}（原文，现行评审口径）\n\n"
         f"规则来源提交: {rules_sha}\n\n" + review_rules
         + "\n\n## 项目 main 的 .aiwork/accepted-risks.md（原文；不存在时为无）\n\n" + risks
         + "\n\n"
         "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
-        + "\n## 完整 diff（merge base → HEAD）\n```diff\n" + diff + "\n```\n"
+        + "\n## 完整 diff（merge base → HEAD）\n```diff\n" + diff + "\n```\n\n"
+        + CONCLUSION_REQUIREMENT + "\n"
     )
 
 
@@ -286,6 +314,26 @@ def review_report(log: Path) -> str:
     return report
 
 
+def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, directory: Path,
+                    env: dict[str, str], run_id: str, frozen_model: str | None) -> tuple[dict, Path]:
+    log, facts = directory / "review.log", directory / "facts.json"
+    result_file, diagnostic = directory / "result.json", directory / "leg.stderr"
+    env = dict(env, AIWORK_REVIEW_FACTS_PATH=str(facts))
+    leg = subprocess.run([str(BIN / leg_name), "review", str(task), str(log), str(repo)],
+                         text=True, capture_output=True, env=env, check=False)
+    diagnostic.write_text(leg.stderr, encoding="utf-8")
+    command = [sys.executable, str(BIN / "_review_result.py"), "emit", "--result", str(result_file),
+               "--run-id", run_id, "--name", leg_name, "--family", family, "--adapter", leg_name,
+               "--exit-code", str(leg.returncode), "--task-sha256", sha256_file(task),
+               "--log", str(log), "--diagnostic", str(diagnostic)]
+    if facts.is_file():
+        command += ["--facts", str(facts)]
+    if frozen_model is not None:
+        command += ["--expected-model", frozen_model]
+    run(command)
+    return load_result(result_file), log
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pr", type=int, help="PR number in the selected repository")
@@ -311,39 +359,45 @@ def main() -> int:
                 task = directory / "task.md"
                 task.write_text(task_text(args.pr, pr, merge_base, files, diff,
                                           review_rules, risks, rules_sha=rules_sha, repository=args.repo), encoding="utf-8")
-                log = directory / "review.log"
-                facts = directory / "facts.json"
-                result_file = directory / "result.json"
-                diagnostic = directory / "leg.stderr"
+                selected_leg, switch_note = route_task(args.leg, task, family)
+                if switch_note:
+                    print(f"review-pr: {switch_note}", file=sys.stderr)
+                notices = [switch_note] if switch_note else []
                 env = dict(os.environ)
                 for key in ("GH_TOKEN", "GITHUB_TOKEN", "AIWORK_REVIEW_GIT_TOKEN", "GIT_ASKPASS"):
                     env.pop(key, None)
-                env.update(AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_RESULT_BIN=str(BIN / "_review_result.py"),
-                           PANEL_DIFF_BASE=merge_base)
+                env.update(AIWORK_REVIEW_RESULT_BIN=str(BIN / "_review_result.py"),
+                           PANEL_DIFF_BASE=merge_base, AIWORK_REVIEW_PR="1", MIMO_RETRY_ATTEMPTS="1")
+                timeout_variable = READER_TIMEOUT_ENV.get(selected_leg)
+                if timeout_variable and not env.get(timeout_variable):
+                    env[timeout_variable] = "2400"
                 if frozen_model is not None:
                     env["CURSOR_MODEL"] = frozen_model
-                leg = subprocess.run([str(BIN / args.leg), "review", str(task), str(log), str(repo)],
-                                     text=True, capture_output=True, env=env, check=False)
-                diagnostic.write_text(leg.stderr, encoding="utf-8")
-                command = [sys.executable, str(BIN / "_review_result.py"), "emit", "--result", str(result_file),
-                           "--run-id", run_id, "--name", args.leg,
-                           "--family", family, "--adapter", args.leg, "--exit-code", str(leg.returncode),
-                           "--task-sha256", sha256_file(task), "--log", str(log), "--diagnostic", str(diagnostic)]
-                if facts.is_file():
-                    command += ["--facts", str(facts)]
-                if frozen_model is not None:
-                    command += ["--expected-model", frozen_model]
-                run(command)
-                result = load_result(result_file)
+                attempt_directory = directory
+                for attempt in range(2):
+                    result, log = run_leg_attempt(selected_leg, family, task, repo, attempt_directory,
+                                                  env, run_id, frozen_model)
+                    if (attempt == 0 and result["process"]["state"] == "exited"
+                            and result["failure_kind"] in {"no_verdict", "output_truncated"}):
+                        report_failure(directory, run_id + "-attempt-1")
+                        note = f"retry 2/2 for {selected_leg}: {result['failure_kind']}; first failure artifacts preserved"
+                        notices.append(note)
+                        print(f"review-pr: {note}", file=sys.stderr)
+                        attempt_directory = directory / "attempt-2"
+                        attempt_directory.mkdir()
+                        continue
+                    break
                 model = publishable_model(result)
-                identity = leg_identity(args.leg, model)
+                identity = leg_identity(selected_leg, model)
                 if identity is None or identity[0] != family or not model.startswith(identity[1]):
                     raise ReviewError("review leg model does not match selected family")
                 report = review_report(log)
+                if notices:
+                    report = "\n\n".join(f"**Execution:** {note}" for note in notices) + "\n\n" + report
                 block = {"verdict": result["verdict"], "head_sha": pr["head"]["sha"],
                          "model": model, "family": family, "completeness": completeness(result),
                          "files_read": files}
-                body = build_body(args.leg, model, report, block)
+                body = build_body(selected_leg, model, report, block)
                 check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=args.repo))
                 if args.dry_run:
                     print(body, end="")
