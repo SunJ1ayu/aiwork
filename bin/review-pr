@@ -99,7 +99,14 @@ def report_failure(directory: Path, run_id: str) -> None:
     try:
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         destination.parent.chmod(0o700)
-        shutil.copytree(directory, destination, symlinks=True)
+        shutil.copytree(directory, destination, symlinks=True,
+                        ignore=shutil.ignore_patterns("repo", "askpass"))
+        os.utime(destination, None)
+        archives = sorted((path for path in destination.parent.iterdir()
+                           if path.is_dir() and not path.is_symlink()),
+                          key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        for expired in archives[20:]:
+            shutil.rmtree(expired)
         print(f"review-pr: failure artifacts kept in {destination}", file=sys.stderr)
     except OSError as exc:
         print(f"review-pr: could not preserve failure artifacts: {redact(str(exc))}", file=sys.stderr)
@@ -367,7 +374,7 @@ def main() -> int:
                 for key in ("GH_TOKEN", "GITHUB_TOKEN", "AIWORK_REVIEW_GIT_TOKEN", "GIT_ASKPASS"):
                     env.pop(key, None)
                 env.update(AIWORK_REVIEW_RESULT_BIN=str(BIN / "_review_result.py"),
-                           PANEL_DIFF_BASE=merge_base, AIWORK_REVIEW_PR="1", MIMO_RETRY_ATTEMPTS="1")
+                           PANEL_DIFF_BASE=merge_base, AIWORK_REVIEW_PR="1")
                 timeout_variable = READER_TIMEOUT_ENV.get(selected_leg)
                 if timeout_variable and not env.get(timeout_variable):
                     env[timeout_variable] = "2400"

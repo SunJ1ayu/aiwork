@@ -96,10 +96,12 @@ class ReliabilityTests(unittest.TestCase):
             shutil.copy2(BIN / '_review_result.py', bin_dir / '_review_result.py')
 
         def invoke(command, **kwargs):
-            if fake_attempts is None or Path(command[0]).parent != bin_dir or not Path(command[0]).name.startswith('sub'):
+            is_leg = Path(command[0]).parent == bin_dir and Path(command[0]).name.startswith('sub')
+            if is_leg:
+                self.leg_calls.append((Path(command[0]).name, kwargs['env'].copy()))
+            if fake_attempts is None or not is_leg:
                 return real_subprocess_run(command, **kwargs)
             name = Path(command[0]).name
-            self.leg_calls.append((name, kwargs['env'].copy()))
             attempt = fake_attempts[min(len(self.leg_calls) - 1, len(fake_attempts) - 1)]
             model = {'subdeepseek': 'deepseek-flash', 'subdeepseek-agent': 'deepseek-flash',
                      'subglm': 'glm-5.3-flash', 'subglm-agent': 'go/glm-5.3-flash',
@@ -268,15 +270,79 @@ class ReliabilityTests(unittest.TestCase):
                 self.assertEqual((len(self.leg_calls), posted), (1, []))
                 self.assertNotIn('retry 2/2', stderr)
 
-    def test_review_pr_http_errors_do_not_retry_requests(self):
-        for status in (401, 429, 503):
+    def test_http_engine_retries_transient_failures_without_restarting_review_leg(self):
+        for status, requests in ((401, 1), (429, 3), (503, 3)):
             with self.subTest(status=status):
                 rc, payloads, posted, _, stderr = self.run_review(
                     responses=[{'_status': status, 'error': 'Provider failed.'}],
                     env={'MIMO_RETRY_BASE_SECONDS': '0', 'MIMO_RETRY_CAP_SECONDS': '0'})
                 self.assertEqual(rc, 1)
-                self.assertEqual((len(payloads), posted), (1, []))
-                self.assertNotIn('retry 2/2', stderr)
+                self.assertEqual((len(payloads), posted), (requests, []))
+                self.assertEqual(len(self.leg_calls), 1)
+                self.assertNotIn('review-pr: retry 2/2', stderr)
+
+    def test_http_engine_recovers_transient_failures_and_honors_caller_attempt_limit(self):
+        for status in (429, 503):
+            with self.subTest(status=status):
+                rc, payloads, posted, _, stderr = self.run_review(responses=[
+                    {'_status': status, 'error': 'Temporary provider failure.'},
+                    {'choices': [{'message': {'content': 'Recovered.\nConclusion: PASS'},
+                                  'finish_reason': 'stop'}]}],
+                    env={'MIMO_RETRY_ATTEMPTS': '2', 'MIMO_RETRY_BASE_SECONDS': '0',
+                         'MIMO_RETRY_CAP_SECONDS': '0'})
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(len(payloads), 2)
+                self.assertEqual(len(self.leg_calls), 1)
+                self.assertEqual(len(posted), 1)
+                self.assertNotIn('review-pr: retry 2/2', stderr)
+
+
+class FailureArchiveTests(unittest.TestCase):
+    def setUp(self):
+        self.review = load_script()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = Path(self.tmp.name)
+        self.source = self.directory / 'source'
+        self.source.mkdir(mode=0o700)
+        self.archives = self.directory / 'data/logs/review-pr-failures'
+        self.addCleanup(patch.stopall)
+        patch.object(self.review, 'data_path', return_value=self.archives).start()
+
+    def test_failure_archive_keeps_diagnostics_without_repo_or_askpass(self):
+        files = ('task.md', 'review.log', 'leg.stderr', 'facts.json', 'result.json',
+                 'review.stream.jsonl')
+        for name in files:
+            (self.source / name).write_text('diagnostic ' + name)
+        (self.source / 'repo').mkdir()
+        (self.source / 'repo/checkout.txt').write_text('repository snapshot')
+        (self.source / 'askpass').write_text('credential helper')
+        with redirect_stderr(io.StringIO()):
+            self.review.report_failure(self.source, 'new-failure')
+        archive = self.archives / 'new-failure'
+        self.assertEqual({p.name for p in archive.iterdir()}, set(files))
+        for name in files:
+            self.assertEqual((archive / name).read_bytes(), (self.source / name).read_bytes())
+        self.assertTrue((self.source / 'repo/checkout.txt').exists())
+        self.assertTrue((self.source / 'askpass').exists())
+
+    def test_failure_archives_keep_only_newest_twenty_by_archive_time(self):
+        self.archives.mkdir(parents=True)
+        previous = []
+        for index in range(24):
+            archive = self.archives / f'run-{24 - index:02d}'
+            archive.mkdir()
+            (archive / 'review.log').write_text(f'failure {index}')
+            os.utime(archive, (index + 1, index + 1))
+            previous.append(archive)
+        (self.source / 'review.log').write_text('latest failure')
+        os.utime(self.source, (0, 0))
+        with redirect_stderr(io.StringIO()):
+            self.review.report_failure(self.source, 'new-failure')
+        remaining = {p.name for p in self.archives.iterdir()}
+        self.assertEqual(remaining, {'new-failure', *(p.name for p in previous[5:])})
+        self.assertEqual(len(remaining), 20)
+        self.assertEqual((self.archives / 'new-failure/review.log').read_text(), 'latest failure')
 
 
 class ReaderFailureClassificationTests(LegCase):
