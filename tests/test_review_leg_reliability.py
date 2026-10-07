@@ -71,7 +71,7 @@ class ReliabilityTests(unittest.TestCase):
         return f'http://127.0.0.1:{server.server_port}', payloads
 
     def run_review(self, leg='subdeepseek', *, responses=None, env=None,
-                   fake_attempts=None, missing_agent=False):
+                   fake_attempts=None, missing_agent=False, files=None):
         """Run the real publisher, leg, chat engine and result producer offline."""
         default_response = [
             {'choices': [{'message': {'content': 'Checked file.\nConclusion: PASS'},
@@ -84,6 +84,7 @@ class ReliabilityTests(unittest.TestCase):
         real_subprocess_run = subprocess.run
         bin_dir = BIN
         self.leg_calls = []
+        self.seen_tasks = []
         if fake_attempts is not None:
             self.run_count += 1
             bin_dir = self.directory / f'bin-{self.run_count}'
@@ -100,6 +101,7 @@ class ReliabilityTests(unittest.TestCase):
             is_leg = Path(command[0]).parent == bin_dir and Path(command[0]).name.startswith('sub')
             if is_leg:
                 self.leg_calls.append((Path(command[0]).name, kwargs['env'].copy()))
+                self.seen_tasks.append(Path(command[2]).read_text(encoding='utf-8'))
             if fake_attempts is None or not is_leg:
                 return real_subprocess_run(command, **kwargs)
             name = Path(command[0]).name
@@ -139,7 +141,8 @@ class ReliabilityTests(unittest.TestCase):
                 patch('sys.argv', ['review-pr', '1', '--repo', 'example/repo', '--leg', leg]), \
                 patch.object(self.review, 'run', side_effect=run), \
                 patch.object(self.review, 'pr_state', return_value=pr), \
-                patch.object(self.review, 'snapshot', return_value=(self.repo, self.base, ['file'], self.diff)), \
+                patch.object(self.review, 'snapshot', return_value=(
+                    self.repo, self.base, files or ['file'], self.diff)), \
                 patch.object(self.review, 'aiwork_main_rules', return_value=('d' * 40, 'Trusted rules.')), \
                 patch.object(self.review, 'main_document', return_value='无'), \
                 patch.object(self.review, 'github', side_effect=github), \
@@ -181,6 +184,101 @@ class ReliabilityTests(unittest.TestCase):
                 self.assertIn(notice, posted[0]['body'])
                 block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
                 self.assertEqual(block['family'], family)
+
+    def test_large_deletion_reader_task_stays_complete_without_deleted_body(self):
+        diff, count = self.whole_file_deletion_diff()
+        self.diff = diff
+        limit = 200 * 1024
+        self.assertGreater(len(diff.encode()), limit)
+        rc, payloads, posted, _, stderr = self.run_review(
+            'subdeepseek-agent', files=['gone.txt'], fake_attempts=[{}])
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(payloads, [])
+        self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
+        task = self.seen_tasks[0]
+        self.assertLessEqual(len(task.encode()), limit)
+        self.assertNotIn('DELETED_PAYLOAD_9f3c', task)
+        self.assertIn(f'（{count} 行）', task)
+        self.assertIn(f'git diff {self.base}..{self.head} -- gone.txt', task)
+        self.assertEqual(self.review.READER_INLINE_DIFF_BYTES, limit)
+        block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
+        self.assertEqual(block['completeness'], 'complete')
+
+    def test_large_deletion_stays_on_the_chat_leg_without_the_deleted_body(self):
+        diff, count = self.whole_file_deletion_diff()
+        self.diff = diff
+        limit = 200 * 1024
+        self.assertGreater(len(diff.encode()), limit)
+        rc, payloads, posted, _, stderr = self.run_review(
+            'subdeepseek', files=['gone.txt'], fake_attempts=[{}])
+        self.assertEqual(rc, 0, stderr)
+        task = self.seen_tasks[0]
+        self.assertLessEqual(len(task.encode()), limit)
+        self.assertNotIn('DELETED_PAYLOAD_9f3c', task)
+        self.assertIn(f'（{count} 行）', task)
+        self.assertNotIn('不内联', task)
+        self.assertNotIn('[TRUNCATED:', task)
+        self.assertNotIn('git diff ', task)
+        self.assertEqual(self.leg_calls[0][0], 'subdeepseek')
+        self.assertEqual(payloads, [])
+        block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
+        self.assertEqual(block['completeness'], 'complete')
+
+    def test_reader_under_the_limit_still_receives_the_inline_diff(self):
+        rc, _, posted, _, stderr = self.run_review('subdeepseek-agent', fake_attempts=[{}])
+        self.assertEqual(rc, 0, stderr)
+        self.assertIn(DIFF_MARKER, self.seen_tasks[0])
+        self.assertNotIn('不内联', self.seen_tasks[0])
+        block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
+        self.assertEqual(block['completeness'], 'complete')
+
+    def test_switched_reader_still_inlines_a_diff_under_the_cap(self):
+        self.diff += 'x\n' * 65000
+        self.assertGreater(len(self.diff.encode()), 120000)
+        self.assertLess(len(self.diff.encode()), 200 * 1024)
+        rc, _, posted, _, stderr = self.run_review('subdeepseek', fake_attempts=[{}])
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
+        self.assertIn('\nx\n', self.seen_tasks[0])
+        self.assertNotIn('不内联', self.seen_tasks[0])
+        self.assertNotIn('[TRUNCATED:', self.seen_tasks[0])
+        block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
+        self.assertEqual(block['completeness'], 'complete')
+
+    def test_switched_reader_is_not_handed_the_oversize_inline_diff(self):
+        payload = 'KEEP_SWITCH_PAYLOAD\n'
+        self.diff += payload * 12000
+        self.assertGreater(len(self.diff.encode()), 200 * 1024)
+        rc, payloads, posted, _, stderr = self.run_review('subdeepseek', fake_attempts=[{}])
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(payloads, [])
+        self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
+        self.assertNotIn('KEEP_SWITCH_PAYLOAD', self.seen_tasks[0])
+        self.assertNotIn('[TRUNCATED:', self.seen_tasks[0])
+        self.assertIn(f'git diff {self.base}..{self.head} -- file', self.seen_tasks[0])
+        block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
+        self.assertEqual(block['completeness'], 'complete')
+        self.assertIn('subdeepseek → subdeepseek-agent', posted[0]['body'])
+
+    def whole_file_deletion_diff(self):
+        marker = 'DELETED_PAYLOAD_9f3c'
+        count = (200 * 1024) // (len(marker) + 1) + 80
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True)
+            git('init', '-q')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'gone.txt').write_text((marker + '\n') * count)
+            git('add', 'gone.txt')
+            git('commit', '-qm', 'add')
+            base = git('rev-parse', 'HEAD').stdout.strip()
+            git('rm', '-q', 'gone.txt')
+            git('commit', '-qm', 'delete')
+            head = git('rev-parse', 'HEAD').stdout.strip()
+            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+        return diff, count
 
     def test_oversized_task_without_available_reader_stops_before_leg_or_post(self):
         self.diff += 'x\n' * 70000

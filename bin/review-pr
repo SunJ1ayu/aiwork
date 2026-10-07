@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,9 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 CONCLUSION_REQUIREMENT = ("最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
                           "Conclusion: NEEDS_MORE_INFO。")
 CHAT_LEGS = frozenset({"subdeepseek", "subglm"})
+# A repository reader can open the snapshot and run git. Past this size the task
+# names that command instead of pasting the diff; the review stays complete.
+READER_INLINE_DIFF_BYTES = 200 * 1024
 READER_TIMEOUT_ENV = {
     "subdeepseek-agent": "DEEPSEEK_TIMEOUT", "subglm-agent": "ZHIPU_TIMEOUT",
     "subcodex": "SUBCODEX_TIMEOUT", "subcursor": "CURSOR_TIMEOUT",
@@ -270,12 +274,142 @@ def aiwork_main_rules() -> tuple[str, str]:
     return commit, raw.decode("utf-8")
 
 
+def _decode_git_token(token: str) -> str:
+    if len(token) < 2 or token[0] != '"' or token[-1] != '"':
+        return token
+    raw = token[1:-1]
+    out = bytearray()
+    index = 0
+    while index < len(raw):
+        if raw[index] != '\\':
+            out.extend(raw[index].encode('utf-8'))
+            index += 1
+            continue
+        if index + 1 >= len(raw):
+            break
+        nxt = raw[index + 1]
+        if nxt in '01234567':
+            octal = raw[index + 1:index + 4]
+            if len(octal) == 3 and all(char in '01234567' for char in octal):
+                out.append(int(octal, 8))
+                index += 4
+                continue
+        mapping = {'a': 7, 'b': 8, 't': 9, 'n': 10, 'v': 11, 'f': 12, 'r': 13, '"': 34, '\\': 92}
+        if nxt in mapping:
+            out.append(mapping[nxt])
+            index += 2
+            continue
+        out.append(ord(nxt))
+        index += 2
+    return out.decode('utf-8', 'surrogateescape')
+
+
+def _strip_diff_prefix(path: str) -> str:
+    if path.startswith('a/') or path.startswith('b/'):
+        return path[2:]
+    return path
+
+
+def _take_git_path(payload: str) -> tuple[str, str]:
+    if payload.startswith('"'):
+        index = 1
+        while index < len(payload):
+            if payload[index] == '\\':
+                index += 2
+                continue
+            if payload[index] == '"':
+                return _decode_git_token(payload[:index + 1]), payload[index + 1:].lstrip()
+            index += 1
+    token, _, rest = payload.partition(' ')
+    return token, rest
+
+
+def _deleted_path(piece: str, header: str) -> str:
+    for line in header.splitlines():
+        if line.startswith('--- '):
+            token, _rest = _take_git_path(line[4:])
+            return _strip_diff_prefix(token)
+    a_path, _b_path = _take_git_path(piece.splitlines()[0][len('diff --git '):])
+    return _strip_diff_prefix(a_path)
+
+
+def _deleted_line_count(piece: str) -> int | None:
+    if '\nGIT binary patch\n' in piece or re.search(r'(?m)^Binary files ', piece):
+        return None
+    total = 0
+    found = False
+    for match in re.finditer(r'(?m)^@@ -\d+(?:,(\d+))? \+\d+(?:,\d+)? @@', piece):
+        found = True
+        total += int(match.group(1) or '1')
+    return total if found else 0
+
+
+def partition_whole_file_deletions(diff: str) -> tuple[str, list[tuple[str, int | None]]]:
+    """Drop whole-file deletion bodies. Line counts stay; file bytes do not."""
+    pieces = re.split(r'(?m)(?=^diff --git )', diff)
+    kept: list[str] = []
+    deleted: list[tuple[str, int | None]] = []
+    for piece in pieces:
+        if not piece.startswith('diff --git '):
+            kept.append(piece)
+            continue
+        header = piece.split('\n@@', 1)[0].split('\nGIT binary patch', 1)[0].split('\nBinary files ', 1)[0]
+        if not re.search(r'(?m)^deleted file mode ', header):
+            kept.append(piece)
+            continue
+        deleted.append((_deleted_path(piece, header), _deleted_line_count(piece)))
+    return ''.join(kept), deleted
+
+
+def _deletion_section(deleted: list[tuple[str, int | None]]) -> str:
+    if not deleted:
+        return ''
+    lines = ['## 整文件删除（只列路径和行数，不含内容）']
+    for path, count in deleted:
+        shown = json.dumps(path, ensure_ascii=False)
+        if count is None:
+            lines.append(f'- {shown}（二进制文件）')
+        else:
+            lines.append(f'- {shown}（{count} 行）')
+    return '\n'.join(lines) + '\n\n'
+
+
+def _diff_commands(merge_base: str, head: str, files: list[str],
+                   deleted: list[tuple[str, int | None]]) -> str:
+    names = list(files)
+    seen = set(names)
+    for path, _count in deleted:
+        if path not in seen:
+            names.append(path)
+            seen.add(path)
+    return '\n'.join(
+        f'git diff {merge_base}..{head} -- {shlex.quote(name)}' for name in names)
+
+
 def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
-              review_rules: str, risks: str, *, rules_sha: str, repository: str) -> str:
+              review_rules: str, risks: str, *, rules_sha: str, repository: str,
+              reader: bool = False) -> str:
     rules_repository, rules_path = REVIEW_RULES_SOURCE
+    inline, deleted = partition_whole_file_deletions(diff)
+    raw_bytes = len(diff.encode('utf-8'))
+    omit_inline = reader and raw_bytes > READER_INLINE_DIFF_BYTES
+    head = pr['head']['sha']
+    file_list = "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
+    if omit_inline:
+        diff_section = (
+            "## diff\n"
+            f"diff 为 {raw_bytes} 字节，超过 {READER_INLINE_DIFF_BYTES} 字节，任务书不内联。\n"
+            "请对每个改动文件执行下面的命令自己读；这样读到的 diff 仍是这次完整评审。\n"
+            "```text\n" + _diff_commands(merge_base, head, files, deleted) + "\n```\n\n"
+        )
+    elif inline.strip():
+        title = '## diff（merge base → HEAD，不含上面的整文件删除）' if deleted else '## 完整 diff（merge base → HEAD）'
+        diff_section = title + "\n```diff\n" + inline + "\n```\n\n"
+    else:
+        diff_section = ''
     return (
         f"# {repository} PR #{number} · 当前 HEAD 的完整评审\n\n"
-        f"HEAD: {pr['head']['sha']} ({pr['head']['ref']})\n"
+        f"HEAD: {head} ({pr['head']['ref']})\n"
         f"Base: {pr['base']['sha']} ({pr['base']['ref']})\n"
         f"Merge base: {merge_base}\n\n"
         "请独立审查这次 PR 的完整改动，亲自检查涉及的文件及调用方、测试和系统约束。"
@@ -289,8 +423,8 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
         f"规则来源提交: {rules_sha}\n\n" + review_rules
         + "\n\n## 项目 main 的 .aiwork/accepted-risks.md（原文；不存在时为无）\n\n" + risks
         + "\n\n"
-        "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
-        + "\n## 完整 diff（merge base → HEAD）\n```diff\n" + diff + "\n```\n\n"
+        + file_list
+        + "\n" + _deletion_section(deleted) + diff_section
         + CONCLUSION_REQUIREMENT + "\n"
     )
 
@@ -386,9 +520,17 @@ def main() -> int:
                 rules_sha, review_rules = aiwork_main_rules()
                 risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
                 task = directory / "task.md"
-                task.write_text(task_text(args.pr, pr, merge_base, files, diff,
-                                          review_rules, risks, rules_sha=rules_sha, repository=repository), encoding="utf-8")
+
+                def write_task(reader: bool) -> None:
+                    task.write_text(task_text(args.pr, pr, merge_base, files, diff,
+                                              review_rules, risks, rules_sha=rules_sha,
+                                              repository=repository, reader=reader), encoding="utf-8")
+
+                requested_reader = args.leg not in CHAT_LEGS
+                write_task(requested_reader)
                 selected_leg, switch_note = route_task(args.leg, task, family)
+                if selected_leg not in CHAT_LEGS and not requested_reader:
+                    write_task(True)
                 if switch_note:
                     print(f"review-pr: {switch_note}", file=sys.stderr)
                 notices = [switch_note] if switch_note else []

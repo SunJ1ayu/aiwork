@@ -107,10 +107,15 @@ Things that are not aiwork live with their own owners:
   Failed runs print the redacted last 40 stderr lines and retain diagnostics
   under the data path `logs/review-pr-failures/<run-id>/`, excluding the repository
   checkout and credential helper. Only the newest 20 failure archives are retained.
-  The task contains the sole PR diff and repeats the conclusion requirement after it.
+  The task repeats the conclusion requirement after the diff. A file deleted in
+  full is listed by path and line count, without its body, for every leg.
+  Repository readers leave the diff out of the task when it exceeds
+  `READER_INLINE_DIFF_BYTES` (200KB) and name `git diff <merge-base>..<head> -- <file>`
+  for each changed file; reading it that way is still a complete review.
   Tasks exceeding `MIMO_MAX_FILE_BYTES` (default 120000 bytes) switch from chat to
   an available repository reader of the same family; the switch is disclosed in
-  the terminal and published review. Without a reader, the run stops. Truncated
+  the terminal and published review. Without a reader, the run stops. Chat
+  truncation and its partial marker are unchanged. Truncated
   chat context is refused before requesting a model response.
   Repository readers default to 2400 seconds for this command; their existing
   timeout environment variables override that default. Only a missing verdict

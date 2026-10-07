@@ -422,6 +422,127 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn('需要联网、需要读取本机模型凭证', readme)
         self.assertIn('必须在沙箱外运行', readme)
 
+    def whole_file_deletion(self):
+        marker = 'DELETED_PAYLOAD_9f3c'
+        count = (200 * 1024) // (len(marker) + 1) + 80
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True,
+                                       capture_output=True, text=True)
+            git('init', '-q')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'gone.txt').write_text((marker + '\n') * count)
+            git('add', 'gone.txt')
+            git('commit', '-qm', 'add')
+            base = git('rev-parse', 'HEAD').stdout.strip()
+            git('rm', '-q', 'gone.txt')
+            git('commit', '-qm', 'delete')
+            head = git('rev-parse', 'HEAD').stdout.strip()
+            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+        pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
+        return pr, base, head, ['gone.txt'], diff, count, marker
+
+    def test_large_whole_file_deletion_reader_task_stays_within_limit(self):
+        pr, base, head, files, diff, count, marker = self.whole_file_deletion()
+        limit = 200 * 1024
+        self.assertGreater(len(diff.encode()), limit)
+        task = self.review.task_text(
+            17, pr, base, files, diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork', reader=True)
+        self.assertLessEqual(len(task.encode()), limit)
+        self.assertNotIn(marker, task)
+        self.assertIn(f'（{count} 行）', task)
+        self.assertIn(f'git diff {base}..{head} -- gone.txt', task)
+        self.assertEqual(self.review.READER_INLINE_DIFF_BYTES, limit)
+        self.assertGreater(task.rfind('最后独占一行写'), task.rfind('```'))
+
+    def test_large_whole_file_deletion_chat_task_omits_content_without_reader_instructions(self):
+        pr, base, head, files, diff, count, marker = self.whole_file_deletion()
+        limit = 200 * 1024
+        self.assertGreater(len(diff.encode()), limit)
+        task = self.review.task_text(
+            17, pr, base, files, diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
+        self.assertLessEqual(len(task.encode()), limit)
+        self.assertNotIn(marker, task)
+        self.assertIn(f'（{count} 行）', task)
+        self.assertNotIn(f'git diff {base}..{head} -- gone.txt', task)
+        self.assertNotIn('不内联', task)
+
+    def test_other_hunks_stay_inlined_when_a_small_file_is_deleted(self):
+        marker = 'ONLY_IN_DELETED_FILE'
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True,
+                                       capture_output=True, text=True)
+            git('init', '-q')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'stay.txt').write_text('base\n')
+            (repo / 'gone.txt').write_text(marker + '\n')
+            git('add', '.')
+            git('commit', '-qm', 'add')
+            base = git('rev-parse', 'HEAD').stdout.strip()
+            (repo / 'stay.txt').write_text('base\nchanged\n')
+            git('add', 'stay.txt')
+            git('rm', '-q', 'gone.txt')
+            git('commit', '-qm', 'edit')
+            head = git('rev-parse', 'HEAD').stdout.strip()
+            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+        pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
+        task = self.review.task_text(
+            3, pr, base, ['stay.txt', 'gone.txt'], diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork', reader=True)
+        self.assertIn('\n+changed\n', task)
+        self.assertNotIn(marker, task)
+        self.assertIn('（1 行）', task)
+        self.assertNotIn('不内联', task)
+
+    def test_binary_whole_file_deletion_omits_patch_bytes(self):
+        diff = (
+            'diff --git a/a.bin b/a.bin\n'
+            'deleted file mode 100644\n'
+            'index 1111111..0000000\n'
+            'GIT binary patch\n'
+            'literal 5\n'
+            'AAAAA_SECRET_BYTES\n'
+        )
+        pr = {'head': {'sha': 'a' * 40, 'ref': 'feature'}, 'base': {'sha': 'b' * 40, 'ref': 'main'}}
+        task = self.review.task_text(
+            4, pr, 'c' * 40, ['a.bin'], diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
+        self.assertNotIn('AAAAA_SECRET_BYTES', task)
+        self.assertIn('"a.bin"（二进制文件）', task)
+
+    def test_quoted_deletion_path_keeps_its_name_and_line_count(self):
+        name = '断线 砍断.txt'
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True,
+                                       capture_output=True, text=True)
+            git('init', '-q')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / name).write_text('one\ntwo\n')
+            git('add', '--', name)
+            git('commit', '-qm', 'add')
+            base = git('rev-parse', 'HEAD').stdout.strip()
+            git('rm', '-q', '--', name)
+            git('commit', '-qm', 'delete')
+            head = git('rev-parse', 'HEAD').stdout.strip()
+            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+        pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
+        task = self.review.task_text(
+            5, pr, base, [name], diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork', reader=True)
+        self.assertNotIn('\n-one\n', task)
+        self.assertNotIn('\n-two\n', task)
+        self.assertIn(f'{json.dumps(name, ensure_ascii=False)}（2 行）', task)
+
     def test_task_rules_are_aiwork_main_verbatim_with_commit(self):
         rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", project_rules=True)
         self.assertEqual(rc, 0, stderr)
