@@ -108,10 +108,11 @@ Things that are not aiwork live with their own owners:
   under the data path `logs/review-pr-failures/<run-id>/`, excluding the repository
   checkout and credential helper. Only the newest 20 failure archives are retained.
   The task repeats the conclusion requirement after the diff. A file deleted in
-  full is listed by path and line count, without its body, for every leg.
-  Repository readers leave the diff out of the task when it exceeds
+  full is listed by path and line count, without its body, for every leg; the
+  reader is not told to git-diff that body back into context. Repository readers
+  leave the remaining diff out of the task when it exceeds
   `READER_INLINE_DIFF_BYTES` (200KB) and name `git diff <merge-base>..<head> -- <file>`
-  for each changed file; reading it that way is still a complete review.
+  for each file that still has a diff; reading it that way is still a complete review.
   Tasks exceeding `MIMO_MAX_FILE_BYTES` (default 120000 bytes) switch from chat to
   an available repository reader of the same family; the switch is disclosed in
   the terminal and published review. Without a reader, the run stops. Chat

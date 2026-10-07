@@ -33,8 +33,9 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 CONCLUSION_REQUIREMENT = ("最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
                           "Conclusion: NEEDS_MORE_INFO。")
 CHAT_LEGS = frozenset({"subdeepseek", "subglm"})
-# A repository reader can open the snapshot and run git. Past this size the task
-# names that command instead of pasting the diff; the review stays complete.
+# A repository reader can open the snapshot and run git. Past this size of the
+# diff that remains after whole-file deletion bodies are removed, the task names
+# that command instead of pasting the diff; the review stays complete.
 READER_INLINE_DIFF_BYTES = 200 * 1024
 READER_TIMEOUT_ENV = {
     "subdeepseek-agent": "DEEPSEEK_TIMEOUT", "subglm-agent": "ZHIPU_TIMEOUT",
@@ -374,14 +375,7 @@ def _deletion_section(deleted: list[tuple[str, int | None]]) -> str:
     return '\n'.join(lines) + '\n\n'
 
 
-def _diff_commands(merge_base: str, head: str, files: list[str],
-                   deleted: list[tuple[str, int | None]]) -> str:
-    names = list(files)
-    seen = set(names)
-    for path, _count in deleted:
-        if path not in seen:
-            names.append(path)
-            seen.add(path)
+def _diff_commands(merge_base: str, head: str, names: list[str]) -> str:
     return '\n'.join(
         f'git diff {merge_base}..{head} -- {shlex.quote(name)}' for name in names)
 
@@ -392,15 +386,36 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
     rules_repository, rules_path = REVIEW_RULES_SOURCE
     inline, deleted = partition_whole_file_deletions(diff)
     raw_bytes = len(diff.encode('utf-8'))
-    omit_inline = reader and raw_bytes > READER_INLINE_DIFF_BYTES
+    inline_bytes = len(inline.encode('utf-8'))
+    deleted_paths = {path for path, _count in deleted}
+    command_files: list[str] = []
+    seen: set[str] = set()
+    for name in files:
+        if name in deleted_paths or name in seen:
+            continue
+        command_files.append(name)
+        seen.add(name)
+    omit_inline = reader and inline_bytes > READER_INLINE_DIFF_BYTES
     head = pr['head']['sha']
     file_list = "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
     if omit_inline:
+        notice = ""
+        if deleted:
+            notice = "整文件删除只列在上面，不要把那些文件的正文读进上下文。\n"
         diff_section = (
             "## diff\n"
-            f"diff 为 {raw_bytes} 字节，超过 {READER_INLINE_DIFF_BYTES} 字节，任务书不内联。\n"
-            "请对每个改动文件执行下面的命令自己读；这样读到的 diff 仍是这次完整评审。\n"
-            "```text\n" + _diff_commands(merge_base, head, files, deleted) + "\n```\n\n"
+            f"diff 为 {inline_bytes} 字节，超过 {READER_INLINE_DIFF_BYTES} 字节，任务书不内联。\n"
+            + notice
+            + "请对下面每个文件执行命令自己读；这样读到的 diff 仍是这次完整评审。\n"
+            "```text\n" + _diff_commands(merge_base, head, command_files) + "\n```\n\n"
+        )
+    elif reader and raw_bytes > READER_INLINE_DIFF_BYTES and not inline.strip():
+        diff_section = (
+            "## diff\n"
+            f"原 diff 为 {raw_bytes} 字节，超过 {READER_INLINE_DIFF_BYTES} 字节。"
+            "整文件删除只列路径和行数，不要把这些文件的正文读进上下文。\n"
+            "没有其余 diff。核对未整文件删除的文件时用 "
+            f"git diff {merge_base}..{head} -- <文件>；这样读仍是完整评审。\n\n"
         )
     elif inline.strip():
         title = '## diff（merge base → HEAD，不含上面的整文件删除）' if deleted else '## 完整 diff（merge base → HEAD）'

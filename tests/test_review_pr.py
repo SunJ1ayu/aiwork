@@ -454,9 +454,46 @@ class ReviewPrTests(unittest.TestCase):
         self.assertLessEqual(len(task.encode()), limit)
         self.assertNotIn(marker, task)
         self.assertIn(f'（{count} 行）', task)
-        self.assertIn(f'git diff {base}..{head} -- gone.txt', task)
+        self.assertIn(f'git diff {base}..{head} -- <文件>', task)
+        self.assertNotIn(f'-- gone.txt', task)
+        self.assertIn('不要把这些文件的正文读进上下文', task)
         self.assertEqual(self.review.READER_INLINE_DIFF_BYTES, limit)
         self.assertGreater(task.rfind('最后独占一行写'), task.rfind('```'))
+
+    def test_large_deletion_keeps_a_smaller_edit_inline_and_does_not_reread_the_deleted_file(self):
+        marker = 'DELETED_PAYLOAD_9f3c'
+        count = (200 * 1024) // (len(marker) + 1) + 80
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True,
+                                       capture_output=True, text=True)
+            git('init', '-q')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'stay.txt').write_text('base\n')
+            (repo / 'gone.txt').write_text((marker + '\n') * count)
+            git('add', '.')
+            git('commit', '-qm', 'add')
+            base = git('rev-parse', 'HEAD').stdout.strip()
+            (repo / 'stay.txt').write_text('base\nchanged\n')
+            git('add', 'stay.txt')
+            git('rm', '-q', 'gone.txt')
+            git('commit', '-qm', 'edit')
+            head = git('rev-parse', 'HEAD').stdout.strip()
+            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+        limit = 200 * 1024
+        self.assertGreater(len(diff.encode()), limit)
+        pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
+        task = self.review.task_text(
+            17, pr, base, ['stay.txt', 'gone.txt'], diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork', reader=True)
+        self.assertIn('\n+changed\n', task)
+        self.assertNotIn(marker, task)
+        self.assertIn(f'（{count} 行）', task)
+        self.assertNotIn(f'git diff {base}..{head} -- gone.txt', task)
+        self.assertNotIn('不内联', task)
+        self.assertLess(len(task.encode()), limit)
 
     def test_large_whole_file_deletion_chat_task_omits_content_without_reader_instructions(self):
         pr, base, head, files, diff, count, marker = self.whole_file_deletion()
