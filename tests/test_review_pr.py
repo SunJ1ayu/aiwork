@@ -14,10 +14,12 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 from urllib.error import HTTPError
 from unittest.mock import patch
+from _test_settings import write_settings
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,7 +77,8 @@ class ReviewPrTests(unittest.TestCase):
     def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True,
                                  repository=None, source_failure=None, project_rules=False,
                                  local_rules="LOCAL WORKSPACE RULES", risks_present=True,
-                                 leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False):
+                                 leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False,
+                                 report="Finding\nConclusion: PASS", private_terms='unused\n'):
         """Exercise the real source readers and task, with offline HTTP and review leg."""
         calls = {"github_writes": [], "public_reads": [], "leg_runs": 0}
         rules = "# aiwork main 规则\r\n必须以此为准。\r\n"
@@ -152,6 +155,15 @@ class ReviewPrTests(unittest.TestCase):
             workspace = Path(temporary)
             bin_dir = workspace / "bin"
             bin_dir.mkdir()
+            for name in ('privacy-check', 'aiwork-config', '_aiwork_config.py',
+                         '_secret_shapes.py', '_secret-shapes'):
+                shutil.copy2(ROOT / 'bin' / name, bin_dir / name)
+            config = workspace / 'settings'
+            write_settings(config)
+            if private_terms is not None:
+                (config / 'private-terms').write_text(private_terms)
+            else:
+                (config / 'private-terms').unlink()
             (bin_dir / "subcursor").touch()
             (workspace / "REVIEW-RULES.md").write_text(local_rules, encoding="utf-8")
             repo = workspace / "project"
@@ -177,14 +189,14 @@ class ReviewPrTests(unittest.TestCase):
                        + (["--repo", repository] if repository else []) + (["--dry-run"] if dry_run else [])), \
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
                     patch.object(self.review, "BIN", bin_dir), \
-                    patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data")), \
+                    patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data"), AIWORK_CONFIG_DIR=str(config)), \
                     patch.object(self.review, "run", side_effect=fake_run), \
                     patch("urllib.request.urlopen", side_effect=fake_public_read), \
                     patch.object(self.review, "github", side_effect=fake_github), \
                     patch.object(self.review, "pr_state", return_value=pr) as state, \
                     patch.object(self.review, "snapshot", return_value=(repo, "c" * 40, ["src/a.py"], "diff")) as snapshot, \
                     patch.object(self.review, "load_result", return_value=result), \
-                    patch.object(self.review, "review_report", return_value="Finding\nConclusion: PASS"), \
+                    patch.object(self.review, "review_report", return_value=report), \
                     patch.object(self.review.subprocess, "run", side_effect=fake_leg), \
                     redirect_stdout(stdout), redirect_stderr(stderr):
                 rc = self.review.main()
@@ -197,6 +209,47 @@ class ReviewPrTests(unittest.TestCase):
             calls['archive_modes'] = [p.stat().st_mode & 0o777 for p in failures.iterdir()] if failures.exists() else []
             calls['temporary_exists'] = Path(calls.get('temporary', '/nonexistent')).exists()
         return rc, calls, stdout.getvalue(), stderr.getvalue()
+
+    def test_private_review_body_is_refused_without_echoing_report_or_leg_stderr(self):
+        marker = 'private-marker'
+        for dry_run in (False, True):
+            with self.subTest(dry_run=dry_run):
+                rc, calls, stdout, stderr = self.run_main_with_leg_result(
+                    'gpt-5.6', dry_run=dry_run, private_terms=' \t' + marker + '\t\n',
+                    report='Finding ' + marker.upper() + '\nConclusion: PASS',
+                    leg_stderr='provider diagnostic ' + marker)
+                self.assertEqual(rc, 1)
+                self.assertEqual(calls['github_writes'], [])
+                self.assertEqual(stdout, '')
+                self.assertIn('review-body.md:3 私人词第 1 条', stderr)
+                self.assertNotIn(marker, stderr.casefold())
+                self.assertNotIn('Finding', stderr)
+
+    def test_secret_shape_in_review_body_is_refused_with_an_empty_wordlist(self):
+        secret = 'sk' + '-' + 'a' * 20
+        rc, calls, stdout, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', dry_run=False, private_terms='',
+            report=secret + '\nConclusion: PASS')
+        self.assertEqual(rc, 1)
+        self.assertEqual(calls['github_writes'], [])
+        self.assertEqual(stdout, '')
+        self.assertIn('review-body.md:3 形状 sk-', stderr)
+        self.assertIn('词表为空，只检查了密钥形状', stderr)
+        self.assertNotIn(secret, stderr)
+
+    def test_privacy_check_covers_machine_block_and_missing_wordlist_refuses_publication(self):
+        for terms in ('src/a.py\n', None):
+            with self.subTest(terms=terms):
+                rc, calls, stdout, stderr = self.run_main_with_leg_result(
+                    'gpt-5.6', dry_run=False, private_terms=terms)
+                self.assertEqual(rc, 1)
+                self.assertEqual(calls['github_writes'], [])
+                self.assertEqual(stdout, '')
+                if terms:
+                    self.assertIn('review-body.md:7 私人词第 1 条', stderr)
+                    self.assertNotIn('src/a.py', stderr)
+                else:
+                    self.assertIn('请建立并填写本机私人词表', stderr)
 
     def test_failed_leg_reports_only_last_40_lines_with_secrets_redacted(self):
         fake_token = 'ghs' + '_' + 'testsecret'

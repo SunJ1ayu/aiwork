@@ -46,6 +46,28 @@ class PrivacyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(str(self.config / 'private-terms'), result.stderr)
 
+    def test_terms_trim_surrounding_whitespace_skip_blank_lines_and_keep_row_numbers(self):
+        self.terms(' \t\n\t Private-Marker \t\n\u3000\n')
+        (self.repo / 'file.txt').write_text('clean words\nPRIVATE-MARKER\n')
+        result = self.check('--files', 'file.txt')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stdout, 'file.txt:2 私人词第 2 条\n')
+        self.assertEqual(result.stderr, '')
+
+    def test_empty_terms_warn_on_stderr_without_changing_clean_hit_or_error_codes(self):
+        for terms in ('', '\n \t\n\u3000\n'):
+            self.terms(terms)
+            for content, expected in (('safe\n', 0), ('sk' + '-' + 'a' * 20 + '\n', 1)):
+                with self.subTest(terms=repr(terms), expected=expected):
+                    (self.repo / 'file.txt').write_text(content)
+                    result = self.check('--files', 'file.txt')
+                    self.assertEqual(result.returncode, expected)
+                    self.assertEqual(result.stderr, '词表为空，只检查了密钥形状\n')
+                    self.assertNotIn('词表为空', result.stdout)
+            result = self.check('--files', 'missing.txt')
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('词表为空，只检查了密钥形状\n', result.stderr)
+
     def test_range_checks_additions_paths_and_every_metadata_field_without_echo(self):
         self.terms('PersonalMarker\n')
         (self.repo / 'old.txt').write_text('PersonalMarker old content\n')

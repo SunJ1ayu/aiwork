@@ -41,6 +41,10 @@ class ReviewError(ValueError):
     pass
 
 
+class PrivacyError(ReviewError):
+    pass
+
+
 def repository_name(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", value):
         raise argparse.ArgumentTypeError("repository must be owner/name")
@@ -95,7 +99,7 @@ def route_task(leg: str, task: Path, family: str) -> tuple[str, str | None]:
     return reader, f"task is {size} bytes, exceeding the {limit}-byte chat limit; switched {leg} → {reader}"
 
 
-def report_failure(directory: Path, run_id: str) -> None:
+def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = True) -> None:
     destination = data_path("logs/review-pr-failures") / run_id
     try:
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -113,7 +117,7 @@ def report_failure(directory: Path, run_id: str) -> None:
         print(f"review-pr: could not preserve failure artifacts: {redact(str(exc))}", file=sys.stderr)
         destination = None
     diagnostic = directory / "leg.stderr"
-    if diagnostic.is_file():
+    if include_diagnostic and diagnostic.is_file():
         text = diagnostic.read_text(encoding="utf-8", errors="replace")
         if destination is not None:
             text = text.replace(str(directory), str(destination))
@@ -406,6 +410,13 @@ def main() -> int:
                          "model": model, "family": family, "completeness": completeness(result),
                          "files_read": files}
                 body = build_body(selected_leg, model, report, block)
+                body_file = directory / "review-body.md"
+                body_file.write_text(body, encoding="utf-8")
+                privacy = subprocess.run([str(BIN / "privacy-check"), "--files", str(body_file)],
+                                         text=True, capture_output=True, check=False)
+                if privacy.returncode:
+                    raise PrivacyError("privacy-check refused review publication:\n"
+                                       + privacy.stdout + privacy.stderr)
                 check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=args.repo))
                 if args.dry_run:
                     print(body, end="")
@@ -418,8 +429,8 @@ def main() -> int:
                 # The gate wakes on the review itself (OpenDesign aiwork-review-ping); no second doorbell.
                 print(link)
                 return 0
-            except (ReviewError, OSError, ValueError):
-                report_failure(directory, run_id)
+            except (ReviewError, OSError, ValueError) as exc:
+                report_failure(directory, run_id, include_diagnostic=not isinstance(exc, PrivacyError))
                 raise
 
     except (ReviewError, OSError, ValueError) as exc:

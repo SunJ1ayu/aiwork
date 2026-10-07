@@ -73,6 +73,9 @@ fi
 
 # Test model defaults are disposable fixtures, never the owner's machine settings.
 _test_settings_py="$(dirname "${BASH_SOURCE[0]}")/_test_settings.py"
+_test_review_unset="$(python3 "$_test_settings_py" clear-review-env)" || exit 78
+eval "$_test_review_unset"
+unset _test_review_unset
 if [[ -z "${AIWORK_CONFIG_DIR:-}" || -z "${AIWORK_DATA_DIR:-}" ]]; then
   exec python3 "$_test_settings_py" "${BASH:-bash}" "$0" "$@"
 fi

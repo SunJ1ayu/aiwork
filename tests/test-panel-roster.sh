@@ -18,16 +18,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# panel-review 的所有选腿参数都从环境继承。花名册判据问的是默认契约,
-# 调用者飘着的 off / health / budget 不得把它改成另一道题。
-if [[ "${PANEL_ROSTER_ENV_SCRUBBED:-}" != "1" ]]; then
-  exec env -u PANEL_DIFF_BASE -u PANEL_INCLUDE -u ZHIPU_INCLUDE -u DEEPSEEK_INCLUDE \
-    -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
-    -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
-    -u PANEL_ORACLE_CMD -u PANEL_GLM_LEG -u PANEL_DEEPSEEK_LEG \
-    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG -u PANEL_CURSOR_LEG -u CURSOR_MODEL \
-    PANEL_ROSTER_ENV_SCRUBBED=1 bash "$0" "$@"
-fi
+unset ZHIPU_INCLUDE DEEPSEEK_INCLUDE
 
 # Test fixtures use a stable model independently of the operator's model choice.
 export CURSOR_MODEL=composer-2.5
