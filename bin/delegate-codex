@@ -6,7 +6,7 @@ set -uo pipefail
 # 为什么是"入口"而不是又一条规矩(2026-08-06):
 #   本机反复验证过同一件事 —— **补脚本和入口有效,补字段和约定无效**。
 #   `lane:` / `派给:` 有守卫 ⇒ 七份 verify 一次没空过;`Verdict:` 没守卫 ⇒ 两个月空两次。
-#   08-05 那一单里,"派活前请第三方攻一遍我的 design + oracle"这条只住在 track 模板的
+#   08-05 那一单里,"派活前请第三方攻一遍我的 design + oracle"这条只住在当时模板的
 #   填空提示里,而我派活时打开的抽屉(delegate/SKILL.md)一个字都没提;那格填空当天
 #   被我自己一句括号绕过("不适用")。代价:五个真实缺陷里**至少四个不看实现就能发现**,
 #   却全都等到执行腿跑完 22 分钟 + 我收货 53 分钟之后才被抓 ——
@@ -19,7 +19,7 @@ set -uo pipefail
 # 用法:
 #   delegate-codex --task TASK.md --repo DIR --attack-log PATH \
 #                  --protect PATH [--protect PATH ...] \
-#                  [--track NAME] [--model gpt-<id>(默认 ~/.config/aiwork/models.env)] [--log PATH] [--no-isolate] [--dry-run] \
+#                  [--model gpt-<id>(默认 ~/.config/aiwork/models.env)] [--log PATH] [--no-isolate] [--dry-run] \
 #                  [-- <直通 codex 的参数>]
 #   delegate-codex --print-oracle-hash --repo DIR --protect PATH...
 #                  # 攻完题把这一行贴进攻题记录,否则派不出去
@@ -28,7 +28,7 @@ set -uo pipefail
 # 退出码:0 正常   2 用法/前置不满足(**拒发,codex 一次都不启动**)   其它 = codex 的 rc
 #         --receive:0 判卷没被动过   1 判卷被动过(含新增未跟踪文件)   2 回执读不了/现场没了
 #
-# ── 2026-08-11 两件事(track codex-worktree-delegation,design「十」)────────────
+# ── 2026-08-11 两件事 ────────────────────────────────────────────────────
 # **一、派活默认在独立 worktree 里跑**(`--isolate` 默认开,`--no-isolate` 退出)。
 #   动机不是"为并行铺路"(并行已驳回:oracle 只能主 agent 亲写 ⇒ 同时可派的活结构上
 #   不存在),是**归因**:闸① 的基线是派活时 HEAD,而"腿说考卷错了 ⇒ 我改考卷并提交"
@@ -37,8 +37,8 @@ set -uo pipefail
 #   树建在 ${DELEGATE_WORKTREE_ROOT:-<data-dir>/worktrees}/<任务名>-<时间戳>,
 #   分支 delegate/<同名>。**环境变量只为判据能用临时目录**,如实写在这儿,不假装它不存在。
 #
-#   **隔离不是沙箱边界,别把它读成边界**(2026-08-11 真 codex 探针实测,收据在 track 的
-#   evidence/ 里):`-s workspace-write` 的可写范围是它自己向上解析出的"项目根" ——
+#   **隔离不是沙箱边界,别把它读成边界**(2026-08-11 真 codex 探针实测,记录在 git 历史里):
+#   `-s workspace-write` 的可写范围是它自己向上解析出的"项目根" ——
 #   worktree 的 `.git` 是个文件,于是它一路走到**主仓**,能往主仓写、改主仓的文件;
 #   `/tmp` 也是敞的;只有无关路径才拒。读更是完全不管。
 #   所以隔离买到的是**归因**(腿默认在树里干活 ⇒ 闸① 不再误报我自己、底账精确),
@@ -55,7 +55,6 @@ BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sy
 CODEX="${CODEX:-codex}"
 DATA_ROOT="$("$BIN_DIR/aiwork-config" data-path)" || exit 2
 WT_ROOT="${DELEGATE_WORKTREE_ROOT:-$DATA_ROOT/worktrees}"
-TRACK_RECORD_BIN="${TRACK_RECORD_BIN:-$BIN_DIR/track-record}"
 
 die()  { echo "delegate-codex: $*" >&2; exit 2; }
 usage() { sed -n '/^# 用法:/,/^#         --receive/p' "$0" | sed 's/^# \?//' >&2; }
@@ -270,9 +269,8 @@ PY
 }
 
 # ── 参数 ────────────────────────────────────────────────────────────────
-TASK=""; REPO=""; ATTACK=""; LOG=""; MODEL=""; RECEIVE=""; TRACK=""; DRY=0
+TASK=""; REPO=""; ATTACK=""; LOG=""; MODEL=""; RECEIVE=""; DRY=0
 ISOLATE=1; PRINTHASH=0                 # **默认隔离**(design 九·2 用户拍板)
-TRACK_SAID=0                           # 归属这件事我有没有**亲口说过**(见下面那道闸)
 PROTECT=(); PASSTHRU=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -281,8 +279,6 @@ while [[ $# -gt 0 ]]; do
     --repo)       REPO="${2:-}";   shift 2 ;;
     --attack-log) ATTACK="${2:-}"; shift 2 ;;
     --protect)    [[ -n "${2:-}" ]] || die "--protect 要一个路径"; PROTECT+=("$2"); shift 2 ;;
-    --track)      TRACK="${2:-}"; TRACK_SAID=1; shift 2 ;;
-    --no-track)   TRACK=""; TRACK_SAID=1; shift ;;
     --model)      MODEL="${2:-}";  shift 2 ;;
     --log)        LOG="${2:-}";    shift 2 ;;
     --receive)    RECEIVE="${2:-}"; shift 2 ;;
@@ -325,9 +321,7 @@ with open(temp, "w", encoding="utf-8") as stream:
 os.replace(temp, path)
 PY
   if [[ $? -ne 0 ]]; then
-    echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIVE event=received (回执完成态写入失败)" >&2
-  elif ! "$TRACK_RECORD_BIN" import-delegate --receipt "$RECEIVE" --event received; then
-    echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIVE event=received" >&2
+    echo "delegate-codex: receipt update failed: $RECEIVE event=received" >&2
   fi
   exit "$_receive_rc"
 fi
@@ -351,19 +345,6 @@ if [[ $PRINTHASH -eq 0 ]]; then
   [[ -s "$ATTACK" ]] || die "攻题记录是空文件:$ATTACK(空文件应付不算做过这件事)"
 fi
 _rp="$(realpath "$REPO")"
-CONTROL_REPO="$_rp"
-_common_git="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-if [[ "$(basename "$_common_git")" == ".git" ]]; then
-  CONTROL_REPO="$(dirname "$_common_git")"
-fi
-
-# typed track 的机器事实只认主仓卷宗；从 worktree 派发时也不能把事件/决策写进临时树。
-if [[ $PRINTHASH -eq 0 && -n "$TRACK" ]]; then
-  [[ "$TRACK" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "--track 不是安全的单段名称:$TRACK"
-  [[ -d "$CONTROL_REPO/tracks/$TRACK" ]] || die "active track 不存在:$CONTROL_REPO/tracks/$TRACK"
-  "$TRACK_RECORD_BIN" validate --phase dispatch "$CONTROL_REPO/tracks/$TRACK" \
-    || die "track 的 typed decision 未通过 dispatch 闸:$TRACK"
-fi
 
 # ② 判卷清单:守卫的强度只等于这份清单,漏列一个就是那个洞。没有清单 = 没有守卫。
 [[ ${#PROTECT[@]} -gt 0 ]] || die "缺 --protect:把 oracle 为得出裁决所读的**每一个**文件
@@ -435,13 +416,8 @@ if [[ $ISOLATE -eq 1 ]]; then
   往 $REPO/.gitignore 里加一行 '$_wtrel/',或用 DELEGATE_WORKTREE_ROOT 指到仓外。"
       ;;
   esac
-  if [[ -n "$TRACK" ]]; then
-    WT="$_wtroot_abs/$TRACK/$JOB"
-    BRANCH="delegate/$TRACK/$JOB"
-  else
-    WT="$_wtroot_abs/$JOB"
-    BRANCH="delegate/$JOB"
-  fi
+  WT="$_wtroot_abs/$JOB"
+  BRANCH="delegate/$JOB"
   RUNDIR="$WT"
 fi
 
@@ -452,7 +428,7 @@ fi
 #        worktree 的 `.git` 是个文件,它把"项目根"一路向上解析到了主仓;
 #        写无关路径才会被拒(`patch rejected: writing outside of the project`),`/tmp` 也是敞的。
 #      · 写沙箱**管不了读**:探针里腿把主仓中一份未跟踪的"秘密攻题记录"原文贴了回来。
-#    收据:tracks/codex-worktree-delegation/evidence/*probe-real-sandbox*
+#    当时的探针记录在 git 历史里。
 #    ⇒ 卷宗落主仓 = 腿改得到回执(闸① 自证)+ 读得到攻题记录(考卷的洞递给考生)。
 #    ⇒ **A2 那个死结没解开**:派 aiwork 自己的活,日志/攻题记录必须显式指到 /root/aiwork 之外。
 _forbid=("$_rp"); _legwhat="被派活的仓里"
@@ -469,21 +445,6 @@ for _a in "$(realpath "$ATTACK")" "$(realpath -s "$ATTACK")"; do
   挪到仓外,例如 $HOME/.local/share/aiwork/attack-logs/<name>.md;派 aiwork 自己的活时,'仓外'就是 $_rp 之外。"
   fi
 done
-
-# ⑤a 归属:仓里有 active track 时,**必须亲口说**这一单挂不挂轮次(`--track X` 或 `--no-track`)。
-#     为什么不替我猜"只有一个 track 那就是它吧"(2026-08-12 四审 subdeepseek,我采纳):
-#     那等于把"我没说"翻译成"我同意删" —— 归档时轮次目录下的树是**可以被自动收掉**的,
-#     而无主的树只点名不碰。猜错的代价落在删这一侧,和本机"猜不出就 fail closed"的立场相反。
-#     没有 active track 的仓不啰嗦(守卫一变噪音就没人看)。
-if [[ $PRINTHASH -eq 0 && $TRACK_SAID -eq 0 && -d "$CONTROL_REPO/tracks" ]]; then
-  _active="$(ls -1 "$CONTROL_REPO/tracks" 2>/dev/null | grep -v '^archive$' || true)"
-  if [[ -n "$_active" ]]; then
-    die "这个仓里有开着的 track,得说一句这单归谁(我不替你猜):
-$(printf '%s\n' "$_active" | sed 's/^/    --track /')
-  归档那一轮时,挂在它名下的树会被自动收掉(前提是干净且已合进主线);
-  这单不挂任何轮次就显式写 **--no-track**(那样树只会被点名,不会被自动收)。"
-  fi
-fi
 
 # ⑤b 直通参数排在工具自己给的 `-C <树>` `-s workspace-write` **后面**,last-wins ⇒
 #     `-- -C /别处` 或 `-- -s danger-full-access` 能**静默撤销隔离**,而我会以为它隔离着。
@@ -553,11 +514,7 @@ if [[ $ISOLATE -eq 1 && $DRY -eq 0 ]]; then
     _try=$((_try+1))
     [[ $_try -le 20 ]] || die "同名任务的树/分支太多了(${JOB}-2..20 全被占着),先收几棵:
     git -C $REPO worktree list"
-    if [[ -n "$TRACK" ]]; then
-      WT="$_wtroot_abs/$TRACK/${JOB}-${_try}"; BRANCH="delegate/$TRACK/${JOB}-${_try}"
-    else
-      WT="$_wtroot_abs/${JOB}-${_try}"; BRANCH="delegate/${JOB}-${_try}"
-    fi
+    WT="$_wtroot_abs/${JOB}-${_try}"; BRANCH="delegate/${JOB}-${_try}"
   done
   _wt_out="$(git -C "$REPO" worktree add -b "$BRANCH" "$WT" "$HEAD_AT_DISPATCH" 2>&1)" || die \
 "建 worktree 失败(codex 一次都没启动):
@@ -613,10 +570,10 @@ fi
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
 STARTED_NS="$(date +%s%N)"
 python3 - "$RECEIPT" "$REPO" "$HEAD_AT_DISPATCH" "$ATTACK" "$TASK" "$LOG" "$MODEL" \
-         "$ISOLATE" "$WT" "$BRANCH" "$TRACK" "$ORACLE_HASH" "$DRY" "$RUN_ID" "$OBS_LABEL" \
+         "$ISOLATE" "$WT" "$BRANCH" "$ORACLE_HASH" "$DRY" "$RUN_ID" "$OBS_LABEL" \
          "$STARTED_AT" "${PROTECT[@]}" <<'PY'
 import hashlib, json, sys, datetime
-receipt, repo, head, attack, task, log, model, isolate, wt, branch, track, ohash, dry, run_id, label, started_at, *protect = sys.argv[1:]
+receipt, repo, head, attack, task, log, model, isolate, wt, branch, ohash, dry, run_id, label, started_at, *protect = sys.argv[1:]
 sha = hashlib.sha256(open(attack, "rb").read()).hexdigest()
 json.dump({
     "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -624,7 +581,6 @@ json.dump({
     "repo": repo, "head": head, "protect": protect,
     "isolate": isolate == "1", "dry_run": dry == "1",
     "worktree": wt or None, "branch": branch or None,
-    "track": track or None,
     "oracle_sha256": ohash,
     "attack_log": attack, "attack_log_sha256": sha,
     "task": task, "log": log, "model": model,
@@ -674,9 +630,7 @@ with open(temp, "w", encoding="utf-8") as stream:
 os.replace(temp, path)
 PY
 if [[ $? -ne 0 ]]; then
-  echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIPT event=execution_finished (回执完成态写入失败)" >&2
-elif ! "$TRACK_RECORD_BIN" import-delegate --receipt "$RECEIPT" --event execution_finished; then
-  echo "delegate-codex: OBSERVATION_WRITE_FAILED receipt=$RECEIPT event=execution_finished" >&2
+  echo "delegate-codex: receipt update failed: $RECEIPT event=execution_finished" >&2
 fi
 
 echo

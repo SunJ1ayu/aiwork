@@ -1,4 +1,4 @@
-// aiwork 放行关卡(gate/)的对抗用例。计划:SunJ1ayu/aiwork WORKFLOW-MIGRATION-PLAN.md 第 5 节。
+// aiwork 放行关卡(gate/)的对抗用例。计划在 git 历史里。
 // 策略用 tests/fixtures/gate-logic-policy.json（这些用例在 OpenDesign 05fe41b 上对着的那份）。
 // 从仓库内容推导清单的用例留在 OpenDesign，不在这里。
 // 跑法:node --test tests/test_aiwork_gate.mjs

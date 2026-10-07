@@ -65,8 +65,8 @@ Verify manifest:
   A finding's source names ONE attempt (`<item>#<n>`): it acknowledges that attempt's
   BLOCK / NEEDS_MORE_INFO only. Every blocking verdict of every attempt needs its own finding.
 
-Scoped results carry review_contract_version=2: they NEVER count as archive coverage,
-and panel-slice never binds a track. Refusals print `panel-slice: REFUSED <rule>: ...`
+Scoped results carry review_contract_version=2: they do not count as full-task
+review coverage. Refusals print `panel-slice: REFUSED <rule>: ...`
 and exit 3 before any leg starts.
 
 Env: PANEL_STATE_DIR / PANEL_HEALTH_OVERRIDE / PANEL_<LEG>_LEG as in panel-review;
@@ -101,7 +101,7 @@ write_legs_table() {  # write_legs_table <file> —— 腿表只从唯一源导�
 probe_health() {  # probe_health <repo> <dir>  -> <dir>/probe.plan
   local repo="$1" dir="$2"
   printf '# panel-slice health probe: no leg is dispatched\n' > "$dir/probe-task.md"
-  if ! env -u PANEL_ORACLE_CMD PANEL_STAGGER_MAX=0 bash "$BIN/panel-review" --scoped-review --no-track \
+  if ! env -u PANEL_ORACLE_CMD PANEL_STAGGER_MAX=0 bash "$BIN/panel-review" --scoped-review \
       --no-my-review --risk self "$dir/probe-task.md" "$repo" "$dir/probe" >"$dir/probe.out" 2>&1 \
       || [[ ! -s "$dir/probe.plan" ]]; then
     sed 's/^/  | /' "$dir/probe.out" >&2
@@ -122,7 +122,7 @@ launch() {  # launch <item> <attempt> <leg> <family> <task> <prefix> <category>
   (
     # setsid:腿和它的控制器进自己的会话 ⇒ 本控制器被整组砍掉时,它们照样跑完、自己落终态。
     env -u PANEL_ORACLE_CMD PANEL_STAGGER_MAX=0 setsid --wait bash "$BIN/panel-review" \
-      --scoped-review --no-track "${MR_ARGS[@]}" --risk standard --budget 1 --pin-leg "$leg" \
+      --scoped-review "${MR_ARGS[@]}" --risk standard --budget 1 --pin-leg "$leg" \
       "$task" "$REPO" "$prefix" >"$adir/controller.log" 2>&1
     rc=$?
     printf '%s\n' "$rc" > "$adir/controller.exit.tmp" && mv -f "$adir/controller.exit.tmp" "$adir/controller.exit"
@@ -207,7 +207,7 @@ cmd_run() {
 
   echo "panel-slice run: manifest=$manifest repo=$REPO"
   echo "  run dir -> $RUN_DIR"
-  echo "  scoped results (review_contract_version=2) never count as archive coverage"
+  echo "  scoped results (review_contract_version=2) do not count as full-task review coverage"
   dispatch "$TMPD/launch"
   finish
 }

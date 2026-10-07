@@ -2,7 +2,7 @@
 
 关卡代码取自 SunJ1ayu/OpenDesign `05fe41b97ba94b86bb31f032adb763b1b1576a5e` 的 `.github/aiwork-gate/`。判定行为不变。策略不跟代码走：workflow 把调用方检出里的 `.aiwork/policy.json` 放进 `AIWORK_POLICY_PATH`。
 
-计划:SunJ1ayu/aiwork 的 `WORKFLOW-MIGRATION-PLAN.md` 阶段 C(规则 G1–G8、M1)。
+规则来历在 git 历史里。
 
 | 文件 | 做什么 |
 |---|---|

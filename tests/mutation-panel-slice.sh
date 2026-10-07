@@ -99,11 +99,6 @@ sub M12 slice "S5: decide 不给理由 ⇒ 拒绝" bin/_panel_slice.py \
         raise Refused("reason", "a decision needs --reason'
 sub M13 slice "S5: 同 id 不同内容的 finding ⇒ 拒绝" bin/_panel_slice.py \
   '                if old != new:' '                if False:'
-sub M14 slice "S9: --scoped-review 与 --track 同时给 ⇒ 拒绝且零调用" bin/panel-review \
-  '  if [[ -n "$TRACK_NAME" ]]; then
-    echo "panel-review: --scoped-review cannot bind --track' \
-  '  if false; then
-    echo "panel-review: --scoped-review cannot bind --track'
 sub M15 slice "S9: 非 scoped 模式不许 --pin-leg" bin/panel-review \
   'if [[ -n "$PIN_LEG" && "$SCOPED_REVIEW" -eq 0 ]]; then' 'if false; then'
 sub M16 slice "S2: 默认整体腿 subcodex 被关掉 ⇒ 拒绝且零调用" bin/_panel_slice.py \

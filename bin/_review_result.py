@@ -24,7 +24,7 @@ DEFAULT_CHAT_MAX_FILE_BYTES = 120000
 SUBJECT_MANIFEST_VERSION = 1
 NORMALIZER_VERSION = 1
 REVIEW_CONTRACT_VERSION = 1
-# 契约 2 = scoped review(track sliced-panel-review):切片/整体/复核腿只对分派给它的那部分负责,
+# 契约 2 = scoped review:切片/整体/复核腿只对分派给它的那部分负责,
 # 不是契约 1 的「整任务全量评审」。它**故意不在** SUPPORTED_REVIEW_CONTRACTS 里 ⇒ 旧覆盖谓词
 # 一律 review_contract_unsupported。要让切片结果承担放行资格,得另立新策略,不是往这里加一个数。
 SCOPED_REVIEW_CONTRACT_VERSION = 2
@@ -256,8 +256,6 @@ def canonical_subject_bytes(subject: dict[str, Any]) -> bytes:
         "task_sha256": subject["task_sha256"],
         "source": subject["source"],
     }
-    if subject["manifest_version"] == 2:
-        manifest["delivery"] = subject["delivery"]
     return json.dumps(
         manifest,
         sort_keys=True,
@@ -312,25 +310,20 @@ def validate_result(value: Any) -> dict[str, Any]:
     for key in ("requested", "invoked", "reported"):
         _nullable_token(model[key], f"result.model.{key}")
 
-    subject_version = root["subject"].get("manifest_version") if isinstance(root["subject"], dict) else None
     subject = _exact_object(
         root["subject"],
         "result.subject",
-        ("manifest_version", "task_sha256", "source", "digest") + (("delivery",) if subject_version == 2 else ()),
+        ("manifest_version", "task_sha256", "source", "digest"),
     )
-    if type(subject["manifest_version"]) is not int or subject["manifest_version"] not in (1, 2):
+    if subject["manifest_version"] != SUBJECT_MANIFEST_VERSION:
         raise ReviewResultError(
             "subject.version",
             "result.subject.manifest_version",
             subject["manifest_version"],
-            "1|2",
+            SUBJECT_MANIFEST_VERSION,
         )
     _sha256(subject["task_sha256"], "result.subject.task_sha256")
     source = _validate_source(subject["source"], "result.subject.source")
-    if subject_version == 2:
-        _validate_delivery(subject["delivery"], "result.subject.delivery")
-        if source is None:
-            raise ReviewResultError("subject.source", "result.subject.source", None, "source required for delivery binding")
     digest = _sha256(subject["digest"], "result.subject.digest", nullable=True)
     if source is None and digest is not None:
         raise ReviewResultError("subject.digest", "result.subject.digest", digest, "null when source is null")
@@ -429,20 +422,8 @@ def write_result_no_clobber(path: Path, value: dict[str, Any]) -> bool:
             pass
 
 
-def _validate_delivery(value: Any, path: str) -> dict[str, Any]:
-    delivery = _exact_object(value, path, ("policy_version", "track", "digest"))
-    if type(delivery["policy_version"]) is not int or delivery["policy_version"] != 1:
-        raise ReviewResultError("delivery.policy", path + ".policy_version", delivery["policy_version"], 1)
-    _identifier(delivery["track"], path + ".track")
-    _sha256(delivery["digest"], path + ".digest")
-    return delivery
-
-
 def _validate_facts(value: Any) -> dict[str, Any]:
-    keys = FACT_KEYS + (("delivery",) if isinstance(value, dict) and "delivery" in value else ())
-    facts = _exact_object(value, "facts", keys)
-    if "delivery" in facts:
-        _validate_delivery(facts["delivery"], "facts.delivery")
+    facts = _exact_object(value, "facts", FACT_KEYS)
     model = _exact_object(facts["model"], "facts.model", ("requested", "invoked", "reported"))
     for key in ("requested", "invoked", "reported"):
         _nullable_token(model[key], f"facts.model.{key}")
@@ -519,9 +500,6 @@ def _facts_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "billing_mode": args.billing_mode,
         "degraded": None if args.degraded is None else args.degraded == "true",
     }
-    if args.delivery_track is not None or args.delivery_digest is not None:
-        result["delivery"] = _validate_delivery({"policy_version": 1, "track": args.delivery_track,
-                                                  "digest": args.delivery_digest}, "facts.delivery")
     return result
 
 
@@ -551,9 +529,6 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
         "source": source,
         "digest": None,
     }
-    if facts is not None and "delivery" in facts:
-        subject["manifest_version"] = 2
-        subject["delivery"] = facts["delivery"]
     if source is not None:
         subject["digest"] = subject_digest(subject)
 
@@ -791,8 +766,6 @@ def parser() -> argparse.ArgumentParser:
     facts.add_argument("--head-oid")
     facts.add_argument("--index-tree-oid")
     facts.add_argument("--worktree-tree-oid")
-    facts.add_argument("--delivery-track")
-    facts.add_argument("--delivery-digest")
     facts.add_argument("--view-delivery-state", choices=sorted(DELIVERY_STATES), default="none")
     facts.add_argument("--view-mode", choices=sorted(VIEW_MODES))
     facts.add_argument("--process-state", choices=sorted(PROCESS_STATES))

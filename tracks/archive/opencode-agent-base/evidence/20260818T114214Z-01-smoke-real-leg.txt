@@ -1,8 +1,0 @@
-# runlog receipt —— 机器写的,别手改(改了守卫看不出来,但闸③ 会在 diff 里看见)
-slug:    smoke-real-leg
-cmd:     env REVIEW_NO_MY_REVIEW=1 bin/subglm-agent review /tmp/claude-0/-root/a49225b2-227b-445c-b0c2-7fea859fcb3b/scratchpad/ocrepo-task.md /root/aiwork/logs/smoke-ocleg.log /tmp/claude-0/-root/a49225b2-227b-445c-b0c2-7fea859fcb3b/scratchpad/ocrepo
-cwd:     /root/aiwork(仓根)
-commit:  6153c0f
-dirty:   yes(跑之前采的;含未跟踪文件)
-started: 2026-08-18T11:42:14Z
----------------- 输出开始 ----------------

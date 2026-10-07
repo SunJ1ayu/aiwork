@@ -1,1 +1,0 @@
-{"success": true, "family_ok": true, "models": ["Cursor Grok 4.6 High"], "malformed": false, "has_text": true, "reported_model": null, "subtype": "success", "session_id": "40f8aeab-13c6-489f-8fba-b8ea61bd98a8", "usage": {"inputTokens": 79819, "outputTokens": 9505, "cacheReadTokens": 239104, "cacheWriteTokens": 0}, "duration_ms": 157246}

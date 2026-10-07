@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # track codex-worktree-delegation 的判据(主 agent 亲写,执行腿逐字节 off-limits)。
 #
-# 判的是 `bin/delegate-codex` 的两件新能力(规格在 tracks/codex-worktree-delegation/design.md「十」):
+# 判的是 `bin/delegate-codex` 的两件新能力(规格在 git 历史里):
 #   H 攻题新鲜度从 **mtime** 换成**内容哈希**(P0 前置);
 #   I 派活默认在**独立 worktree** 里跑(`--isolate` 默认开,`--no-isolate` 退出);
 #   R 回执 + 收货闸① 全部改看那棵树。

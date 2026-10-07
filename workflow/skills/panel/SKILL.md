@@ -24,7 +24,7 @@ description: 可选的方案发散与第二意见工具用法。正式评审使�
 ```bash
 panel-candidates --mode review
 panel-candidates --adapter subcursor --discover-cursor --mode explore
-panel-review --no-track --members submimo,subcursor@composer-2.5 TASK REPO PREFIX
+panel-review --members submimo,subcursor@composer-2.5 TASK REPO PREFIX
 panel-explore --members subcursor@grok-4.7-high BRIEF REPO PREFIX
 ```
 
@@ -36,8 +36,8 @@ panel-explore --members subcursor@grok-4.7-high BRIEF REPO PREFIX
 ## panel-review
 
 ```bash
-panel-review --no-track --require-my-review SELF_REVIEW TASK REPO PREFIX
-panel-review --no-track --all --require-my-review SELF_REVIEW TASK REPO PREFIX
+panel-review --require-my-review SELF_REVIEW TASK REPO PREFIX
+panel-review --all --require-my-review SELF_REVIEW TASK REPO PREFIX
 panel-roster PREFIX
 ```
 

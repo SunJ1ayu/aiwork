@@ -436,9 +436,8 @@ class ReviewResultTest(unittest.TestCase):
         return json.loads(path.read_text(encoding="utf-8"))
 
     def test_scoped_slice_results_are_marked_in_data_and_never_old_coverage(self) -> None:
-        # track sliced-panel-review:切片/整体/复核腿只对**分派给它的那部分**负责,不是旧契约里的
-        # 「整任务全量评审」。只靠调度器不传 --track 是流程上的排除;手动 observe 一份切片结果
-        # 就能凑满 standard track 的 1 家族预算。所以要在**数据上**就标出来。
+        # 切片/整体/复核腿只对分派给它的那部分负责,不是整任务全量评审。
+        # 契约版本写在结果数据上,覆盖统计才分得开。
         full = self._emit_complete("full", "subkimi", "moonshot", "kimi-code/k3")
         self.assertEqual(full["review_contract_version"], 1)
         self.assertEqual(eligibility_reasons(full), [])
@@ -458,6 +457,22 @@ class ReviewResultTest(unittest.TestCase):
         )
         self.assertNotEqual(bad.returncode, 0)
         self.assertFalse((self.root / "bad.result.json").exists())
+
+    def test_facts_do_not_bind_a_track_delivery(self) -> None:
+        helper = ROOT / "bin" / "_review_result.py"
+        source = helper.read_text(encoding="utf-8")
+        self.assertNotIn("--delivery-track", source)
+        self.assertNotIn("def _validate_delivery", source)
+        proc = subprocess.run(
+            [sys.executable, str(helper), "facts", "-h"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("--delivery-track", proc.stdout)
+        self.assertNotIn("--delivery-digest", proc.stdout)
+        result = self._emit_complete("no-track-bind", "subkimi", "moonshot", "kimi-code/k3")
+        self.assertEqual(result["subject"]["manifest_version"], 1)
+        self.assertNotIn("delivery", result["subject"])
 
     def test_gpt_review_leg_has_a_known_family_identity(self) -> None:
         # subcodex(GPT 整体腿)是新腿:身份表漏了它,每份结果都会带 adapter_family_unknown,

@@ -8,39 +8,19 @@ Multi-model implementation and PR review tooling.
 `~/CLAUDE.md` 和 `~/.claude/skills/{panel,delegate}` 是由 `bin/sync-workflow-docs` 管理的部署副本。
 
 GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；原始日志、配置、会话及本机资料
-留在机器的数据目录。现存 `track/`、`tracks/` 及相关命令是暂留的兼容资产，后续单独拆除。
+留在机器的数据目录。
 
-## History and project separation
+## History
 
-This repository holds only the workflow: tools, tests, track records and
-their evidence. Its history was filtered on 2026-10-04, before the repository
-was made public: every commit keeps only workflow paths, so task briefs,
-reference notes, configuration backups, logs and project material are gone
-from all of history, and one private project name in three track records was
-replaced with "另一个项目".
+旧记录在 git 历史里。
 
-Commit IDs therefore differ from the ones quoted in records written before the
-filter (track evidence, verify.md, review links). Those refer to the
-unfiltered history, kept read-only in the private repository
-`SunJ1ayu/aiwork-archive` together with the pull requests opened before the
-switch. Nothing new goes into the archive.
-
-The first-parent history of `main` is the original local history of
-`/root/aiwork` (639 commits after filtering, up to `a617d69`), joined in by
-merge `d2c5cb4`. Tracks archived before the switch therefore keep their
-evidence and observations from their original archive commits. The
-second-parent line is the curated snapshot (`2363e54`) that briefly stood in
-for this repository, plus the changes made on it.
-
-Things that are not aiwork live with their own owners:
+## What lives elsewhere
 
 - quicklook lives at `/root/quicklook`; its systemd unit and run-output path
   point there.
 - The current wiki-ingest skill lives in the OpenClaw workspace at
   `/root/.openclaw/workspace/skills/wiki-ingest`; the older aiwork copy was
   removed.
-- The `opendesign-file-organizer` and `opendesign-ref-images` track records
-  belong to OpenDesign (moved by `SunJ1ayu/OpenDesign` PR #20).
 - Local working files — task briefs, my-review files, reference notes, logs,
   tool homes — stay in the machine data directory outside this checkout. This repository is
   public: never commit private content.
@@ -53,8 +33,6 @@ Things that are not aiwork live with their own owners:
 - `gate/` shared merge gate. A project connects by the steps in [gate/README.md](gate/README.md)
 - `templates/` starter task files (`review-task.md`, `fix-task.md`) and the two gate workflow templates
 - `tests/` regression oracles for this tooling itself
-- `track/` legacy convention and templates, retained for compatibility
-- `tracks/` existing historical records, retained unchanged
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - Machine data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
 - `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use the data directory
@@ -139,12 +117,10 @@ agent to verify, never a verdict to adopt.
   Isolation buys attribution, not confinement: `-s workspace-write` resolves its
   writable root upward to the main repo (a worktree's `.git` is a file), so case
   files (attack log, log, receipt) must stay outside `repo ∪ worktrees-root`.
-- `bin/track-record` — legacy record inspection, retained for compatibility pending separate retirement.
 - `bin/redcheck` — revert-the-implementation red check: puts the impl back to a
   baseline, rebuilds, reruns the oracle, and REQUIRES red (`--must-fail` pins
   where the red must land). Restores unconditionally and proves the tree is clean.
-- `bin/runlog`, `bin/track`, `bin/track-guard`, `bin/track-commit-msg` remain as legacy compatibility tools.
-  They do not define the current task workflow; the rule entry is [REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md).
+  The rule entry is [REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md).
 
 ## Panel fan-out
 
@@ -154,7 +130,7 @@ capabilities and past health (remaining quota stays unknown). Add
 
 ```bash
 bin/panel-candidates --adapter subcursor --discover-cursor --mode review
-bin/panel-review --members submimo,subcursor@composer-2.5 --no-track TASK REPO PREFIX
+bin/panel-review --members submimo,subcursor@composer-2.5 TASK REPO PREFIX
 bin/panel-explore --members subcursor@cursor-grok-4.6-high,subcursor@composer-2.5 BRIEF REPO PREFIX
 ```
 
@@ -167,7 +143,7 @@ members and models for `panel-roster` recovery. Legacy commands remain compatibl
 Model defaults live in `~/.config/aiwork/models.env`; environment overrides are frozen per member.
 
 
-- `bin/panel-review --no-track TASK [REPO] [LOG_PREFIX]` — optional second-opinion analysis.
+- `bin/panel-review TASK [REPO] [LOG_PREFIX]` — optional second-opinion analysis.
   `--all` runs the entire current reviewer pool (enabled, available channels); tool status is diagnostic output.
   Details and explicit member selection are in the panel skill.
 - `bin/panel-explore BRIEF [REPO] [LOG_PREFIX]` — divergent: MiMo, DeepSeek,

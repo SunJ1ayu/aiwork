@@ -120,7 +120,7 @@ class CursorTest(unittest.TestCase):
         self.config = write_settings(self.d / 'settings')
         self.bin = self.d/'bin'; self.bin.mkdir()
         for name in ('subcursor','aiwork-config', '_aiwork_config.py','_cursor-stream.py','_review-workspace.sh',
-                     '_review_result.py','_review_delivery.py','_my-review-gate.sh',
+                     '_review_result.py','_my-review-gate.sh',
                      'ro-repo-exec','panel-explore','panel-review','_panel-roster-lib.sh'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         set_model(self.config, 'cursor', ('composer-2.5\n').strip())
@@ -255,7 +255,7 @@ class CursorTest(unittest.TestCase):
         env=dict(self.env,PANEL_MIMO_LEG='off',PANEL_DEEPSEEK_LEG='off',PANEL_GLM_LEG='off',
                  PANEL_KIMI_LEG='off',PANEL_GEMINI_LEG='off',PANEL_CURSOR_LEG='agent',PANEL_GROK_LEG='off')
         prefix=self.d/'panel'
-        result=subprocess.run([str(self.bin/'panel-review'),'--no-track','--no-my-review',
+        result=subprocess.run([str(self.bin/'panel-review'),'--no-my-review',
             '--budget','1',str(self.task),str(self.repo),str(prefix)],env=env,
             capture_output=True,text=True,timeout=35)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
@@ -321,7 +321,7 @@ class CursorTest(unittest.TestCase):
         set_model(self.config, 'cursor', ('opus-4.6\n').strip())
         env=dict(self.env,PANEL_MIMO_LEG='off',PANEL_DEEPSEEK_LEG='off',PANEL_GLM_LEG='off',
                  PANEL_KIMI_LEG='off',PANEL_GEMINI_LEG='off',PANEL_GROK_LEG='off')
-        result=subprocess.run([str(self.bin/'panel-review'),'--no-track','--no-my-review','--budget','1',
+        result=subprocess.run([str(self.bin/'panel-review'),'--no-my-review','--budget','1',
             str(self.task),str(self.repo),str(self.d/'switched')],env=env,capture_output=True,text=True,timeout=35)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         data=json.loads((self.d/'switched.subcursor.result.json').read_text())
@@ -348,7 +348,7 @@ class CursorTest(unittest.TestCase):
                                    ('spare',['--budget','2'],'no_verdict'),
                                    ('all',['--all'],'')]:
             prefix=self.d/tag
-            result=subprocess.run([str(self.bin/'panel-review'),'--no-track','--no-my-review',
+            result=subprocess.run([str(self.bin/'panel-review'),'--no-my-review',
                 *options,str(self.task),str(self.repo),str(prefix)],
                 env=dict(env,FAKE_CASE=case),capture_output=True,text=True,timeout=35)
             self.assertTrue(Path(str(prefix)+'.subcursor.state').exists(),result.stdout+result.stderr)

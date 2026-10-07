@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """panel-slice core: manifest → plan → budget reservations → findings ledger → status.
 
-Track sliced-panel-review (2026-09-13). The bash controller `panel-slice` owns
+Sliced multi-family review (2026-09-13). The bash controller `panel-slice` owns
 process launching (one pinned `panel-review --scoped-review` per work item);
 this module owns every decision that must be reproducible from disk alone.
 
@@ -579,7 +579,7 @@ def render_status_md(status: dict[str, Any], run_dir: Path) -> str:
         f"- 预算:初始 {status['budget']['initial_used']}/{status['budget']['initial_sessions']},"
         f" extra {status['budget']['extra_used']}/{status['budget']['extra_sessions']}(retry 与 verify 共用)",
         f"- run 目录:{run_dir}",
-        "- 切片结果契约版本=2:**永不计入**任何 track 的归档覆盖。",
+        "- 切片结果契约版本=2:不计入整任务放行覆盖。",
         "",
         "| 项 | 角色 | 尝试 | 腿/家族 | 状态 | 裁决 |",
         "|---|---|---|---|---|---|",
