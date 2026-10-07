@@ -136,7 +136,7 @@ class CursorTest(unittest.TestCase):
         self.task = self.d/'task.md'; self.task.write_text('Inspect tracked.txt and propose or review.\n')
         self.auth = self.d/'auth.json'; self.auth.write_text(json.dumps({'accessToken':'fake-access','refreshToken':'never-copy','apiKey':'never-copy'}))
         self.env = {k:v for k,v in os.environ.items()
-                    if not k.startswith(('CURSOR_', 'PANEL_', 'AIWORK_REVIEW_', 'REVIEW_')) and k != 'CURSOR_API_KEY'}
+                    if not k.startswith(('CURSOR_',)) and k != 'CURSOR_API_KEY'}
         self.env.update(AIWORK_CONFIG_DIR=str(self.config), PATH=str(self.fake)+os.pathsep+os.environ['PATH'],
             CURSOR_AUTH_FILE=str(self.auth), REVIEW_NO_MY_REVIEW='1',
             REVIEW_WORKSPACE_BASE=str(self.d/'workspaces'),

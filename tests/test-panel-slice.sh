@@ -15,22 +15,6 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# 腿开关、健康覆盖、分配起点……全走环境变量。调用者环境里飘着一个 `PANEL_KIMI_LEG=off`
-# 就能让整段判据问不到某条腿(2026-08-26 实测过同一种病),所以先清干净再跑。
-# 要清哪些开关从唯一源长出来,不在这里抄腿名单。
-if [[ "${PANEL_SLICE_ENV_SCRUBBED:-}" != "1" ]]; then
-  . "$ROOT/bin/_panel-roster-lib.sh"
-  _unset=()
-  for _spec in "${PANEL_LEG_SPECS[@]}" ${PANEL_ROLE_LEG_SPECS[@]+"${PANEL_ROLE_LEG_SPECS[@]}"}; do
-    _unset+=(-u "${_spec##*|}")
-  done
-  exec env "${_unset[@]}" -u CURSOR_MODEL -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
-    -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET -u PANEL_DIFF_BASE \
-    -u PANEL_INCLUDE -u PANEL_ORACLE_CMD -u PANEL_SLICE_ASSIGN_START -u PANEL_SLICE_RUN_ROOT \
-    -u REVIEW_MY_REVIEW -u REVIEW_NO_MY_REVIEW -u AIWORK_REVIEW_TRACK \
-    PANEL_SLICE_ENV_SCRUBBED=1 bash "$0" "$@"
-fi
-
 # Test fixtures use a stable model independently of the operator's model choice.
 export CURSOR_MODEL=composer-2.5
 . "$ROOT/bin/_panel-roster-lib.sh"

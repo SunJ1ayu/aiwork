@@ -55,6 +55,32 @@ class SettingsTest(unittest.TestCase):
         return subprocess.run([sys.executable, str(ROOT / 'bin/aiwork-config'), *args],
                               env=self.env, capture_output=True, text=True, timeout=10)
 
+    def test_public_test_startup_clears_inherited_review_context(self):
+        inherited = {'AIWORK_REVIEW_PR': '1', 'AIWORK_REVIEW_FUTURE': 'fixture',
+                     'PANEL_DIFF_BASE': 'fixture', 'REVIEW_NO_MY_REVIEW': '1'}
+        control = {'TEST_REVIEW_WORKSPACE_CASE': 'write-boundary'}
+        keys = [*inherited, *control, 'AIWORK_CONFIG_DIR', 'AIWORK_DATA_DIR']
+        output = f'print(json.dumps({{k: os.environ[k] for k in {keys!r} if k in os.environ}}))'
+        probe = self.d / 'startup.py'
+        probe.write_text(f'import sys\nsys.path.insert(0, {str(ROOT / "tests")!r})\n'
+                         'import _no_egress\nimport json, os\n'
+                         + output + '\n')
+        shell = self.d / 'startup.sh'
+        shell.write_text(f'. {ROOT / "tests/_no-egress.sh"}\n'
+                         f'exec {sys.executable} -c "import json, os; {output}"\n')
+        for command in ([sys.executable, str(probe)], ['bash', str(shell)]):
+            with self.subTest(command=command[0]):
+                result = subprocess.run(command, env=dict(self.env, **inherited, **control),
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                environment = json.loads(result.stdout)
+                for key in inherited:
+                    self.assertNotIn(key, environment)
+                for key, value in control.items():
+                    self.assertEqual(environment[key], value)
+                self.assertEqual(environment['AIWORK_CONFIG_DIR'], str(self.config))
+                self.assertEqual(environment['AIWORK_DATA_DIR'], self.env['AIWORK_DATA_DIR'])
+
     def test_each_leg_is_read_from_models_env(self):
         for leg, expected in self.models.items():
             with self.subTest(leg=leg):

@@ -74,7 +74,7 @@ class CandidateTest(unittest.TestCase):
         self.git('add', '.'); self.git('commit', '-qm', 'base')
         self.task = self.d / 'task.md'; self.task.write_text('Inspect app.\n')
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(('PANEL_', 'CURSOR_', 'AIWORK_REVIEW_', 'REVIEW_', 'MIMO_'))}
+                    if not k.startswith(('CURSOR_', 'MIMO_'))}
         self.env.update(AIWORK_CONFIG_DIR=str(self.config), PATH=str(self.fake) + os.pathsep + os.environ['PATH'],
                         PANEL_STATE_DIR=str(self.d / 'state'), PANEL_STAGGER_MAX='0',
                         MIMO_CLI_MODEL='xiaomi/mimo-v2.5-pro')

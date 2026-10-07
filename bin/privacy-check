@@ -21,7 +21,8 @@ def git(*args, input=None):
 class Scanner:
     def __init__(self, terms):
         self.shapes = load_shapes()
-        self.terms = [(n, line.casefold()) for n, line in enumerate(terms.splitlines(), 1) if line]
+        self.terms = [(n, line.strip().casefold())
+                      for n, line in enumerate(terms.splitlines(), 1) if line.strip()]
         self.hits = set()
 
     def kinds(self, text):
@@ -104,6 +105,8 @@ def main():
             print(f'privacy-check: 请建立并填写本机私人词表 {terms_path}', file=sys.stderr)
             return 2
         scanner = Scanner(terms)
+        if not scanner.terms:
+            print('词表为空，只检查了密钥形状', file=sys.stderr)
         if not args.files:
             os.chdir(git('rev-parse', '--show-toplevel').decode().strip())
         if args.files:

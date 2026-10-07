@@ -20,17 +20,6 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# 与 test-panel-observation.sh 同款隔离:选腿/开关全走环境变量,调用者环境里飘一个
-# PANEL_*_LEG=off 就能把判卷防线悄悄关掉(08-26 subkimi 实证)。
-if [[ "${PANEL_ROUND_ENV_SCRUBBED:-}" != "1" ]]; then
-  exec env -u PANEL_MIMO_LEG -u PANEL_DEEPSEEK_LEG -u PANEL_GLM_LEG \
-    -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG -u PANEL_CURSOR_LEG -u CURSOR_MODEL \
-    -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
-    -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
-    -u PANEL_DIFF_BASE -u PANEL_INCLUDE -u PANEL_ORACLE_CMD \
-    PANEL_ROUND_ENV_SCRUBBED=1 bash "$0" "$@"
-fi
-
 # Test fixtures use a stable model independently of the operator's model choice.
 export CURSOR_MODEL=composer-2.5
 . "$ROOT/bin/_panel-roster-lib.sh"

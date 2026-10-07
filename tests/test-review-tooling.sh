@@ -78,24 +78,14 @@ set -uo pipefail
 # 这一行把整个套件 exec 进一个没有出口的网络命名空间;做不到就拒跑。
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78   # source 失败=裸跑,必须硬退
 
-# panel-review 的 oracle 和外腿都会继承调用者环境。判据若吃到它的
-# 选腿/基线/健康覆盖，测到的就不再是默认合约。只在入口重进一次，
-# 且只清理本套件会消费的面板控制变量。
-if [[ "${REVIEW_TOOLING_ENV_SCRUBBED:-}" != "1" ]]; then
-  exec env -u PANEL_DIFF_BASE -u PANEL_INCLUDE -u ZHIPU_INCLUDE -u DEEPSEEK_INCLUDE \
-    -u PANEL_HEALTH_OVERRIDE -u PANEL_SELECTION_START -u PANEL_STATE_DIR \
-    -u PANEL_STAGGER_MAX -u PANEL_IMPACT_RISK -u PANEL_REVIEW_BUDGET \
-    -u PANEL_ORACLE_CMD -u PANEL_GLM_LEG -u PANEL_DEEPSEEK_LEG \
-    -u PANEL_MIMO_LEG -u PANEL_KIMI_LEG -u PANEL_GEMINI_LEG -u PANEL_GROK_LEG -u PANEL_CURSOR_LEG -u CURSOR_MODEL \
-    REVIEW_TOOLING_ENV_SCRUBBED=1 bash "$0" "$@"
-fi
+unset ZHIPU_INCLUDE DEEPSEEK_INCLUDE
 # Test fixtures use a stable model independently of the operator's model choice.
 export CURSOR_MODEL=composer-2.5
 
 
 # 短路探针：正常套件会在下面用污染的 PANEL_* 环境重进本文件。
 # 它不得递归跑全套，只检查重进后这些控制变量是否已清理。
-if [[ "${REVIEW_TOOLING_ENV_PROBE:-}" == "1" ]]; then
+if [[ "${TEST_REVIEW_TOOLING_ENV_PROBE:-}" == "1" ]]; then
   for _v in PANEL_DIFF_BASE PANEL_INCLUDE ZHIPU_INCLUDE DEEPSEEK_INCLUDE \
     PANEL_HEALTH_OVERRIDE PANEL_SELECTION_START PANEL_STATE_DIR PANEL_STAGGER_MAX \
     PANEL_IMPACT_RISK PANEL_REVIEW_BUDGET PANEL_ORACLE_CMD PANEL_GLM_LEG \
@@ -189,8 +179,8 @@ GATE_PROBE_TIMEOUT="${GATE_PROBE_TIMEOUT:-5}"
 
 # 从判据自身位置推 bin/,**不写死绝对路径**:执行腿在 worktree 里改了代码,
 # 写死路径会让判据仍去测主仓的文件 = 改了也永远红(2026-08-01 派活前发现)。
-# 可用 REVIEW_BIN 覆盖。
-BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
+# 可用 TEST_REVIEW_BIN 覆盖。
+BIN="${TEST_REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 # 2026-08-18 晚:**这里原本有一行 `export PANEL_GLM_LEG=agent`,已删。**
 #
 # 它的来历:08-04 GLM 腿因欠费默认 off,老用例问的是"这条腿的行为"不是"它默不默认开",
@@ -298,7 +288,7 @@ check(){ # check "desc" COND_RC   (0 => pass)
 
 v0_parent_panel_env_is_scrubbed() {
   echo "[V0] 判据不继承调用面板的选择环境"
-  env -u REVIEW_TOOLING_ENV_SCRUBBED REVIEW_TOOLING_ENV_PROBE=1 \
+  env TEST_REVIEW_TOOLING_ENV_PROBE=1 \
     PANEL_DIFF_BASE=bad-base PANEL_INCLUDE=bad-include \
     PANEL_HEALTH_OVERRIDE='submimo=quota' PANEL_SELECTION_START=3 \
     PANEL_STATE_DIR=/tmp/bad-panel-state PANEL_STAGGER_MAX=9 \
@@ -3502,7 +3492,7 @@ PWN2
 #!/usr/bin/env bash
 printf '%s\\n' "\$@" > "\${RO_ARGV_OUT:-/dev/null}"
 # 照常放行,后面还要跑真腿。**指到 \$BIN 那份**,不写死路径 ——
-# 写死的话变异测试(REVIEW_BIN 指到变异 bin)会从这里溜回未变异的实现。
+# 写死的话变异测试(TEST_REVIEW_BIN 指到变异 bin)会从这里溜回未变异的实现。
 exec "$BIN/ro-repo-exec" "\$@"
 RECORD
   chmod +x "$b/ro-repo-exec"
@@ -5097,25 +5087,15 @@ PY
   local fam; fam="$( . "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null; panel_leg_family subgemini 2>/dev/null )"
   check "V46⑧c: 唯一源里 subgemini 的模型家族是 google(实际='$fam')" \
     "$([[ "$fam" == "google" ]] && echo 0 || echo 1)"
-  # ⑧d 每条腿的开关变量都必须出现在本判据顶部那两份 PANEL_* 清单里。
-  #    漏一个 ⇒ 那条腿的开关会从调用者环境**继承**进来,判据测到的就不是默认合约
-  #    (本文件顶上那段注释写的正是这件事)。PANEL_GEMINI_LEG 就漏了 —— 加腿第七处。
-  # 🔴 **三份判据都要查**。原来只查 tests/test-review-tooling.sh —— 而派发判据
-  # tests/test-panel-observation.sh 当时根本没有 scrub,一个 PANEL_GEMINI_LEG=off
-  # 就能把它从 55/0 变成 50/5(2026-08-26 第二轮四审 subkimi 实测)。
-  # 第三轮四审又实测:tests/test-panel-roster.sh 继承 PANEL_GEMINI_LEG=off
-  # 后 R5 从 34/0 变成 33/1。同一道闸漏装第三扇门,还是老账「守卫要守对门」。
+  # ⑧d 从唯一花名册推导所有腿开关，检查公共测试入口真的清掉继承值。
   local _sw _miss=""
   for _sw in $( . "$PWD/bin/_panel-roster-lib.sh" 2>/dev/null
                 for l in "${PANEL_LEGS_ORDER[@]}"; do panel_leg_switch "$l"; done ); do
-    [[ "$(grep -c -- "-u $_sw\b\|^[[:space:]]*$_sw\b\|[[:space:]]$_sw\b" "$PWD/tests/test-review-tooling.sh")" -ge 2 ]] \
-      || _miss+="${_miss:+,}$_sw(review-tooling)"
-    grep -q -- "-u $_sw\b" "$PWD/tests/test-panel-observation.sh" \
-      || _miss+="${_miss:+,}$_sw(panel-observation)"
-    grep -q -- "-u $_sw\b" "$PWD/tests/test-panel-roster.sh" \
-      || _miss+="${_miss:+,}$_sw(panel-roster)"
+    env "$_sw=off" bash -c '. "$1" || exit 78; [[ -z "${!2+x}" ]]' \
+      -- "$PWD/tests/_no-egress.sh" "$_sw" \
+      || _miss+="${_miss:+,}$_sw"
   done
-  check "V46⑧d: 每条腿的开关变量在**三套**判据里都被清理(缺:${_miss:-无})" \
+  check "V46⑧d: 每条腿的开关变量在公共测试入口被清理(缺:${_miss:-无})" \
     "$([[ -z "$_miss" ]] && echo 0 || echo 1)"
 
   # ⑩ headless 权限白名单:没有它,这条腿会**交白卷而看起来一切正常**。

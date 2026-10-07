@@ -2,6 +2,7 @@
 import atexit
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -14,10 +15,21 @@ MODELS = {'codex': 'gpt-6-sol', 'cursor': 'grok-4.7-high',
           'triage': 'jev-latest'}
 
 
+def review_environment_keys():
+    """Inherited review context is cleared once, before suites set fixtures."""
+    return [key for key in os.environ if key.startswith(('AIWORK_REVIEW_', 'PANEL_', 'REVIEW_'))]
+
+
+def clear_review_environment():
+    for key in review_environment_keys():
+        os.environ.pop(key)
+
+
 def write_settings(directory):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / 'models.env').write_text(''.join(f'{k}={v}\n' for k, v in MODELS.items()))
+    (directory / 'private-terms').write_text('unused\n')
     return directory
 
 
@@ -46,7 +58,10 @@ def ensure_settings():
 
 
 if __name__ == '__main__':
-    if sys.argv[1] == 'set-model':
+    if sys.argv[1] == 'clear-review-env':
+        keys = review_environment_keys()
+        print(shlex.join(['unset', '-v', '--', *keys]) if keys else ':')
+    elif sys.argv[1] == 'set-model':
         set_model(os.environ['AIWORK_CONFIG_DIR'], *sys.argv[2:])
     else:
         with tempfile.TemporaryDirectory(prefix='aiwork-test-settings-') as directory, \

@@ -94,6 +94,7 @@ class ReliabilityTests(unittest.TestCase):
                     continue
                 (bin_dir / name).touch()
             shutil.copy2(BIN / '_review_result.py', bin_dir / '_review_result.py')
+            (bin_dir / 'privacy-check').symlink_to(BIN / 'privacy-check')
 
         def invoke(command, **kwargs):
             is_leg = Path(command[0]).parent == bin_dir and Path(command[0]).name.startswith('sub')
@@ -128,7 +129,7 @@ class ReliabilityTests(unittest.TestCase):
             return {'html_url': 'https://github.com/example/repo/pull/1#pullrequestreview-1'}
 
         clean = {k: v for k, v in os.environ.items() if not k.startswith(
-            ('PANEL_', 'REVIEW_', 'AIWORK_REVIEW_', 'MIMO_', 'DEEPSEEK_', 'ZHIPU_'))}
+            ('MIMO_', 'DEEPSEEK_', 'ZHIPU_'))}
         clean.update(REVIEW_NO_MY_REVIEW='1', DEEPSEEK_API_KEY='fixture-key',
                      DEEPSEEK_API_BASE=endpoint, CURSOR_MODEL='gpt-6-sol',
                      AIWORK_DATA_DIR=str(self.directory / 'data'))

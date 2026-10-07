@@ -78,5 +78,6 @@ def _enforce():
 
 _enforce()
 
-from _test_settings import ensure_settings
+from _test_settings import clear_review_environment, ensure_settings
+clear_review_environment()
 ensure_settings()

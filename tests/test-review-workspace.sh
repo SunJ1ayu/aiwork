@@ -5,8 +5,8 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78
 
-BIN="${REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
-HELPER="${REVIEW_WORKSPACE_HELPER:-$BIN/_review-workspace.sh}"
+BIN="${TEST_REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
+HELPER="${TEST_REVIEW_WORKSPACE_HELPER:-$BIN/_review-workspace.sh}"
 PASS=0; FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -325,7 +325,7 @@ test_mutation_sensitivity() {
   # the source write.
   sed '/^  REVIEW_SNAPSHOT_TREE="\$tree1"$/a\  REVIEW_WORK_REPO="$REVIEW_SOURCE_REPO"' \
     "$HELPER" > "$direct"
-  REVIEW_WORKSPACE_CASE=write-boundary REVIEW_WORKSPACE_HELPER="$direct" \
+  TEST_REVIEW_WORKSPACE_CASE=write-boundary TEST_REVIEW_WORKSPACE_HELPER="$direct" \
     bash "$0" > "$d/direct.out" 2>&1
   rc=$?
   [[ $rc -ne 0 ]] && grep -q 'FAIL: RW2: same leg writes and commits' "$d/direct.out"
@@ -346,7 +346,7 @@ exec "$REAL_MKTEMP" "$@"
 MKTEMP_STUB
   chmod +x "$fake/mktemp"
   PATH="$fake:$PATH" REAL_MKTEMP="$real_mktemp" MUT_SHARED="$d/shared" \
-    REVIEW_WORKSPACE_CASE=parallel-isolation REVIEW_WORKSPACE_HELPER="$HELPER" \
+    TEST_REVIEW_WORKSPACE_CASE=parallel-isolation TEST_REVIEW_WORKSPACE_HELPER="$HELPER" \
     bash "$0" > "$d/shared.out" 2>&1
   rc=$?
   [[ $rc -ne 0 ]] && grep -q 'FAIL: RW3:' "$d/shared.out"
@@ -359,7 +359,7 @@ _review_workspace_summary() {
   [[ $FAIL -eq 0 ]]
 }
 
-case "${REVIEW_WORKSPACE_CASE:-all}" in
+case "${TEST_REVIEW_WORKSPACE_CASE:-all}" in
   write-boundary)
     . "$HELPER"
     test_write_boundary
@@ -373,7 +373,7 @@ case "${REVIEW_WORKSPACE_CASE:-all}" in
     exit $?
     ;;
   all) ;;
-  *) echo "unknown REVIEW_WORKSPACE_CASE:${REVIEW_WORKSPACE_CASE}" >&2; exit 2 ;;
+  *) echo "unknown TEST_REVIEW_WORKSPACE_CASE:${TEST_REVIEW_WORKSPACE_CASE}" >&2; exit 2 ;;
 esac
 
 test_delivery_binding() {
