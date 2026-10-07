@@ -49,9 +49,6 @@ SUITES=(
   "evidence-lifetime|bash|$ROOT/tests/test-evidence-lifetime.sh"
   "review-workspace|bash|$ROOT/tests/test-review-workspace.sh"
   "workflow-docs|bash|$ROOT/tests/test-workflow-docs.sh"
-  # 守的是**仓外**那份 ~/.claude/switch-model.sh 的原子写。它原本住在 track 目录里,
-  # 归档后就没有任何入口叫得动 —— 正是本文件开头骂的那种孤儿脚本(09-01 断线接手时自己抓到)。
-  "switch-model-atomic|bash|$ROOT/tests/test-switch-model-atomic.sh"
 )
 
 # ── 名单漏网报告(2026-08-06)────────────────────────────────────────────

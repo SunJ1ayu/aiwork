@@ -7,7 +7,6 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$ROOT/workflow"
-DEPLOY_ROOT="${WORKFLOW_DEPLOY_ROOT:-/root}"
 SYNC="$ROOT/bin/sync-workflow-docs"
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -22,12 +21,8 @@ MAPPINGS=(
 )
 
 echo "=== workflow docs oracle ==="
-echo "[W1] Git 内唯一源与当前部署副本逐字节一致"
-for spec in "${MAPPINGS[@]}"; do
-  src="${spec%%|*}"; dst="${spec#*|}"
-  cmp -s "$SOURCE/$src" "$DEPLOY_ROOT/$dst"
-  check "W1: $src == 部署 $dst" $?
-done
+# 家目录里那份部署副本是本机状态。同步器对临时目录的行为由下面 W2 问;
+# 这台机器的副本是否跟上,不在仓库判据里。
 
 echo "[W2] 同步器只管固定清单，漂移默认拒绝、显式 force 才覆盖"
 if [[ -x "$SYNC" ]]; then

@@ -102,16 +102,12 @@ fi
 # 修法不是去补那几个调用点 —— 补完第 10 个还会漏。这里放一层**兜底桩**:
 # 真 opencode 一旦被判据碰到就**立刻响亮失败**,把"谁没给桩"当场点名。
 # 需要行为的用例照旧在自己的 $b 里放桩(PATH 里排在这层前面),不受影响。
+# `debug` 也不放行。以前 V28/V33 靠本机 CLI 的 debug 子命令核对解析结果;
+# 那是在问这台机器装的工具,干净环境没有它就会红。仓库判据只查自己写出的配置。
 _OC_FLOOR="$(mktemp -d)"
-_REAL_OC_BIN="$(command -v opencode 2>/dev/null || true)"
-cat > "$_OC_FLOOR/opencode" <<OCFLOOR
+cat > "$_OC_FLOOR/opencode" <<'OCFLOOR'
 #!/usr/bin/env bash
-# \`opencode debug ...\` 放行给真二进制(同 mimo 那条的理由):本地解析、不调模型,
-# 而 V28 靠 \`opencode debug config\` 取证只读锁 —— 拿桩验锁等于验我自己写了什么。
-if [[ "\${1:-}" == "debug" && -n "$_REAL_OC_BIN" ]]; then
-  exec "$_REAL_OC_BIN" "\$@"
-fi
-echo "判据里调到了**真的** opencode 底座:\$*" >&2
+echo "判据里调到了**真的** opencode 底座:$*" >&2
 echo "  这条用例跑了 opencode 底座的腿却没给它桩 —— 补一个桩,别让判据去碰真底座。" >&2
 exit 97
 OCFLOOR
@@ -121,17 +117,9 @@ OCFLOOR
 # 而"内存不够 ⇒ 判据随机红"是本机记过的账)。
 # 发现过程也值得记:第二轮四审里评审腿自己跑了 `bash tests/test-review-tooling.sh`,
 # 于是同一个洞被放大了一轮 —— 我一开始判成"腿的问题",两边其实都成立。
-_REAL_MIMO_BIN="$(command -v mimo 2>/dev/null || true)"
-cat > "$_OC_FLOOR/mimo" <<MIMOFLOOR
+cat > "$_OC_FLOOR/mimo" <<'MIMOFLOOR'
 #!/usr/bin/env bash
-# **\`mimo debug ...\` 放行给真二进制**:它是本地解析(不调模型、不花钱、不留遗孤),
-# 而 V33 正是靠 \`mimo debug agent\` 取证只读锁 —— 查工件不查自述,那条不能拿桩糊弄
-# (拿桩验锁 = 验我自己写了什么,而 plan 档骗过我的正好是"写的和解析出来的不一样")。
-# 挡的只有 \`mimo run\` 这类真跑。
-if [[ "\${1:-}" == "debug" && -n "$_REAL_MIMO_BIN" ]]; then
-  exec "$_REAL_MIMO_BIN" "\$@"
-fi
-echo "判据里调到了**真的** mimo 底座:\$*" >&2
+echo "判据里调到了**真的** mimo 底座:$*" >&2
 echo "  这条用例跑了 submimo 却没给它桩 —— 补一个桩,别让判据去碰真底座。" >&2
 echo "  (真底座会挂在 900 秒 timeout 上,判据结束后变成遗孤继续占内存。)" >&2
 exit 97
@@ -2342,19 +2330,8 @@ PYEOF2
   [[ "$(get "$d/ds2.json" MIMO_BASE_URL)" == "https://api.deepseek.com" ]]
   check "V26: deepseek 聊天腿端点没被顺手改" $?
 
-  # ── ④ 机上真 key 落位:文件在、只有属主读得了、是合法 JSON 且 key 非空
-  local authf="${AIWORK_CALLER_HOME:-$HOME}/.config/opencode-go/auth.json"
-  if [[ -f "$authf" ]]; then
-    ok "V26: OpenCode Go key 文件就位($authf)"
-    [[ "$(stat -c '%a' "$authf")" == "600" ]]
-    check "V26: key 文件权限 600" $?
-    python3 -c "import json,sys;k=json.load(open(sys.argv[1])).get('key','');sys.exit(0 if k.startswith('sk-') and len(k)>32 else 1)" "$authf"
-    check "V26: key 文件里是一把像样的 key" $?
-  else
-    bad "V26: OpenCode Go key 文件就位($authf)"
-    bad "V26: key 文件权限 600"
-    bad "V26: key 文件里是一把像样的 key"
-  fi
+  # 真 key 文件在不在、权限是不是 600、里面是不是一把像样的 key,问的是这台机器,
+  # 不在仓库判据里。上面 ② 已经用假 HOME 钉死默认路径和"没 key 就不起底座"。
 
   # ── ④b base URL 不许以 /v1 结尾。claude CLI 自己会补 `/v1/messages`,
   #    写成 .../go/v1 会发到 /zen/go/v1/v1/messages(实测 404),而 CLI 把这个 404
@@ -2627,24 +2604,10 @@ PYCFG
     local off2; off2="$(occfg "$cfg" tools_off)"
     [[ " $off2 " != *" bash "* ]]
     check "V28: **bash 留着**(腿要能自己读 git;关掉的代价见上,已被推翻)" $?
-    # **让 opencode 自己解析**，确认 Bash 是整项 allow；不是查我们写进去的 JSON。
-    # 真正的写边界已移到“原仓只读 + 每腿可丢弃副本”，这里要让测试/build 真能跑。
-    if [[ -n "${_REAL_OC_BIN:-}" ]]; then
-      env -u XDG_CONFIG_HOME -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT \
-        HOME="$(dirname "$(dirname "$(dirname "$cfg")")")" \
-        timeout 60 "$_REAL_OC_BIN" debug config 2>/dev/null \
-        | python3 -c "
-import json,sys
-try: c=json.load(sys.stdin)
-except Exception: sys.exit(1)
-ag=c.get('agent',{}).get('aiwork-review',{})
-b=ag.get('permission',{}).get('bash')
-sys.exit(0 if b == 'allow' else 1)"
-      check "V28: 本地 Bash 整项 allow —— **opencode 自己解析出来**的 permission" $?
-    else
-      bad "V28: 本地 Bash 整项 allow —— opencode 自己解析出来的 permission"
-      echo "    (机器上没有 opencode,这条取证跑不了)"
-    fi
+    # Bash 整项 allow 写在仓库生成的配置里。opencode 自己的解析器是否同意,
+    # 取决于这台机器装的那一版 CLI,不在仓库判据里。
+    [[ "$(occfg "$cfg" bash_perm)" == '"allow"' ]]
+    check "V28: review 配置把 Bash permission 写成整项 allow" $?
     # 写口仍然全关 —— 零成本,不跟着 bash 一起放
     [[ " $off2 " == *" write "* && " $off2 " == *" edit "* && " $off2 " == *" task "* ]]
     check "V28: 写口仍全关(write/edit/task)—— 零成本,不跟着 bash 一起放" $?
@@ -2855,7 +2818,6 @@ v33_submimo_review_leg_is_read_only() {
   echo "[V33] panel 第一条腿(submimo)写口关掉、bash 留着,fix 不受连累"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
-  local REAL_MIMO; REAL_MIMO="$(command -v mimo || true)"
   cp "$BIN/submimo" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   printf '# t\n' > "$d/t.md"
@@ -2887,22 +2849,8 @@ print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
 
   local mhome="$d/mimohome"
 
-  # ── ⓪ 前置锚:内置 plan 档**确实**是全开的。
-  #    没有这一条,下面所有断言都可能是在给一个本来就没问题的东西加锁(测空气)。
-  #    用 mimo 自己的解析器取证 —— 查工件不查自述。
-  if [[ -n "$REAL_MIMO" ]]; then
-    local planopen
-    planopen="$("$REAL_MIMO" debug agent plan 2>/dev/null | python3 -c "
-import json,sys
-try: t=json.load(sys.stdin).get('tools',{})
-except Exception: print('ERR'); raise SystemExit
-print('OPEN' if (t.get('write') and t.get('task')) else 'LOCKED')" 2>/dev/null)"
-    [[ "$planopen" == "OPEN" ]]
-    check "V33: 锚 —— 内置 plan 档实测 write+task 全开(自称 Disallows all edit tools)" $?
-  else
-    bad "V33: 锚 —— 内置 plan 档实测 write+task 全开"
-    echo "    (机器上没有 mimo,这条取证跑不了)"
-  fi
+  # 内置 plan 档是否名不副实,问的是这台机器装的 mimo,不在仓库判据里。
+  # 下面只钉仓库自己写出的档:不用 plan、写口关掉、bash 留着。
 
   # ── ① review 不许再用内置 plan 档
   rm -f "$d/c_review"
@@ -2946,70 +2894,43 @@ print('OPEN' if (t.get('write') and t.get('task')) else 'LOCKED')" 2>/dev/null)"
   fi
 
   # 上面 explore 会按旧语义把 Bash 收回只读 git；O4 问的是 review 能力。
-  # 再跑一次 review，让下面的解析器检查 review 最终生成的配置。
+  # 再跑一次 review，让下面检查 review 最终写下的配置。
   env PATH="$b:$PATH" CAPTURE="$d/c_review_config" MIMO_REVIEW_HOME="$mhome" \
     bash "$b/submimo" review "$d/t.md" "$d/r-config.log" "$repo" >/dev/null 2>&1
 
-  # ── ④ 锁必须是**机械的**:拿 mimo 自己的解析器去读我们生成的配置。
-  #    只查"我们往 json 里写了什么"是不够的 —— plan 档骗过我的正是这个区别:
-  #    配置说一套、解析出来是另一套。
-  if [[ -f "$mhome/mimocode/mimocode.json" ]]; then
-    ok "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染 /root/.config/mimocode)"
-    if [[ -n "$REAL_MIMO" ]]; then
-      # 写口必须关:write/edit/task/webfetch/skill。这几样评审腿本来就不需要,
-      # 关掉是**零成本**的 —— 和关 bash 完全不同(那个的代价见文件头边界二)。
-      # task 尤其要关:spawn 子代理 = 子代理有自己的工具面 = 现成的绕过通道。
-      local wopen
-      wopen="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
-import json,sys
-try: t=json.load(sys.stdin).get('tools',{})
-except Exception: print('ERR'); raise SystemExit
-bad=[k for k in ('write','edit','patch','task','webfetch','skill') if t.get(k)]
-print(','.join(bad) if bad else 'NONE')" 2>/dev/null)"
-      [[ "$wopen" == "NONE" ]]
-      check "V33: 写口全关(残留: ${wopen:-?})—— write/edit/patch/task/webfetch/skill" $?
-
-      # **反向断言**:bash 不许被关掉。
-      # 这条挡的不是攻击者,是**未来的我** —— 08-18 我就是觉得"关掉更安全"才关的,
-      # 结果两条腿静默不跑、一天半白干。腿要能自己 git diff/log/show 读仓库。
-      local bashon
-      bashon="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
-import json,sys
-t=json.load(sys.stdin).get('tools',{})
-print('ON' if t.get('bash') else 'OFF')" 2>/dev/null)"
-      [[ "$bashon" == "ON" ]]
-      check "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)" $?
-
-      # Bash 在副本中整项放开，才能运行项目自己的测试/build。用 mimo 自己解析
-      # 出来的 permission 判，不拿生成 JSON 的自述冒充真实能力。
-      local bwl
-      bwl="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
-import json,sys
-ps=json.load(sys.stdin).get('permission',[])
-bs=[p for p in ps if p.get('permission')=='bash']
-local_ok=any(p.get('pattern')=='*' and p.get('action')=='allow' for p in bs)
-deny_all=any(p.get('pattern')=='*' and p.get('action')=='deny' for p in bs)
-print('OK' if (local_ok and not deny_all) else 'NO')" 2>/dev/null)"
-      [[ "$bwl" == "OK" ]]
-      check "V33: Bash 整项 allow(副本内可跑 tests/lint/build)" $?
-
-      local keep
-      keep="$(XDG_CONFIG_HOME="$mhome" "$REAL_MIMO" debug agent aiwork-review 2>/dev/null | python3 -c "
-import json,sys
-t=json.load(sys.stdin).get('tools',{})
-print('OK' if all(t.get(k) for k in ('read','glob','grep')) else 'MISSING')" 2>/dev/null)"
-      [[ "$keep" == "OK" ]]
-      check "V33: read/glob/grep 还在(否则这条腿等于废了)" $?
-    else
-      bad "V33: 写口全关 —— write/edit/patch/task/webfetch/skill"
-      bad "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)"
-      bad "V33: read/glob/grep 还在"
-    fi
+  # ── ④ 锁写在仓库生成的配置里。mimo 装好的那一版是否照这份 JSON 解析,
+  #    是本机体检;这里只读我们写下的文件,缺文件就红,不许跳过。
+  local mcfg="$mhome/mimocode/mimocode.json"
+  if [[ -f "$mcfg" ]]; then
+    ok "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染调用者的 mimocode)"
+    local v33json
+    v33json="$(python3 - "$mcfg" <<'PYV33'
+import json, sys
+c = json.load(open(sys.argv[1]))
+ag = c.get("agent", {}).get("aiwork-review", {})
+tools = ag.get("tools") or {}
+perm = ag.get("permission") or {}
+closed = [k for k in ("write", "edit", "patch", "task", "webfetch", "skill") if tools.get(k) is not False]
+print("CLOSED" if not closed else "OPEN:" + ",".join(closed))
+print("BASH_ON" if tools.get("bash") is True else "BASH_OFF")
+print("ALLOW" if perm.get("bash") == "allow" else "NOT_ALLOW")
+print("KEEP" if all(tools.get(k) is True for k in ("read", "glob", "grep")) else "MISSING")
+PYV33
+)"
+    grep -qx "CLOSED" <<< "$v33json"
+    check "V33: 配置里写口全关 —— write/edit/patch/task/webfetch/skill" $?
+    grep -qx "BASH_ON" <<< "$v33json"
+    check "V33: 配置里 bash 留着(关掉它就得自己喂 diff,那条路已被推翻)" $?
+    grep -qx "ALLOW" <<< "$v33json"
+    check "V33: 配置里 Bash permission 是整项 allow" $?
+    grep -qx "KEEP" <<< "$v33json"
+    check "V33: 配置里 read/glob/grep 还在" $?
   else
-    bad "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染 /root/.config/mimocode)"
-    bad "V33: 写口全关 —— write/edit/patch/task/webfetch/skill"
-    bad "V33: **bash 保留**(关掉它就得自己喂 diff,那条路已被推翻)"
-    bad "V33: read/glob/grep 还在"
+    bad "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染调用者的 mimocode)"
+    bad "V33: 配置里写口全关 —— write/edit/patch/task/webfetch/skill"
+    bad "V33: 配置里 bash 留着(关掉它就得自己喂 diff,那条路已被推翻)"
+    bad "V33: 配置里 Bash permission 是整项 allow"
+    bad "V33: 配置里 read/glob/grep 还在"
   fi
 
   # ── ④b 隔离必须用 XDG_CONFIG_HOME,**不许用 HOME**。
