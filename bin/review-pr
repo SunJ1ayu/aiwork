@@ -23,8 +23,11 @@ from _secret_shapes import redact_shapes
 
 
 BIN = Path(__file__).resolve().parent
-DEFAULT_REPO = "SunJ1ayu/OpenDesign"
 REVIEW_RULES_SOURCE = ("SunJ1ayu/aiwork", "REVIEW-RULES.md")
+ORIGIN_REPO = re.compile(
+    r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*?)(?:\.git)?/?$"
+)
 SHA = re.compile(r"^[0-9a-f]{40}$")
 CONCLUSION_REQUIREMENT = ("最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
                           "Conclusion: NEEDS_MORE_INFO。")
@@ -51,11 +54,23 @@ def repository_name(value: str) -> str:
     return value
 
 
+def repository_from_origin() -> str:
+    """owner/name from this checkout's origin. Pass --repo when that cannot be read."""
+    try:
+        url = run(["git", "remote", "get-url", "origin"]).strip()
+    except ReviewError as exc:
+        raise ReviewError("cannot derive owner/name from origin; pass --repo owner/name") from exc
+    match = ORIGIN_REPO.fullmatch(url)
+    if match is None:
+        raise ReviewError("cannot derive owner/name from origin; pass --repo owner/name")
+    return match.group(1)
+
+
 def choose_leg(name: str) -> tuple[str, str | None]:
     """The family this review is published under, and the model frozen for this run.
 
     A leg only has to be attributable to one family. Which families count for which
-    PR is the gate's call (OpenDesign .github/aiwork-gate/decide.mjs), not this tool's.
+    PR is the gate's call (gate/decide.mjs), not this tool's.
     Cursor's model is frozen once here, from the same source as the panel
     (CURSOR_MODEL, else ~/.config/aiwork/models.env), and decides the family.
     """
@@ -153,7 +168,7 @@ def github(token: str, endpoint: str, payload: dict | None = None) -> dict:
     return value
 
 
-def pr_state(token: str, number: int, *, repository: str = DEFAULT_REPO) -> dict:
+def pr_state(token: str, number: int, *, repository: str) -> dict:
     value = github(token, f"repos/{repository}/pulls/{number}")
     head = value.get("head") or {}
     base = value.get("base") or {}
@@ -175,7 +190,7 @@ def check_current_head(expected: str, current: dict) -> None:
         raise ReviewError(f"PR head changed since review of {expected}; no review posted, rerun")
 
 
-def snapshot(token: str, pr: dict, directory: Path, *, repository: str = DEFAULT_REPO) -> tuple[Path, str, list[str], str]:
+def snapshot(token: str, pr: dict, directory: Path, *, repository: str) -> tuple[Path, str, list[str], str]:
     repo = directory / "repo"
     repo.mkdir()
     run(["git", "init", "-q", str(repo)])
@@ -256,7 +271,7 @@ def aiwork_main_rules() -> tuple[str, str]:
 
 
 def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
-              review_rules: str, risks: str, *, rules_sha: str, repository: str = DEFAULT_REPO) -> str:
+              review_rules: str, risks: str, *, rules_sha: str, repository: str) -> str:
     rules_repository, rules_path = REVIEW_RULES_SOURCE
     return (
         f"# {repository} PR #{number} · 当前 HEAD 的完整评审\n\n"
@@ -349,7 +364,8 @@ def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, director
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pr", type=int, help="PR number in the selected repository")
-    parser.add_argument("--repo", type=repository_name, default=DEFAULT_REPO, help="target owner/name (default: %(default)s)")
+    parser.add_argument("--repo", type=repository_name, default=None,
+                        help="target owner/name (default: this checkout's origin)")
     parser.add_argument("--leg", default="subcodex")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -357,20 +373,21 @@ def main() -> int:
         if args.pr < 1:
             raise ReviewError("PR number must be positive")
         family, frozen_model = choose_leg(args.leg)
-        token = run([str(BIN / "gh-app-token"), "review", "--repo", args.repo]).strip()
+        repository = args.repo or repository_from_origin()
+        token = run([str(BIN / "gh-app-token"), "review", "--repo", repository]).strip()
         if not token:
             raise ReviewError("review App returned an empty token")
-        pr = pr_state(token, args.pr, repository=args.repo)
+        pr = pr_state(token, args.pr, repository=repository)
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
             directory = Path(temporary)
-            run_id = f"pr-{args.repo.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}-{directory.name.removeprefix('aiwork-review-pr-')}"
+            run_id = f"pr-{repository.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}-{directory.name.removeprefix('aiwork-review-pr-')}"
             try:
-                repo, merge_base, files, diff = snapshot(token, pr, directory, repository=args.repo)
+                repo, merge_base, files, diff = snapshot(token, pr, directory, repository=repository)
                 rules_sha, review_rules = aiwork_main_rules()
                 risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
                 task = directory / "task.md"
                 task.write_text(task_text(args.pr, pr, merge_base, files, diff,
-                                          review_rules, risks, rules_sha=rules_sha, repository=args.repo), encoding="utf-8")
+                                          review_rules, risks, rules_sha=rules_sha, repository=repository), encoding="utf-8")
                 selected_leg, switch_note = route_task(args.leg, task, family)
                 if switch_note:
                     print(f"review-pr: {switch_note}", file=sys.stderr)
@@ -417,16 +434,16 @@ def main() -> int:
                 if privacy.returncode:
                     raise PrivacyError("privacy-check refused review publication:\n"
                                        + privacy.stdout + privacy.stderr)
-                check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=args.repo))
+                check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=repository))
                 if args.dry_run:
                     print(body, end="")
                     return 0
-                response = github(token, f"repos/{args.repo}/pulls/{args.pr}/reviews",
+                response = github(token, f"repos/{repository}/pulls/{args.pr}/reviews",
                                   {"commit_id": pr["head"]["sha"], "event": "COMMENT", "body": body})
                 link = response.get("html_url")
                 if not isinstance(link, str) or not link.startswith("https://github.com/"):
                     raise ReviewError("review POST succeeded but returned no review link")
-                # The gate wakes on the review itself (OpenDesign aiwork-review-ping); no second doorbell.
+                # The gate wakes on the review itself (the repo's aiwork-review-ping); no second doorbell.
                 print(link)
                 return 0
             except (ReviewError, OSError, ValueError) as exc:

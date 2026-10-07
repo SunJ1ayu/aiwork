@@ -1,0 +1,42 @@
+{
+  "_说明": [
+    "aiwork 自己的关卡策略。关卡代码在 gate/，本文件在调用方检出里，由 workflow 用 AIWORK_POLICY_PATH 传入。",
+    "check_name 为 aiwork-gate-shadow：只报不拦。转真拦截前不要把它设为必过。",
+    "builders 只登记单一模型账号。多家模型共用的 aiwork-build[bot] 不登记，作者记成未知，要业主批准。",
+    "judging_surface 罩住 workflow、关卡、规则、测试入口和断网守卫。high 先罩住密钥和发布相关的工具。"
+  ],
+  "check_name": "aiwork-gate-shadow",
+  "gate_app_id": 5121026,
+  "owner": "SunJ1ayu",
+  "builders": {
+    "SunJ1ayuBoT": "anthropic"
+  },
+  "reviewer_bot": "aiwork-review[bot]",
+  "merge_label": "aiwork:merge",
+  "merge_requesters": [],
+  "ci": {
+    "workflow_path": ".github/workflows/ci.yml",
+    "event": "pull_request"
+  },
+  "judging_surface": [
+    ".github/**",
+    ".aiwork/**",
+    "gate/**",
+    "REVIEW-RULES.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "workflow/**",
+    "bin/rust-check-review-tooling",
+    "tests/_no-egress.sh",
+    "tests/_no_egress.py",
+    "templates/aiwork-gate.yml",
+    "templates/aiwork-review-ping.yml"
+  ],
+  "high": [
+    "bin/gh-app-token",
+    "bin/privacy-check",
+    "bin/_secret-shapes",
+    "bin/_secret_shapes.py",
+    "bin/review-pr"
+  ]
+}
