@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  review-tooling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the offline suite inside a real network namespace
+        run: |
+          if ! command -v unshare >/dev/null || ! command -v nsenter >/dev/null || ! command -v ip >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y iproute2 util-linux
+          fi
+          # The runner user is not root. tests/_no-egress.sh refuses to
+          # continue unless unshare -n actually isolates the suite, and
+          # tests/test-no-egress.sh uses nsenter -t 1 to prove the host
+          # still has egress. Both need CAP_SYS_ADMIN. Do not set
+          # AIWORK_NO_EGRESS_TRIED or otherwise let the guard pass without
+          # isolating the process.
+          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo --preserve-env=PATH,GITHUB_WORKSPACE,GITHUB_SHA,CI \
+            bash -c 'cd "$GITHUB_WORKSPACE" && exec bash bin/rust-check-review-tooling'
