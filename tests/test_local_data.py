@@ -33,7 +33,8 @@ class LocalDataTests(unittest.TestCase):
     def test_submimo_iso_seeds_credentials_from_home(self):
         canonical = self.home / '.local/share/mimocode'
         canonical.mkdir(parents=True)
-        (canonical / 'auth.json').write_text('fixture credential')
+        credential = ' '.join(('fixture', 'credential'))
+        (canonical / 'auth.json').write_text(credential)
         stub = self.tool / 'bin/submimo'
         stub.write_text('#!/bin/bash\ncp "$XDG_DATA_HOME/mimocode/auth.json" "$3"\n')
         project = self.d / 'project'
@@ -44,9 +45,9 @@ class LocalDataTests(unittest.TestCase):
         log = self.d / 'review.log'
         result = self.run_tool('submimo-iso', 'fixture', 'review', str(task), str(project), str(log))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(log.read_text() == 'fixture credential', 'credentials did not come from HOME')
+        self.assertTrue(log.read_text() == credential, 'credentials did not come from HOME')
         self.assertTrue((self.data / 'mimo-home/fixture/data/mimocode/auth.json').read_text()
-                        == 'fixture credential', 'isolated home was not seeded from HOME')
+                        == credential, 'isolated home was not seeded from HOME')
 
     def test_data_default_override_and_query_do_not_create_directories(self):
         env = dict(self.env)
@@ -173,8 +174,9 @@ class LocalDataTests(unittest.TestCase):
     def test_kimi_sync_copies_only_seed_and_keeps_existing_runtime(self):
         seed = self.tool / 'kimi-review-home'
         (seed / 'hooks').mkdir(parents=True)
-        (seed / 'config.toml').write_text('default_model = "__KIMI_MODEL_ALIAS__"\ncommand = "node /old/hooks/guard.mjs"\n')
+        shutil.copy2(ROOT / 'kimi-review-home/config.toml', seed / 'config.toml')
         (seed / 'hooks/guard.mjs').write_text('process.exit(2);\n')
+        (seed / 'hooks/leftover.mjs').write_text('runtime leftover')
         for name in ('credentials', 'cache', 'sessions', 'logs', 'search-index', 'telemetry'):
             (seed / name).mkdir()
             (seed / name / 'marker').write_text('seed runtime: must stay here')
@@ -193,6 +195,7 @@ class LocalDataTests(unittest.TestCase):
                     (runtime / 'sessions/marker').write_text('existing runtime')
                 self.run_tool('subkimi', 'review', str(task), str(self.d / 'log'), str(repo), env=env)
                 self.assertTrue((runtime / 'hooks/guard.mjs').is_file())
+                self.assertFalse((runtime / 'hooks/leftover.mjs').exists())
                 self.assertIn(str(runtime / 'hooks/guard.mjs'), (runtime / 'config.toml').read_text())
                 for name in ('credentials', 'cache', 'logs', 'search-index', 'telemetry'):
                     self.assertFalse((runtime / name).exists(), name)

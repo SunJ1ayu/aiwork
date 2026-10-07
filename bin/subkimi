@@ -106,30 +106,23 @@ MODEL="$("$BIN_DIR/aiwork-config" model kimi "${KIMI_MODEL:-}")" || exit 1
 review_home_guard kimi "$REVIEW_HOME" "$SOURCE_REPO" KIMI_REVIEW_HOME || exit 1
 
 # ── 运行期 home:种子同步 + 位置检查(track repo-write-audit,2026-08-19 第二轮)──
-# 仓内的 `kimi-review-home/` 暂留原处当**种子**；后续隐私检查后单独入 Git。config.toml 和
+# 仓内的 `kimi-review-home/` 是版本控制中的种子。config.toml 和
 # hooks/guard.mjs 是判卷防线的一部分,必须可审计。每次跑都从种子覆盖到运行期 home
 # —— 不覆盖的话,改了仓内那份守卫**不生效**,又是"同一件事写两处、只更新一处"。
 # 只在用默认 home 时同步:显式指定 KIMI_REVIEW_HOME 的调用方自己负责(判据夹具靠这个)。
 KIMI_SEED_HOME="$BIN_DIR/../kimi-review-home"
 if [[ -z "${KIMI_REVIEW_HOME:-}" && -d "$KIMI_SEED_HOME" ]]; then
   mkdir -p "$REVIEW_HOME/hooks"
-  for _h in "$KIMI_SEED_HOME"/hooks/*; do
-    [[ -f "$_h" ]] && cp -f "$_h" "$REVIEW_HOME/hooks/" 2>/dev/null || true
-  done
-  # hook 命令里的路径也得跟着搬(第二轮四审 subdeepseek F2):种子里写的是
-  # `node /root/aiwork/kimi-review-home/hooks/guard.mjs` —— 仓内那一份。不改的话
-  # 上面辛辛苦苦同步过来的 guard 副本**是死代码**,真正被执行的还是仓内那份,
-  # 而仓在只读挂载下(还随时可能被换掉),"运行期 home 自包含"就是句假话。
-  # 老账:同一件事写两处、只更新一处。
+  cp -f "$KIMI_SEED_HOME/hooks/guard.mjs" "$REVIEW_HOME/hooks/guard.mjs" || die 'cannot sync review guard'
+  # 种子只声明占位符；命令渲染为运行期 home 自己那份 guard。
   KIMI_RUNTIME_HOME="$REVIEW_HOME" python3 - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || die 'cannot render review config'
-import os, re, sys
+import json, os, shlex, sys
 home = os.environ["KIMI_RUNTIME_HOME"].rstrip("/")
 model = sys.argv[2]
 p = home + "/config.toml"
 s = open(sys.argv[1]).read()
 s = s.replace("__KIMI_MODEL_ALIAS__", model).replace("__KIMI_MODEL_ID__", model.split("/", 1)[1])
-s2 = re.sub(r'(command\s*=\s*"node )[^"]*/hooks/guard\.mjs"',
-            lambda m: m.group(1) + home + '/hooks/guard.mjs"', s)
+s2 = s.replace('"__KIMI_GUARD_COMMAND__"', json.dumps('node ' + shlex.quote(home + '/hooks/guard.mjs')))
 tmp = p + ".tmp." + str(os.getpid())
 with open(tmp, "w") as fh:
     fh.write(s2)

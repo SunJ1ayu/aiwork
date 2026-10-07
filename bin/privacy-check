@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Check Git additions and metadata, the current tree, or selected local files."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+from _secret_shapes import load_shapes
+
+BIN = Path(__file__).resolve().parent
+
+
+def git(*args, input=None):
+    return subprocess.run(['git', *args], input=input, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, check=True).stdout
+
+
+class Scanner:
+    def __init__(self, terms):
+        self.shapes = load_shapes()
+        self.terms = [(n, line.casefold()) for n, line in enumerate(terms.splitlines(), 1) if line]
+        self.hits = set()
+
+    def kinds(self, text):
+        return [f'形状 {name}' for name, pattern in self.shapes if pattern.search(text)] + [
+            f'私人词第 {n} 条' for n, term in self.terms if term in text.casefold()]
+
+    def location(self, path):
+        # A newly added filename can itself contain a secret. Never echo that
+        # part of the location, and escape control characters in every path.
+        if self.kinds(path):
+            return '[隐藏文件路径]'
+        return json.dumps(path, ensure_ascii=False)[1:-1]
+
+    def scan(self, path, number, text):
+        for kind in self.kinds(text):
+            self.hits.add((self.location(path), number, kind))
+
+    def file(self, path):
+        self.scan(path, 0, path)
+        p = Path(path)
+        if p.is_symlink():
+            content = os.readlink(p)
+        elif p.is_file():
+            content = p.read_bytes().decode('utf-8', errors='replace')
+        else:
+            return
+        for n, line in enumerate(content.splitlines(), 1):
+            self.scan(path, n, line)
+
+    def commits(self, revisions):
+        commits = git('rev-list', '--reverse', *revisions, '--').decode().splitlines()
+        empty = git('hash-object', '-t', 'tree', '--stdin', input=b'').decode().strip()
+        for commit in commits:
+            fields = git('show', '-s', '--format=%an%x00%ae%x00%cn%x00%ce%x00%B', commit).decode(
+                'utf-8', errors='replace').split('\0', 4)
+            for label, field in zip(('author-name', 'author-email', 'committer-name', 'committer-email',
+                                      'message'), fields):
+                for n, line in enumerate(field.splitlines(), 1):
+                    self.scan(f'commit/{commit}/{label}', n, line)
+            parents = git('rev-list', '--parents', '-n', '1', commit).decode().split()
+            base = parents[1] if len(parents) > 1 else empty
+            changes = git('diff', '--name-status', '-z', '--no-renames', base, commit, '--').split(b'\0')
+            for i in range(0, len(changes) - 1, 2):
+                status, raw_path = changes[i:i + 2]
+                if status == b'D':
+                    continue
+                path = raw_path.decode('utf-8', errors='replace')
+                if status == b'A':
+                    self.scan(path, 0, path)
+                patch = git('diff', '--no-ext-diff', '--no-textconv', '--no-color', '--text', '--unified=0',
+                            '--output-indicator-new=+', '--output-indicator-old=-', '--output-indicator-context= ',
+                            base, commit, '--', raw_path).decode('utf-8', errors='replace')
+                number = None
+                for line in patch.splitlines():
+                    hunk = re.match(r'^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)', line)
+                    if hunk:
+                        number = int(hunk.group(1))
+                    elif number is not None and line.startswith('+'):
+                        self.scan(path, number, line[1:])
+                        number += 1
+                    elif number is not None and line.startswith(' '):
+                        number += 1
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--all', action='store_true', help='tracked and non-ignored working tree files')
+    mode.add_argument('--files', nargs='+', metavar='PATH', help='selected local files, before git add')
+    parser.add_argument('revisions', nargs='*', help='Git range (BASE..HEAD); HEAD checks all history')
+    args = parser.parse_args()
+    if bool(args.revisions) == bool(args.all or args.files):
+        parser.error('指定提交范围、--all 或 --files 三者之一')
+    try:
+        terms_path = Path(subprocess.check_output([str(BIN / 'aiwork-config'), 'path', 'private-terms'],
+                                                 text=True).strip())
+        try:
+            terms = terms_path.read_text(encoding='utf-8')
+        except OSError:
+            print(f'privacy-check: 请建立并填写本机私人词表 {terms_path}', file=sys.stderr)
+            return 2
+        scanner = Scanner(terms)
+        if not args.files:
+            os.chdir(git('rev-parse', '--show-toplevel').decode().strip())
+        if args.files:
+            for path in args.files:
+                if not Path(path).exists() and not Path(path).is_symlink():
+                    raise OSError('missing file')
+                scanner.file(path)
+        elif args.all:
+            paths = git('ls-files', '-co', '--exclude-standard', '-z').split(b'\0')
+            for path in sorted(set(paths) - {b''}):
+                scanner.file(path.decode('utf-8', errors='replace'))
+        else:
+            scanner.commits(args.revisions)
+        for path, number, kind in sorted(scanner.hits):
+            print(f'{path}:{number} {kind}')
+        return 1 if scanner.hits else 0
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        print('privacy-check: 检查失败，未输出原文', file=sys.stderr)
+        return 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

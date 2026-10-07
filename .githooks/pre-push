@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Git supplies one local/remote ref pair per line on stdin.
+set -euo pipefail
+BIN="$(dirname "$(dirname "$(realpath "$0")")")/bin"
+remote="${1:?pre-push requires the remote name}"
+while read -r local_ref local_oid remote_ref remote_oid; do
+  [[ "$local_oid" =~ ^0+$ ]] && continue
+  revisions=("$local_oid")
+  if [[ "$remote_oid" =~ ^0+$ ]]; then
+    # A new branch sends history absent from the fetched remote refs. Without
+    # any remote refs, check all its history (fail conservatively).
+    while read -r oid; do
+      revisions+=("^$oid")
+    done < <(git for-each-ref --format='%(objectname)' "refs/remotes/$remote/")
+  else
+    revisions+=("^$remote_oid")
+  fi
+  "$BIN/privacy-check" "${revisions[@]}"
+done

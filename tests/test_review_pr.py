@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin/review-pr"
+FAKE_TOKEN = '-'.join(('fake', 'token'))
 
 
 def load_script(name="review-pr"):
@@ -118,7 +119,7 @@ class ReviewPrTests(unittest.TestCase):
         def fake_run(command, **kwargs):
             if command[0].endswith("gh-app-token"):
                 calls["token_command"] = command
-                return "fake-token"
+                return FAKE_TOKEN
             if command[0] == "git":
                 return real_run(command, **kwargs)
             calls["emit"] = command
@@ -198,7 +199,8 @@ class ReviewPrTests(unittest.TestCase):
         return rc, calls, stdout.getvalue(), stderr.getvalue()
 
     def test_failed_leg_reports_only_last_40_lines_with_secrets_redacted(self):
-        diagnostic = ''.join(f'line-{i:02d}\n' for i in range(60)) + 'token: ghs_testsecret\n'
+        fake_token = 'ghs' + '_' + 'testsecret'
+        diagnostic = ''.join(f'line-{i:02d}\n' for i in range(60)) + 'token: ' + fake_token + '\n'
         rc, calls, stdout, stderr = self.run_main_with_leg_result('gpt-5.6', dry_run=False,
                                                                 leg_exit=1, leg_stderr=diagnostic)
         self.assertEqual(rc, 1)
@@ -207,7 +209,7 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn('line-21', stderr)
         self.assertIn('line-59', stderr)
         self.assertNotIn('line-20', stderr)
-        self.assertNotIn('ghs_testsecret', stderr)
+        self.assertNotIn(fake_token, stderr)
         self.assertIn('[redacted]', stderr)
 
     def test_failed_leg_keeps_whole_directory_and_reports_a_live_log_path(self):
@@ -242,33 +244,37 @@ class ReviewPrTests(unittest.TestCase):
             with self.assertRaises(self.review.ReviewError) as error:
                 self.review.run(['gh-app-token', 'review'])
         self.assertIn(diagnostic, str(error.exception))
-        secrets = 'ghs_first ghp_second github_pat_third token: ordinary-value token=other-value\n' \
-                  '-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----'
+        fake_tokens = ['ghs' + '_' + 'first', 'ghp' + '_' + 'second', 'github' + '_pat_' + 'third']
+        pem = '-----' + 'BEGIN PRIVATE KEY' + '-----\nprivate-material\n-----END PRIVATE KEY-----'
+        ordinary, other = ['-'.join((word, 'value')) for word in ('ordinary', 'other')]
+        secrets = ' '.join(fake_tokens) + f' token: {ordinary} token={other}\n' + pem
         with patch.object(self.review.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', secrets)):
             with self.assertRaises(self.review.ReviewError) as error:
                 self.review.run(['provider'])
-        for secret in ('ghs_first', 'ghp_second', 'github_pat_third', 'ordinary-value', 'other-value', 'private-material'):
+        for secret in (*fake_tokens, ordinary, other, 'private-material'):
             self.assertNotIn(secret, str(error.exception))
 
     def test_common_secret_assignments_headers_and_prefixes_are_redacted(self):
-        fake_key = 'sk-abcdefghijklmnop'
+        fake_key = 'sk' + '-' + 'abcdefghijklmnop'
+        opaque = '-'.join(('opaque', 'fixture'))
+        spaced = ' '.join(('opaque', 'fixture'))
         cases = (
             (f'DEEPSEEK_API_KEY={fake_key}', 'DEEPSEEK_API_KEY=[redacted]'),
             (f'export MIMO_API_KEY="{fake_key}"', 'export MIMO_API_KEY=[redacted]'),
             (f'Authorization: Bearer {fake_key}', 'Authorization: Bearer [redacted]'),
-            ('GH_TOKEN=opaque-fixture', 'GH_TOKEN=[redacted]'),
-            ('service_secret: "opaque fixture"', 'service_secret: [redacted]'),
-            ("custom_PaSsWoRd='opaque fixture'", 'custom_PaSsWoRd=[redacted]'),
-            ('myKey: opaque-fixture', 'myKey: [redacted]'),
-            ('TOKEN: opaque-fixture', 'TOKEN: [redacted]'),
-            ('API-KEY=opaque-fixture', 'API-KEY=[redacted]'),
-            ('authorization: bearer opaque-fixture', 'authorization: bearer [redacted]'),
+            (f'GH_TOKEN={opaque}', 'GH_TOKEN=[redacted]'),
+            (f'service_secret: "{spaced}"', 'service_secret: [redacted]'),
+            (f"custom_PaSsWoRd='{spaced}'", 'custom_PaSsWoRd=[redacted]'),
+            (f'myKey: {opaque}', 'myKey: [redacted]'),
+            (f'TOKEN: {opaque}', 'TOKEN: [redacted]'),
+            (f'API-KEY={opaque}', 'API-KEY=[redacted]'),
+            (f'authorization: bearer {opaque}', 'authorization: bearer [redacted]'),
             (f'provider echoed {fake_key}', 'provider echoed [redacted]'),
-            ('provider echoed sk-abcd_efgh-ijklmn', 'provider echoed [redacted]'),
-            ('provider echoed ghs_fixture', 'provider echoed [redacted]'),
-            ('provider echoed ghp_fixture', 'provider echoed [redacted]'),
-            ('provider echoed github_pat_fixture', 'provider echoed [redacted]'),
-            ('-----BEGIN PRIVATE KEY-----\nfixture-only\n-----END PRIVATE KEY-----', '[redacted]'),
+            ('provider echoed ' + 'sk' + '-' + 'abcd_efgh-ijklmn', 'provider echoed [redacted]'),
+            ('provider echoed ' + 'ghs' + '_' + 'fixture', 'provider echoed [redacted]'),
+            ('provider echoed ' + 'ghp' + '_' + 'fixture', 'provider echoed [redacted]'),
+            ('provider echoed ' + 'github' + '_pat_' + 'fixture', 'provider echoed [redacted]'),
+            ('-----' + 'BEGIN PRIVATE KEY' + '-----\nfixture-only\n-----END PRIVATE KEY-----', '[redacted]'),
         )
         for original, expected in cases:
             with self.subTest(original=original):
@@ -277,12 +283,19 @@ class ReviewPrTests(unittest.TestCase):
     def test_secret_redaction_keeps_tool_errors_and_short_sk_text(self):
         for message in ('gh-app-token: 目标仓库不在角色配置范围内',
                         'fetch-key: 无法读取文件',
-                        'provider mentioned sk-abcdefghijklmno'):
+                        'codex/task-model-roles-closeout',
+                        'provider mentioned ' + 'sk' + '-' + 'abcdefghijklmno'):
             with self.subTest(message=message):
                 self.assertEqual(self.review.redact(message), message)
 
+    def test_mimo_and_nested_pem_shapes_hide_the_entire_payload(self):
+        fake = 'tp' + '-' + 'a' * 48
+        self.assertEqual(self.review.redact('provider: ' + fake), 'provider: [redacted]')
+        pem = '-----' + 'BEGIN PRIVATE KEY' + '-----\n' + fake + '\n-----END PRIVATE KEY-----'
+        self.assertEqual(self.review.redact('before ' + pem + ' after'), 'before [redacted] after')
+
     def test_common_secrets_are_redacted_in_failed_leg_stderr(self):
-        fake_key = 'sk-abcdefghijklmnop'
+        fake_key = 'sk' + '-' + 'abcdefghijklmnop'
         diagnostic = f'DEEPSEEK_API_KEY={fake_key}\nexport MIMO_API_KEY="{fake_key}"\n' \
                      f'Authorization: Bearer {fake_key}\ngh-app-token: 目标仓库不在角色配置范围内\n'
         rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', leg_exit=1, leg_stderr=diagnostic)
@@ -313,7 +326,7 @@ class ReviewPrTests(unittest.TestCase):
             response = json.dumps({'choices': [{'message': {'content': content}, 'finish_reason': finish_reason}]})
             stdout, stderr = io.StringIO(), io.StringIO()
             with patch.dict(os.environ, {'AIWORK_REVIEW_FACTS_PATH': str(facts), 'PANEL_DIFF_BASE': '',
-                    'MIMO_API_KEY': 'fake-key', 'MIMO_BASE_URL': 'http://127.0.0.1',
+                    'MIMO_API_KEY': '-'.join(('fake', 'key')), 'MIMO_BASE_URL': 'http://127.0.0.1',
                     'AIWORK_MODEL_LEG': 'cursor', 'MIMO_MODEL': 'gpt-5.6'}), \
                     patch('sys.argv', ['submimo-review', str(task), str(log), '--repo', str(repo), '--git-diff']), \
                     patch.object(engine.urllib.request, 'urlopen', return_value=io.BytesIO(response.encode())), \
@@ -429,7 +442,7 @@ class ReviewPrTests(unittest.TestCase):
               "base": {"sha": "b" * 40, "ref": "main", "repo": {"full_name": "SunJ1ayu/OpenDesign"}}}
         with patch.object(self.review, "github", return_value=pr) as api:
             with self.assertRaisesRegex(self.review.ReviewError, "repository"):
-                self.review.pr_state("fake-token", 12, repository="SunJ1ayu/aiwork")
+                self.review.pr_state(FAKE_TOKEN, 12, repository="SunJ1ayu/aiwork")
             self.assertEqual(api.call_args.args[1], "repos/SunJ1ayu/aiwork/pulls/12")
 
     def test_snapshot_fetches_the_selected_repository_and_its_main(self):
@@ -449,7 +462,7 @@ class ReviewPrTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.object(self.review, "run", side_effect=fake_git), \
                 patch.object(self.review.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"src/a.py\0", b"")):
-            _, base, files, _ = self.review.snapshot("fake-token", pr, Path(temporary),
+            _, base, files, _ = self.review.snapshot(FAKE_TOKEN, pr, Path(temporary),
                                                    repository="SunJ1ayu/aiwork")
         fetch = next(command for command in commands if "fetch" in command)
         self.assertIn("https://github.com/SunJ1ayu/aiwork.git", fetch)

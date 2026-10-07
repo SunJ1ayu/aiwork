@@ -338,7 +338,7 @@ r8_final_binds_the_existing_last_run() {
 r9_secret_shapes_never_become_receipts() {
   echo "[R9] 命令参数/输出像秘密 ⇒ 拒绝形成可提交 receipt"
   local d marker rc out secret
-  secret='sk-abcdefghijklmnopqrstuvwxyz012345'
+  secret="$(printf '%s-%s' sk abcdefghijklmnopqrstuvwxyz012345)"
 
   d="$(newrepo)"; marker="$(mktemp)"; : > "$marker"
   ( cd "$d" && "$RUNLOG" --final -t t -n arg-secret -- \
@@ -369,6 +369,17 @@ r9_secret_shapes_never_become_receipts() {
   ( cd "$d" && "$RUNLOG" --final -t t -n benign -- \
       bash -c 'echo "token budget=200"' ) >/dev/null 2>&1; rc=$?
   check "R9: 普通 token 用词不误杀" $([[ $rc -eq 0 ]]; echo $?)
+  ( cd "$d" && "$RUNLOG" -t t -n branch-name -- \
+      bash -c 'echo codex/task-model-roles-closeout' ) >/dev/null 2>&1; rc=$?
+  check "R9: task-model-roles 分支名不误判为密钥" $([[ $rc -eq 0 ]]; echo $?)
+  secret="$(printf '%s-%s' tp "$(printf '%048d' 0)")"
+  ( cd "$d" && "$RUNLOG" -t t -n mimo-arg -- \
+      bash -c 'exit 0' _ "$secret" ) >/dev/null 2>&1; rc=$?
+  check "R9: MiMo 参数使用共享形状拒绝" $([[ $rc -ne 0 ]]; echo $?)
+  out="$(cd "$d" && RUNLOG_TEST_SECRET="$secret" "$RUNLOG" -t t -n mimo-output -- \
+      bash -c 'printf "%s\\n" "$RUNLOG_TEST_SECRET"' 2>&1)"; rc=$?
+  check "R9: MiMo 输出使用共享形状拒绝且不回显" \
+    $([[ $rc -ne 0 ]] && ! grep -qF "$secret" <<< "$out"; echo $?)
   rm -rf "$d" "$marker"
 }
 
