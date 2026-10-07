@@ -439,7 +439,7 @@ class ReviewPrTests(unittest.TestCase):
         rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", dry_run=False)
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(calls["leg_runs"], 1)
-        self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/OpenDesign/pulls/12/reviews"])
+        self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/aiwork/pulls/12/reviews"])
 
     def test_unreadable_aiwork_rules_never_run_or_publish(self):
         for failure in ("main_unreadable", "rules_unreadable", "invalid_sha",
@@ -480,6 +480,35 @@ class ReviewPrTests(unittest.TestCase):
             self.assertEqual(call.kwargs["repository"], target)
         self.assertEqual(calls["snapshot"].kwargs["repository"], target)
         self.assertTrue(calls["task"].startswith("# SunJ1ayu/aiwork PR #12"))
+
+    def test_repository_defaults_to_origin(self):
+        cases = [
+            ("https://github.com/SunJ1ayu/aiwork.git", "SunJ1ayu/aiwork"),
+            ("https://github.com/SunJ1ayu/aiwork", "SunJ1ayu/aiwork"),
+            ("git@github.com:SunJ1ayu/OpenDesign.git", "SunJ1ayu/OpenDesign"),
+            ("ssh://git@github.com/SunJ1ayu/aiwork.git", "SunJ1ayu/aiwork"),
+        ]
+        for url, expected in cases:
+            with self.subTest(url=url), patch.object(self.review, "run", return_value=url + "\n"):
+                self.assertEqual(self.review.repository_from_origin(), expected)
+
+    def test_unreadable_origin_requires_explicit_repo(self):
+        for url in ("https://gitlab.com/a/b.git", "not a url", ""):
+            with self.subTest(url=url), patch.object(self.review, "run", return_value=url + "\n"):
+                with self.assertRaisesRegex(self.review.ReviewError, "--repo"):
+                    self.review.repository_from_origin()
+        with patch.object(self.review, "run", side_effect=self.review.ReviewError("git failed")):
+            with self.assertRaisesRegex(self.review.ReviewError, "--repo"):
+                self.review.repository_from_origin()
+
+    def test_missing_origin_stops_before_credentials(self):
+        with patch("sys.argv", ["review-pr", "12"]), \
+                patch.object(self.review, "run", side_effect=self.review.ReviewError("git failed")) as run, \
+                redirect_stderr(io.StringIO()) as err:
+            rc = self.review.main()
+        self.assertEqual(rc, 1)
+        self.assertIn("--repo", err.getvalue())
+        self.assertTrue(all(not str(call.args[0][0]).endswith("gh-app-token") for call in run.call_args_list))
 
     def test_invalid_repository_is_rejected_before_getting_credentials(self):
         for target in ("../aiwork", "owner/repo/extra", "https://github.com/owner/repo", "owner/repo\nother", "owner/.."):
@@ -541,12 +570,12 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn("does not match selected family", stderr)
 
     def test_publishing_writes_only_the_review(self):
-        # The review itself wakes the gate (OpenDesign aiwork-review-ping); a second write
+        # The review itself wakes the gate (the repo's aiwork-review-ping); a second write
         # such as a recheck label is a second doorbell, and its failure would turn a posted
-        # review into exit 1.
+        # review into exit 1. The target is this checkout's origin.
         rc, calls, stdout, stderr = self.run_main_with_leg_result("gpt-5.6", dry_run=False)
         self.assertEqual(rc, 0, stderr)
-        self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/OpenDesign/pulls/12/reviews"])
+        self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/aiwork/pulls/12/reviews"])
         self.assertEqual(stdout.strip(), "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1")
 
     def test_report_is_separated_only_at_the_leg_log_header(self):

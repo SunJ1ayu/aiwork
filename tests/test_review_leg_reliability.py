@@ -161,7 +161,7 @@ class ReliabilityTests(unittest.TestCase):
         pr = {'head': {'sha': self.head, 'ref': 'feature'},
               'base': {'sha': self.base, 'ref': 'main'}}
         task = self.review.task_text(1, pr, self.base, ['file'], self.diff + 'x\n' * 75000,
-                                     'Trusted rules.', '无', rules_sha='d' * 40)
+                                     'Trusted rules.', '无', rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
         tail = '\n'.join(task.splitlines()[-3:])
         self.assertIn('最后独占一行写 Conclusion: PASS', tail)
         self.assertIn('Conclusion: BLOCK', tail)

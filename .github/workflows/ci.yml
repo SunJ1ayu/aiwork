@@ -6,11 +6,19 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   review-tooling:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Run the offline suite inside a real network namespace
         run: |
           if ! command -v unshare >/dev/null || ! command -v nsenter >/dev/null || ! command -v ip >/dev/null; then

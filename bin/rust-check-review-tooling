@@ -49,6 +49,7 @@ SUITES=(
   "evidence-lifetime|bash|$ROOT/tests/test-evidence-lifetime.sh"
   "review-workspace|bash|$ROOT/tests/test-review-workspace.sh"
   "workflow-docs|bash|$ROOT/tests/test-workflow-docs.sh"
+  "aiwork-gate|bash|$ROOT/tests/test-aiwork-gate.sh"
 )
 
 # ── 名单漏网报告(2026-08-06)────────────────────────────────────────────

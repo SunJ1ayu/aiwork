@@ -50,7 +50,8 @@ Things that are not aiwork live with their own owners:
 - `bin/` executors and panel tools (below)
 - Machine data directory `tasks/` holds local task/brief files sent to reviewers (main-agent-authored)
 - Machine data directory `logs/` holds reviewer output, `.err` sidecars and arbitration records
-- `templates/` starter task files (`review-task.md`, `fix-task.md`)
+- `gate/` shared merge gate. A project connects by the steps in [gate/README.md](gate/README.md)
+- `templates/` starter task files (`review-task.md`, `fix-task.md`) and the two gate workflow templates
 - `tests/` regression oracles for this tooling itself
 - `track/` legacy convention and templates, retained for compatibility
 - `tracks/` existing historical records, retained unchanged
@@ -101,7 +102,7 @@ Things that are not aiwork live with their own owners:
   remains partial evidence and never counts as completed review coverage.
 - `bin/submimo-iso` — concurrency-safe submimo for two simultaneous
   driver agents (e.g. Claude + Codex).
-- `bin/review-pr PR --repo owner/name --leg LEG` — review a PR head and publish
+- `bin/review-pr PR [--repo owner/name] --leg LEG` — review a PR head and publish. `--repo` defaults to this checkout's origin; pass it when that origin is not a GitHub `owner/name`.
   an aiwork-review COMMENT review. 需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。
   Failed runs print the redacted last 40 stderr lines and retain diagnostics
   under the data path `logs/review-pr-failures/<run-id>/`, excluding the repository
