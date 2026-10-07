@@ -13,6 +13,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import shutil
 import tempfile
@@ -194,7 +195,8 @@ class ReviewPrTests(unittest.TestCase):
                     patch("urllib.request.urlopen", side_effect=fake_public_read), \
                     patch.object(self.review, "github", side_effect=fake_github), \
                     patch.object(self.review, "pr_state", return_value=pr) as state, \
-                    patch.object(self.review, "snapshot", return_value=(repo, "c" * 40, ["src/a.py"], "diff")) as snapshot, \
+                    patch.object(self.review, "snapshot", return_value=(
+                        repo, "c" * 40, ["src/a.py"], "diff", [], ["src/a.py"], 4)) as snapshot, \
                     patch.object(self.review, "load_result", return_value=result), \
                     patch.object(self.review, "review_report", return_value=report), \
                     patch.object(self.review.subprocess, "run", side_effect=fake_leg), \
@@ -440,17 +442,18 @@ class ReviewPrTests(unittest.TestCase):
             git('rm', '-q', 'gone.txt')
             git('commit', '-qm', 'delete')
             head = git('rev-parse', 'HEAD').stdout.strip()
-            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+            view = self.review.collect_review_diff(repo, base, head)
         pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
-        return pr, base, head, ['gone.txt'], diff, count, marker
+        return pr, base, head, view, count, marker
 
     def test_large_whole_file_deletion_reader_task_stays_within_limit(self):
-        pr, base, head, files, diff, count, marker = self.whole_file_deletion()
+        pr, base, head, (files, command_files, diff, deleted, raw_bytes), count, marker = self.whole_file_deletion()
         limit = 200 * 1024
-        self.assertGreater(len(diff.encode()), limit)
+        self.assertGreater(raw_bytes, limit)
         task = self.review.task_text(
             17, pr, base, files, diff, 'rules\n', '无',
-            rules_sha='d' * 40, repository='SunJ1ayu/aiwork', reader=True)
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork',
+            deleted=deleted, command_files=command_files, raw_bytes=raw_bytes, reader=True)
         self.assertLessEqual(len(task.encode()), limit)
         self.assertNotIn(marker, task)
         self.assertIn(f'（{count} 行）', task)
@@ -481,13 +484,15 @@ class ReviewPrTests(unittest.TestCase):
             git('rm', '-q', 'gone.txt')
             git('commit', '-qm', 'edit')
             head = git('rev-parse', 'HEAD').stdout.strip()
-            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+            full = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+            files, command_files, diff, deleted, raw_bytes = self.review.collect_review_diff(repo, base, head)
         limit = 200 * 1024
-        self.assertGreater(len(diff.encode()), limit)
+        self.assertGreater(len(full.encode()), limit)
         pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
         task = self.review.task_text(
-            17, pr, base, ['stay.txt', 'gone.txt'], diff, 'rules\n', '无',
-            rules_sha='d' * 40, repository='SunJ1ayu/aiwork', reader=True)
+            17, pr, base, files, diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork',
+            deleted=deleted, command_files=command_files, raw_bytes=raw_bytes, reader=True)
         self.assertIn('\n+changed\n', task)
         self.assertNotIn(marker, task)
         self.assertIn(f'（{count} 行）', task)
@@ -496,12 +501,13 @@ class ReviewPrTests(unittest.TestCase):
         self.assertLess(len(task.encode()), limit)
 
     def test_large_whole_file_deletion_chat_task_omits_content_without_reader_instructions(self):
-        pr, base, head, files, diff, count, marker = self.whole_file_deletion()
+        pr, base, head, (files, command_files, diff, deleted, raw_bytes), count, marker = self.whole_file_deletion()
         limit = 200 * 1024
-        self.assertGreater(len(diff.encode()), limit)
+        self.assertGreater(raw_bytes, limit)
         task = self.review.task_text(
             17, pr, base, files, diff, 'rules\n', '无',
-            rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork',
+            deleted=deleted, command_files=command_files, raw_bytes=raw_bytes)
         self.assertLessEqual(len(task.encode()), limit)
         self.assertNotIn(marker, task)
         self.assertIn(f'（{count} 行）', task)
@@ -528,29 +534,39 @@ class ReviewPrTests(unittest.TestCase):
             git('rm', '-q', 'gone.txt')
             git('commit', '-qm', 'edit')
             head = git('rev-parse', 'HEAD').stdout.strip()
-            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+            files, command_files, diff, deleted, raw_bytes = self.review.collect_review_diff(repo, base, head)
         pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
         task = self.review.task_text(
-            3, pr, base, ['stay.txt', 'gone.txt'], diff, 'rules\n', '无',
-            rules_sha='d' * 40, repository='SunJ1ayu/aiwork', reader=True)
+            3, pr, base, files, diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork',
+            deleted=deleted, command_files=command_files, raw_bytes=raw_bytes, reader=True)
         self.assertIn('\n+changed\n', task)
         self.assertNotIn(marker, task)
         self.assertIn('（1 行）', task)
         self.assertNotIn('不内联', task)
 
     def test_binary_whole_file_deletion_omits_patch_bytes(self):
-        diff = (
-            'diff --git a/a.bin b/a.bin\n'
-            'deleted file mode 100644\n'
-            'index 1111111..0000000\n'
-            'GIT binary patch\n'
-            'literal 5\n'
-            'AAAAA_SECRET_BYTES\n'
-        )
-        pr = {'head': {'sha': 'a' * 40, 'ref': 'feature'}, 'base': {'sha': 'b' * 40, 'ref': 'main'}}
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True,
+                                       capture_output=True)
+            git('init', '-q')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'a.bin').write_bytes(b'\0AAAAA_SECRET_BYTES\0')
+            git('add', '--', 'a.bin')
+            git('commit', '-qm', 'add')
+            base = git('rev-parse', 'HEAD').stdout.decode().strip()
+            git('rm', '-q', '--', 'a.bin')
+            git('commit', '-qm', 'delete')
+            head = git('rev-parse', 'HEAD').stdout.decode().strip()
+            files, command_files, diff, deleted, raw_bytes = self.review.collect_review_diff(repo, base, head)
+        pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
         task = self.review.task_text(
-            4, pr, 'c' * 40, ['a.bin'], diff, 'rules\n', '无',
-            rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
+            4, pr, base, files, diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork',
+            deleted=deleted, command_files=command_files, raw_bytes=raw_bytes)
         self.assertNotIn('AAAAA_SECRET_BYTES', task)
         self.assertIn('"a.bin"（二进制文件）', task)
 
@@ -571,14 +587,57 @@ class ReviewPrTests(unittest.TestCase):
             git('rm', '-q', '--', name)
             git('commit', '-qm', 'delete')
             head = git('rev-parse', 'HEAD').stdout.strip()
-            diff = git('diff', '--binary', '--no-ext-diff', base, head).stdout
+            files, command_files, diff, deleted, raw_bytes = self.review.collect_review_diff(repo, base, head)
         pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
         task = self.review.task_text(
-            5, pr, base, [name], diff, 'rules\n', '无',
-            rules_sha='d' * 40, repository='SunJ1ayu/aiwork', reader=True)
+            5, pr, base, files, diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork',
+            deleted=deleted, command_files=command_files, raw_bytes=raw_bytes, reader=True)
         self.assertNotIn('\n-one\n', task)
         self.assertNotIn('\n-two\n', task)
         self.assertIn(f'{json.dumps(name, ensure_ascii=False)}（2 行）', task)
+
+    def test_awkward_deleted_names_stay_whole_and_out_of_the_command_list(self):
+        bodies = {
+            'with space.txt': 'SPACE_BODY\nSPACE_BODY\n',
+            'tab\tname.txt': 'TAB_BODY\n',
+            '中文.txt': 'CJK_BODY\n',
+            'quote"name.txt': 'QUOTE_BODY\n',
+        }
+        keep_line = 'K' * 80
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True,
+                                       capture_output=True)
+            git('init', '-q')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            for name, body in bodies.items():
+                (repo / name).write_text(body)
+            (repo / 'keep.txt').write_text(keep_line + '\n')
+            git('add', '-A')
+            git('commit', '-qm', 'add')
+            base = git('rev-parse', 'HEAD').stdout.decode().strip()
+            for name in bodies:
+                git('rm', '-q', '--', name)
+            (repo / 'keep.txt').write_text((keep_line + '\n') * 4000)
+            git('add', '-A')
+            git('commit', '-qm', 'edit')
+            head = git('rev-parse', 'HEAD').stdout.decode().strip()
+            files, command_files, diff, deleted, raw_bytes = self.review.collect_review_diff(repo, base, head)
+        self.assertGreater(len(diff.encode()), 200 * 1024)
+        pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
+        task = self.review.task_text(
+            8, pr, base, files, diff, 'rules\n', '无',
+            rules_sha='d' * 40, repository='SunJ1ayu/aiwork',
+            deleted=deleted, command_files=command_files, raw_bytes=raw_bytes, reader=True)
+        for name, body in bodies.items():
+            self.assertIn(f'{json.dumps(name, ensure_ascii=False)}（{body.count(chr(10))} 行）', task)
+            self.assertNotIn(body.split('\n', 1)[0], task)
+            self.assertNotIn(f'-- {shlex.quote(name)}', task)
+        self.assertIn('-- keep.txt', task)
+        self.assertNotIn('"with"（', task)
 
     def test_task_rules_are_aiwork_main_verbatim_with_commit(self):
         rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", project_rules=True)
@@ -699,11 +758,16 @@ class ReviewPrTests(unittest.TestCase):
                 return "patch"
             return ""
 
+        def fake_subprocess(command, **kwargs):
+            if "--numstat" in command:
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+            return subprocess.CompletedProcess(command, 0, b"src/a.py\0", b"")
+
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.object(self.review, "run", side_effect=fake_git), \
-                patch.object(self.review.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"src/a.py\0", b"")):
-            _, base, files, _ = self.review.snapshot(FAKE_TOKEN, pr, Path(temporary),
-                                                   repository="SunJ1ayu/aiwork")
+                patch.object(self.review.subprocess, "run", side_effect=fake_subprocess):
+            _, base, files, *_rest = self.review.snapshot(FAKE_TOKEN, pr, Path(temporary),
+                                                         repository="SunJ1ayu/aiwork")
         fetch = next(command for command in commands if "fetch" in command)
         self.assertIn("https://github.com/SunJ1ayu/aiwork.git", fetch)
         self.assertNotIn("https://github.com/SunJ1ayu/OpenDesign.git", fetch)

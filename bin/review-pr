@@ -195,7 +195,8 @@ def check_current_head(expected: str, current: dict) -> None:
         raise ReviewError(f"PR head changed since review of {expected}; no review posted, rerun")
 
 
-def snapshot(token: str, pr: dict, directory: Path, *, repository: str) -> tuple[Path, str, list[str], str]:
+def snapshot(token: str, pr: dict, directory: Path, *, repository: str
+             ) -> tuple[Path, str, list[str], str, list[tuple[str, int | None]], list[str], int]:
     repo = directory / "repo"
     repo.mkdir()
     run(["git", "init", "-q", str(repo)])
@@ -218,15 +219,12 @@ def snapshot(token: str, pr: dict, directory: Path, *, repository: str) -> tuple
     if "160000 " in run(["git", "-C", str(repo), "ls-files", "--stage"]):
         raise ReviewError("snapshot contains submodules; full view cannot be verified")
     merge_base = run(["git", "-C", str(repo), "merge-base", base, head]).strip()
-    raw_names = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", "-z",
-                                merge_base, head], capture_output=True, check=True).stdout
-    files = [os.fsdecode(item) for item in raw_names.split(b"\0") if item]
+    files, command_files, diff, deleted, raw_bytes = collect_review_diff(repo, merge_base, head)
     if not files:
         raise ReviewError("PR has no changed files relative to merge base")
-    diff = run(["git", "-C", str(repo), "diff", "--binary", "--no-ext-diff", merge_base, head])
-    if not diff:
+    if not diff and not deleted:
         raise ReviewError("PR diff is empty")
-    return repo, merge_base, files, diff
+    return repo, merge_base, files, diff, deleted, command_files, raw_bytes
 
 
 def main_document(repo: Path, path: str, *, required: bool = True) -> str:
@@ -275,91 +273,46 @@ def aiwork_main_rules() -> tuple[str, str]:
     return commit, raw.decode("utf-8")
 
 
-def _decode_git_token(token: str) -> str:
-    if len(token) < 2 or token[0] != '"' or token[-1] != '"':
-        return token
-    raw = token[1:-1]
-    out = bytearray()
-    index = 0
-    while index < len(raw):
-        if raw[index] != '\\':
-            out.extend(raw[index].encode('utf-8'))
-            index += 1
-            continue
-        if index + 1 >= len(raw):
-            break
-        nxt = raw[index + 1]
-        if nxt in '01234567':
-            octal = raw[index + 1:index + 4]
-            if len(octal) == 3 and all(char in '01234567' for char in octal):
-                out.append(int(octal, 8))
-                index += 4
-                continue
-        mapping = {'a': 7, 'b': 8, 't': 9, 'n': 10, 'v': 11, 'f': 12, 'r': 13, '"': 34, '\\': 92}
-        if nxt in mapping:
-            out.append(mapping[nxt])
-            index += 2
-            continue
-        out.append(ord(nxt))
-        index += 2
-    return out.decode('utf-8', 'surrogateescape')
+def _git_bytes(repo: Path, *args: str) -> bytes:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True).stdout
 
 
-def _strip_diff_prefix(path: str) -> str:
-    if path.startswith('a/') or path.startswith('b/'):
-        return path[2:]
-    return path
+def _nul_paths(blob: bytes) -> list[str]:
+    return [os.fsdecode(item) for item in blob.split(b"\0") if item]
 
 
-def _take_git_path(payload: str) -> tuple[str, str]:
-    if payload.startswith('"'):
-        index = 1
-        while index < len(payload):
-            if payload[index] == '\\':
-                index += 2
-                continue
-            if payload[index] == '"':
-                return _decode_git_token(payload[:index + 1]), payload[index + 1:].lstrip()
-            index += 1
-    token, _, rest = payload.partition(' ')
-    return token, rest
-
-
-def _deleted_path(piece: str, header: str) -> str:
-    for line in header.splitlines():
-        if line.startswith('--- '):
-            token, _rest = _take_git_path(line[4:])
-            return _strip_diff_prefix(token)
-    a_path, _b_path = _take_git_path(piece.splitlines()[0][len('diff --git '):])
-    return _strip_diff_prefix(a_path)
-
-
-def _deleted_line_count(piece: str) -> int | None:
-    if '\nGIT binary patch\n' in piece or re.search(r'(?m)^Binary files ', piece):
-        return None
-    total = 0
-    found = False
-    for match in re.finditer(r'(?m)^@@ -\d+(?:,(\d+))? \+\d+(?:,\d+)? @@', piece):
-        found = True
-        total += int(match.group(1) or '1')
-    return total if found else 0
-
-
-def partition_whole_file_deletions(diff: str) -> tuple[str, list[tuple[str, int | None]]]:
-    """Drop whole-file deletion bodies. Line counts stay; file bytes do not."""
-    pieces = re.split(r'(?m)(?=^diff --git )', diff)
-    kept: list[str] = []
+def _deleted_numstat(blob: bytes) -> list[tuple[str, int | None]]:
+    """numstat -z records are added, removed, path, NUL. Split twice so a tab in the path stays."""
     deleted: list[tuple[str, int | None]] = []
-    for piece in pieces:
-        if not piece.startswith('diff --git '):
-            kept.append(piece)
+    for record in blob.split(b"\0"):
+        if not record:
             continue
-        header = piece.split('\n@@', 1)[0].split('\nGIT binary patch', 1)[0].split('\nBinary files ', 1)[0]
-        if not re.search(r'(?m)^deleted file mode ', header):
-            kept.append(piece)
-            continue
-        deleted.append((_deleted_path(piece, header), _deleted_line_count(piece)))
-    return ''.join(kept), deleted
+        _added, removed, path = record.split(b"\t", 2)
+        count = None if removed == b"-" else int(removed)
+        deleted.append((os.fsdecode(path), count))
+    return deleted
+
+
+def collect_review_diff(repo: Path, merge_base: str, head: str
+                        ) -> tuple[list[str], list[str], str, list[tuple[str, int | None]], int]:
+    """Paths, non-deleted paths, diff without whole-file deletions, deletions, and the original size.
+
+    Deleted paths and line counts come from git -z numstat. The remaining diff and the
+    command-list names exclude deletions with --diff-filter=d. Nothing parses a diff header.
+    """
+    files = _nul_paths(_git_bytes(repo, "diff", "--name-only", "-z", merge_base, head))
+    command_files = _nul_paths(_git_bytes(
+        repo, "diff", "--name-only", "-z", "--diff-filter=d", merge_base, head))
+    diff = run(["git", "-C", str(repo), "diff", "--binary", "--no-ext-diff",
+                "--diff-filter=d", merge_base, head])
+    deleted = _deleted_numstat(_git_bytes(
+        repo, "diff", "--diff-filter=D", "--numstat", "-z", merge_base, head))
+    if deleted and not diff.strip():
+        raw_bytes = len(_git_bytes(
+            repo, "diff", "--binary", "--no-ext-diff", "--diff-filter=D", merge_base, head))
+    else:
+        raw_bytes = len(diff.encode("utf-8"))
+    return files, command_files, diff, deleted, raw_bytes
 
 
 def _deletion_section(deleted: list[tuple[str, int | None]]) -> str:
@@ -382,19 +335,19 @@ def _diff_commands(merge_base: str, head: str, names: list[str]) -> str:
 
 def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
               review_rules: str, risks: str, *, rules_sha: str, repository: str,
-              reader: bool = False) -> str:
+              deleted: list[tuple[str, int | None]], command_files: list[str],
+              raw_bytes: int, reader: bool = False) -> str:
     rules_repository, rules_path = REVIEW_RULES_SOURCE
-    inline, deleted = partition_whole_file_deletions(diff)
-    raw_bytes = len(diff.encode('utf-8'))
+    inline = diff
     inline_bytes = len(inline.encode('utf-8'))
-    deleted_paths = {path for path, _count in deleted}
-    command_files: list[str] = []
+    ordered: list[str] = []
     seen: set[str] = set()
-    for name in files:
-        if name in deleted_paths or name in seen:
+    for name in command_files:
+        if name in seen:
             continue
-        command_files.append(name)
+        ordered.append(name)
         seen.add(name)
+    command_files = ordered
     omit_inline = reader and inline_bytes > READER_INLINE_DIFF_BYTES
     head = pr['head']['sha']
     file_list = "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
@@ -531,7 +484,8 @@ def main() -> int:
             directory = Path(temporary)
             run_id = f"pr-{repository.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}-{directory.name.removeprefix('aiwork-review-pr-')}"
             try:
-                repo, merge_base, files, diff = snapshot(token, pr, directory, repository=repository)
+                repo, merge_base, files, diff, deleted, command_files, raw_bytes = snapshot(
+                    token, pr, directory, repository=repository)
                 rules_sha, review_rules = aiwork_main_rules()
                 risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
                 task = directory / "task.md"
@@ -539,7 +493,9 @@ def main() -> int:
                 def write_task(reader: bool) -> None:
                     task.write_text(task_text(args.pr, pr, merge_base, files, diff,
                                               review_rules, risks, rules_sha=rules_sha,
-                                              repository=repository, reader=reader), encoding="utf-8")
+                                              repository=repository, deleted=deleted,
+                                              command_files=command_files, raw_bytes=raw_bytes,
+                                              reader=reader), encoding="utf-8")
 
                 requested_reader = args.leg not in CHAT_LEGS
                 write_task(requested_reader)
