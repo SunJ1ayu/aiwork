@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 关卡逻辑（假事件、假 API）和接入 workflow 的形状。从仓库内容推导 policy 清单的用例留在 OpenDesign。
+# 关卡逻辑（假事件、假 API）、接入 workflow 的形状，以及从本仓库推出的判卷面 / high 清单。
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
