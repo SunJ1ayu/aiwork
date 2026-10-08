@@ -750,6 +750,14 @@ grep -q -F -- "$3" "$clone/$4"
             with self.assertRaisesRegex(self.review.ReviewError, "did not write the report file"):
                 self.review.review_report(report)
 
+    def test_report_file_replaces_undecodable_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.md"
+            report.write_bytes("Findings.\n\nConclusion: PASS\n".encode() + b"\xff")
+            text = self.review.review_report(report)
+            self.assertIn("Conclusion: PASS", text)
+            self.assertIn("\ufffd", text)
+
     def test_report_file_is_the_published_prose_verbatim(self):
         last = "Findings.\n\nConclusion: PASS"
         with tempfile.TemporaryDirectory() as temporary:

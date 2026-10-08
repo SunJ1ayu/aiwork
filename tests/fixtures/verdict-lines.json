@@ -21,5 +21,9 @@
   {"line": "**Conclusion:** Pass", "verdict": null},
   {"line": "# Conclusion: PASS", "verdict": null},
   {"line": "## 过程", "verdict": null},
-  {"line": "评审提到 Conclusion: BLOCK 的写法(不在行首)", "verdict": null}
+  {"line": "评审提到 Conclusion: BLOCK 的写法(不在行首)", "verdict": null},
+  {"text": "Conclusion: BLOCK\nConclusion: PASS", "lines": ["BLOCK", "PASS"]},
+  {"text": "Conclusion: BLOCK\r\nConclusion: PASS", "lines": ["BLOCK", "PASS"]},
+  {"text": "Conclusion: BLOCK\rConclusion: PASS", "lines": ["BLOCK", "PASS"]},
+  {"text": "Conclusion: BLOCK\u2028Conclusion: PASS", "lines": ["BLOCK", "PASS"]}
 ]

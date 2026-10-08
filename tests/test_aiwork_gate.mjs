@@ -594,8 +594,9 @@ test("R29 正文结论行和结论块不一样(哪怕不是写 BLOCK)→ 按 BLO
 test("结论行规则和 Python 共用 tests/fixtures/verdict-lines.json", () => {
   const cases = JSON.parse(readFileSync(new URL("./fixtures/verdict-lines.json", import.meta.url), "utf8"));
   for (const item of cases) {
-    const got = conclusionLines(item.line);
-    assert.deepEqual(got, item.verdict ? [item.verdict] : [], item.line);
+    const text = "text" in item ? item.text : item.line;
+    const want = "lines" in item ? item.lines : (item.verdict ? [item.verdict] : []);
+    assert.deepEqual(conclusionLines(text), want, JSON.stringify(text));
   }
 });
 

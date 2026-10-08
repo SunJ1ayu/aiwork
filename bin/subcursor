@@ -104,10 +104,6 @@ EOF
 if [[ "$MODE" == review ]]; then
   cat >> "$PROMPT_FILE" <<'EOF'
 Review the task. Give findings with severity, file:line evidence and reasoning.
-Choose exactly one:
-Conclusion: PASS
-Conclusion: BLOCK
-Conclusion: NEEDS_MORE_INFO
 EOF
 else
   cat >> "$PROMPT_FILE" <<'EOF'

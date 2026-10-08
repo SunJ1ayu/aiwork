@@ -202,8 +202,6 @@ do not intentionally edit source files. Do not push, merge, install dependencies
 run migrations, access production systems, or change credentials.
 
 Report findings with file:line references and a severity each.
-The verdict line must be exactly this form:
-Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 
 --- REVIEW TASK ---
 $(cat "$TASK_FILE")"

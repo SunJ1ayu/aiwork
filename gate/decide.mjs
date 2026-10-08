@@ -20,9 +20,18 @@ const VERDICTS = new Set(["PASS", "BLOCK", "NEEDS_MORE_INFO", "UNKNOWN"]);
 const COMPLETENESS = new Set(["complete", "partial", "none"]);
 const FAMILY_RE = /^[a-z][a-z0-9-]*$/;
 // 和 bin/_review_result.py 的 VERDICT_LINE_RE 是同一条规则:独占一行的 Conclusion / Verdict / 结论,
-// 后面只跟一个结论词。用例表在 tests/fixtures/verdict-lines.json,改一边另一边的测试会红。
+// 后面只跟一个结论词。切行和 Python str.splitlines() 同一组换行(\r\n 算一次,结尾的换行不另起空行)。
+// 用例表在 tests/fixtures/verdict-lines.json,改一边另一边的测试会红。
 const VERDICT_WORDS = { "通过": "PASS", "不通过": "BLOCK", "阻断": "BLOCK", "需要更多信息": "NEEDS_MORE_INFO" };
 const VERDICT_LINE_RE = /^[\t ]*[*_`]*[\t ]*(?:Conclusion|Verdict|结论)[\t ]*[：:][\t ]*(PASS|BLOCK|NEEDS_MORE_INFO|NMI|通过|不通过|阻断|需要更多信息)(?:[\t ]*[(（][\t ]*(PASS|BLOCK|NEEDS_MORE_INFO|NMI)[\t ]*[)）])?[\t ]*[*_`]*[\t ]*$/iu;
+const LINE_BREAK = /\r\n|[\n\v\f\r\x1c\x1d\x1e\x85\u2028\u2029]/;
+
+function splitLines(text) {
+  if (text === "") return [];
+  const parts = text.split(LINE_BREAK);
+  if (parts.length > 0 && parts[parts.length - 1] === "") parts.pop();
+  return parts;
+}
 
 function canonicalVerdict(word) {
   const value = VERDICT_WORDS[word] || String(word).toUpperCase();
@@ -31,7 +40,7 @@ function canonicalVerdict(word) {
 
 export function conclusionLines(body) {
   const found = [];
-  for (const line of String(body ?? "").split(/\r?\n/)) {
+  for (const line of splitLines(String(body ?? ""))) {
     const match = line.match(VERDICT_LINE_RE);
     if (!match) continue;
     const value = canonicalVerdict(match[1]);

@@ -173,9 +173,12 @@ class ReliabilityTests(unittest.TestCase):
         task = self.review.task_text(1, pr, self.base, ['file'], padded,
                                      'Trusted rules.', '无', rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
         requirement = self.review.CONCLUSION_REQUIREMENT
-        tail = '\n'.join(task.splitlines()[-3:])
-        self.assertIn(requirement, tail)
+        self.assertTrue(task.endswith(requirement + "\n"))
         self.assertGreater(task.rfind(requirement), task.rfind('```'))
+        self.assertEqual(
+            [line for line in requirement.splitlines() if line.startswith("Conclusion:")],
+            ["Conclusion: PASS", "Conclusion: BLOCK", "Conclusion: NEEDS_MORE_INFO"],
+        )
 
     def whole_file_deletion_view(self):
         marker = 'DELETED_PAYLOAD_9f3c'
@@ -271,7 +274,8 @@ class ReliabilityTests(unittest.TestCase):
         rc, _, posted, _, stderr = self.run_review('subkimi', fake_attempts=[{'write_report': False}])
         self.assertEqual(rc, 1, stderr)
         self.assertEqual(posted, [])
-        self.assertIn('did not write the report file', stderr)
+        self.assertIn('no_verdict', stderr)
+        self.assertIn('verdict=UNKNOWN', stderr)
 
     def test_rate_limit_without_a_report_names_the_failure(self):
         rc, _, posted, _, stderr = self.run_review(

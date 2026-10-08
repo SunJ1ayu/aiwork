@@ -31,7 +31,11 @@ ORIGIN_REPO = re.compile(
 )
 SHA = re.compile(r"^[0-9a-f]{40}$")
 CONCLUSION_REQUIREMENT = (
-    "你的最后一条消息就是发布出去的评审：要写完整的报告，并以独占一行的 Conclusion 结束。"
+    "你的最后一条消息就是发布出去的评审：要写完整的报告。"
+    "结尾从下面三行里选一行，独占一行写上：\n"
+    "Conclusion: PASS\n"
+    "Conclusion: BLOCK\n"
+    "Conclusion: NEEDS_MORE_INFO"
 )
 # A repository reader past this size reads the complete diff from the snapshot
 # file instead of pasting it. The review is of the complete diff, deletions included.
@@ -471,7 +475,7 @@ def review_report(report: Path) -> str:
     # whole process; publication never reconstructs a report from that text.
     if not report.is_file():
         raise ReviewError(f"review leg did not write the report file {report}; refusing to publish")
-    text = report.read_text(encoding="utf-8")
+    text = report.read_text(encoding="utf-8", errors="replace")
     if not text.strip():
         raise ReviewError(f"review leg wrote an empty report file {report}; refusing to publish")
     return text
@@ -492,8 +496,7 @@ def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, director
                "--log", str(log), "--diagnostic", str(diagnostic)]
     if facts.is_file():
         command += ["--facts", str(facts)]
-    if report.is_file():
-        command += ["--report", str(report)]
+    command += ["--report", str(report)]
     if frozen_model is not None:
         command += ["--expected-model", frozen_model]
     run(command)
