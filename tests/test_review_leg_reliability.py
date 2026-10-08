@@ -273,6 +273,18 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual(posted, [])
         self.assertIn('did not write the report file', stderr)
 
+    def test_rate_limit_without_a_report_names_the_failure(self):
+        rc, _, posted, _, stderr = self.run_review(
+            'subkimi', fake_attempts=[{
+                'failure': 'rate_limit', 'exit': 1, 'write_report': False,
+                'log': '# fixture review log\n',
+            }])
+        self.assertEqual(rc, 1, stderr)
+        self.assertEqual(posted, [])
+        self.assertEqual(len(self.leg_calls), 1)
+        self.assertIn('rate_limit', stderr)
+        self.assertNotIn('did not write the report file', stderr)
+
     def test_published_body_is_the_report_file_not_the_leg_log(self):
         last = 'Findings.\n\nConclusion: PASS'
         log = ('# fixture review log\n\n## 过程\n'

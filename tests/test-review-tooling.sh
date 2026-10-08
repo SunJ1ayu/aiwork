@@ -873,7 +873,7 @@ printf 'repo=%s\ncwd=%s\nwork=%s\nsource=%s\n' "$target" "$PWD" "$work" "$source
 printf 'model=%s\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" >> "$PWN_OUT"
 printf 'mimocfg=%s\n' "${MIMOCODE_CONFIG_CONTENT:-}" >> "$PWN_OUT"
 # 每条腿只认自己命令行的最后一条消息。claude 是 result 事件，kimi 是 role=assistant，
-# mimo review 是 --format json 的最后一条 assistant 文本。
+# mimo review 是 --format json 里最后一条 text 事件所属消息的正文。
 case "$(basename "$0")" in
   claude)
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
@@ -884,8 +884,9 @@ case "$(basename "$0")" in
     ;;
   *)
     if [[ " $* " == *" json "* ]]; then
-      echo '{"type":"message.updated","properties":{"info":{"id":"m1","role":"assistant"}}}'
-      echo '{"type":"message.part.updated","properties":{"part":{"id":"p1","messageID":"m1","type":"text","text":"stub\nConclusion: PASS"}}}'
+      echo '{"type":"step_start","timestamp":1,"sessionID":"ses_fixture","part":{"id":"prt_fixture_start","messageID":"msg_fixture","sessionID":"ses_fixture","snapshot":"fixture-snapshot","type":"step-start"}}'
+      echo '{"type":"text","timestamp":2,"sessionID":"ses_fixture","part":{"id":"prt_fixture_text","messageID":"msg_fixture","sessionID":"ses_fixture","type":"text","text":"stub\nConclusion: PASS","time":{"start":1,"end":2}}}'
+      echo '{"type":"step_finish","timestamp":3,"sessionID":"ses_fixture","part":{"id":"prt_fixture_finish","reason":"stop","snapshot":"fixture-snapshot","messageID":"msg_fixture","sessionID":"ses_fixture","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}'
     else
       echo "Conclusion: PASS"
     fi
@@ -1066,8 +1067,9 @@ case "$(basename "$0")" in
     ;;
   *)
     if [[ " $* " == *" json "* ]]; then
-      echo '{"type":"message.updated","properties":{"info":{"id":"m1","role":"assistant"}}}'
-      echo '{"type":"message.part.updated","properties":{"part":{"id":"p1","messageID":"m1","type":"text","text":"stub\nConclusion: PASS"}}}'
+      echo '{"type":"step_start","timestamp":1,"sessionID":"ses_fixture","part":{"id":"prt_fixture_start","messageID":"msg_fixture","sessionID":"ses_fixture","snapshot":"fixture-snapshot","type":"step-start"}}'
+      echo '{"type":"text","timestamp":2,"sessionID":"ses_fixture","part":{"id":"prt_fixture_text","messageID":"msg_fixture","sessionID":"ses_fixture","type":"text","text":"stub\nConclusion: PASS","time":{"start":1,"end":2}}}'
+      echo '{"type":"step_finish","timestamp":3,"sessionID":"ses_fixture","part":{"id":"prt_fixture_finish","reason":"stop","snapshot":"fixture-snapshot","messageID":"msg_fixture","sessionID":"ses_fixture","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}'
     else
       echo "Conclusion: PASS"
     fi
@@ -1646,26 +1648,10 @@ print(json.dumps({"role":"meta","type":"session.resume_hint","content":"To resum
 PY
   cat > "$b/mimo" <<'PY'
 #!/usr/bin/env python3
-import json, os, sys
+import os, sys
 if "--format" not in sys.argv or sys.argv[sys.argv.index("--format")+1] != "json":
     raise SystemExit("review must request --format json")
-noise = ("## 过程\n\n```python\n# 注释\nconclusion: pending ? null : value\n```\n\n"
-         "mimo> \n  → Bash sed -n '1,40p' gate/decide.mjs\n# 注释\necho hi")
-last = open(os.environ["FINAL_LAST"], encoding="utf-8").read()
-def emit(obj):
-    print(json.dumps(obj, ensure_ascii=False))
-emit({"type":"message.updated","properties":{"info":{"id":"m1","role":"assistant"}}})
-emit({"type":"message.part.updated","properties":{"part":{
-    "id":"p1","messageID":"m1","type":"text","text":noise}}})
-emit({"type":"message.part.updated","properties":{"part":{
-    "id":"p2","messageID":"m1","type":"tool","tool":"bash"}}})
-emit({"type":"message.updated","properties":{"info":{"id":"m2","role":"assistant"}}})
-emit({"type":"message.part.updated","properties":{"part":{
-    "id":"p3","messageID":"m2","type":"text","text":"synthetic note","synthetic":True}}})
-emit({"type":"message.part.updated","properties":{"part":{
-    "id":"p4","messageID":"m2","type":"text","text":last}}})
-emit({"type":"session.idle","properties":{}})
-print("Conclusion: BLOCK")
+sys.stdout.write(open(os.environ["MIMO_JSON_FIXTURE"], encoding="utf-8").read())
 PY
   chmod +x "$b/claude" "$b/kimi" "$b/mimo"
 
@@ -1708,15 +1694,33 @@ PY
   check "V46: subkimi 裁决来自报告而不是过程里的 BLOCK" \
     $(python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); sys.exit(0 if f["verdict"]=="PASS" else 1)' "$d/kimi.facts.json"; echo $?)
 
-  env PATH="$b:$PATH" FINAL_LAST="$d/last.txt" MIMO_REVIEW_HOME="$d/mimo-home" \
+  # 样本从真实 mimo run --format json 日志裁出：几条 step_start / tool_use / text /
+  # step_finish，会话号换成占位符，正文缩短。最后一条消息的 text 部分先出现一次
+  # 旧快照，再用同 part.id 的后一次内容和后一个 part 拼成报告。
+  printf '%s' $'Shared fixture checked.\n\nConclusion: PASS' > "$d/mimo-want.txt"
+  env PATH="$b:$PATH" MIMO_JSON_FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/mimo-run-json.jsonl" \
+    MIMO_REVIEW_HOME="$d/mimo-home" \
     AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
     AIWORK_REVIEW_REPORT_PATH="$d/mimo-report.md" \
     bash "$b/submimo" review "$d/t.md" "$d/mimo.log" "$d/repo" >/dev/null 2>"$d/mimo.err"; rc=$?
   check "V46: submimo 退出 0" $([[ $rc -eq 0 ]]; echo $?)
-  cmp -s "$d/mimo-report.md" "$d/last.txt"; check "V46: submimo 报告与最后一条消息一字不差" $?
-  check "V46: submimo 发布正文只有报告，过程留在日志" \
-    $(_published "$d/mimo-report.md" "$d/mimo.log"; echo $?)
-  check "V46: submimo 裁决来自报告而不是过程里的 BLOCK" \
+  cmp -s "$d/mimo-report.md" "$d/mimo-want.txt"; check "V46: submimo 报告是最后一条消息按真实事件拼出的正文" $?
+  python3 - "$d/mimo-report.md" "$d/mimo.log" <<'PY'
+import pathlib, sys
+paths = [pathlib.Path(p) for p in sys.argv[1:]]
+if not all(path.is_file() for path in paths):
+    raise SystemExit(1)
+report, log = (path.read_text(encoding="utf-8") for path in paths)
+kept_out = (
+    "All suites pass.",
+    "python: all 23 cases checked",
+    "earlier snapshot",
+)
+ok = all(piece not in report and piece in log for piece in kept_out)
+raise SystemExit(0 if ok else 1)
+PY
+  check "V46: submimo 发布正文只有报告，过程和旧快照留在日志" $?
+  check "V46: submimo 裁决来自报告而不是更早的消息" \
     $(python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); sys.exit(0 if f["verdict"]=="PASS" else 1)' "$d/mimo.facts.json"; echo $?)
 
   rm -rf "$d"

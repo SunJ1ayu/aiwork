@@ -324,6 +324,9 @@ if [[ -z "$ORACLE_CMD" ]]; then
     python3 - "$LOG_FILE" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
 import json, pathlib, sys
 log, local, dest = sys.argv[1:]
+# `mimo run --format json` emits step_start / text / tool_use / step_finish.
+# The report is every text part of the last text event's message, in the order
+# each part.id first appeared; a repeated part.id keeps its later text.
 last_id = None
 parts, order = {}, {}
 for line in pathlib.Path(log).read_text(encoding="utf-8", errors="replace").splitlines():
@@ -334,24 +337,18 @@ for line in pathlib.Path(log).read_text(encoding="utf-8", errors="replace").spli
         event = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if not isinstance(event, dict):
+    if not isinstance(event, dict) or event.get("type") != "text":
         continue
-    props = event.get("properties") or {}
-    if event.get("type") == "message.updated":
-        info = props.get("info") or {}
-        mid = info.get("id")
-        if info.get("role") == "assistant" and isinstance(mid, str):
-            last_id = mid
-    elif event.get("type") == "message.part.updated":
-        part = props.get("part") or {}
-        if part.get("type") != "text" or part.get("synthetic") is True or part.get("ignored") is True:
-            continue
-        mid, pid, text = part.get("messageID"), part.get("id"), part.get("text")
-        if not isinstance(mid, str) or not isinstance(pid, str) or not isinstance(text, str):
-            continue
-        if pid not in order.setdefault(mid, []):
-            order[mid].append(pid)
-        parts.setdefault(mid, {})[pid] = text
+    part = event.get("part")
+    if not isinstance(part, dict):
+        continue
+    mid, pid, text = part.get("messageID"), part.get("id"), part.get("text")
+    if not isinstance(mid, str) or not isinstance(pid, str) or not isinstance(text, str):
+        continue
+    last_id = mid
+    if pid not in order.setdefault(mid, []):
+        order[mid].append(pid)
+    parts.setdefault(mid, {})[pid] = text
 if last_id is None or last_id not in parts:
     raise SystemExit(0)
 body = "".join(parts[last_id][pid] for pid in order[last_id])

@@ -18,7 +18,7 @@ import tempfile
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _review_result import leg_identity, load_result, normalize_verdict, sha256_file
+from _review_result import leg_identity, load_result, sha256_file
 from _aiwork_config import ConfigError, data_path, model as configured_model
 from _secret_shapes import redact_shapes
 
@@ -429,10 +429,12 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
 
 def publishable_model(result: dict) -> str:
     process = result["process"]
-    if process != {"state": "exited", "exit_code": 0}:
-        raise ReviewError(f"review leg process failed: {process}")
+    # A classified failure (rate limit, timeout, auth) is the reason, including
+    # when the process exit is non-zero. The exit code alone hides that reason.
     if result["verdict"] == "UNKNOWN" or result["failure_kind"] != "none":
         raise ReviewError(f"review leg failed: {result['failure_kind']}; verdict={result['verdict']}")
+    if process != {"state": "exited", "exit_code": 0}:
+        raise ReviewError(f"review leg process failed: {process}")
     if result["evidence"]["completeness"] == "none" or result["view"]["delivery_state"] == "none":
         raise ReviewError("review leg supplied no evidence or view")
     model = result["model"]
@@ -559,12 +561,8 @@ def main() -> int:
                         attempt_directory.mkdir()
                         continue
                     break
-                report = review_report(report_path)
-                result = dict(result)
-                result["verdict"] = normalize_verdict(report)
-                if result["verdict"] == "UNKNOWN" and result["failure_kind"] == "none":
-                    result["failure_kind"] = "no_verdict"
                 model = publishable_model(result)
+                report = review_report(report_path)
                 identity = leg_identity(selected_leg, model)
                 if identity is None or identity[0] != family or not model.startswith(identity[1]):
                     raise ReviewError("review leg model does not match selected family")
