@@ -10,7 +10,7 @@
 # 而 panel 照常出结论 —— **比"腿可能写个文件"危险得多**。
 #
 # 这里走第三条路:**腿的能力一个字不改,把仓变成只读的。**
-# 真探针(tracks/repo-write-audit/evidence/)测过:只读工作树上
+# 真探针(旧记录在 git 历史里)测过:只读工作树上
 # `git status/diff/log/show/rev-parse/blame/diff HEAD~1` 七条全 rc=0,脏改动照常看得见,
 # 与可写状态逐条对照**差异为零**;而 `touch` / `git diff --output=` / 改 `tests/` 全部失败。
 #

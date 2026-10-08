@@ -96,8 +96,8 @@ chmod +x "$STUB"
 
 make_fixture() {  # make_fixture <root>
   local d="$1" b="$1/bin" spec name family agent chat switch f
-  mkdir -p "$b" "$d/repo/tracks/current" "$d/state" "$d/tasks" "$d/modes" "$d/runs"
-  for f in panel-slice _panel_slice.py panel-review _panel-roster-lib.sh aiwork-config _aiwork_config.py _review_result.py track-record; do
+  mkdir -p "$b" "$d/repo" "$d/state" "$d/tasks" "$d/modes" "$d/runs"
+  for f in panel-slice _panel_slice.py panel-review _panel-roster-lib.sh aiwork-config _aiwork_config.py _review_result.py; do
     [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$b/"
   done
   # 桩名单从两张表长出来(底座腿 + 聊天腿两种二进制都铺)。
@@ -105,17 +105,6 @@ make_fixture() {  # make_fixture <root>
     IFS='|' read -r name family agent chat switch <<<"$spec"
     for f in $agent $chat; do cp "$STUB" "$b/$f"; chmod +x "$b/$f"; done
   done
-  cat > "$d/repo/tracks/current/decision.json" <<'EOF'
-{
-  "schema_version": 1,
-  "track": "current",
-  "impact": {"level": "high", "factors": []},
-  "design": {"uncertainty": "low", "premise_attack": {"status": "not_required", "evidence": []}},
-  "execution_plan": {"adapter": "main", "model": null},
-  "outcome": {"verdict": null}
-}
-EOF
-  printf '# Verify\n' > "$d/repo/tracks/current/verify.md"
   ( cd "$d/repo" && git init -q -b main && git config user.email t@t && git config user.name t \
     && printf 'x\n' > app.txt && git add -A && git commit -qm init )
   printf 'my own review first\n' > "$d/tasks/manifest-my-review.md"
@@ -226,8 +215,8 @@ PY
 done < <(find "$run" -name '*.result.json' -print0 2>/dev/null)
 check "S1: 每份腿结果契约版本=2,旧覆盖谓词判否且理由恰好是 review_contract_unsupported($_nres 份)" \
   $([[ $_contract -eq 0 && $_nres -eq $((P+1)) ]]; echo $?)
-check "S1: fixture 仓的 typed track 下零 observation(切片结果不进归档覆盖)" \
-  $([[ $s1rc -eq 0 && -z "$(find "$d/repo/tracks" -path '*/observations/*' -type f 2>/dev/null)" ]]; echo $?)
+check "S1: 切片不在仓里建 tracks" \
+  $([[ $s1rc -eq 0 && ! -e "$d/repo/tracks" ]]; echo $?)
 check "S1: 普通轮换游标没被切片派发推动" $([[ $s1rc -eq 0 && "$(cat "$d/state/cursor" 2>/dev/null)" == 3 ]]; echo $?)
 status_json "$d" "$run"
 jq_py "$d/st.json" "s['run_state'] == 'clean' and s['budget']['initial_sessions'] == $((P+1)) and s['budget']['initial_used'] == $((P+1)) and s['budget']['extra_used'] == 0 and all(i['covered'] for i in s['items']) and all(a['state'] == 'done' for i in s['items'] for a in i['attempts'])"
@@ -511,17 +500,15 @@ pr() {  # pr <prefix-leaf> <panel-review args...>
 }
 mkdir -p "$d/p"
 for _leaf in a b c g; do mkdir -p "$d/p/$_leaf/items/x/attempt-1"; done
-out="$(pr a --scoped-review --track current --no-my-review --risk standard --budget 1 --pin-leg "${POOL[0]}" 2>&1)"; rc=$?
-check "S9: --scoped-review 与 --track 同时给 ⇒ 拒绝且零调用" $([[ $rc -ne 0 && "$(ncalls "$d")" -eq 0 ]] && grep -q -- '--scoped-review' <<<"$out" && grep -q -- '--track' <<<"$out"; echo $?)
-out="$(pr b --scoped-review --no-track --no-my-review --risk standard --budget 1 2>&1)"; rc=$?
+out="$(pr b --scoped-review --no-my-review --risk standard --budget 1 2>&1)"; rc=$?
 check "S9: scoped 且预算>0 却没钉腿 ⇒ 拒绝且零调用" $([[ $rc -ne 0 && "$(ncalls "$d")" -eq 0 ]] && grep -q -- '--pin-leg' <<<"$out"; echo $?)
-out="$(pr c --scoped-review --no-track --no-my-review --risk standard --budget 1 --pin-leg nosuch 2>&1)"; rc=$?
+out="$(pr c --scoped-review --no-my-review --risk standard --budget 1 --pin-leg nosuch 2>&1)"; rc=$?
 check "S9: 钉一条表里没有的腿 ⇒ 拒绝且零调用" $([[ $rc -ne 0 && "$(ncalls "$d")" -eq 0 ]] && grep -q 'nosuch' <<<"$out"; echo $?)
-out="$(pr g --no-track --no-my-review --risk standard --budget 1 --pin-leg "${POOL[0]}" 2>&1)"; rc=$?
+out="$(pr g --no-my-review --risk standard --budget 1 --pin-leg "${POOL[0]}" 2>&1)"; rc=$?
 check "S9: 非 scoped 模式不许 --pin-leg(内部开关不外露成普通评审的后门)" \
   $([[ $rc -ne 0 && "$(ncalls "$d")" -eq 0 ]] && grep -q -- '--pin-leg' <<<"$out" && grep -q -- '--scoped-review' <<<"$out"; echo $?)
 mkdir -p "$d/p/all/items/x/attempt-1"
-pr all --no-track --no-my-review --all >/dev/null 2>&1; rc=$?
+pr all --no-my-review --all >/dev/null 2>&1; rc=$?
 _role_called=1
 for _r in ${ROLE_LEGS[@]+"${ROLE_LEGS[@]}"}; do
   cut -f1 "$d/calls" | grep -qx "$(panel_leg_agent "$_r")" && _role_called=0
@@ -533,12 +520,12 @@ check "S9: 普通 --all 派满整个池,但角色腿一次都没被派" \
 check "S9: 普通花名册里不出现角色腿" $?
 : > "$d/calls"; printf '3\n' > "$d/state/cursor"
 mkdir -p "$d/p/ctl/items/x/attempt-1"
-pr ctl --no-track --no-my-review --risk standard --budget 1 >/dev/null 2>&1
+pr ctl --no-my-review --risk standard --budget 1 >/dev/null 2>&1
 check "S9: 对照组:普通预算 1 评审会推动游标(证明下一条能测出'没推')" \
   $([[ "$(cat "$d/state/cursor")" != 3 ]]; echo $?)
 printf '3\n' > "$d/state/cursor"; : > "$d/calls"
 mkdir -p "$d/p/codex/items/x/attempt-1"
-pr codex --scoped-review --no-track --no-my-review --risk standard --budget 1 --pin-leg subcodex >/dev/null 2>&1; rc=$?
+pr codex --scoped-review --no-my-review --risk standard --budget 1 --pin-leg subcodex >/dev/null 2>&1; rc=$?
 check "S9: scoped 钉 subcodex ⇒ 恰好 1 次调用且是 subcodex" \
   $([[ $rc -eq 0 && "$(ncalls "$d")" -eq 1 && "$(cut -f1 "$d/calls")" == subcodex ]]; echo $?)
 check "S9: scoped 评审不推动普通轮换游标" $([[ $rc -eq 0 && "$(cat "$d/state/cursor")" == 3 ]]; echo $?)
@@ -555,14 +542,14 @@ for _spec in "${PANEL_LEG_SPECS[@]}"; do
   IFS='|' read -r _n _f _a _c _w <<<"$_spec"; [[ "$_n" == subdeepseek ]] || _off+=("$_w=off")
 done
 env "${_off[@]}" AIWORK_DATA_DIR="$d" SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
-  bash "$d/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
+  bash "$d/bin/panel-review" --no-my-review --risk standard --budget 1 \
   "$d/task.md" "$d/repo" "$d/p/fb/items/x/attempt-1/panel" >/dev/null 2>&1
 check "S9: 对照组:普通模式 agent 腿失败会回落聊天腿(2 次调用)" \
   $([[ "$(ncalls "$d")" -eq 2 ]] && cut -f1 "$d/calls" | grep -qx subdeepseek; echo $?)
 : > "$d/calls"; mkdir -p "$d/p/nofb/items/x/attempt-1"
 PANEL_HEALTH_OVERRIDE=subdeepseek=healthy AIWORK_DATA_DIR="$d" SLICE_TEST_CALLS="$d/calls" SLICE_TEST_MODES="$d/modes" \
   PANEL_STATE_DIR="$d/state" PANEL_STAGGER_MAX=0 \
-  bash "$d/bin/panel-review" --scoped-review --no-track --no-my-review --risk standard --budget 1 \
+  bash "$d/bin/panel-review" --scoped-review --no-my-review --risk standard --budget 1 \
   --pin-leg subdeepseek "$d/task.md" "$d/repo" "$d/p/nofb/items/x/attempt-1/panel" >/dev/null 2>&1
 check "S9: scoped 模式 agent 腿失败 ⇒ 不调聊天腿(恰好 1 次调用,不暗中多花一次)" \
   $([[ "$(ncalls "$d")" -eq 1 && "$(cut -f1 "$d/calls")" == subdeepseek-agent ]]; echo $?)

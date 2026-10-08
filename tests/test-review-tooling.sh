@@ -209,7 +209,7 @@ FIXTURE_DS_AUTH_KEY="$(printf '%s-%s' "$FIXTURE_DS_KEY" file)"
 PASS=0; FAIL=0
 
 # ── V45:判卷工具自己不许碰业主的真实评审环境(兜底报警器)──────────────────
-# 根因与实证见 tracks/panel-kimi-credential-wipe/(此处不复述,免得两处各写一份)。
+# 根因与实证在 git 历史里(此处不复述)。
 # 只盯**判据没有任何理由去碰、碰了就是错**的那几样:
 #   ① 凭证目录本身(被写穿 = 业主掉登录,不可逆,只能他本人重新 OAuth);
 #   ② 运行期 kimi home 的 config.toml / hooks/*(判据里跑真 subkimi 会把它重置成种子);
@@ -355,7 +355,7 @@ v2_glob_not_pre_expanded() {
   # subdeepseek is a thin shim onto subchat; bin/ deploys as a set, so copy both.
   cp "$BIN/subdeepseek" "$stub_bin/subdeepseek"
   cp "$BIN/subchat" "$stub_bin/subchat"
-  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$stub_bin/"
+  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$stub_bin/"
   # stub engine: subdeepseek does `exec python3 "$ENGINE" ...`; record argv.
   cat > "$stub_bin/submimo-review" <<PYEOF
 import sys
@@ -395,7 +395,7 @@ v3_panel_sidecar() {
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$b/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# t\n' > "$d/t.md"
 
   # scenario A: all three fail -> each .err non-empty with reason, exit 1
@@ -609,7 +609,7 @@ v8_subchat_provider_table() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/subchat" "$b/subchat"
-  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
   cp "$BIN/subdeepseek" "$b/subdeepseek"
   cp "$BIN/subglm"   "$b/subglm"
   # stub engine: record argv + the MIMO_*/REVIEW_LABEL env subchat must inject.
@@ -743,7 +743,7 @@ v9_claude_shell_base() {
   # 它对 deepseek 仍然完全有效,断言一条不删、一条不弱。GLM 那条底座由 V28 问。
   # (本函数末尾那段 panel 选腿用例里的 subglm 桩保持不动:那里造的是桩,不碰真底座。)
   # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
-  cp "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
@@ -931,7 +931,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   # panel-review leg selection: default=agent, PANEL_GLM_LEG=agent/chat, missing agent
   local pb="$d/panelbin"; mkdir -p "$pb"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for stubname in submimo subdeepseek; do
     cat > "$pb/$stubname" <<'EOF'
 #!/usr/bin/env bash
@@ -1007,7 +1007,7 @@ v11_panel_gates() {
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"
     chmod +x "$pb/$leg"
@@ -1066,7 +1066,7 @@ v12_gate_default_on() {
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb" "$d/repo" "$d/tasks"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
   done
@@ -1140,7 +1140,7 @@ v13_subkimi_leg() {
   fi
 
   # --- subkimi wrapper against a stub kimi + fixture review home
-  cp "$BIN/subkimi" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/subkimi" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   printf 'default_model = "x"\n' > "$rh/config.toml"
@@ -1237,7 +1237,7 @@ PY
   # --- panel-review 4th-leg selection
   local pb="$d/panelbin"; mkdir -p "$pb"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for stubname in submimo subdeepseek subglm; do
     cat > "$pb/$stubname" <<'EOF'
 #!/usr/bin/env bash
@@ -1323,7 +1323,7 @@ v14_leg_fallback_and_include() {
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# review\n' > "$d/t.md"
   # 中立的两条腿(不参与本组断言)
   for leg in submimo subkimi; do
@@ -1402,7 +1402,7 @@ EOF
   # --- ⑤ subdeepseek-agent 的轮次上限:默认放宽到 80,env 仍可覆盖
   local ab="$d/agentbin"; mkdir -p "$ab"
   # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
-  cp "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$ab/claude" <<'PYEOF'
 #!/usr/bin/env python3
@@ -1428,12 +1428,12 @@ v15_anchor_leak_warning() {
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm subkimi; do
     printf '#!/bin/bash\necho "STUB PASS" > "$3"\nexit 0\n' > "$pb/$leg"; chmod +x "$pb/$leg"
   done
   printf '# review\n' > "$d/t.md"
-  local repo="$d/repo"; mkdir -p "$repo/tracks/x"
+  local repo="$d/repo"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
 
@@ -1442,12 +1442,10 @@ v15_anchor_leak_warning() {
   if grep -qi "anchor\|锚定" "$d/a1.out"; then bad "V15: 干净仓不该报锚定"; else ok "V15: 干净仓不该报锚定"; fi
 
   # 未提交的 verify.md(带主审 findings)在仓里 → 会被 collect_untracked 喂给评审腿
-  printf '# Verify\n- findings: M1 主审抓到的真问题\n' > "$repo/tracks/x/verify.md"
+  printf '# Verify\n- findings: M1 主审抓到的真问题\n' > "$repo/verify.md"
   bash "$pb/panel-review" --no-my-review "$d/t.md" "$repo" "$d/A2" >"$d/a2.out" 2>&1
   grep -qi "anchor\|锚定" "$d/a2.out"; check "V15: 仓里有 verify.md 时报锚定风险" $?
-  # G4(track review-convergence-and-preflight 第 2 轮后主审自扫):复审轮必然触发这条报警(处置表已落 verify.md),
-  # 而报警原文无条件说「先派发、后写 verify.md」,与 panel 抽屉 4b ②「处置先落盘再派复审」正面相反。
-  grep -q '初审' "$d/a2.out"; check "V15: 报警说清「先派发、后写 verify.md」管的是初审(复审轮见 4b ②)" $?
+  grep -q '底座腿自己读树' "$d/a2.out"; check "V15: 报警说清泄漏通道(底座腿读树、未跟踪文件内联、chat 腿看 diff)" $?
 
   # 已提交进被评 diff 的 verify.md(= 07-21 的真实踩法)
   ( cd "$repo"; git add -A; git commit -qm "verify" )
@@ -1470,7 +1468,7 @@ v16_timeout_and_blind_chat_leg() {
   # 07-27 取证:kimi 900s 被砍时,最值钱的发现已经在正文里,唯独裁决行没写成
   # (prompt 原文要求 "MUST end your review with a final line")。工具调用只有个位数,
   # 时间全花在长推理上 —— 所以解法不是缩小它的自读面,而是让裁决先落地。
-  cp "$BIN/subkimi" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"
+  cp "$BIN/subkimi" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"
   cp "$BIN/ro-repo-exec" "$pb/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   printf 'default_model = "x"\n' > "$rh/config.toml"
@@ -1546,7 +1544,7 @@ EOF
     git checkout -qb feature; echo "真正要审的实现" >> impl.py
     git add -A; git commit -qm work )
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   for leg in submimo subdeepseek subglm subkimi; do
     printf '#!/bin/bash\necho "DIFF_BASE=${PANEL_DIFF_BASE:-unset}" > "$3"\nexit 0\n' \
       > "$pb/$leg"; chmod +x "$pb/$leg"
@@ -1574,7 +1572,7 @@ v17_explore_agent_legs() {
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
   # 瘦 shim + 共享躯干(V21):bin/ 成套部署,subagent 也要 cp,否则被测脚本起不来。
-  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # 假 claude:把 argv/stdin/env 落盘,输出由 STUB_REVIEW_OUT 控制。
   # 默认输出**不带任何裁决行** —— 发散的正常形态就是没有 Conclusion。
@@ -1785,7 +1783,7 @@ v19_degradation_travels_with_conclusion() {
   local d pb; d="$(mktemp -d)"; pb="$d/bin"; mkdir -p "$pb"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   # 三腿:mimo 正常;deepseek 底座腿必死 + 聊天腿成功(这就是要验的回落路径);glm 关掉
   for n in submimo subglm subkimi; do
     printf '#!/usr/bin/env bash\nprintf "%%s\\n" "Conclusion: PASS" > "$3"\n' > "$pb/$n"
@@ -1879,7 +1877,7 @@ v21_agent_leg_body_is_single_source() {
   local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$ab/claude" <<'CAPEOF'
 #!/usr/bin/env python3
@@ -1922,7 +1920,7 @@ v22_head_moved_during_review() {
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb" "$repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
@@ -1988,46 +1986,23 @@ EOF
   rm -rf "$d"
 }
 
-v22_anchor_leak_sees_committed_track() {
-  echo "[V22b] panel-review: 已提交的同名 track verify.md 也算锚定泄漏(不依赖 diff 基线)"
+v22_diff_base_unset_on_default_branch() {
+  echo "[V22d] panel-review: HEAD 等于默认分支时不自动设 PANEL_DIFF_BASE"
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb"
-  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
+  mkdir -p "$d/repo"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"
   for leg in submimo subdeepseek subglm subkimi; do
-    # 桩把自己看见的 PANEL_DIFF_BASE 记进日志:V22d 要的就是"腿到底拿到了什么"。
     printf '#!/bin/bash\necho "STUB PASS diffbase=${PANEL_DIFF_BASE:-UNSET}" > "$3"\nexit 0\n' \
       > "$pb/$leg"; chmod +x "$pb/$leg"
   done
-  # 本机默认形状:在 main 上干活(main == HEAD ⇒ PANEL_DIFF_BASE 那一臂结构上不存在)、
-  # 工作区干净(verify.md 已提交 ⇒ status 那一臂也照不到)。08-05 实测泄漏就长这样。
-  mkdir -p "$repo/tracks/turnid" "$repo/tracks/unrelated"
   ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
     echo base > f.txt
-    printf '# Verify\n规格自查第 2 条:……\n' > tracks/turnid/verify.md
-    printf '# Verify\n别的 track\n' > tracks/unrelated/verify.md
     git add -A; git commit -qm init )
-  printf '# review\n' > "$d/turnid-review.md"
+  printf '# review\n' > "$d/review.md"
 
-  bash "$pb/panel-review" --no-my-review "$d/turnid-review.md" "$repo" "$d/L1" >"$d/l1.out" 2>&1
-  grep -q "tracks/turnid/verify.md" "$d/l1.out"
-  check "V22b: 同名 track 的已提交 verify.md 被点名" $?
-  grep -qi "anchor\|锚定" "$d/l1.out"; check "V22b: 点名时给的是锚定泄漏警告" $?
-  if grep -q "tracks/unrelated/verify.md" "$d/l1.out"; then
-    bad "V22b: 不相干 track 的 verify.md 不许跟着报(误报会把警告变噪音)"
-  else
-    ok "V22b: 不相干 track 的 verify.md 不许跟着报(误报会把警告变噪音)"
-  fi
-  # 警告只是提醒,不阻断
-  [[ -s "$d/L1.submimo.log" ]]; check "V22b: 报警不阻断派发" $?
-
-  # V22d(2026-08-24,track workflow-gates-say-why):**同一次运行**再钉一件事 ——
-  # 这个默认形状里 PANEL_DIFF_BASE 压根没被设上(HEAD == 默认分支 ⇒ 自动设那一臂
-  # 结构上不成立),所以 chat 腿的 diff 是 `git diff HEAD` = 只有未提交改动,
-  # **已提交的 verify.md 不在 chat 腿的 diff 里**。上面 V22b 又证明它照样泄漏 ——
-  # 两条合起来才说得清泄漏的真实通道:底座腿自己读树,不是"整份 diff 被内联"。
-  # 我 08-24 把那句推论写成事实、还写进了 SKILL.md,靠 panel 一条腿读源码才揪回来。
-  # 断言查的是**腿实际拿到的环境**,不是控制台措辞。
+  bash "$pb/panel-review" --no-my-review "$d/review.md" "$repo" "$d/L1" >"$d/l1.out" 2>&1
+  [[ -s "$d/L1.submimo.log" ]]; check "V22d: 干净默认分支上照常派发" $?
   grep -q 'diffbase=UNSET' "$d/L1.submimo.log"
   check "V22d: HEAD==默认分支时不自动设 PANEL_DIFF_BASE(chat 腿只看未提交改动)" $?
   rm -rf "$d"
@@ -2038,7 +2013,7 @@ v22_roster_file() {
   local d pb repo; d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; mkdir -p "$pb" "$repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
@@ -2093,7 +2068,7 @@ v25_legs_run_in_their_own_session() {
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/panel-review" "$b/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# t\n' > "$d/t.md"
 
   # 假腿:把自己的 SID 写进它那份日志(第 3 个参数)
@@ -2128,7 +2103,7 @@ v23_my_review_gate_on_every_review_path() {
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   ( cd "$d/repo"; git init -q; git config user.email t@t; git config user.name t
     echo x > f; git add -A; git commit -qm init )
-  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/" 2>/dev/null
+  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/" 2>/dev/null
   printf '# 评审任务书\n' > "$d/t.md"
 
   # 三条躯干各造一个"被调用就留痕"的假模型端点:闸该在**调用之前**拦下。
@@ -2170,7 +2145,7 @@ v23_my_review_gate_on_every_review_path() {
   local fb="$d/fakebin"; mkdir -p "$fb"
   printf '#!/bin/bash\nexit 1\n' > "$fb/realpath"; chmod +x "$fb/realpath"
   printf '我的一遍\n' > "$d/mine.md"
-  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/" 2>/dev/null
+  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/" 2>/dev/null
   out="$(cd "$d" && PATH="$fb:$PATH" REVIEW_NO_MY_REVIEW=0 REVIEW_MY_REVIEW="$d/mine.md" \
           MIMO_REVIEW_HOME="$d/mimo-home-v23" \
           timeout "$GATE_PROBE_TIMEOUT" bash "$b/submimo" review "$d/t.md" "$d/out.log" "$d/repo" 2>&1)"
@@ -2187,7 +2162,7 @@ v24_no_env_backdoor_and_coverage_report() {
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   ( cd "$d/repo"; git init -q; git config user.email t@t; git config user.name t
     echo x > f; git add -A; git commit -qm init )
-  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/" 2>/dev/null
+  cp "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/" 2>/dev/null
   printf '# 评审任务书\n' > "$d/t.md"
 
   for tool in submimo subkimi subchat subagent; do
@@ -2259,7 +2234,7 @@ v26_glm_on_opencode_go() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
-  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" \
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" \
      "$BIN/subchat" "$BIN/subglm" "$BIN/subdeepseek" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$b/claude" <<'PYEOF2'
@@ -2423,7 +2398,7 @@ v27_knockon_of_the_backend_switch() {
   #    日志上只看得见"模型没回话"。这正是本单要根治的病,表驱动自己却没守卫。
   #    (08-18 四审有两条腿都断言这里是 fail-closed —— **它们都错了**,我实测的。
   #     所以这条断言不是抄评审意见,是抄实测。)
-  cp "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cat > "$b/claude" <<'EOF'
 #!/usr/bin/env bash
@@ -2501,7 +2476,7 @@ v28_glm_on_opencode_base() {
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
   printf '# review this\n' > "$d/t.md"
-  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/subglm-agent" "$BIN/subdeepseek-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local ochome="$d/ochome"
 
@@ -2675,7 +2650,7 @@ EOF
   #    反过来则放行到 `opencode run` 才报一个误导性的 rc=127。
   #    (四审两条腿独立点到:subdeepseek F2 / subglm MEDIUM。)
   local nb="$d/nobin"; mkdir -p "$nb"
-  cp "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$nb/"
+  cp "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$nb/"
   cp "$BIN/ro-repo-exec" "$nb/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   oc_stub "$nb"        # 只有 opencode,**没有 claude**
   env PATH="$nb:/usr/bin:/bin" OPENCODE_REVIEW_HOME="$ochome" ZHIPU_API_KEY="$FIXTURE_GLM_KEY" \
@@ -2785,7 +2760,7 @@ EOF
 # 全文在 git 历史里:`git log --oneline -- tests/test-review-tooling.sh`,
 # 拆除那一版是本行所在 commit 的父提交。
 # 替代防线是新 track `repo-write-audit`(写审计,按进程树归因),**它还没上线** ——
-# 窗口期是明账,写在 tracks/repo-write-audit/proposal.md 末尾。
+# 窗口期是明账,写在 git 历史里。
 
 # ---------------------------------------------------------------- V33
 # 2026-08-19,收本轮四审 subkimi 的 F1(孤腿 BLOCK,成立)。
@@ -2818,7 +2793,7 @@ v33_submimo_review_leg_is_read_only() {
   echo "[V33] panel 第一条腿(submimo)写口关掉、bash 留着,fix 不受连累"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
-  cp "$BIN/submimo" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/submimo" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   printf '# t\n' > "$d/t.md"
   local repo="$d/repo"; mkdir -p "$repo"
@@ -3016,7 +2991,7 @@ PYATOM
 # 更简单的一条路成立:把仓 ro bind 进腿自己的 mount namespace,
 # **腿的读能力一条不少**(status/diff/log/show/rev-parse/blame 全 rc=0,
 # 与可写状态逐条对照无差异),而写口物理消失。收据在
-# tracks/repo-write-audit/evidence/(probe-readonly-mount / -v2 / probe-logs-writable)。
+# 只读挂载探针记录在 git 历史里。
 #
 # ⚠️ 这道防线**最危险的失败形态是安静的**:挂载没生效时腿照跑、结论照出、
 # 一切看起来完全正常。所以下面每一条正面断言前都先钉**前置锚**(证明确实进了
@@ -3171,7 +3146,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   cp "$BIN/_review-workspace.sh" "$b/" 2>/dev/null || true
 
@@ -3385,7 +3360,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -3680,7 +3655,7 @@ v40_second_panel_findings() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" \
+  cp "$BIN/subdeepseek-agent" "$BIN/subglm-agent" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" \
      "$BIN/subkimi" "$BIN/ro-repo-exec" "$b/"
   [[ -f "$BIN/_my-review-gate.sh" ]] && cp "$BIN/_my-review-gate.sh" "$b/"
   [[ -f "$BIN/_review-home-guard.sh" ]] && cp "$BIN/_review-home-guard.sh" "$b/"
@@ -3714,7 +3689,7 @@ RECORD
   # 早就写着"种子造小份",① 段一直在照搬):
   #  · 活仓种子里的 credentials 是**指向业主真凭证的符号链接**(腿和业主共用一次登录),
   #    `cp -a` 原样保留它 ⇒ 下面写假凭证会**写穿到真凭证**,把 subkimi 登出
-  #    (2026-08-25 实证,详见 tracks/panel-kimi-credential-wipe/);
+  #    (2026-08-25 实证,详见 git 历史);
   #  · 真种子 101MB(其中 80MB 是 sessions)⇒ 整份 cp 每跑一次就把会话历史抄进 /tmp。
   #  拼装比"先整份 cp 再删链接"更贴根因:不产生通道,就不需要斩断通道。
   local _seedhook
@@ -4192,7 +4167,7 @@ v44_dead_leg_stops_rotating() {
   d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; state="$d/state"
   mkdir -p "$pb" "$repo" "$state"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
@@ -4514,7 +4489,7 @@ v43_health_aware_rotating_budget() {
   d="$(mktemp -d)"; pb="$d/bin"; repo="$d/repo"; state="$d/state"
   mkdir -p "$pb" "$repo" "$state"
   cp "$BIN/panel-review" "$pb/panel-review"
-  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
+  cp "$BIN/_panel-roster-lib.sh" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$pb/"  # 花名册渲染的共享库,panel-review 缺它会 fail closed
   printf '# review\n' > "$d/t.md"
   ( cd "$repo"; git init -q -b main; git config user.email t@t; git config user.name t
     echo base > f.txt; git add -A; git commit -qm init )
@@ -4786,7 +4761,7 @@ echo "=== review-tooling regression oracle ==="
 
 # ── V46:subgemini(Antigravity CLI 腿)──────────────────────────────────────
 # 这条腿骑业主的 Gemini 会员额度,底座是**闭源 Go 二进制** `agy`。
-# 全部依据见 tracks/subgemini-review-leg/(此处不复述)。只钉死"错了就是防线破洞"的:
+# 全部依据在 git 历史里(此处不复述)。只钉死"错了就是防线破洞"的:
 #   ① **模型必须是 gemini-***:`agy models` 同时供应 claude-sonnet-4-6 /
 #      claude-opus-4-6-thinking / gpt-oss-120b。这条腿一旦跑 Claude,panel 归档闸的
 #      "覆盖 N 个不同模型家族"就被架空 —— **而那道闸查的是腿名,不是它实际调了谁**。
@@ -5442,7 +5417,7 @@ REVIEW_NO_MY_REVIEW=1 v19_chat_leg_declares_its_blindness
 REVIEW_NO_MY_REVIEW=1 v20_max_turns_does_not_discard_work
 REVIEW_NO_MY_REVIEW=1 v21_agent_leg_body_is_single_source
 REVIEW_NO_MY_REVIEW=1 v22_head_moved_during_review
-REVIEW_NO_MY_REVIEW=1 v22_anchor_leak_sees_committed_track
+REVIEW_NO_MY_REVIEW=1 v22_diff_base_unset_on_default_branch
 REVIEW_NO_MY_REVIEW=1 v22_roster_file
 v23_my_review_gate_on_every_review_path
 v24_no_env_backdoor_and_coverage_report

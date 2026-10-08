@@ -24,12 +24,12 @@ description: 有界实现委托、delegate-codex 副本隔离与收货用法。
 
 ```bash
 delegate-codex --print-oracle-hash --repo REPO --protect tests/ >> ATTACK_LOG
-delegate-codex --no-track --task TASK --repo REPO --attack-log ATTACK_LOG \
+delegate-codex --task TASK --repo REPO --attack-log ATTACK_LOG \
   --protect tests/ --log LOG
 delegate-codex --receive RECEIPT.json
 ```
 
-派活时用 `--no-track`。`TASK` 写明文件范围和检查方式；`--protect` 可重复，
+`TASK` 写明文件范围和检查方式；`--protect` 可重复，
 包括测试、fixture 和期望输出等判据实际读取的文件。
 `ATTACK_LOG` 放在仓库之外，记录对题面和测试的检查；用 `--print-oracle-hash` 写入当前判据哈希。
 改过判据后重新检查哈希。工具在缺任务、记录、保护清单或哈希不符时拒绝派发。

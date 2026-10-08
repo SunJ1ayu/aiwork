@@ -1,5 +1,5 @@
 // aiwork 放行关卡的判定部分:只吃收集好的事实(collect.mjs)和策略(.aiwork/policy.json),不碰网络。
-// 规则编号对应 SunJ1ayu/aiwork 的 WORKFLOW-MIGRATION-PLAN.md 第 2 节;对抗用例见 tests/test_aiwork_gate.mjs。
+// 规则编号的来历在 git 历史里。对抗用例见 tests/test_aiwork_gate.mjs。
 //
 //   G1 CI:当前 head 上、来自 ci.yml 的那次运行成功,且是在最后一次改目标分支之后触发的 —— 业主批准也豁免不了
 //   G2 判卷面:改了 CI / 测试入口 / 关卡自己 → 要业主批准

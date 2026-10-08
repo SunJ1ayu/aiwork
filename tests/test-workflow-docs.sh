@@ -143,12 +143,42 @@ check "W4: 正式评审在 PR 上使用沙箱外 review-pr" $?
 grep -q '不改考卷让自己及格' "$SOURCE/CLAUDE.md" \
   && grep -q '不信执行腿的自述' "$SOURCE/CLAUDE.md"
 check "W4: 保留判据核实与收货方法" $?
-grep -q -- '--no-track' "$SOURCE/skills/delegate/SKILL.md" \
-  && grep -q -- '--receive' "$SOURCE/skills/delegate/SKILL.md"
-check "W4: 委托保留隔离收货，用 --no-track" $?
+grep -q -- '--receive' "$SOURCE/skills/delegate/SKILL.md" \
+  && ! grep -q -- '--no-track' "$SOURCE/skills/delegate/SKILL.md" \
+  && ! grep -q -- '--track' "$SOURCE/skills/delegate/SKILL.md"
+check "W4: 委托保留隔离收货，不再挂 track" $?
 grep -q '~/.config/aiwork/' "$SOURCE/CLAUDE.md" \
   && grep -q '~/.local/share/aiwork/' "$SOURCE/CLAUDE.md"
 check "W4: 设置与运行数据的本机目录明确" $?
+grep -q 'aiwork-config data-path worktrees' "$SOURCE/CLAUDE.md" \
+  && grep -q '不在共享检出' "$SOURCE/CLAUDE.md" \
+  && grep -q 'PR 合并后删掉这个工作树' "$SOURCE/CLAUDE.md"
+check "W4: 开工先在本机数据目录建工作树，不在共享检出里改" $?
+
+echo "[W5] 旧 track 流程不留在仓库里"
+for gone in bin/track bin/track-guard bin/track-record bin/track-commit-msg \
+            bin/runlog bin/_evidence.sh bin/_review_delivery.py bin/_ephemeral-refs.sh \
+            track tracks WORKFLOW-DEBT.md WORKFLOW-MIGRATION-PLAN.md workflow-migration \
+            tests/test-track-guard.sh tests/test-track-record.sh tests/test-track-links.sh \
+            tests/test_track_preflight.py tests/test-ledger.sh tests/test-runlog.sh \
+            tests/test_review_delivery.py tests/mutation-review-delivery.sh \
+            tests/test-panel-round-discipline.sh tests/test-delegate-observation.sh \
+            tests/test-worktree-sweep.sh tests/test-evidence-lifetime.sh; do
+  [[ ! -e "$ROOT/$gone" ]]
+  check "W5: 已删除 $gone" $?
+done
+! grep -q 'track-guard|bash' "$ROOT/bin/rust-check-review-tooling" \
+  && ! grep -q 'track-record|bash' "$ROOT/bin/rust-check-review-tooling" \
+  && ! grep -q 'runlog|bash' "$ROOT/bin/rust-check-review-tooling"
+check "W5: 总跑不再登记 track / runlog 套件" $?
+# 历史段只留一句指向，不复述过滤、归档仓库或提交个数。
+hist="$(awk '/^## History/{flag=1;next} /^## /{flag=0} flag' "$ROOT/README.md")"
+[[ "$(printf '%s\n' "$hist" | grep -cve '^[[:space:]]*$')" -eq 1 ]]
+check "W5: README 历史部分只有一句" $?
+printf '%s\n' "$hist" | grep -q 'git 历史' \
+  && ! printf '%s\n' "$hist" | grep -q 'aiwork-archive' \
+  && ! printf '%s\n' "$hist" | grep -q '639'
+check "W5: 那一句指向 git 历史，不复述内容" $?
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

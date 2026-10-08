@@ -1,7 +1,0 @@
-{"at": "2026-09-13T16:18:21Z", "claim": "store.save 以 \"w\" 打开日志文件,每次调用清空已有行,违反追加语义。", "event": "finding", "evidence": "store.py:8", "id": "F1", "round": 1, "severity": "critical", "source": "store"}
-{"at": "2026-09-13T16:18:21Z", "claim": "写入端写字段 ts(本地时间字符串),读取端读 timestamp 并 int() 转 epoch 秒:键名与格式都不兼容,report.latest 读 store.save 的文件必抛异常。", "event": "finding", "evidence": "store.py:10, report.py:15", "id": "F2", "round": 1, "severity": "high", "source": "overall"}
-{"at": "2026-09-13T16:18:21Z", "claim": "report.latest 用 max 取最大时间戳,多条并列时返回文件中最早出现的一条,而不是最后追加的那条,违背「取最近一条」。", "event": "finding", "evidence": "report.py:15", "id": "F3", "round": 1, "severity": "medium", "source": "report"}
-{"at": "2026-09-13T16:18:21Z", "event": "check", "family": "xiaomi", "findings": ["F3"], "id": "c1", "leg": "submimo", "round": 1}
-{"at": "2026-09-13T16:19:33Z", "event": "decision", "finding": "F1", "reason": "练习仓(V3 机制真跑)里故意埋的缺陷;本轮只验切片评审机制,不修练习仓", "status": "accepted-risk"}
-{"at": "2026-09-13T16:19:33Z", "event": "decision", "finding": "F2", "reason": "练习仓(V3 机制真跑)里故意埋的缺陷;本轮只验切片评审机制,不修练习仓", "status": "accepted-risk"}
-{"at": "2026-09-13T16:19:34Z", "event": "decision", "finding": "F3", "reason": "练习仓(V3 机制真跑)里故意埋的缺陷;本轮只验切片评审机制,不修练习仓", "status": "accepted-risk"}

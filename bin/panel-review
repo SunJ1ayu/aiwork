@@ -25,7 +25,7 @@ REVIEW_RESULT_BIN="${PANEL_REVIEW_RESULT_BIN:-$BIN/_review_result.py}"
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  panel-review [--track NAME|--no-track] TASK_FILE [REPO_DIR] [LOG_PREFIX]
+  panel-review TASK_FILE [REPO_DIR] [LOG_PREFIX]
 
 Default: impact-risk=high, rotate 2 healthy reviewer families in parallel.
 Failure, degraded fallback, missing verdict, NEEDS_MORE_INFO, an ineligible
@@ -59,11 +59,9 @@ Options / env:
   --risk self|standard|high  external-review budget 0 / 1 / 2 (default: high)
   --budget N                 explicit initial budget, 0..current pool size
   --all                      explicit full-pool review (special high risk)
-  --track NAME               bind dispatch/observation to a typed track in the main repo
-  --no-track                 explicitly state that this review belongs to no track
   --scoped-review            internal (panel-slice): the reviewer owns only an assigned slice/overall/
                              verification scope. Results carry review_contract_version=2 and never
-                             count as full-review coverage; no --track, no --all, no chat fallback,
+                             count as full-review coverage; no --all, no chat fallback,
                              the normal rotation cursor is left alone, and budget>0 needs --pin-leg.
   --pin-leg NAME             internal, only with --scoped-review: NAME is the only selectable leg
                              (pool legs and role-only legs such as subcodex)
@@ -103,8 +101,6 @@ PIN_LEG=""
 IMPACT_RISK="${PANEL_IMPACT_RISK:-high}"
 REVIEW_BUDGET="${PANEL_REVIEW_BUDGET:-}"
 ALL_REVIEWERS=0
-TRACK_NAME=""
-NO_TRACK=0
 POSARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -128,11 +124,6 @@ while [[ $# -gt 0 ]]; do
       shift 2 ;;
     --explore-members) PANEL_MODE=explore; shift ;;
     --all) ALL_REVIEWERS=1; shift ;;
-    --track)
-      TRACK_NAME="${2:-}"
-      [[ -n "$TRACK_NAME" ]] || { echo "panel-review: --track needs a name" >&2; exit 2; }
-      shift 2 ;;
-    --no-track) NO_TRACK=1; shift ;;
     --scoped-review) SCOPED_REVIEW=1; shift ;;
     --pin-leg)
       PIN_LEG="${2:-}"
@@ -154,10 +145,10 @@ if [[ -n "$MEMBERS" && ( -n "$REVIEW_BUDGET" || "$ALL_REVIEWERS" -eq 1 || "$SCOP
   echo 'panel-review: --members conflicts with budget/all/scoped/pin-leg' >&2; exit 2
 fi
 if [[ "$PANEL_MODE" == explore ]]; then
-  [[ -n "$MEMBERS" && -z "$TRACK_NAME" && "$SCOPED_REVIEW" -eq 0 ]] || {
-    echo 'panel-review: exploration needs explicit members and cannot bind a track or scoped review' >&2; exit 2;
+  [[ -n "$MEMBERS" && "$SCOPED_REVIEW" -eq 0 ]] || {
+    echo 'panel-review: exploration needs explicit members and cannot bind a scoped review' >&2; exit 2;
   }
-  NO_TRACK=1; NO_MY_REVIEW=1; RISK_BUDGET=0
+  NO_MY_REVIEW=1; RISK_BUDGET=0
 fi
 [[ -n "$REVIEW_BUDGET" ]] || REVIEW_BUDGET="$RISK_BUDGET"
 POOL_SIZE="${#PANEL_LEGS_ORDER[@]}"
@@ -172,7 +163,7 @@ if [[ "$ALL_REVIEWERS" -eq 1 ]]; then REVIEW_BUDGET="$POOL_SIZE"; fi
 FORCE_ALL=0
 [[ "$ALL_REVIEWERS" -eq 1 || "$REVIEW_BUDGET" -eq "$POOL_SIZE" ]] && FORCE_ALL=1
 
-# ── scoped review(track sliced-panel-review)────────────────────────────────
+# ── scoped review ──────────────────────────────────────────────────────────
 # panel-slice 的每个工作项 = 一次钉住单腿的 scoped 评审。这几条拒绝都在**任何落盘之前**:
 # 它们防的是「切片结果被当成整任务评审」和「内部开关变成普通评审的后门」。
 REVIEW_CONTRACT_VERSION=1
@@ -182,10 +173,6 @@ if [[ -n "$PIN_LEG" && "$SCOPED_REVIEW" -eq 0 ]]; then
 fi
 if [[ "$SCOPED_REVIEW" -eq 1 ]]; then
   REVIEW_CONTRACT_VERSION=2
-  if [[ -n "$TRACK_NAME" ]]; then
-    echo "panel-review: --scoped-review cannot bind --track: scoped results are never archive coverage" >&2
-    exit 2
-  fi
   if [[ "$ALL_REVIEWERS" -eq 1 ]]; then
     echo "panel-review: --scoped-review cannot use --all: panel-slice assigns exactly one leg per work item" >&2
     exit 2
@@ -229,148 +216,6 @@ REPO_DIR="${2:-$PWD}"
 [[ -f "$TASK_FILE" ]] || { echo "panel-review: task file not found: $TASK_FILE" >&2; exit 1; }
 [[ -d "$REPO_DIR" ]]  || { echo "panel-review: repo dir not found: $REPO_DIR" >&2; exit 1; }
 
-[[ -z "$TRACK_NAME" || "$NO_TRACK" -eq 0 ]] || {
-  echo "panel-review: --track and --no-track are mutually exclusive" >&2; exit 2; }
-
-# A review may target an isolated worktree, but durable controller facts must land in
-# the main checkout that owns the common Git dir; otherwise archive sweep deletes them.
-CONTROL_REPO="$(realpath "$REPO_DIR")"
-_common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-if [[ -n "$_common" && "$(basename "$_common")" == ".git" ]]; then
-  CONTROL_REPO="$(dirname "$_common")"
-fi
-unset _common
-
-TRACK_RECORD_BIN="${TRACK_RECORD_BIN:-$(dirname "$0")/track-record}"
-_typed_active=()
-if [[ -d "$CONTROL_REPO/tracks" ]]; then
-  while IFS= read -r _decision; do
-    _typed_active+=("$(basename "$(dirname "$_decision")")")
-  done < <(find "$CONTROL_REPO/tracks" -mindepth 2 -maxdepth 2 -type f -name decision.json \
-           -not -path '*/archive/*' -print 2>/dev/null | sort)
-fi
-if [[ -z "$TRACK_NAME" && "$NO_TRACK" -eq 0 && "${#_typed_active[@]}" -gt 0 ]]; then
-  echo "panel-review: typed active track exists; choose --track NAME or --no-track before dispatch" >&2
-  printf '  active: %s\n' "${_typed_active[*]}" >&2
-  exit 2
-fi
-# 评审轮次读数(track panel-round-discipline,2026-09-16)—— 在派活当场回答两个问题:
-# **这是第几轮**,和**自上一轮以来到底改了什么**。
-# 由来:09-16「查更新被限流」单跑了八轮外审,4~8 轮审的是我自己的判据措辞(产品代码零改动),
-# 当天烧光 Kimi 与 GLM 的额度。没有哪一轮当时看起来是错的 —— 缺的就是这两个读数。
-#
-# 🔴 **它是读数不是闸**:只打印、不阻断、不改退出码。硬拦会在正当的第 4 轮(产品真改了)
-#    误伤,而误伤一次就会被绕过去,从此没人再看它。看到读数之后该干什么写在 panel 抽屉里。
-# 🔴 **打印事实,不打印结论**:什么算"产品代码"是仓库相关的,守卫不替我定义 —— 本机
-#    "守卫守错门"已经栽过三次。这里只给三桶计数 + 其它桶的文件名,结论我自己下。
-round_readout() {  # round_readout <track_dir> <repo>
-  local track_dir="$1" repo="$2" obs_dir="$1/observations"
-  local -a obs=()
-  while IFS= read -r -d '' f; do obs+=("$f"); done < <(
-    find "$obs_dir" -maxdepth 1 -name '*panel-review*.json' -print0 2>/dev/null | sort -z)
-  local n="${#obs[@]}"
-  [[ "$n" -gt 0 ]] || return 0   # 第一轮没有"上一轮"可比;打了就是噪音
-  printf 'panel-review: 轮次读数 —— 这是第 %d 轮(数的是这个 track 已落盘的 panel 轮次)\n' \
-    "$((n + 1))" >&2
-  # 🔴 这个 N 是**已落盘的派发**次数,基础设施重试也算;panel 抽屉 4b 的轮次预算数的是**实质评审**。
-  #    同一个「轮」字两个集合 —— 2026-09-16 一次重试被印成「第 2 轮」,照字面读会以为预算用完了
-  #    (track review-convergence-and-preflight 第 1 轮 F1)。当场说清,别让人自己猜。
-  printf 'panel-review:   ⚠️ 这个 N 数的是已落盘的 panel 派发(基础设施重试也算,控制器没活到收尾的那次不计);不是 4b 轮次预算里的「实质评审」轮 —— 用了几轮看 verify.md 的轮次记录。\n' >&2
-  # 基线:从最近一份往回找,取**第一个读得出 head_oid 的**轮次。
-  # 中间轮次可能整轮死光(腿没交卷 ⇒ subject.source=null),或是 0 腿的自审轮
-  # (整份 observation 哪儿都没有 commit)。那种轮次**不能把基线冲掉** ——
-  # 否则它之前的产品改动会被静默吞掉,读数反而骗我。(2026-09-16 实测三条前提,见判据抬头。)
-  local base="" i
-  for (( i = n - 1; i >= 0; i-- )); do
-    base="$(python3 - "${obs[$i]}" <<'PYOID' 2>/dev/null
-import json, sys
-try:
-    d = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception:
-    sys.exit(0)
-for leg in (d.get("actual") or {}).get("legs") or []:
-    oid = ((leg.get("subject") or {}).get("source") or {}).get("head_oid")
-    if oid:
-        print(oid)
-        break
-PYOID
-)"
-    [[ -n "$base" ]] && break
-  done
-  if [[ -z "$base" ]] || ! git -C "$repo" cat-file -e "${base}^{commit}" 2>/dev/null; then
-    printf 'panel-review:   上一轮的 commit 读不出来(没有腿交过卷,或它不是本仓的对象)⇒ 这次不做对比\n' >&2
-    return 0
-  fi
-  # 已跟踪的改动比到**工作区**(不是 HEAD):评审看的就是工作区那份。
-  # 🔴 未跟踪文件**单独一栏,不进三桶**(2026-09-16 我自己审出来的):`ls-files --others`
-  #    列的是"此刻所有未跟踪文件",不是"这一轮新增的"。/root/aiwork 里常年躺着 51 个未跟踪
-  #    的评审简报 ⇒ 把它们并进"其它"桶的话,**在我最常派评审的那个仓里"其它=0"永远不成立**,
-  #    ①的触发条件就等于没有。它们又不能不报:没进过 commit 的新产品文件正是本机反复栽过的
-  #    盲区。所以单列一栏,并说清这一栏答不了"是不是这一轮才出现的"。
-  # 🔴 **一律走 `-z`**(NUL 分隔)。不带 -z 时 git 会把非 ASCII 路径 C-quote 成
-  #    `"\344\270\255..."` —— 而这份文件名清单的**唯一用途就是给主 agent 看**,
-  #    转义了等于没打。仓里中文文件名是常态。本仓 `bin/track-guard` 早就这么躲
-  #    (它那段注释还实测过 `-z` 与 core.quotepath 无关),新读数是最后一处没跟上的地方。
-  #    2026-09-16 第 1 轮评审 subdeepseek 实测点名;判据 R-cn 钉住。
-  local -a changed=() others=() untracked=()
-  local pth t=0 k=0 o=0 shown=0
-  while IFS= read -r -d '' pth; do
-    [[ -n "$pth" ]] && changed+=("$pth")
-  done < <( git -C "$repo" diff --name-only -z "$base" 2>/dev/null | sort -zu )
-  while IFS= read -r -d '' pth; do
-    [[ -n "$pth" ]] && untracked+=("$pth")
-  done < <( git -C "$repo" ls-files --others --exclude-standard -z 2>/dev/null | sort -zu )
-  for pth in ${changed+"${changed[@]}"}; do
-    case "$pth" in
-      tests/*)  t=$((t + 1)) ;;
-      tracks/*) k=$((k + 1)) ;;
-      *)        o=$((o + 1)); others+=("$pth") ;;
-    esac
-  done
-  printf 'panel-review:   上一轮 @ %s\n' "${base:0:12}" >&2
-  printf 'panel-review:   自上一轮以来改动(已跟踪):tests/=%d  tracks/=%d  其它=%d\n' \
-    "$t" "$k" "$o" >&2
-  if [[ "$o" -gt 0 ]]; then
-    # 一行一个:仓里中文文件名是常态,空格也不是没有,空格拼接会把两个名字读成一个。
-    printf 'panel-review:   其它改动的文件:\n' >&2
-    shown=0
-    for pth in "${others[@]}"; do
-      [[ "$shown" -ge 12 ]] && { printf 'panel-review:     …共 %d 个\n' "$o" >&2; break; }
-      printf 'panel-review:     %s\n' "$pth" >&2; shown=$((shown + 1))
-    done
-  else
-    printf 'panel-review:   其它=0 ⇒ 已跟踪的产品文件自上一轮没动过,这一轮审的多半是我自己的考卷。\n' >&2
-    printf 'panel-review:   规矩(panel 抽屉 4b):先别改;延期项留在 verify.md,不自动开下一单;实质评审才算进开工写的轮次预算,基础设施重试不算(4b ④)。\n' >&2
-    printf 'panel-review:   ⚠️ 「其它=0」≠「上一轮的绑定还有效」:tests/ 与未跟踪文件同样进交付指纹。\n' >&2
-  fi
-  if [[ "${#untracked[@]}" -gt 0 ]]; then
-    printf 'panel-review:   未跟踪文件 %d 个 —— **不在上面的对比里**(从没进过 commit,看不出是不是这一轮才出现的):\n' \
-      "${#untracked[@]}" >&2
-    shown=0
-    for pth in "${untracked[@]}"; do
-      [[ "$shown" -ge 8 ]] && { printf 'panel-review:     …共 %d 个\n' "${#untracked[@]}" >&2; break; }
-      printf 'panel-review:     %s\n' "$pth" >&2; shown=$((shown + 1))
-    done
-  fi
-}
-
-if [[ -n "$TRACK_NAME" ]]; then
-  case "$TRACK_NAME" in
-    */*|*..*|-*|.|archive) echo "panel-review: invalid --track '$TRACK_NAME'" >&2; exit 2 ;;
-  esac
-  TRACK_DIR="$CONTROL_REPO/tracks/$TRACK_NAME"
-  [[ -d "$TRACK_DIR" ]] || { echo "panel-review: active track not found: $TRACK_DIR" >&2; exit 2; }
-  if ! "$TRACK_RECORD_BIN" validate --phase dispatch --expected-impact "$IMPACT_RISK" "$TRACK_DIR"; then
-    echo "panel-review: typed track is not dispatch-ready or --risk mismatches; no leg was started" >&2
-    exit 2
-  fi
-  if [[ "$REVIEW_BUDGET" -lt "$RISK_BUDGET" ]]; then
-    echo "panel-review: typed track budget=$REVIEW_BUDGET is below impact-risk=$IMPACT_RISK minimum=$RISK_BUDGET; no leg was started" >&2
-    exit 2
-  fi
-  round_readout "$TRACK_DIR" "$CONTROL_REPO" || true
-fi
-unset _decision _typed_active
 
 # The my-review gate is DEFAULT-ON. Unless explicitly opted out, resolve a path:
 # an explicit --require-my-review wins; otherwise derive the convention path from
@@ -746,31 +591,13 @@ fi
 
 # Anti-anchoring leak check (2026-07-21 实事故): the engine inlines untracked repo
 # files and the whole diff into every reviewer prompt. If the main agent's OWN
-# findings are sitting in the repo (a filled-in tracks/**/verify.md, a stray
-# *my-review*), the "independent" legs end up quoting them back — one chat leg
+# findings are sitting in the repo (a stray *my-review*), the "independent" legs end up quoting them back — one chat leg
 # literally cited verify.md as evidence. Warn (never block); the arbiter decides.
 anchor_leak_files() {
-  # -uall: 不带它 git 会把未跟踪目录折叠成 `tracks/`,verify.md 就漏检了(oracle 实抓)
+  # -uall: 不带它 git 会把未跟踪目录折成一行,里面的 my-review 会漏检。
   { git -C "$REPO_DIR" status --porcelain -uall 2>/dev/null | awk '{print $NF}'
     if [[ -n "${PANEL_DIFF_BASE:-}" ]]; then
       git -C "$REPO_DIR" diff --name-only "${PANEL_DIFF_BASE}...HEAD" 2>/dev/null
-    fi
-    # 第三臂(2026-08-05 实测):上面两臂在**本机默认形状**下都照不到 ——
-    # 我一直在 main 上干活(main == HEAD ⇒ PANEL_DIFF_BASE 那一臂结构上不存在),
-    # 而 verify.md 是已提交的(⇒ status 那一臂也空)。那次 DeepSeek 日志第 28 行
-    # 读了 verify.md、第 101 行原文引用我的「规格自查第 2 条」,两臂一声没吭。
-    # 底座腿自己读仓库,**不看 diff**,所以只要文件在树上就够得着。
-    # 只报与本任务同名的 track(任务文件常叫 <track>-review.md),不相干的 track
-    # 不报 —— 误报会把警告变噪音,下一次就没人看了。
-    local _base="${TASKNAME%-my-review}"; _base="${_base%-review}"
-    if [[ -n "$_base" ]]; then
-      local _f _t
-      while IFS= read -r _f; do
-        [[ -n "$_f" ]] || continue
-        _t="${_f#tracks/}"; _t="${_t%%/*}"
-        [[ -n "$_t" ]] || continue
-        if [[ "$_base" == "$_t"* || "$_t" == "$_base"* ]]; then echo "$_f"; fi
-      done < <(git -C "$REPO_DIR" ls-files 'tracks/*/verify.md' 2>/dev/null)
     fi
   } | grep -Ei 'verify\.md$|my.?review' | sort -u
 }
@@ -780,8 +607,7 @@ if [[ -n "$LEAK" ]]; then
   echo "$LEAK" | sed 's/^/    /'
   # 这行字 08-24 把我指错过一整轮:它说的"整份 diff"只在 chat 腿 + PANEL_DIFF_BASE
   # 设上时才成立,而本机默认形状下泄漏走的是"底座腿自己读树"。报警要说得出自己在报什么。
-  echo "    (底座腿自己读树、未跟踪文件会被内联、chat 腿另看 diff —— 已提交的照样够得着;"
-  echo "     初审要先派发、后写 verify.md;复审轮读到上一轮处置表是预期内的(4b ②);详见 skills/panel/SKILL.md 反锚定一节)"
+  echo "    (底座腿自己读树、未跟踪文件会被内联、chat 腿另看 diff)"
 fi
 
 # 派发窗口的树是不是同一棵(2026-08-05 实事故):22:40 我趁 Kimi 还在跑提交了 80d2d23,
@@ -883,18 +709,9 @@ session_run() {  # success-state/result failure-state/result log failure-log evi
   local run_id="$1"; shift
   local name="$1"; shift
   local family="$1" adapter="$2" degraded="$3"; shift 3
-  # 归属 track 只进**腿自己的进程**:交付指纹由 _review-workspace.sh 在腿里算,
-  # 它只在这个变量有值时才算;不传 ⇒ 每条腿都产 v1 subject ⇒ 归档闸的 delivery
-  # 比较永远走不到,而单元判据照样全绿(接线缺失没有症状)。
-  # 作用域要收在这里,不能在脚本顶上 export:PANEL_ORACLE_CMD 和判据进程都是本脚本
-  # 的子进程,顶上 export 会让它们跟着走绑定路径 —— P0 那条判据存在的理由就是这个。
-  # 无归属时用 `env -u` 显式抹掉:继承来的陈旧值会给一次无归属评审盖上别人的绑定。
+  # 成员覆盖只进这条腿自己的进程。不能在脚本顶上 export:PANEL_ORACLE_CMD 和判据进程
+  # 都是本脚本的子进程,顶上 export 会让它们跟着走。
   local -a leg_env=(env)
-  if [[ -n "$TRACK_NAME" ]]; then
-    leg_env+=("AIWORK_REVIEW_TRACK=$TRACK_NAME")
-  else
-    leg_env+=(-u AIWORK_REVIEW_TRACK)
-  fi
   if [[ -n "$MEMBERS" ]]; then
     leg_env+=("${MEMBER_ENV[$name]}=${MEMBER_VALUE[$name]}")
   fi
@@ -1186,7 +1003,7 @@ unset _leg
 # ── 花名册落盘 ────────────────────────────────────────────────────────
 # 2026-08-05 实事故:各腿状态只活在终端里,事后我在 verify.md 写下"三条腿一致 PASS",
 # 而 Kimi 那条腿根本没出结论(同一页第 90 行我自己还写着它没出报告)—— 同页自相矛盾。
-# 手抄一份终端上的东西,抄错的那次不会有人发现。⇒ 机器写一行,verify.md 直接粘。
+# 手抄一份终端上的东西,抄错的那次不会有人发现。⇒ 机器写一行花名册,直接用这一行。
 # 注意:这里的 PASS 只表示**进程 rc=0**,不表示它给了裁决;裁决永远要自己读日志。
 ROSTER_FILE="${LOG_PREFIX}.roster"
 # ── final:只有控制器活到这一步才写(escalation / HEAD_AFTER 也只有此刻才知道)
@@ -1205,7 +1022,7 @@ ROSTER_FILE="${LOG_PREFIX}.roster"
 # (不是字面逐字节:抬头嵌了渲染时间戳,两次渲染必然不同;R5b 的 norm 抹掉
 #  时间戳/HEAD/日志前缀三行再比。说"逐字节"会让人对这道闸产生错误预期。)
 render_roster "$LOG_PREFIX" > "$ROSTER_FILE"
-echo "  roster -> $ROSTER_FILE(各腿状态一行,粘进 verify.md,别再手写)"
+echo "  roster -> $ROSTER_FILE(各腿状态一行,别再手写)"
 
 echo "  read all logs above, then arbitrate."
 
@@ -1220,31 +1037,6 @@ if [[ "$REVIEW_BUDGET" -ne 0 ]]; then
     [[ "${LEG_SELECTED[$_leg]}" -eq 1 && "${LEG_RC[$_leg]}" -eq 0 ]] && _evidence=$((_evidence + 1))
   done
   [[ "$_evidence" -gt 0 ]] || PANEL_RC=1
-fi
-
-# Controller-side compact observation. The roster/raw logs stay outside the repo;
-# only whitelisted actual facts enter the main track. Missing model/usage remain null.
-if [[ -n "$TRACK_NAME" ]]; then
-  _obs_legs=()
-  for _leg in "${LEGS[@]}"; do
-    [[ "${LEG_SELECTED[$_leg]}" -eq 1 ]] || continue
-    _obs_legs+=(--leg-result "${LEG_LOG[$_leg]%.log}.result.json")
-  done
-  PANEL_FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  PANEL_END_NS="$(date +%s%N)"
-  PANEL_DURATION_MS=$(( (PANEL_END_NS - PANEL_START_NS) / 1000000 ))
-  _obs_label="$(printf '%s' "$TASKNAME" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//;s/-*$//')"
-  [[ -n "$_obs_label" ]] || _obs_label=panel
-  _obs_label="${_obs_label:0:128}"
-  _run_id="$PANEL_RUN_ID"
-  if ! "$TRACK_RECORD_BIN" observe --repo "$CONTROL_REPO" --track "$TRACK_NAME" \
-      --run-id "$_run_id" --controller panel-review --event execution_finished \
-      --label "$_obs_label" --started-at "$PANEL_STARTED_AT" --finished-at "$PANEL_FINISHED_AT" \
-      --duration-ms "$PANEL_DURATION_MS" --exit-code "$PANEL_RC" --adapter panel-review \
-      --work-exit-code "$PANEL_RC" --risk "$IMPACT_RISK" \
-      "${_obs_legs[@]}" >/dev/null; then
-    echo "panel-review: OBSERVATION_WRITE_FAILED track=$TRACK_NAME run_id=$_run_id (controller rc 保持 $PANEL_RC)" >&2
-  fi
 fi
 
 exit "$PANEL_RC"

@@ -88,7 +88,7 @@ class GrokTest(unittest.TestCase):
         self.config = write_settings(self.d / 'settings')
         self.bin = self.d/'bin'; self.bin.mkdir()
         for name in ('subgrok','aiwork-config', '_aiwork_config.py','_grok-stream.py','_review-workspace.sh',
-                     '_review_result.py','_review_delivery.py','_my-review-gate.sh',
+                     '_review_result.py','_my-review-gate.sh',
                      'ro-repo-exec','panel-explore','panel-review','_panel-roster-lib.sh'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         self.fake = self.d/'fake'; self.fake.mkdir()
@@ -216,7 +216,7 @@ class GrokTest(unittest.TestCase):
         env=dict(self.env,PANEL_MIMO_LEG='off',PANEL_DEEPSEEK_LEG='off',PANEL_GLM_LEG='off',
                  PANEL_KIMI_LEG='off',PANEL_GEMINI_LEG='off',PANEL_GROK_LEG='agent')
         prefix=self.d/'panel'
-        result=subprocess.run([str(self.bin/'panel-review'),'--no-track','--no-my-review',
+        result=subprocess.run([str(self.bin/'panel-review'),'--no-my-review',
             '--budget','1',str(self.task),str(self.repo),str(prefix)],env=env,
             capture_output=True,text=True,timeout=35)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)

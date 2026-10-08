@@ -5,9 +5,8 @@
 # 绿了也打一行心跳,这样 cron 死了本身也看得见(P0-2「静默过期」的教训)。
 # 只跑桩/离线套件,不做真供应商探活(不烧额度)。
 #
-# 2026-08-06:改成**清单驱动**。此前是三行硬写的 T1/T2/T3,于是
-# `test-track-guard.sh`(08-04 建)和 `test-delegate-entry.sh`(08-06 建)
-# **谁都没被任何总跑调用过** —— 和 design-studio 那边 `tests/mcp-gate.sh` 成了孤儿脚本
+# 2026-08-06:改成清单驱动。此前是三行硬写的 T1/T2/T3,后加的套件
+# 谁都没被总跑调用过,和 design-studio 那边 `tests/mcp-gate.sh` 成了孤儿脚本
 # 是同一种病:病根不是缺哪条检查,是缺一个把它们全串起来的入口。
 # **新增判据套件 = 往下面这张表里加一行。**
 set -uo pipefail
@@ -22,7 +21,6 @@ SUITES=(
   "review-leg-reliability|python3|$ROOT/tests/test_review_leg_reliability.py"
   "app-token-scope|python3|$ROOT/tests/test_app_token_scope.py"
   "panel-candidates|python3|$ROOT/tests/test_panel_candidates.py"
-  "review-delivery|python3|$ROOT/tests/test_review_delivery.py"
   "review-result|python3|$ROOT/tests/test_review_result.py"
   "subgrok|python3|$ROOT/tests/test_subgrok.py"
   "subcursor|python3|$ROOT/tests/test_subcursor.py"
@@ -31,22 +29,12 @@ SUITES=(
   "panel-observation|bash|$ROOT/tests/test-panel-observation.sh"
   "panel-roster|bash|$ROOT/tests/test-panel-roster.sh"
   "panel-slice|bash|$ROOT/tests/test-panel-slice.sh"
-  "panel-round-discipline|bash|$ROOT/tests/test-panel-round-discipline.sh"
   "subcodex|bash|$ROOT/tests/test-subcodex.sh"
   "fix-oracle|bash|$ROOT/tests/test-submimo-fix-oracle.sh"
   "retry|python3|$ROOT/tests/test_submimo_retry.py"
-  "track-guard|bash|$ROOT/tests/test-track-guard.sh"
-  "track-record|bash|$ROOT/tests/test-track-record.sh"
-  "track-preflight|python3|$ROOT/tests/test_track_preflight.py"
-  "ledger|bash|$ROOT/tests/test-ledger.sh"
-  "track-links|bash|$ROOT/tests/test-track-links.sh"
   "delegate-entry|bash|$ROOT/tests/test-delegate-entry.sh"
-  "delegate-observation|bash|$ROOT/tests/test-delegate-observation.sh"
   "delegate-isolate|bash|$ROOT/tests/test-delegate-isolate.sh"
-  "worktree-sweep|bash|$ROOT/tests/test-worktree-sweep.sh"
-  "runlog|bash|$ROOT/tests/test-runlog.sh"
   "no-egress|bash|$ROOT/tests/test-no-egress.sh"
-  "evidence-lifetime|bash|$ROOT/tests/test-evidence-lifetime.sh"
   "review-workspace|bash|$ROOT/tests/test-review-workspace.sh"
   "workflow-docs|bash|$ROOT/tests/test-workflow-docs.sh"
   "aiwork-gate|bash|$ROOT/tests/test-aiwork-gate.sh"
@@ -66,7 +54,7 @@ if declare -f is_judging_surface >/dev/null; then
 fi
 
 # ── 孤儿判据套件(2026-08-08 四审 F2 实证)──────────────────────────────
-# 新写的 `tests/test-runlog.sh` 没被加进上面那张表 ⇒ 落盘当天绿的,此后**没有任何入口
+# 新写的判据套件没被加进上面那张表 ⇒ 落盘当天绿的,此后**没有任何入口
 # 再跑它**,烂掉不会有人知道。本文件头部自己写着「新增判据套件 = 往那张表里加一行」——
 # 靠"记得加"就等于没有闸,和 bin/ 名单那条债是同一笔。
 # 和 bin/ 名单**不同的是这里硬红**:`tests/test-*` 没有"运维脚本"那种歧义,
@@ -84,7 +72,7 @@ if [[ "${1:-}" == "--coverage-only" ]]; then
   if [[ -n "$uncovered" ]]; then
     echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(只扫 bin/):$uncovered"
   else
-    echo "ℹ️  规矩4 名单覆盖了 bin/ 下所有可执行文件(只扫 bin/,tests/ 与 track/templates/ 未扫)"
+    echo "ℹ️  规矩4 名单覆盖了 bin/ 下所有可执行文件(只扫 bin/)"
   fi
   if [[ -n "$orphans" ]]; then
     echo "🔴 有判据套件不在 SUITES 里(写了没人跑 = 从此静默腐烂):$orphans"
@@ -119,7 +107,7 @@ for i in "${!names[@]}"; do
 done
 
 if [[ -n "$uncovered" ]]; then
-  echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**,没扫 tests/ 与 track/templates/;只报不拦):"
+  echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**;只报不拦):"
   echo "   $uncovered"
 fi
 if [[ -n "$orphans" ]]; then

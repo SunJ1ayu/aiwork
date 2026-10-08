@@ -67,7 +67,6 @@ make_fixture() { # make_fixture <dir> <sleep> <rc>
   local d="$1" sl="$2" rc="$3" b="$1/bin" repo="$1/repo"
   mkdir -p "$b" "$repo" "$d/raw" "$d/state"
   cp "$ROOT/bin/panel-review" "$b/panel-review"
-  cp "$ROOT/bin/track-record" "$b/track-record"
   # 花名册渲染的共享库:panel-review 和 panel-roster 都 source 它(只许有一份)。
   # 真实 bin/ 里本来就在,夹具得跟上 —— 这是管线,不是断言。
   if [[ -f "$ROOT/bin/_panel-roster-lib.sh" ]]; then
@@ -115,7 +114,7 @@ echo "[R1/R2/R3] 控制器死在第一条腿交卷之前 —— 复刻 08-23 的
 d="$(mktemp -d)"; make_fixture "$d" 6 3        # 腿睡 6 秒后以 rc=3 退出
 pre="$d/raw/killed"
 env "${common_env[@]}" "${only_glm[@]}" PANEL_STATE_DIR="$d/state" \
-  bash "$d/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
+  bash "$d/bin/panel-review" --no-my-review --risk standard --budget 1 \
   "$d/task.md" "$d/repo" "$pre" >"$d/ctl.out" 2>&1 &
 ctl=$!
 wait_for "$pre.plan" 30                        # 等 plan 落盘(腿还在睡 6 秒,一条都没交卷)
@@ -177,7 +176,7 @@ echo "[R5] 正常路径下花名册**格式**不许变(verify.md 里粘的那行
 d5="$(mktemp -d)"; make_fixture "$d5" 0 0
 pre5="$d5/raw/normal"
 env "${common_env[@]}" PANEL_STATE_DIR="$d5/state" \
-  bash "$d5/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
+  bash "$d5/bin/panel-review" --no-my-review --risk standard --budget 1 \
   "$d5/task.md" "$d5/repo" "$pre5" >"$d5/ctl.out" 2>&1
 golden="$ROOT/tests/fixtures/panel-roster-format.golden"
 norm() {  # 抹掉天然会变的两样:时间戳、fixture 的 HEAD
@@ -208,7 +207,7 @@ make_leg "$d6/bin/subglm-agent" 0 9            # 底座腿挂(rc=9)
 make_leg "$d6/bin/subglm" 0 0                  # 聊天腿成
 pre6="$d6/raw/fallback"
 env "${common_env[@]}" "${only_glm[@]}" PANEL_STATE_DIR="$d6/state" \
-  bash "$d6/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
+  bash "$d6/bin/panel-review" --no-my-review --risk standard --budget 1 \
   "$d6/task.md" "$d6/repo" "$pre6" >"$d6/ctl.out" 2>&1
 check "R6: 底座腿那次的 state 单独留档(.agent.state)" \
   $([[ -s "$pre6.subglm.agent.state" ]]; echo $?)
@@ -227,7 +226,7 @@ echo "[R8] 共享库缺失必须 fail closed(2026-08-23 自己踩出来的)"
 # 静默放过 = 假绿,和 `env '=key'` rc=0 那次是同一种病。
 d8="$(mktemp -d)"; mkdir -p "$d8/bin"
 cp "$ROOT/bin/panel-review" "$d8/bin/panel-review"     # 故意**不**复制共享库
-out8="$(bash "$d8/bin/panel-review" --no-track --no-my-review /dev/null 2>&1)"; rc8=$?
+out8="$(bash "$d8/bin/panel-review" --no-my-review /dev/null 2>&1)"; rc8=$?
 # ⚠️ 这两条第一版是**为了错误的理由绿的**(红检 M7 当场照出来):
 #    改回裸 source 之后脚本照样非零退出(后面别的原因),而 bash 自己那句
 #    "No such file" 里也含库名 ⇒ 两条都撞对了,却没一条在问我要保证的事。
@@ -295,7 +294,7 @@ echo "[R11] 杀法二:SIGTERM 打**整个进程组**(断线的杀法,不是 time
 d11="$(mktemp -d)"; make_fixture "$d11" 6 3
 pre11="$d11/raw/grpkill"
 setsid env "${common_env[@]}" "${only_glm[@]}" PANEL_STATE_DIR="$d11/state" \
-  bash "$d11/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
+  bash "$d11/bin/panel-review" --no-my-review --risk standard --budget 1 \
   "$d11/task.md" "$d11/repo" "$pre11" >"$d11/ctl.out" 2>&1 &
 ctl11=$!
 wait_for "$pre11.plan" 30
@@ -392,7 +391,7 @@ d13="$(mktemp -d)"; make_fixture "$d13" 0 0
 pre13="$d13/raw/alloff"
 env "${common_env[@]}" "${_all_off[@]}" \
   PANEL_STATE_DIR="$d13/state" \
-  bash "$d13/bin/panel-review" --no-track --no-my-review --risk standard --budget 1 \
+  bash "$d13/bin/panel-review" --no-my-review --risk standard --budget 1 \
   "$d13/task.md" "$d13/repo" "$pre13" >"$d13/ctl.out" 2>&1
 rc13=$?
 check "R13a: 一条腿都派不出去时,控制器**响亮地失败**(budget>=1 却 0 条 ⇒ 非零)" \

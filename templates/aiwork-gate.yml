@@ -1,5 +1,5 @@
 # aiwork 放行关卡。判定代码在 SunJ1ayu/aiwork 的 gate/，策略在本仓库 main 的 .aiwork/policy.json。
-# 计划见 SunJ1ayu/aiwork 的 WORKFLOW-MIGRATION-PLAN.md（规则 G1–G8、M1），用法见 gate/README.md。
+# 计划在 git 历史里。用法见 gate/README.md。
 #
 # 防的误放行:没测过、没独立评审、自己审自己、改了 CI 或关卡自己、高风险只一家审过的 PR 被合进 main。
 # 删掉会怎样:放不放行又回到靠人看评论区自述。

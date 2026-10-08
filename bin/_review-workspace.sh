@@ -246,21 +246,9 @@ review_workspace_prepare() { # source-repo leg-name
   REVIEW_SNAPSHOT_OBJECT_FORMAT="$object_format"
   REVIEW_SNAPSHOT_TREE="$tree1"
   REVIEW_SNAPSHOT_INDEX_TREE="$index_tree1"
-  REVIEW_DELIVERY_DIGEST=""
-  if [[ -n "${AIWORK_REVIEW_TRACK:-}" ]]; then
-    local delivery_helper="$(dirname "${BASH_SOURCE[0]}")/_review_delivery.py"
-    REVIEW_DELIVERY_DIGEST="$(python3 "$delivery_helper" --repo "$REVIEW_WORK_REPO" \
-      --track "$AIWORK_REVIEW_TRACK" --tree "$tree1")" || {
-      review_workspace__say '生成交付指纹失败；模型不会启动'
-      review_workspace_cleanup >/dev/null 2>&1 || true
-      return 78
-    }
-  fi
   export REVIEW_SOURCE_REPO REVIEW_WORKSPACE_BASE_REAL REVIEW_WORKSPACE_DIR
   export REVIEW_WORK_REPO REVIEW_SNAPSHOT_HEAD REVIEW_SNAPSHOT_OBJECT_FORMAT
-  # REVIEW_DELIVERY_DIGEST 也必须导出:写 facts 的那一步一旦被挪进子进程,
-  # 只靠 sourced shell 的全局变量就会**静默**退回无绑定的 v1 subject(RW9 钉住)。
-  export REVIEW_SNAPSHOT_TREE REVIEW_SNAPSHOT_INDEX_TREE REVIEW_DELIVERY_DIGEST
+  export REVIEW_SNAPSHOT_TREE REVIEW_SNAPSHOT_INDEX_TREE
   return 0
 }
 
@@ -278,9 +266,6 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
   local degraded="${8:-}" reported="${9:-}"
   local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper="${AIWORK_REVIEW_RESULT_BIN:-}"
   local -a outcome=()
-  if [[ -n "${REVIEW_DELIVERY_DIGEST:-}" ]]; then
-    outcome+=(--delivery-track "$AIWORK_REVIEW_TRACK" --delivery-digest "$REVIEW_DELIVERY_DIGEST")
-  fi
   [[ -n "$output" ]] || return 0
   [[ -n "$helper" && -f "$helper" ]] \
     || { review_workspace__say 'typed facts producer 缺件'; return 78; }

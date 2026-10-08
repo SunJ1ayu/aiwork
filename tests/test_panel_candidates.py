@@ -39,11 +39,6 @@ args = [sys.executable, helper, 'facts', '--output', os.environ['AIWORK_REVIEW_F
  '--worktree-tree-oid', git('rev-parse', 'HEAD^{tree}'),
  '--view-delivery-state', 'complete', '--view-mode', 'full_snapshot',
  '--evidence-completeness', 'complete']
-track = os.environ.get('AIWORK_REVIEW_TRACK')
-if track:
-    digest = subprocess.check_output([sys.executable, str(pathlib.Path(helper).with_name('_review_delivery.py')),
-       '--repo', repo, '--track', track, '--source', 'working'], text=True).strip()
-    args += ['--delivery-track', track, '--delivery-digest', digest]
 subprocess.check_call(args)
 '''
 
@@ -86,7 +81,7 @@ class CandidateTest(unittest.TestCase):
     def run_panel(self, members, mode='review', risk='high', env=None, flags=None):
         self.n += 1; prefix = self.d / f'run{self.n}'
         args = [str(self.bin / ('panel-' + mode)), '--members', members]
-        if mode == 'review': args += ['--no-track', '--no-my-review', '--risk', risk]
+        if mode == 'review': args += ['--no-my-review', '--risk', risk]
         args += flags or []
         args += [str(self.task), str(self.repo), str(prefix)]
         result = subprocess.run(args, env=dict(self.env, **(env or {})),
@@ -177,27 +172,6 @@ class CandidateTest(unittest.TestCase):
         self.assertEqual(data[0]['model']['requested'], 'xiaomi/mimo-v2.5-pro')
         self.assertFalse(coverage_eligible(data[0]))
 
-    def test_typed_track_records_dynamic_members_and_delivery(self):
-        track = self.repo / 'tracks/choice'; track.mkdir(parents=True)
-        (track / 'decision.json').write_text(json.dumps({
-            'schema_version': 2, 'track': 'choice',
-            'impact': {'level': 'high', 'factors': ['judging_control']},
-            'design': {'uncertainty': 'low', 'premise_attack': {'status': 'not_required', 'evidence': []}},
-            'execution_plan': {'adapter': 'main', 'model': 'gpt-6-astra'},
-            'outcome': {'verdict': None}}))
-        prefix = self.d / 'bound'
-        r = subprocess.run([str(self.bin / 'panel-review'), '--members',
-            'subcursor@composer-2.5,subcursor@cursor-grok-4.6-high', '--track', 'choice',
-            '--no-my-review', str(self.task), str(self.repo), str(prefix)],
-            env=self.env, text=True, capture_output=True, timeout=35)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertNotIn('OBSERVATION_WRITE_FAILED', r.stderr)
-        events = list((track / 'observations').glob('*.json'))
-        self.assertEqual(len(events), 1)
-        legs = json.loads(events[0].read_text())['actual']['legs']
-        self.assertEqual(len(legs), 2)
-        self.assertTrue(all(x['subject']['delivery']['track'] == 'choice' for x in legs))
-
     def test_explore_shared_selection_cannot_supply_review_coverage(self):
         r, p = self.run_panel('subcursor@cursor-grok-4.6-high,subcursor@composer-2.5', mode='explore', env={'EXPLORE_PASS': '1'})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -217,9 +191,6 @@ class CandidateTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(self.results(p)[0]['failure_kind'], 'none')
             self.assertIn('EXPLORE(rc=0,coverage=none)', Path(str(p) + '.roster').read_text())
-        r, p = self.run_panel('subcursor@composer-2.5', mode='explore', flags=['--track', 'choice'])
-        self.assertNotEqual(r.returncode, 0)
-        self.assertFalse(list(self.d.glob(p.name + '.*.called')))
 
     def test_roster_uses_frozen_members_after_config_changes(self):
         r, p = self.run_panel('subcursor@cursor-grok-4.6-high,subcursor@composer-2.5')
@@ -261,7 +232,7 @@ class CandidateTest(unittest.TestCase):
         self.n += 1; prefix = self.d / f'run{self.n}'
         off = {k: 'off' for k in ('PANEL_MIMO_LEG', 'PANEL_DEEPSEEK_LEG', 'PANEL_GLM_LEG',
                                   'PANEL_KIMI_LEG', 'PANEL_GEMINI_LEG', 'PANEL_GROK_LEG')}
-        result = subprocess.run([str(self.bin / 'panel-review'), '--no-track', '--no-my-review',
+        result = subprocess.run([str(self.bin / 'panel-review'), '--no-my-review',
                                  '--risk', 'standard', str(self.task), str(self.repo), str(prefix)],
                                 env=dict(self.env, **off, CURSOR_MODEL=model, **(env or {})),
                                 capture_output=True, text=True, timeout=35)

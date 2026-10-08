@@ -242,7 +242,7 @@ test_wrapper_helper_failure() {
   echo '[RW6] no wrapper invokes a model when workspace preparation fails'
   local d b repo rc mimo_rc deepseek_rc glm_rc kimi_rc
   d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
-  cp "$BIN/submimo" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review_delivery.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py"    "$BIN/subagent"    "$BIN/subdeepseek-agent" "$BIN/subglm-agent" \
+  cp "$BIN/submimo" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py"    "$BIN/subagent"    "$BIN/subdeepseek-agent" "$BIN/subglm-agent" \
      "$BIN/subkimi" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
 review_workspace_prepare() { return 78; }
@@ -376,71 +376,6 @@ case "${TEST_REVIEW_WORKSPACE_CASE:-all}" in
   *) echo "unknown TEST_REVIEW_WORKSPACE_CASE:${TEST_REVIEW_WORKSPACE_CASE}" >&2; exit 2 ;;
 esac
 
-test_delivery_binding() {
-  echo '[RW8] 绑定 track 的评审必须带上交付指纹,且与工作树侧同解'
-  local d repo rc facts result digest
-  d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
-  mkdir -p "$repo/tracks/example"
-  printf '# design\n' > "$repo/tracks/example/design.md"
-  printf '# pending\n' > "$repo/tracks/example/verify.md"
-  REVIEW_WORKSPACE_BASE="$d/workspaces"
-  export AIWORK_REVIEW_TRACK=example
-  review_workspace_prepare "$repo" oracle-delivery >/dev/null 2>&1
-  rc=$?
-  check 'RW8: 绑定 track 时仍能准备工作副本' "$rc"
-  if [[ $rc -ne 0 ]]; then unset AIWORK_REVIEW_TRACK; rm -rf "$d"; return; fi
-
-  # 交付视图有**两套扫描实现**:这里的 __scan_view(shell)和归档闸用的
-  # delivery_fingerprint(python)。两边一旦不同解,binding 永远对不上 ⇒ 每一次归档
-  # 都 BLOCK,而且要等两条腿派完才发现。所以在这里当场对一次账,别留给归档时才炸。
-  digest="$(python3 "$BIN/_review_delivery.py" --repo "$repo" --track example --source working)"
-  [[ -n "${REVIEW_DELIVERY_DIGEST:-}" && "$REVIEW_DELIVERY_DIGEST" == "$digest" ]]
-  check 'RW8: 快照侧指纹 == 工作树侧指纹(两套扫描不许各走各的)' $?
-
-  facts="$d/facts.json"; result="$d/result.json"
-  AIWORK_REVIEW_FACTS_PATH="$facts" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
-    review_workspace_write_facts m m subscription >/dev/null 2>&1
-  check 'RW8: 带 track 时 facts 写得出来' $?
-  python3 "$BIN/_review_result.py" emit --result "$result" --facts "$facts" \
-    --run-id rw8 --name submimo --family xiaomi --adapter submimo --exit-code 0 \
-    --task-sha256 "sha256:$(printf 'task' | sha256sum | cut -d' ' -f1)" \
-    --log "$facts" --duration-ms 1 >/dev/null 2>&1
-  check 'RW8: 腿结果落盘' $?
-  python3 - "$result" "$digest" <<'RW8PY'
-import json, sys
-subject = json.load(open(sys.argv[1], encoding="utf-8"))["subject"]
-assert subject["manifest_version"] == 2, subject["manifest_version"]
-assert subject["delivery"] == {"policy_version": 1, "track": "example",
-                               "digest": sys.argv[2]}, subject
-RW8PY
-  check 'RW8: 指纹一路带到 subject 上(评审证据真绑住了交付内容)' $?
-
-  # RW9:交付指纹必须**跨进程**可见,不能只在 sourced shell 里恰好看得见。
-  # 现在 prepare 与 write_facts 由同一个 sourced shell 先后调用,所以
-  # REVIEW_DELIVERY_DIGEST 即使没进 export 清单也照常工作 —— 那是"恰好可见",
-  # 不是不变量(同族 6 个 REVIEW_SNAPSHOT_*/REVIEW_WORK_REPO 全都导出了,就它没有)。
-  # 哪天某个 wrapper 把写 facts 挪进子进程,这条链会**静默**产出 v1 subject
-  # (带 source、照样计入 coverage),归档端要等到比较时才响,而观测侧那时已经是
-  # "看起来健康、其实没绑定" —— 正是本单要消灭的那一类失败。
-  # 🔴 必须用**新 bash 进程**问它:subshell 不行 —— fork 会把非导出变量一起带过去,
-  # 那样这条判据永远绿 = 白写。2026-09-09 由一条评审腿指出,主裁复核后钉住。
-  local xfacts="$d/facts-xproc.json"
-  env AIWORK_REVIEW_FACTS_PATH="$xfacts" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
-    bash -c '. "$1"; review_workspace_write_facts m m subscription' _ "$HELPER" >/dev/null 2>&1
-  check 'RW9: 跨进程也写得出 facts(先钉住红不在别处)' $?
-  python3 - "$xfacts" "$digest" <<'RW9PY'
-import json, sys
-facts = json.load(open(sys.argv[1], encoding="utf-8"))
-assert facts.get("delivery") == {"policy_version": 1, "track": "example",
-                                 "digest": sys.argv[2]}, facts.get("delivery")
-RW9PY
-  check 'RW9: 交付指纹跨进程可见(不许只靠 sourced shell 的全局变量)' $?
-
-  unset AIWORK_REVIEW_TRACK
-  review_workspace_cleanup >/dev/null 2>&1
-  rm -rf "$d"
-}
-
 echo '=== review workspace oracle ==='
 if [[ ! -f "$HELPER" ]]; then
   bad "RW1: helper exists ($HELPER)"
@@ -455,7 +390,6 @@ else
   test_parallel_isolation
   test_source_race_and_cleanup_guard
   test_gitlink_fails_closed
-  test_delivery_binding
 fi
 test_wrapper_helper_failure
 [[ -f "$HELPER" ]] && test_mutation_sensitivity

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""triage —— 开 track 之前的秒级分诊(TypeSafe / Jev)。
+"""triage —— 把一段描述交给分诊模型，拿回几个带概率的读数(TypeSafe / Jev)。
 
 ## 这东西是什么,不是什么
 
 **是**:把一单的情况喂给一个不生成文字的模型,0.5 秒拿回几个带概率的读数
 (动没动数据/权限、动没动判据、有没有未验证前提、交付物在不在仓外、下一步该做什么),
-贴进 decision.json 当**提醒**。三次调用不到万分之一美分。
+当**提醒**。三次调用不到万分之一美分。
 
 **不是**:判据、闸、裁决、第五条评审腿。
 
@@ -21,9 +21,8 @@
 
 ## 用法
 
-  triage <文件>                 # 一段描述这一单的话(proposal 那种)
+  triage <文件>                 # 一段描述这一单的话
   triage -                      # 从 stdin 读
-  triage --track <track 目录>   # 自动拼 proposal.md + design.md
   triage ... --json             # 机器读;不加就是给人看的
 
 key 放 ~/.config/aiwork/typesafe.env(0600,`export TYPESAFE_API_KEY=...`)。
@@ -65,16 +64,6 @@ def load_key():
 
 
 def read_state(args):
-    if args.get("track"):
-        d = Path(args["track"])
-        parts = []
-        for name in ("proposal.md", "design.md"):
-            f = d / name
-            if f.exists():
-                parts.append(f"=== {name} ===\n{f.read_text().strip()}")
-        if not parts:
-            die(f"{d} 里没有 proposal.md / design.md")
-        return "\n\n".join(parts)
     src = args["file"]
     return sys.stdin.read() if src == "-" else Path(src).read_text()
 
@@ -98,22 +87,19 @@ def ask(key, model, state, questions):
 def main():
     refuse_if_judging()
     argv = sys.argv[1:]
-    args = {"file": None, "track": None, "json": False}
+    args = {"file": None, "json": False}
     i = 0
     while i < len(argv):
         a = argv[i]
         if a == "--json":
             args["json"] = True
-        elif a == "--track":
-            i += 1
-            args["track"] = argv[i] if i < len(argv) else die("--track 后面要跟目录")
         elif a in ("-h", "--help"):
             print(__doc__)
             return 0
         else:
             args["file"] = a
         i += 1
-    if not args["file"] and not args["track"]:
+    if not args["file"]:
         print(__doc__)
         return 2
 
