@@ -10,7 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
+from typing import NamedTuple
 import shutil
 import subprocess
 import sys
@@ -33,10 +33,22 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 CONCLUSION_REQUIREMENT = ("最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
                           "Conclusion: NEEDS_MORE_INFO。")
 CHAT_LEGS = frozenset({"subdeepseek", "subglm"})
-# A repository reader can open the snapshot and run git. Past this size of the
-# diff that remains after whole-file deletion bodies are removed, the task names
-# that command instead of pasting the diff; the review stays complete.
+# Chat legs always receive the inline diff; route_task switches them when the
+# task exceeds the chat limit. A repository reader past this size reads the
+# complete diff from the snapshot file instead of pasting it. Either way the
+# review is of the complete diff, deletions included.
 READER_INLINE_DIFF_BYTES = 200 * 1024
+REVIEW_DIFF_PATH = "aiwork-review.diff"
+
+
+class Change(NamedTuple):
+    status: str
+    path: str
+    old_path: str | None
+    added: int | None
+    removed: int | None
+
+
 READER_TIMEOUT_ENV = {
     "subdeepseek-agent": "DEEPSEEK_TIMEOUT", "subglm-agent": "ZHIPU_TIMEOUT",
     "subcodex": "SUBCODEX_TIMEOUT", "subcursor": "CURSOR_TIMEOUT",
@@ -196,7 +208,7 @@ def check_current_head(expected: str, current: dict) -> None:
 
 
 def snapshot(token: str, pr: dict, directory: Path, *, repository: str
-             ) -> tuple[Path, str, list[str], str, list[tuple[str, int | None]], list[str], int]:
+             ) -> tuple[Path, str, list[str], str, list[Change]]:
     repo = directory / "repo"
     repo.mkdir()
     run(["git", "init", "-q", str(repo)])
@@ -219,12 +231,12 @@ def snapshot(token: str, pr: dict, directory: Path, *, repository: str
     if "160000 " in run(["git", "-C", str(repo), "ls-files", "--stage"]):
         raise ReviewError("snapshot contains submodules; full view cannot be verified")
     merge_base = run(["git", "-C", str(repo), "merge-base", base, head]).strip()
-    files, command_files, diff, deleted, raw_bytes = collect_review_diff(repo, merge_base, head)
+    files, diff, changes = collect_review_diff(repo, merge_base, head)
     if not files:
         raise ReviewError("PR has no changed files relative to merge base")
-    if not diff and not deleted:
+    if not diff.strip():
         raise ReviewError("PR diff is empty")
-    return repo, merge_base, files, diff, deleted, command_files, raw_bytes
+    return repo, merge_base, files, diff, changes
 
 
 def main_document(repo: Path, path: str, *, required: bool = True) -> str:
@@ -277,104 +289,145 @@ def _git_bytes(repo: Path, *args: str) -> bytes:
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True).stdout
 
 
-def _nul_paths(blob: bytes) -> list[str]:
-    return [os.fsdecode(item) for item in blob.split(b"\0") if item]
+def _z_fields(blob: bytes) -> list[bytes]:
+    fields = blob.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    return fields
 
 
-def _deleted_numstat(blob: bytes) -> list[tuple[str, int | None]]:
-    """numstat -z records are added, removed, path, NUL. Split twice so a tab in the path stays."""
-    deleted: list[tuple[str, int | None]] = []
-    for record in blob.split(b"\0"):
-        if not record:
-            continue
-        _added, removed, path = record.split(b"\t", 2)
-        count = None if removed == b"-" else int(removed)
-        deleted.append((os.fsdecode(path), count))
-    return deleted
+def _take_fields(fields: list[bytes], index: int, count: int) -> tuple[list[bytes], int]:
+    if index + count > len(fields):
+        raise ReviewError("git -z record is truncated")
+    return fields[index:index + count], index + count
+
+
+def _parse_name_status(blob: bytes) -> list[tuple[str, str, str | None]]:
+    """Status letter, path, and the old path for a rename or copy. From git -z, not a diff header."""
+    fields = _z_fields(blob)
+    rows: list[tuple[str, str, str | None]] = []
+    index = 0
+    while index < len(fields):
+        status, index = _take_fields(fields, index, 1)
+        letter = os.fsdecode(status[0])[:1]
+        if not letter:
+            raise ReviewError("git name-status -z record is empty")
+        if letter in "RC":
+            pair, index = _take_fields(fields, index, 2)
+            rows.append((letter, os.fsdecode(pair[1]), os.fsdecode(pair[0])))
+        else:
+            path, index = _take_fields(fields, index, 1)
+            rows.append((letter, os.fsdecode(path[0]), None))
+    return rows
+
+
+def _count(field: bytes) -> int | None:
+    return None if field == b"-" else int(field)
+
+
+def _parse_numstat(blob: bytes) -> list[tuple[int | None, int | None, str, str | None]]:
+    """Added, removed, path, and the old path when numstat -z emits the empty rename field."""
+    fields = _z_fields(blob)
+    rows: list[tuple[int | None, int | None, str, str | None]] = []
+    index = 0
+    while index < len(fields):
+        record, index = _take_fields(fields, index, 1)
+        added_b, removed_b, path_b = record[0].split(b"\t", 2)
+        if path_b == b"":
+            pair, index = _take_fields(fields, index, 2)
+            rows.append((_count(added_b), _count(removed_b), os.fsdecode(pair[1]), os.fsdecode(pair[0])))
+        else:
+            rows.append((_count(added_b), _count(removed_b), os.fsdecode(path_b), None))
+    return rows
 
 
 def collect_review_diff(repo: Path, merge_base: str, head: str
-                        ) -> tuple[list[str], list[str], str, list[tuple[str, int | None]], int]:
-    """Paths, non-deleted paths, diff without whole-file deletions, deletions, and the original size.
+                        ) -> tuple[list[str], str, list[Change]]:
+    """Changed paths, the complete diff, and one status row per path from git -z.
 
-    Deleted paths and line counts come from git -z numstat. The remaining diff and the
-    command-list names exclude deletions with --diff-filter=d. Nothing parses a diff header.
+    name-status and numstat are the same diff. A rename keeps both paths. Nothing parses a diff header.
     """
-    files = _nul_paths(_git_bytes(repo, "diff", "--name-only", "-z", merge_base, head))
-    command_files = _nul_paths(_git_bytes(
-        repo, "diff", "--name-only", "-z", "--diff-filter=d", merge_base, head))
-    diff = run(["git", "-C", str(repo), "diff", "--binary", "--no-ext-diff",
-                "--diff-filter=d", merge_base, head])
-    deleted = _deleted_numstat(_git_bytes(
-        repo, "diff", "--diff-filter=D", "--numstat", "-z", merge_base, head))
-    if deleted and not diff.strip():
-        raw_bytes = len(_git_bytes(
-            repo, "diff", "--binary", "--no-ext-diff", "--diff-filter=D", merge_base, head))
-    else:
-        raw_bytes = len(diff.encode("utf-8"))
-    return files, command_files, diff, deleted, raw_bytes
+    spec = ["--find-renames", merge_base, head]
+    status_rows = _parse_name_status(_git_bytes(repo, "diff", "--name-status", "-z", *spec))
+    stat_rows = _parse_numstat(_git_bytes(repo, "diff", "--numstat", "-z", *spec))
+    if len(status_rows) != len(stat_rows):
+        raise ReviewError("git name-status and numstat disagree")
+    changes: list[Change] = []
+    files: list[str] = []
+    for status, stat in zip(status_rows, stat_rows):
+        letter, path, old = status
+        added, removed, stat_path, stat_old = stat
+        if path != stat_path or old != stat_old:
+            raise ReviewError("git name-status and numstat disagree")
+        changes.append(Change(letter, path, old, added, removed))
+        files.append(path)
+    diff = run(["git", "-C", str(repo), "diff", "--binary", "--no-ext-diff", *spec])
+    return files, diff, changes
 
 
-def _deletion_section(deleted: list[tuple[str, int | None]]) -> str:
-    if not deleted:
-        return ''
-    lines = ['## 整文件删除（只列路径和行数，不含内容）']
-    for path, count in deleted:
-        shown = json.dumps(path, ensure_ascii=False)
-        if count is None:
-            lines.append(f'- {shown}（二进制文件）')
-        else:
-            lines.append(f'- {shown}（{count} 行）')
-    return '\n'.join(lines) + '\n\n'
+def place_review_diff(repo: Path, diff: str) -> str:
+    """Put the complete diff where the review snapshot copies untracked files."""
+    target = repo / REVIEW_DIFF_PATH
+    if target.exists() or target.is_symlink():
+        raise ReviewError(f"{REVIEW_DIFF_PATH} already exists in the checkout; refusing to overwrite it")
+    tracked = subprocess.run(
+        ["git", "-C", str(repo), "cat-file", "-e", f"HEAD:{REVIEW_DIFF_PATH}"],
+        capture_output=True, check=False)
+    if tracked.returncode == 0:
+        raise ReviewError(f"{REVIEW_DIFF_PATH} is already tracked; refusing to overwrite it")
+    target.write_bytes(diff.encode("utf-8"))
+    ignored = subprocess.run(
+        ["git", "-C", str(repo), "check-ignore", "-q", "--", REVIEW_DIFF_PATH],
+        capture_output=True, check=False)
+    if ignored.returncode == 0:
+        target.unlink()
+        raise ReviewError(f"{REVIEW_DIFF_PATH} is ignored, so the review snapshot would not include it")
+    return REVIEW_DIFF_PATH
 
 
-def _diff_commands(merge_base: str, head: str, names: list[str]) -> str:
-    return '\n'.join(
-        f'git diff {merge_base}..{head} -- {shlex.quote(name)}' for name in names)
+def _change_line(change: Change) -> str:
+    shown = json.dumps(change.path, ensure_ascii=False)
+    if change.old_path is not None:
+        shown = f"{json.dumps(change.old_path, ensure_ascii=False)} → {shown}"
+    counts = "二进制文件" if change.added is None or change.removed is None else f"+{change.added} -{change.removed}"
+    return f"- {change.status} {shown} {counts}\n"
+
+
+def compose_task(repo: Path, *, reader: bool, number: int, pr: dict, merge_base: str,
+                 files: list[str], diff: str, changes: list[Change], review_rules: str,
+                 risks: str, rules_sha: str, repository: str) -> str:
+    diff_file = None
+    if reader and len(diff.encode("utf-8")) > READER_INLINE_DIFF_BYTES:
+        diff_file = place_review_diff(repo, diff)
+    return task_text(number, pr, merge_base, files, diff, review_rules, risks,
+                     rules_sha=rules_sha, repository=repository, changes=changes,
+                     reader=reader, diff_file=diff_file)
 
 
 def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
               review_rules: str, risks: str, *, rules_sha: str, repository: str,
-              deleted: list[tuple[str, int | None]], command_files: list[str],
-              raw_bytes: int, reader: bool = False) -> str:
+              changes: list[Change] | None = None, reader: bool = False,
+              diff_file: str | None = None) -> str:
     rules_repository, rules_path = REVIEW_RULES_SOURCE
-    inline = diff
-    inline_bytes = len(inline.encode('utf-8'))
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for name in command_files:
-        if name in seen:
-            continue
-        ordered.append(name)
-        seen.add(name)
-    command_files = ordered
+    inline_bytes = len(diff.encode("utf-8"))
     omit_inline = reader and inline_bytes > READER_INLINE_DIFF_BYTES
-    head = pr['head']['sha']
-    file_list = "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
+    head = pr["head"]["sha"]
     if omit_inline:
-        notice = ""
-        if deleted:
-            notice = "整文件删除只列在上面，不要把那些文件的正文读进上下文。\n"
+        if not diff_file:
+            raise ReviewError("over-limit reader task has no snapshot diff file")
+        file_list = "## 改动文件\n" + "".join(_change_line(change) for change in changes or [])
         diff_section = (
             "## diff\n"
-            f"diff 为 {inline_bytes} 字节，超过 {READER_INLINE_DIFF_BYTES} 字节，任务书不内联。\n"
-            + notice
-            + "请对下面每个文件执行命令自己读；这样读到的 diff 仍是这次完整评审。\n"
-            "```text\n" + _diff_commands(merge_base, head, command_files) + "\n```\n\n"
+            f"完整 diff 为 {inline_bytes} 字节，超过 {READER_INLINE_DIFF_BYTES} 字节，不写进任务书。\n"
+            f"完整 diff 在本次评审快照的 {json.dumps(diff_file, ensure_ascii=False)}，含删除内容。"
+            "请读取这个文件，包括被删文件原来做什么。\n\n"
         )
-    elif reader and raw_bytes > READER_INLINE_DIFF_BYTES and not inline.strip():
-        diff_section = (
-            "## diff\n"
-            f"原 diff 为 {raw_bytes} 字节，超过 {READER_INLINE_DIFF_BYTES} 字节。"
-            "整文件删除只列路径和行数，不要把这些文件的正文读进上下文。\n"
-            "没有其余 diff。核对未整文件删除的文件时用 "
-            f"git diff {merge_base}..{head} -- <文件>；这样读仍是完整评审。\n\n"
-        )
-    elif inline.strip():
-        title = '## diff（merge base → HEAD，不含上面的整文件删除）' if deleted else '## 完整 diff（merge base → HEAD）'
-        diff_section = title + "\n```diff\n" + inline + "\n```\n\n"
+    elif diff.strip():
+        file_list = "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
+        diff_section = "## 完整 diff（merge base → HEAD）\n```diff\n" + diff + "\n```\n\n"
     else:
-        diff_section = ''
+        file_list = "## 改动文件\n" + "".join(f"- {json.dumps(name, ensure_ascii=False)}\n" for name in files)
+        diff_section = ""
     return (
         f"# {repository} PR #{number} · 当前 HEAD 的完整评审\n\n"
         f"HEAD: {head} ({pr['head']['ref']})\n"
@@ -392,7 +445,7 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
         + "\n\n## 项目 main 的 .aiwork/accepted-risks.md（原文；不存在时为无）\n\n" + risks
         + "\n\n"
         + file_list
-        + "\n" + _deletion_section(deleted) + diff_section
+        + "\n" + diff_section
         + CONCLUSION_REQUIREMENT + "\n"
     )
 
@@ -484,18 +537,17 @@ def main() -> int:
             directory = Path(temporary)
             run_id = f"pr-{repository.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}-{directory.name.removeprefix('aiwork-review-pr-')}"
             try:
-                repo, merge_base, files, diff, deleted, command_files, raw_bytes = snapshot(
+                repo, merge_base, files, diff, changes = snapshot(
                     token, pr, directory, repository=repository)
                 rules_sha, review_rules = aiwork_main_rules()
                 risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
                 task = directory / "task.md"
 
                 def write_task(reader: bool) -> None:
-                    task.write_text(task_text(args.pr, pr, merge_base, files, diff,
-                                              review_rules, risks, rules_sha=rules_sha,
-                                              repository=repository, deleted=deleted,
-                                              command_files=command_files, raw_bytes=raw_bytes,
-                                              reader=reader), encoding="utf-8")
+                    task.write_text(compose_task(
+                        repo, reader=reader, number=args.pr, pr=pr, merge_base=merge_base,
+                        files=files, diff=diff, changes=changes, review_rules=review_rules,
+                        risks=risks, rules_sha=rules_sha, repository=repository), encoding="utf-8")
 
                 requested_reader = args.leg not in CHAT_LEGS
                 write_task(requested_reader)

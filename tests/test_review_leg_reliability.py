@@ -71,8 +71,7 @@ class ReliabilityTests(unittest.TestCase):
         return f'http://127.0.0.1:{server.server_port}', payloads
 
     def run_review(self, leg='subdeepseek', *, responses=None, env=None,
-                   fake_attempts=None, missing_agent=False, files=None,
-                   deleted=None, command_files=None, raw_bytes=None):
+                   fake_attempts=None, missing_agent=False, files=None, changes=None):
         """Run the real publisher, leg, chat engine and result producer offline."""
         default_response = [
             {'choices': [{'message': {'content': 'Checked file.\nConclusion: PASS'},
@@ -144,9 +143,8 @@ class ReliabilityTests(unittest.TestCase):
                 patch.object(self.review, 'pr_state', return_value=pr), \
                 patch.object(self.review, 'snapshot', return_value=(
                     self.repo, self.base, files or ['file'], self.diff,
-                    [] if deleted is None else deleted,
-                    (files or ['file']) if command_files is None else command_files,
-                    len(self.diff.encode()) if raw_bytes is None else raw_bytes)), \
+                    changes if changes is not None else [
+                        self.review.Change('M', (files or ['file'])[0], None, 1, 0)])), \
                 patch.object(self.review, 'aiwork_main_rules', return_value=('d' * 40, 'Trusted rules.')), \
                 patch.object(self.review, 'main_document', return_value='无'), \
                 patch.object(self.review, 'github', side_effect=github), \
@@ -169,8 +167,7 @@ class ReliabilityTests(unittest.TestCase):
               'base': {'sha': self.base, 'ref': 'main'}}
         padded = self.diff + 'x\n' * 75000
         task = self.review.task_text(1, pr, self.base, ['file'], padded,
-                                     'Trusted rules.', '无', rules_sha='d' * 40, repository='SunJ1ayu/aiwork',
-                                     deleted=[], command_files=['file'], raw_bytes=len(padded.encode()))
+                                     'Trusted rules.', '无', rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
         tail = '\n'.join(task.splitlines()[-3:])
         self.assertIn('最后独占一行写 Conclusion: PASS', tail)
         self.assertIn('Conclusion: BLOCK', tail)
@@ -191,50 +188,47 @@ class ReliabilityTests(unittest.TestCase):
                 block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
                 self.assertEqual(block['family'], family)
 
-    def test_large_deletion_reader_task_stays_complete_without_deleted_body(self):
-        full, (files, command_files, diff, deleted, raw_bytes), count = self.whole_file_deletion_view()
+    def test_large_deletion_reader_points_at_the_snapshot_diff(self):
+        full, files, diff, changes, count = self.whole_file_deletion_view()
         self.diff = diff
-        limit = 200 * 1024
+        limit = self.review.READER_INLINE_DIFF_BYTES
         self.assertIn('DELETED_PAYLOAD_9f3c', full)
-        self.assertNotIn('DELETED_PAYLOAD_9f3c', diff)
-        self.assertGreater(raw_bytes, limit)
+        self.assertGreater(len(diff.encode()), limit)
         rc, payloads, posted, _, stderr = self.run_review(
-            'subdeepseek-agent', files=files, deleted=deleted, command_files=command_files,
-            raw_bytes=raw_bytes, fake_attempts=[{}])
+            'subdeepseek-agent', files=files, changes=changes, fake_attempts=[{}])
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(payloads, [])
         self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
         task = self.seen_tasks[0]
         self.assertLessEqual(len(task.encode()), limit)
         self.assertNotIn('DELETED_PAYLOAD_9f3c', task)
-        self.assertIn(f'（{count} 行）', task)
-        self.assertIn(f'git diff {self.base}..{self.head} -- <文件>', task)
-        self.assertNotIn('-- gone.txt', task)
-        self.assertIn('不要把这些文件的正文读进上下文', task)
-        self.assertEqual(self.review.READER_INLINE_DIFF_BYTES, limit)
+        self.assertNotIn('git diff ', task)
+        self.assertNotIn('不要把', task)
+        self.assertNotIn('整文件删除', task)
+        self.assertIn(f'- D {json.dumps("gone.txt")} +0 -{count}', task)
+        self.assertIn('DELETED_PAYLOAD_9f3c', (self.repo / self.review.REVIEW_DIFF_PATH).read_text())
         block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
         self.assertEqual(block['completeness'], 'complete')
 
-    def test_large_deletion_stays_on_the_chat_leg_without_the_deleted_body(self):
-        full, (files, command_files, diff, deleted, raw_bytes), count = self.whole_file_deletion_view()
+    def test_large_deletion_switches_chat_to_the_reader(self):
+        full, files, diff, changes, count = self.whole_file_deletion_view()
         self.diff = diff
-        limit = 200 * 1024
         self.assertIn('DELETED_PAYLOAD_9f3c', full)
-        self.assertNotIn('DELETED_PAYLOAD_9f3c', diff)
-        self.assertGreater(raw_bytes, limit)
+        self.assertGreater(len(diff.encode()), 120000)
         rc, payloads, posted, _, stderr = self.run_review(
-            'subdeepseek', files=files, deleted=deleted, command_files=command_files,
-            raw_bytes=raw_bytes, fake_attempts=[{}])
+            'subdeepseek', files=files, changes=changes, fake_attempts=[{}])
         self.assertEqual(rc, 0, stderr)
-        task = self.seen_tasks[0]
-        self.assertLessEqual(len(task.encode()), limit)
-        self.assertNotIn('DELETED_PAYLOAD_9f3c', task)
-        self.assertIn(f'（{count} 行）', task)
-        self.assertNotIn('不内联', task)
-        self.assertNotIn('[TRUNCATED:', task)
-        self.assertNotIn('git diff ', task)
-        self.assertEqual(self.leg_calls[0][0], 'subdeepseek')
         self.assertEqual(payloads, [])
+        self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
+        self.assertIn('subdeepseek → subdeepseek-agent', stderr)
+        self.assertIn('120000', stderr)
+        task = self.seen_tasks[0]
+        self.assertLessEqual(len(task.encode()), self.review.READER_INLINE_DIFF_BYTES)
+        self.assertNotIn('DELETED_PAYLOAD_9f3c', task)
+        self.assertNotIn('git diff ', task)
+        self.assertNotIn('[TRUNCATED:', task)
+        self.assertIn(f'- D {json.dumps("gone.txt")} +0 -{count}', task)
+        self.assertIn('DELETED_PAYLOAD_9f3c', (self.repo / self.review.REVIEW_DIFF_PATH).read_text())
         block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
         self.assertEqual(block['completeness'], 'complete')
 
@@ -243,6 +237,7 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         self.assertIn(DIFF_MARKER, self.seen_tasks[0])
         self.assertNotIn('不内联', self.seen_tasks[0])
+        self.assertFalse((self.repo / self.review.REVIEW_DIFF_PATH).exists())
         block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
         self.assertEqual(block['completeness'], 'complete')
 
@@ -256,6 +251,7 @@ class ReliabilityTests(unittest.TestCase):
         self.assertIn('\nx\n', self.seen_tasks[0])
         self.assertNotIn('不内联', self.seen_tasks[0])
         self.assertNotIn('[TRUNCATED:', self.seen_tasks[0])
+        self.assertFalse((self.repo / self.review.REVIEW_DIFF_PATH).exists())
         block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
         self.assertEqual(block['completeness'], 'complete')
 
@@ -269,7 +265,10 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
         self.assertNotIn('KEEP_SWITCH_PAYLOAD', self.seen_tasks[0])
         self.assertNotIn('[TRUNCATED:', self.seen_tasks[0])
-        self.assertIn(f'git diff {self.base}..{self.head} -- file', self.seen_tasks[0])
+        self.assertNotIn('git diff ', self.seen_tasks[0])
+        self.assertIn(self.review.REVIEW_DIFF_PATH, self.seen_tasks[0])
+        self.assertLessEqual(len(self.seen_tasks[0].encode()), self.review.READER_INLINE_DIFF_BYTES)
+        self.assertIn('KEEP_SWITCH_PAYLOAD', (self.repo / self.review.REVIEW_DIFF_PATH).read_text())
         block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
         self.assertEqual(block['completeness'], 'complete')
         self.assertIn('subdeepseek → subdeepseek-agent', posted[0]['body'])
@@ -291,9 +290,9 @@ class ReliabilityTests(unittest.TestCase):
             git('rm', '-q', 'gone.txt')
             git('commit', '-qm', 'delete')
             head = git('rev-parse', 'HEAD').stdout.strip()
-            full = git('diff', '--binary', '--no-ext-diff', base, head).stdout
-            view = self.review.collect_review_diff(repo, base, head)
-        return full, view, count
+            full = git('diff', '--binary', '--no-ext-diff', '--find-renames', base, head).stdout
+            files, diff, changes = self.review.collect_review_diff(repo, base, head)
+        return full, files, diff, changes, count
 
     def test_oversized_task_without_available_reader_stops_before_leg_or_post(self):
         self.diff += 'x\n' * 70000
