@@ -75,7 +75,7 @@ class ReviewPrTests(unittest.TestCase):
             self.assertEqual(self.review.choose_leg("subcursor")[1], configured)
 
     def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True,
-                                 repository=None, source_failure=None, project_rules=False,
+                                 repository="SunJ1ayu/aiwork", source_failure=None, project_rules=False,
                                  local_rules="LOCAL WORKSPACE RULES", risks_present=True,
                                  leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False,
                                  report="Finding\nConclusion: PASS", private_terms='unused\n'):
@@ -185,8 +185,8 @@ class ReviewPrTests(unittest.TestCase):
             git("commit", "-qm", "project main")
             git("update-ref", "refs/aiwork/main", "HEAD")
             (repo / ".aiwork/accepted-risks.md").write_text("PR RISK DECOY", encoding="utf-8")
-            with patch("sys.argv", ["review-pr", "12", "--leg", "subcursor"]
-                       + (["--repo", repository] if repository else []) + (["--dry-run"] if dry_run else [])), \
+            with patch("sys.argv", ["review-pr", "12", "--repo", repository, "--leg", "subcursor"]
+                       + (["--dry-run"] if dry_run else [])), \
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
                     patch.object(self.review, "BIN", bin_dir), \
                     patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data"), AIWORK_CONFIG_DIR=str(config)), \
@@ -790,7 +790,7 @@ grep -q -F -- "$3" "$clone/$4"
     def test_publishing_writes_only_the_review(self):
         # The review itself wakes the gate (the repo's aiwork-review-ping); a second write
         # such as a recheck label is a second doorbell, and its failure would turn a posted
-        # review into exit 1. The target is this checkout's origin.
+        # review into exit 1. The target is the --repo this test passes explicitly.
         rc, calls, stdout, stderr = self.run_main_with_leg_result("gpt-5.6", dry_run=False)
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/aiwork/pulls/12/reviews"])

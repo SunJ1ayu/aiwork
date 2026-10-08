@@ -60,12 +60,10 @@
 #          它日志 1027–1094 行整段在追查"仓库正在被人改",并把 BLOCK 押在这个幻影上,
 #          25 分钟全废。⇒ 派发前后各记一次 HEAD,不同就报,且横幅要**写进每份腿日志**
 #          (结论会被单独读到,那时终端上那行早没了 —— 和 V19 同一个道理)。
-#       b) **反锚定检查有两臂,本机默认形状下两臂都照不到**。`PANEL_DIFF_BASE` 的推导
-#          要求 `main != HEAD`,而我一直在 main 上干活;verify.md 又是**已提交**的
-#          ⇒ status 那臂也空。实测泄漏:DeepSeek 日志第 28 行读了 verify.md、
-#          第 101 行原文引用我的「规格自查第 2 条」。⇒ 补一条不依赖 diff 基线的:
-#          按任务名去 `git ls-files` 找同名 track 的 verify.md(不相干的 track 不报,
-#          否则警告变噪音、下次就没人看了)。
+#       b) **反锚定只看工作区状态和已设的 diff 基线**。未跟踪文件走
+#          `git status --porcelain -uall`；设了 `PANEL_DIFF_BASE` 时再看那段 diff
+#          里的 verify.md / my-review。按任务名用 `git ls-files` 找同名 track 的
+#          verify.md 那一臂已随 track 退役删除，这里不再把它写成还在的检查。
 #       c) **各腿状态只活在终端里**。08-05 我在 verify.md 写下"三条腿一致 PASS",
 #          而 Kimi 根本没出结论(同一页第 90 行自己还写着它没出报告)—— 同页自相矛盾,
 #          `df527f2` 才更正。⇒ 收尾把花名册落盘成 `<prefix>.roster`,粘进 verify.md;
@@ -2157,7 +2155,7 @@ v23_my_review_gate_on_every_review_path() {
 
 # ---------------------------------------------------------------- V24
 v24_no_env_backdoor_and_coverage_report() {
-  echo "[V24] 后门封死:环境变量不再能跳过反锚定闸;清单漏网要有人吭一声"
+  echo "[V24] 后门封死:环境变量不再能跳过反锚定闸;孤儿套件要红"
   local d b rc out; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   ( cd "$d/repo"; git init -q; git config user.email t@t; git config user.name t
@@ -2190,15 +2188,13 @@ v24_no_env_backdoor_and_coverage_report() {
     bad "V24: panel-review 不许再 export 环境变量后门"
   else ok "V24: panel-review 不许再 export 环境变量后门"; fi
 
-  # ④ 清单漏网要看得见:总跑要报出"bin/ 里哪些工具不在规矩4 名单内"。
-  #    不拦(硬堵会误报把运维脚本也拖进来),只让腐烂时有人吭一声。
-  # 种一个**不在名单里**的工具:没有它这一幕问不出东西($b 里全是 sub*/_* 前缀,都被覆盖)
-  printf '#!/bin/bash\nexit 0\n' > "$b/weird-new-tool"; chmod +x "$b/weird-new-tool"
-  out="$(COVERAGE_BIN_DIR="$b" bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"
-  grep -q "weird-new-tool" <<<"$out"
-  check "V24: 漏网报告点名那个不在名单里的工具" $?
-  grep -qi "名单\|未覆盖\|漏网" <<<"$out"
-  check "V24: 总跑报出规矩4 名单的漏网工具" $?
+  # ④ 判卷面只在 .aiwork/policy.json。总跑不再手列名单,也不报「bin/ 漏网」。
+  #    总跑不读 COVERAGE_BIN_DIR,往临时目录放一个工具再断言输出里没有它,测不到这件事。
+  out="$(bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"; rc=$?
+  check "V24: 没有孤儿套件时 coverage-only 不因为手列名单变红" $([[ $rc -eq 0 ]]; echo $?)
+  if grep -Eq "规矩4|_tooling-paths|未覆盖" <<<"$out"; then
+    bad "V24: 总跑不再报手列名单漏网"
+  else ok "V24: 总跑不再报手列名单漏网"; fi
 
   # ⑤ **孤儿判据套件要红,不是只报**(2026-08-08 四审 F2 实证):
   #    新写的 tests/test-runlog.sh 没被加进 SUITES ⇒ 落盘那天是绿的,
