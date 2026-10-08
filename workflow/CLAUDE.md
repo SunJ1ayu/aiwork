@@ -28,7 +28,6 @@
 - 自己写的判据也可能错；检查它能否区分正确和错误行为，必要时对旧实现或基线做对照。
 - 收货不信执行腿的自述：看真实 diff 和未跟踪文件，自己跑检查，再读实际改动。
 - 委托只给清晰的任务、文件范围和验证命令；判据留给主 agent，详见 `delegate` skill。
-- 大改动开工前方向未定时，可选 `panel-explore` 发散方案，用法见 `panel` skill。
 - 部署验证看运行中的目标是否加载了预期版本；源码更新、部署副本和运行状态分别核对。
 
 ## 本机设置与数据
@@ -37,5 +36,5 @@
 本机运行数据位于 `~/.local/share/aiwork/`，包含 tasks、logs、worktrees、运行期 home 和 archive。
 统一入口是 `bin/aiwork-config`；凭证、配置备份、会话及原始日志留在本机。
 
-可用通道包括 Codex、Cursor、DeepSeek、GLM、Gemini、Kimi、MiMo、Grok；默认模型读取本机设置。
-正式评审入口是 `review-pr`；实现委托和可选方案工具分别见 `delegate`、`panel` skill。
+可用通道包括 Codex、Cursor、DeepSeek、Kimi、MiMo。每个通道都能写代码也能评审；同一个 PR 的评审要换一家，由关卡判断。默认模型读取本机设置。
+正式评审入口是 `review-pr`；实现委托见 `delegate` skill。要多家评审就并行跑几次 `review-pr`。

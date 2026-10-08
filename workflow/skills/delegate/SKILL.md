@@ -18,7 +18,7 @@ description: 有界实现委托、delegate-codex 副本隔离与收货用法。
 收货时不信执行腿的自述，查看真实改动并自己验证。
 
 小且明确的编辑直接做。有界的小修可用 `submimo fix`；清晰的实现任务可用 `delegate-codex`。
-大改动方向未定时可先做小实验，或选择 `panel-explore` 发散方案；工具用法见 panel skill。
+大改动方向未定时可先做小实验。
 
 ## delegate-codex
 

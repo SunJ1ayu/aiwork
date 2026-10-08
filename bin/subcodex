@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# subcodex —— GPT(codex CLI)只读评审腿:review / explore(track sliced-panel-review,2026-09-13)。
+# subcodex —— GPT(codex CLI)评审命令:review / explore。
 #
-# 身份:**角色腿**。它在 `_panel-roster-lib.sh` 的 PANEL_ROLE_LEG_SPECS 里,不进普通
-# panel-review 轮换池 —— GPT 同时是默认执行腿(delegate-codex),进池会轮到它审自家代码。
-# 目前只由 panel-slice 钉住当「独立整体腿」派发。
-#
-# 与 delegate-codex 的区别:那边是**写代码**的执行腿(隔离 worktree、可写);这边是**评审**:
+# 写代码在自己的工作树里打开 codex。这条仓库里的命令服务 review-pr:
 #   · 源仓经 ro-repo-exec 物理只读;codex 在一份可丢弃副本里读、跑测试;
 #   · 模型单源 ~/.config/aiwork/models.env(SUBCODEX_MODEL 单次覆盖);
 #   · -c project_doc_max_bytes=0 每次都带(否则它会吞被评审仓里的 AGENTS.md 并向上递归找);
 #   · --ignore-user-config:不加载业主 ~/.codex/config.toml 里的插件/MCP/profile;
 #   · --ephemeral:评审会话不落进业主的会话历史;
-#   · 腿内不许再派子 agent、不许联网(切片评审「单层」的前提):见下面 CODEX_CFG 那段,
+#   · 腿内不许再派子 agent、不许联网:见下面 CODEX_CFG 那段,
 #     **第一版的 `--disable multi_agent` 被真跑证伪过**;
 #   · 任务书走 stdin(argv 单参数上限 128KiB,delegate-codex 为此踩过 E2BIG)。
 
@@ -39,8 +35,6 @@ Logs: LOG_FILE = header + codex's final message; <log>.stream.jsonl = --json eve
 EOF
 }
 
-. "$BIN_DIR/_my-review-gate.sh" || die 'missing _my-review-gate.sh (fail closed)'
-gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 DRY_RUN=0
 ARGS=()
 for arg in "$@"; do
@@ -56,7 +50,6 @@ TASK_FILE="$(realpath "$TASK_FILE")"
 LOG_FILE="$(realpath -m "$LOG_FILE")"
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
-my_review_gate "$MODE" "$TASK_FILE" "$SOURCE_REPO" subcodex || exit 1
 
 MODEL="$("$BIN_DIR/aiwork-config" model codex "${SUBCODEX_MODEL:-}")" || exit 1
 "$BIN_DIR/aiwork-config" family subcodex "$MODEL" >/dev/null \

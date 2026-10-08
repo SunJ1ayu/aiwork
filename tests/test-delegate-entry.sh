@@ -107,7 +107,7 @@ d_refuses_without_evidence() {
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
   grep -qi "空文件" "$d/o3"; check "D1: 说清是**空文件**应付" $?
 
-  # ④ 攻题记录放在**仓内** = 把考卷的洞递给考生(和 panel-review 的 my-review 闸同源)
+  # ④ 攻题记录放在**仓内** = 把考卷的洞递给考生
   cp "$d/attack.md" "$repo/attack.md"
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$repo/attack.md" --protect tests/oracle.sh >"$d/o4" 2>&1; rc=$?

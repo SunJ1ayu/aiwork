@@ -240,10 +240,10 @@ test_gitlink_fails_closed() {
 
 test_wrapper_helper_failure() {
   echo '[RW6] no wrapper invokes a model when workspace preparation fails'
-  local d b repo rc mimo_rc deepseek_rc glm_rc kimi_rc
+  local d b repo rc mimo_rc deepseek_rc kimi_rc
   d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
-  cp "$BIN/submimo" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py"    "$BIN/subagent"    "$BIN/subdeepseek-agent" "$BIN/subglm-agent" \
-     "$BIN/subkimi" "$BIN/_my-review-gate.sh" "$BIN/_review-home-guard.sh" "$b/"
+  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
+     "$BIN/subkimi" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
 review_workspace_prepare() { return 78; }
 review_workspace_repo() { return 78; }
@@ -264,11 +264,6 @@ MODEL_STUB
 printf claude > "$MODEL_COUNT"
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Conclusion: PASS"}]}}'
 MODEL_STUB
-  cat > "$b/opencode" <<'MODEL_STUB'
-#!/usr/bin/env bash
-printf opencode > "$MODEL_COUNT"
-echo 'Conclusion: PASS'
-MODEL_STUB
   cat > "$b/kimi" <<'MODEL_STUB'
 #!/usr/bin/env bash
 printf kimi > "$MODEL_COUNT"
@@ -278,35 +273,28 @@ MODEL_STUB
 #!/usr/bin/env bash
 exit 2
 MODEL_STUB
-  chmod +x "$b/ro-repo-exec" "$b/mimo" "$b/claude" "$b/opencode" "$b/kimi" "$b/node"
+  chmod +x "$b/ro-repo-exec" "$b/mimo" "$b/claude" "$b/kimi" "$b/node"
   printf '# review\n' > "$d/task.md"
 
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
     MIMO_REVIEW_HOME="$d/mimo-home" \
     bash "$b/submimo" review "$d/task.md" "$d/out.log" "$repo" >/dev/null 2>&1
   mimo_rc=$?
   [[ $mimo_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: submimo helper failure is nonzero with zero model calls' $?
 
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
     DEEPSEEK_API_KEY=test \
     bash "$b/subdeepseek-agent" review "$d/task.md" "$d/deepseek.log" "$repo" >/dev/null 2>&1
   deepseek_rc=$?
   [[ $deepseek_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: Claude-base helper failure is nonzero with zero model calls' $?
 
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
-    ZHIPU_API_KEY=test OPENCODE_REVIEW_HOME="$d/opencode-home" \
-    bash "$b/subglm-agent" review "$d/task.md" "$d/glm.log" "$repo" >/dev/null 2>&1
-  glm_rc=$?
-  [[ $glm_rc -ne 0 && ! -e "$d/model-called" ]]
-  check 'RW6: OpenCode-base helper failure is nonzero with zero model calls' $?
-
   mkdir -p "$d/kimi-home/hooks" "$d/kimi-home/credentials"
   printf '[hooks]\n' > "$d/kimi-home/config.toml"
   printf 'guard\n' > "$d/kimi-home/hooks/guard.mjs"
   printf '{}\n' > "$d/kimi-home/credentials/kimi-code.json"
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
     KIMI_REVIEW_HOME="$d/kimi-home" \
     bash "$b/subkimi" review "$d/task.md" "$d/kimi.log" "$repo" >/dev/null 2>&1
   kimi_rc=$?

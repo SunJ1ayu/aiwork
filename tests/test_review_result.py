@@ -196,10 +196,10 @@ class ReviewResultTest(unittest.TestCase):
         retry = copy.deepcopy(self.result)
         retry["name"] = "subkimi-retry"
         block = copy.deepcopy(self.result)
-        block["name"] = "subgemini"
-        block["family"] = "google"
-        block["adapter"] = "subgemini"
-        block["model"] = {"requested": "gemini-3", "invoked": "gemini-3", "reported": None}
+        block["name"] = "subcodex"
+        block["family"] = "openai"
+        block["adapter"] = "subcodex"
+        block["model"] = {"requested": "gpt-5", "invoked": "gpt-5", "reported": None}
         block["verdict"] = "BLOCK"
         summary = summarize_results([self.result, retry, block])
         self.assertEqual(summary["eligible_family_count"], 2)
@@ -377,14 +377,14 @@ class ReviewResultTest(unittest.TestCase):
         )
         diagnostic = self.root / "noverdict.err"
         diagnostic.write_text(
-            "subdeepseek-review: review output contains no standalone verdict\n",
+            "subkimi: review output contains no standalone verdict\n",
             encoding="utf-8",
         )
         path = self.root / "noverdict.result.json"
         proc = subprocess.run(
             [sys.executable, str(ROOT / "bin" / "_review_result.py"), "emit",
-             "--result", str(path), "--run-id", "panel-noverdict", "--name", "subdeepseek",
-             "--family", "deepseek", "--adapter", "subdeepseek", "--exit-code", "1",
+             "--result", str(path), "--run-id", "noverdict", "--name", "subkimi",
+             "--family", "moonshot", "--adapter", "subkimi", "--exit-code", "1",
              "--task-sha256", self.result["subject"]["task_sha256"], "--log", str(self.log),
              "--diagnostic", str(diagnostic)],
             text=True, capture_output=True, check=False,

@@ -120,8 +120,7 @@ class CursorTest(unittest.TestCase):
         self.config = write_settings(self.d / 'settings')
         self.bin = self.d/'bin'; self.bin.mkdir()
         for name in ('subcursor','aiwork-config', '_aiwork_config.py','_cursor-stream.py','_review-workspace.sh',
-                     '_review_result.py','_my-review-gate.sh',
-                     'ro-repo-exec','panel-explore','panel-review','_panel-roster-lib.sh'):
+                     '_review_result.py', 'ro-repo-exec'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         set_model(self.config, 'cursor', ('composer-2.5\n').strip())
         self.fake = self.d/'fake'; self.fake.mkdir()
@@ -138,7 +137,7 @@ class CursorTest(unittest.TestCase):
         self.env = {k:v for k,v in os.environ.items()
                     if not k.startswith(('CURSOR_',)) and k != 'CURSOR_API_KEY'}
         self.env.update(AIWORK_CONFIG_DIR=str(self.config), PATH=str(self.fake)+os.pathsep+os.environ['PATH'],
-            CURSOR_AUTH_FILE=str(self.auth), REVIEW_NO_MY_REVIEW='1',
+            CURSOR_AUTH_FILE=str(self.auth),
             REVIEW_WORKSPACE_BASE=str(self.d/'workspaces'),
             AIWORK_REVIEW_RESULT_BIN=str(self.bin/'_review_result.py'),
             FAKE_SOURCE=str(self.repo), FAKE_RECORD=str(self.d/'record.json'),
@@ -233,10 +232,7 @@ class CursorTest(unittest.TestCase):
         result = self.run_leg('explore',case='markdown_explore')
         self.assertEqual(result.returncode,0,result.stderr)
 
-    def test_gate_and_missing_isolation_stop_before_cli(self):
-        result = self.run_leg(extra={'REVIEW_NO_MY_REVIEW':'0','REVIEW_MY_REVIEW':str(self.d/'absent')})
-        self.assertNotEqual(result.returncode,0)
-        self.assertFalse((self.d/'leg.record.json').exists())
+    def test_missing_isolation_stops_before_cli(self):
         (self.bin/'ro-repo-exec').unlink()
         result = self.run_leg()
         self.assertEqual(result.returncode,78)
@@ -250,36 +246,6 @@ class CursorTest(unittest.TestCase):
         records=[json.loads((self.d/(tag+'.record.json')).read_text()) for tag in ('one','two')]
         self.assertNotEqual(records[0]['home'],records[1]['home'])
         self.assertNotEqual(records[0]['cwd'],records[1]['cwd'])
-
-    def test_panel_review_records_xai_coverage(self):
-        env=dict(self.env,PANEL_MIMO_LEG='off',PANEL_DEEPSEEK_LEG='off',PANEL_GLM_LEG='off',
-                 PANEL_KIMI_LEG='off',PANEL_GEMINI_LEG='off',PANEL_CURSOR_LEG='agent',PANEL_GROK_LEG='off')
-        prefix=self.d/'panel'
-        result=subprocess.run([str(self.bin/'panel-review'),'--no-my-review',
-            '--budget','1',str(self.task),str(self.repo),str(prefix)],env=env,
-            capture_output=True,text=True,timeout=35)
-        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        result_path=self.d/'panel.subcursor.result.json'
-        data=json.loads(result_path.read_text())
-        self.assertEqual(data['family'],'cursor')
-        self.assertEqual(data['adapter'],'subcursor')
-        sys.path.insert(0,str(ROOT/'bin'))
-        from _review_result import coverage_eligible
-        self.assertTrue(coverage_eligible(data),data)
-
-    def test_explore_dispatch_success_failure_and_off(self):
-        # Other providers intentionally fail: only Cursor can make this run succeed.
-        for name in ('submimo','subdeepseek-agent','subdeepseek','subglm-agent','subglm','subgrok'):
-            p=self.bin/name; p.write_text('#!/bin/sh\nexit 1\n'); p.chmod(0o755)
-        for switch,case,expected in (('agent','',0),('agent','exit',1),('off','',1)):
-            with self.subTest(switch=switch,case=case):
-                prefix=self.d/('explore-'+switch+case)
-                result=subprocess.run([str(self.bin/'panel-explore'),str(self.task),str(self.repo),str(prefix)],
-                    env=dict(self.env,PANEL_CURSOR_LEG=switch,PANEL_GROK_LEG='off',FAKE_CASE=case),
-                    capture_output=True,text=True,timeout=35)
-                self.assertEqual(result.returncode,expected,result.stdout+result.stderr)
-                if switch=='off': self.assertFalse(Path(str(prefix)+'.subcursor.log').exists())
-                else: self.assertIn('subcursor rc=',result.stdout)
 
     def test_decoder_rejects_tool_and_child_verdicts(self):
         events=[{'type':'system','subtype':'init','model':'Composer 2.5'},
@@ -318,17 +284,6 @@ class CursorTest(unittest.TestCase):
                 result=self.run_leg(mode)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual(json.loads((self.d/'leg.record.json').read_text())['model'],model)
-        set_model(self.config, 'cursor', ('opus-4.6\n').strip())
-        env=dict(self.env,PANEL_MIMO_LEG='off',PANEL_DEEPSEEK_LEG='off',PANEL_GLM_LEG='off',
-                 PANEL_KIMI_LEG='off',PANEL_GEMINI_LEG='off',PANEL_GROK_LEG='off')
-        result=subprocess.run([str(self.bin/'panel-review'),'--no-my-review','--budget','1',
-            str(self.task),str(self.repo),str(self.d/'switched')],env=env,capture_output=True,text=True,timeout=35)
-        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        data=json.loads((self.d/'switched.subcursor.result.json').read_text())
-        self.assertEqual(data['family'],'anthropic')
-        self.assertTrue(coverage_eligible(data),data)
-        data['family']='cursor'
-        self.assertFalse(coverage_eligible(data))
 
     def test_no_credentials_and_invalid_credentials_stop_before_cli(self):
         self.auth.unlink()
@@ -336,23 +291,6 @@ class CursorTest(unittest.TestCase):
         self.auth.write_text('{}')
         self.assertNotEqual(self.run_leg().returncode,0)
         self.assertFalse((self.d/'leg.record.json').exists())
-
-    def test_duplicate_families_do_not_fill_budget_or_spare_but_all_runs_both(self):
-        set_model(self.config, 'cursor', ('grok-4.6\n').strip())
-        stub=self.bin/'subgrok'
-        stub.write_text('#!/bin/sh\nprintf called > "$3"\nexit 1\n')
-        stub.chmod(0o755)
-        env=dict(self.env,PANEL_MIMO_LEG='off',PANEL_DEEPSEEK_LEG='off',PANEL_GLM_LEG='off',
-                 PANEL_KIMI_LEG='off',PANEL_GEMINI_LEG='off',PANEL_SELECTION_START='6')
-        for tag, options, case in [('budget',['--budget','2'],''),
-                                   ('spare',['--budget','2'],'no_verdict'),
-                                   ('all',['--all'],'')]:
-            prefix=self.d/tag
-            result=subprocess.run([str(self.bin/'panel-review'),'--no-my-review',
-                *options,str(self.task),str(self.repo),str(prefix)],
-                env=dict(env,FAKE_CASE=case),capture_output=True,text=True,timeout=35)
-            self.assertTrue(Path(str(prefix)+'.subcursor.state').exists(),result.stdout+result.stderr)
-            self.assertEqual(Path(str(prefix)+'.subgrok.state').exists(),tag=='all')
 
     def test_explicit_api_key(self):
         self.auth.unlink()

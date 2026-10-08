@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# subcodex oracle —— GPT 只读评审腿(track sliced-panel-review 的整体腿)。codex 是桩,
-# 只读挂载 ro-repo-exec 是真的。
+# subcodex oracle。codex 是桩,只读挂载 ro-repo-exec 是真的。
 #
 # 桩只证明「我们递给 codex 的参数长这样、结果被这样收尾」;开关在真 codex 里是否生效,
 # **这份判据证明不了**,要靠真跑(verify.md 里单列)。
@@ -16,7 +15,6 @@ set -uo pipefail
 
 if [[ "${SUBCODEX_ENV_SCRUBBED:-}" != "1" ]]; then
   exec env -u SUBCODEX_MODEL -u SUBCODEX_TIMEOUT -u SUBCODEX_EFFORT -u CODEX_BIN \
-    -u GATE_PANEL_DISPATCH \
     SUBCODEX_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
 
@@ -29,7 +27,7 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 echo "=== subcodex oracle ==="
 d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/bin" "$d/fake" "$d/ws" "$d/cap"
-for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec _review-workspace.sh _my-review-gate.sh _review_result.py _review-home-guard.sh; do
+for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec _review-workspace.sh _review_result.py _review-home-guard.sh; do
   [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$d/bin/"
 done
 check "C0: bin/subcodex 与本机设置读取入口都在" \
@@ -144,7 +142,7 @@ PY
 }
 
 echo "[C1] review:参数面、只读源仓、可写副本、裁决与 facts"
-REVIEW_NO_MY_REVIEW=1 sc c1 review "$d/task.md" "$d/c1.log" "$d/repo" >/dev/null 2>"$d/c1.err"; rc=$?
+sc c1 review "$d/task.md" "$d/c1.log" "$d/repo" >/dev/null 2>"$d/c1.err"; rc=$?
 check "C1: 正常 review rc=0" $([[ $rc -eq 0 ]]; echo $?)
 [[ $rc -eq 0 ]] || sed 's/^/    | /' "$d/c1.err" | tail -5
 argv_has c1 exec; check "C1: 走 codex exec" $?
@@ -171,44 +169,44 @@ check "C1: 跑完可丢弃副本已清理" $([[ -z "$(ls -A "$d/ws" 2>/dev/null)
 echo "[C2] 模型单源 + 单次覆盖 + 非法值不派发"
 cp -r "$d/bin" "$d/bin2"
 test_model_set codex gpt-fixture-next
-SC_BIN="$d/bin2" REVIEW_NO_MY_REVIEW=1 sc c2a review "$d/task.md" "$d/c2a.log" "$d/repo" >/dev/null 2>&1
+SC_BIN="$d/bin2" sc c2a review "$d/task.md" "$d/c2a.log" "$d/repo" >/dev/null 2>&1
 argv_pair c2a -m gpt-fixture-next; check "C2: 只改 models.env 的 codex 一行 ⇒ 实际 -m 跟着变" $?
-SUBCODEX_MODEL=gpt-override REVIEW_NO_MY_REVIEW=1 sc c2b review "$d/task.md" "$d/c2b.log" "$d/repo" >/dev/null 2>&1
+SUBCODEX_MODEL=gpt-override sc c2b review "$d/task.md" "$d/c2b.log" "$d/repo" >/dev/null 2>&1
 argv_pair c2b -m gpt-override; check "C2: SUBCODEX_MODEL 单次覆盖" $?
 test_model_set codex ""
-SC_BIN="$d/bin2" REVIEW_NO_MY_REVIEW=1 sc c2c review "$d/task.md" "$d/c2c.log" "$d/repo" >/dev/null 2>"$d/c2c.err"; rc=$?
+SC_BIN="$d/bin2" sc c2c review "$d/task.md" "$d/c2c.log" "$d/repo" >/dev/null 2>"$d/c2c.err"; rc=$?
 check "C2: codex 配置为空 ⇒ 拒绝且没调用 codex(理由点名 models.env)" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c2c.argv" ]] && grep -q 'models.env' "$d/c2c.err"; echo $?)
 test_model_set codex "$MODEL"
-SUBCODEX_MODEL=kimi-code/k3 REVIEW_NO_MY_REVIEW=1 sc c2d review "$d/task.md" "$d/c2d.log" "$d/repo" >/dev/null 2>"$d/c2d.err"; rc=$?
+SUBCODEX_MODEL=kimi-code/k3 sc c2d review "$d/task.md" "$d/c2d.log" "$d/repo" >/dev/null 2>"$d/c2d.err"; rc=$?
 check "C2: 非 gpt- 家族的模型名 ⇒ 拒绝且没调用 codex(理由点名 gpt-)" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c2d.argv" ]] && grep -q 'gpt-' "$d/c2d.err"; echo $?)
 
 echo "[C3] 无裁决 / 额度耗尽 / 超时:都不许冒充完成的评审"
-CODEX_TEST_MODE=noverdict REVIEW_NO_MY_REVIEW=1 sc c3 review "$d/task.md" "$d/c3.log" "$d/repo" >/dev/null 2>&1; rc=$?
+CODEX_TEST_MODE=noverdict sc c3 review "$d/task.md" "$d/c3.log" "$d/repo" >/dev/null 2>&1; rc=$?
 check "C3: 没有裁决行 ⇒ rc≠0,但报告原样留着" $([[ $rc -ne 0 ]] && grep -q 'I looked around' "$d/c3.log"; echo $?)
 facts c3 "f['verdict'] == 'UNKNOWN' and f['failure_kind'] == 'no_verdict'"
 check "C3: facts 记 UNKNOWN / no_verdict" $?
-CODEX_TEST_MODE=quota REVIEW_NO_MY_REVIEW=1 sc c4 review "$d/task.md" "$d/c4.log" "$d/repo" >/dev/null 2>&1; rc=$?
+CODEX_TEST_MODE=quota sc c4 review "$d/task.md" "$d/c4.log" "$d/repo" >/dev/null 2>&1; rc=$?
 check "C3: 额度耗尽 ⇒ rc≠0,事件流原样留着" $([[ $rc -ne 0 ]] && grep -q 'usage_limit_exceeded' "$d/c4.stream.jsonl"; echo $?)
 facts c4 "f['failure_kind'] == 'quota'"
 check "C3: 额度耗尽被分型为 quota(健康池据此冷却,而不是记成 runtime)" $?
 _t0=$(date +%s)
-CODEX_TEST_MODE=sleep SUBCODEX_TIMEOUT=1 REVIEW_NO_MY_REVIEW=1 sc c5 review "$d/task.md" "$d/c5.log" "$d/repo" >/dev/null 2>&1; rc=$?
+CODEX_TEST_MODE=sleep SUBCODEX_TIMEOUT=1 sc c5 review "$d/task.md" "$d/c5.log" "$d/repo" >/dev/null 2>&1; rc=$?
 check "C3: 超时 ⇒ rc=124 且没有干等 30 秒" $([[ $rc -eq 124 && $(( $(date +%s) - _t0 )) -lt 20 ]]; echo $?)
 facts c5 "f['process_state'] == 'timed_out'"
 check "C3: facts 记 timed_out" $?
 
-echo "[C4] 模式与反锚定闸"
-REVIEW_NO_MY_REVIEW=1 sc c6 fix "$d/task.md" "$d/c6.log" "$d/repo" >/dev/null 2>"$d/c6.err"; rc=$?
-check "C4: fix 模式拒绝(评审腿只读)且没调用 codex" \
+echo "[C4] 模式"
+sc c6 fix "$d/task.md" "$d/c6.log" "$d/repo" >/dev/null 2>"$d/c6.err"; rc=$?
+check "C4: fix 模式拒绝且没调用 codex" \
   $([[ $rc -eq 2 && ! -e "$d/cap/c6.argv" ]] && grep -qi 'usage' "$d/c6.err"; echo $?)
-CODEX_TEST_MODE=explore REVIEW_NO_MY_REVIEW=1 sc c7 explore "$d/task.md" "$d/c7.log" "$d/repo" >/dev/null 2>&1; rc=$?
+CODEX_TEST_MODE=explore sc c7 explore "$d/task.md" "$d/c7.log" "$d/repo" >/dev/null 2>&1; rc=$?
 check "C4: explore 不要求裁决行" $([[ $rc -eq 0 ]] && grep -q 'Direction' "$d/c7.log"; echo $?)
 sc c8 review "$d/task.md" "$d/c8.log" "$d/repo" >/dev/null 2>"$d/c8.err"; rc=$?
-check "C4: 没写自审又没显式跳过 ⇒ review 拒绝且没调用 codex(共享反锚定闸在说话)" \
-  $([[ $rc -ne 0 && ! -e "$d/cap/c8.argv" ]] && grep -q 'my-review' "$d/c8.err"; echo $?)
-CODEX_TEST_REPORTED=gpt-something-else REVIEW_NO_MY_REVIEW=1 sc c9 review "$d/task.md" "$d/c9.log" "$d/repo" >/dev/null 2>&1
+check "C4: 没有自审文件也调用 codex" \
+  $([[ $rc -eq 0 && -e "$d/cap/c8.argv" ]]; echo $?)
+CODEX_TEST_REPORTED=gpt-something-else sc c9 review "$d/task.md" "$d/c9.log" "$d/repo" >/dev/null 2>&1
 facts c9 "f['model']['reported'] == 'gpt-something-else' and f['model']['invoked'] == '$MODEL'"
 check "C4: 事件流报告的模型与请求不符时如实记下(不许用请求值盖掉)" $?
 
@@ -244,27 +242,27 @@ exec_cfg, preview_cfg = cfg(sys.argv[1]), cfg(sys.argv[2])
 sys.exit(0 if exec_cfg and preview_cfg is not None and set(exec_cfg) <= set(preview_cfg + [("-c", "approval_policy=never")]) else 1)
 PY
 check "C5: 派发前用同一组 -c/--disable 开关跑过 codex debug prompt-input(核验的就是要派发的配置)" $?
-CODEX_TEST_MODE=role_leak REVIEW_NO_MY_REVIEW=1 sc c10 review "$d/task.md" "$d/c10.log" "$d/repo" >/dev/null 2>"$d/c10.err"; rc=$?
+CODEX_TEST_MODE=role_leak sc c10 review "$d/task.md" "$d/c10.log" "$d/repo" >/dev/null 2>"$d/c10.err"; rc=$?
 check "C5: 离线核验仍看到 <multi_agent_role> ⇒ 拒跑、没派发 codex exec、理由点名 sub-agent" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c10.argv" && -e "$d/cap/c10.preview.argv" ]] && grep -qi 'sub-agent' "$d/c10.err"; echo $?)
-CODEX_TEST_CATALOG="gpt-some-other" REVIEW_NO_MY_REVIEW=1 sc c11 review "$d/task.md" "$d/c11.log" "$d/repo" >/dev/null 2>"$d/c11.err"; rc=$?
+CODEX_TEST_CATALOG="gpt-some-other" sc c11 review "$d/task.md" "$d/c11.log" "$d/repo" >/dev/null 2>"$d/c11.err"; rc=$?
 check "C5: 模型不在 codex 模型目录里 ⇒ 拒跑、没派发 codex exec(不带着默认目录悄悄去跑)" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c11.argv" ]] && grep -q 'catalog' "$d/c11.err"; echo $?)
 # 2026-09-14 变异红检 C11 漏网后补:检测器自检加的 `next(...)` 在模型缺席时会自己崩 ⇒ 缺席照样拒跑,
 # 「恰好一次」那道检查被盖住、删掉它上面那条断言仍绿。它唯一还看得见的后果是**重复出现**。
-CODEX_TEST_CATALOG="$MODEL $MODEL gpt-some-other" REVIEW_NO_MY_REVIEW=1 sc c13 review "$d/task.md" "$d/c13.log" "$d/repo" >/dev/null 2>"$d/c13.err"; rc=$?
+CODEX_TEST_CATALOG="$MODEL $MODEL gpt-some-other" sc c13 review "$d/task.md" "$d/c13.log" "$d/repo" >/dev/null 2>"$d/c13.err"; rc=$?
 check "C5: 模型在 codex 模型目录里出现两次 ⇒ 拒跑、没派发 codex exec、理由点名 exactly once" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c13.argv" ]] && grep -q 'exactly once' "$d/c13.err"; echo $?)
 check "C5: 拒跑之后可丢弃副本同样清理干净" $([[ -z "$(ls -A "$d/ws" 2>/dev/null)" ]]; echo $?)
-# C6:2026-09-14 panel-review 高风险评审(subdeepseek)发现 E 后补 —— 检测器自检。
+# C6:检测器自检。
 # 只看「覆盖后的渲染里没有 <multi_agent_role>」,codex 一改标记名就恒过(注释却写着会拒跑)。
 # 自检:模型目录声明了 multi_agent_version 时,**不覆盖目录**的基线渲染里必须看得见标记,看不见 = 检测器瞎了。
 awk 'BEGIN{blk=""; found=0} /^----$/ {if (blk !~ /model_catalog_json=/ && blk ~ /(^|\n)prompt-input(\n|$)/) found=1; blk=""; next} {blk = blk $0 "\n"} END{exit found?0:1}' "$d/cap/c1.preview.all" 2>/dev/null
 check "C6: 派发前另做一次不带目录覆盖的基线渲染(检测器自检)" $?
-CODEX_TEST_MODE=blind_detector REVIEW_NO_MY_REVIEW=1 sc c12 review "$d/task.md" "$d/c12.log" "$d/repo" >/dev/null 2>"$d/c12.err"; rc=$?
+CODEX_TEST_MODE=blind_detector sc c12 review "$d/task.md" "$d/c12.log" "$d/repo" >/dev/null 2>"$d/c12.err"; rc=$?
 check "C6: 目录声明有子 agent、基线渲染却看不到 <multi_agent_role>(检测器瞎了)⇒ 拒跑、没派发 codex exec、理由点名 blind" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c12.argv" ]] && grep -qi 'blind' "$d/c12.err"; echo $?)
-CODEX_TEST_NO_MA=1 REVIEW_NO_MY_REVIEW=1 sc c13 review "$d/task.md" "$d/c13.log" "$d/repo" >/dev/null 2>"$d/c13.err"; rc=$?
+CODEX_TEST_NO_MA=1 sc c13 review "$d/task.md" "$d/c13.log" "$d/repo" >/dev/null 2>"$d/c13.err"; rc=$?
 check "C6: 对照组:目录里本来就没有子 agent 字段的模型 ⇒ 自检不误拒、照常派发" \
   $([[ $rc -eq 0 && -e "$d/cap/c13.argv" ]]; echo $?)
 
