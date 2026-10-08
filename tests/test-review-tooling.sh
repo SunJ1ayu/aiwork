@@ -2189,10 +2189,10 @@ v24_no_env_backdoor_and_coverage_report() {
   else ok "V24: panel-review 不许再 export 环境变量后门"; fi
 
   # ④ 判卷面只在 .aiwork/policy.json。总跑不再手列名单,也不报「bin/ 漏网」。
-  printf '#!/bin/bash\nexit 0\n' > "$b/weird-new-tool"; chmod +x "$b/weird-new-tool"
-  out="$(COVERAGE_BIN_DIR="$b" bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"; rc=$?
+  #    总跑不读 COVERAGE_BIN_DIR,往临时目录放一个工具再断言输出里没有它,测不到这件事。
+  out="$(bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"; rc=$?
   check "V24: 没有孤儿套件时 coverage-only 不因为手列名单变红" $([[ $rc -eq 0 ]]; echo $?)
-  if grep -Eq "weird-new-tool|规矩4|_tooling-paths|未覆盖" <<<"$out"; then
+  if grep -Eq "规矩4|_tooling-paths|未覆盖" <<<"$out"; then
     bad "V24: 总跑不再报手列名单漏网"
   else ok "V24: 总跑不再报手列名单漏网"; fi
 
