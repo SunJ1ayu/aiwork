@@ -19,10 +19,27 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 const VERDICTS = new Set(["PASS", "BLOCK", "NEEDS_MORE_INFO", "UNKNOWN"]);
 const COMPLETENESS = new Set(["complete", "partial", "none"]);
 const FAMILY_RE = /^[a-z][a-z0-9-]*$/;
-// review-pr 的正文里有一行独占的 `Conclusion: …`(评审腿的原话),和结论块的 verdict 是同一个结论的两种写法:
-// 每一行结论行都得和结论块一样,有一行不一样就是自相矛盾
-const CONCLUSION_LINE_RE = /^[\s>*_#-]*Conclusion\s*[:：]\s*[*_]*\s*([A-Za-z_]+)/gim;
-const conclusionLines = (body) => [...String(body ?? "").matchAll(CONCLUSION_LINE_RE)].map((m) => m[1].toUpperCase());
+// 和 bin/_review_result.py 的 VERDICT_LINE_RE 是同一条规则:独占一行的 Conclusion / Verdict / 结论,
+// 后面只跟一个结论词。用例表在 tests/fixtures/verdict-lines.json,改一边另一边的测试会红。
+const VERDICT_WORDS = { "通过": "PASS", "不通过": "BLOCK", "阻断": "BLOCK", "需要更多信息": "NEEDS_MORE_INFO" };
+const VERDICT_LINE_RE = /^[\t ]*[*_`]*[\t ]*(?:Conclusion|Verdict|结论)[\t ]*[：:][\t ]*(PASS|BLOCK|NEEDS_MORE_INFO|NMI|通过|不通过|阻断|需要更多信息)(?:[\t ]*[(（][\t ]*(PASS|BLOCK|NEEDS_MORE_INFO|NMI)[\t ]*[)）])?[\t ]*[*_`]*[\t ]*$/iu;
+
+function canonicalVerdict(word) {
+  const value = VERDICT_WORDS[word] || String(word).toUpperCase();
+  return value === "NMI" ? "NEEDS_MORE_INFO" : value;
+}
+
+export function conclusionLines(body) {
+  const found = [];
+  for (const line of String(body ?? "").split(/\r?\n/)) {
+    const match = line.match(VERDICT_LINE_RE);
+    if (!match) continue;
+    const value = canonicalVerdict(match[1]);
+    if (match[2] != null && canonicalVerdict(match[2]) !== value) continue;
+    found.push(value);
+  }
+  return found;
+}
 
 export function globToRegExp(pattern) {
   let re = "";

@@ -160,7 +160,7 @@ run_cursor --workspace "$EMPTY_WORKSPACE" --add-dir "$REPO_DIR" \
       --disable-auto-update --disable-project-configs \
       --allowed-tools read_tool_call,grep_tool_call,glob_tool_call,ls_tool_call \
       < "$PROMPT_FILE" \
-  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL"
+  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL" "${LOG_FILE}.report"
 STATUS=("${PIPESTATUS[@]}")
 set -e
 RC="${STATUS[0]}"
@@ -173,8 +173,8 @@ except (OSError, ValueError):
 PY
 )"
 VERDICT=UNKNOWN
-if [[ "$MODE" == review ]]; then
-  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "$LOG_FILE")"
+if [[ "$MODE" == review && -f "${LOG_FILE}.report" ]]; then
+  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "${LOG_FILE}.report")"
 fi
 if [[ "$RC" == 124 || "$RC" == 137 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" timed_out partial timeout "$VERDICT" || exit 78

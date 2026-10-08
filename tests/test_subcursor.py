@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
 
 import concurrent.futures
+import importlib.machinery
 import importlib.util
 import io
 import json
@@ -100,12 +101,19 @@ if case=='bad_explore': text='Direction: only one section'
 if case=='markdown_explore':
     text = '\n'.join('- **'+line.split(':',1)[0]+'**:'+line.split(':',1)[1]
                      for line in text.splitlines())
+result_text = text
+if case == 'final_report':
+    text = ('## 过程\n\n$ cursor-agent --print\n\n```python\n# 注释\n'
+            'conclusion: pending ? null : value\n```\n\n'
+            "  → Bash sed -n '1,40p' gate/decide.mjs\necho hi\n\nConclusion: BLOCK")
+    result_text = ('Findings at gate/decide.mjs:22.\n\n'
+                   'The pending ternary is not a verdict line.\n\nConclusion: PASS')
 emit({'type':'assistant','message':{'role':'assistant','content':[{'type':'text','text':text}]}})
 if case in ('timeout', 'daemon_timeout'): time.sleep(20)
 if case=='truncated': raise SystemExit(0)
 if case=='malformed': print('{broken',flush=True)
 emit({'type':'result','subtype':'error' if case=='cancelled' else 'success',
-      'is_error':case=='is_error','result':text,
+      'is_error':case=='is_error','result':result_text,
       'session_id':'wrong' if case=='session' else 'fixture-session'})
 if case=='duplicate': emit({'type':'result','subtype':'success','is_error':False,'result':text})
 if case=='exit': raise SystemExit(42)
@@ -246,6 +254,34 @@ class CursorTest(unittest.TestCase):
         records=[json.loads((self.d/(tag+'.record.json')).read_text()) for tag in ('one','two')]
         self.assertNotEqual(records[0]['home'],records[1]['home'])
         self.assertNotEqual(records[0]['cwd'],records[1]['cwd'])
+
+    def test_published_report_is_the_structured_last_message(self):
+        last = ('Findings at gate/decide.mjs:22.\n\n'
+                'The pending ternary is not a verdict line.\n\nConclusion: PASS')
+        report = self.d / 'report.md'
+        result = self.run_leg(case='final_report', extra={'AIWORK_REVIEW_REPORT_PATH': str(report)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(report.read_text(encoding='utf-8'), last)
+        log = (self.d / 'leg.log').read_text(encoding='utf-8')
+        self.assertIn('## 过程', log)
+        self.assertIn('# 注释', log)
+        self.assertIn('conclusion: pending ? null : value', log)
+        self.assertIn("sed -n '1,40p' gate/decide.mjs", log)
+        self.assertIn('Conclusion: BLOCK', log)
+        facts = json.loads((self.d / 'leg.facts.json').read_text())
+        self.assertEqual(facts['verdict'], 'PASS')
+        loader = importlib.machinery.SourceFileLoader('review_pr', str(ROOT / 'bin' / 'review-pr'))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        review = importlib.util.module_from_spec(spec)
+        loader.exec_module(review)
+        prose = review.review_report(report)
+        self.assertEqual(prose, last)
+        body = review.build_body('subcursor', 'composer-2.5', prose, {
+            'verdict': 'PASS', 'head_sha': 'a' * 40, 'model': 'composer-2.5',
+            'family': 'cursor', 'completeness': 'complete', 'files_read': ['gate/decide.mjs']})
+        self.assertIn(last, body)
+        self.assertNotIn('## 过程', body)
+        self.assertNotIn('pending ? null', body)
 
     def test_decoder_rejects_tool_and_child_verdicts(self):
         events=[{'type':'system','subtype':'init','model':'Composer 2.5'},

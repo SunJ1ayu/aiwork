@@ -99,6 +99,9 @@ case "${CODEX_TEST_MODE:-pass}" in
   pass)
     printf '{"type":"thread.started","model":"%s"}\n' "${CODEX_TEST_REPORTED:-$model}"
     printf 'Findings: none.\nConclusion: PASS\n' > "$out" ;;
+  final_report)
+    printf '%s\n' '{"type":"item.completed","item":{"type":"command_execution","command":"sed -n '\''1,40p'\'' gate/decide.mjs\n# 注释","aggregated_output":"## 过程\n$ codex>\nconclusion: pending ? null : value\nConclusion: BLOCK\n"}}'
+    cat "$CODEX_TEST_LAST" > "$out" ;;
   explore)
     printf '{"type":"thread.started","model":"%s"}\n' "$model"
     printf 'Direction: keep it simple\n' > "$out" ;;
@@ -265,6 +268,35 @@ check "C6: 目录声明有子 agent、基线渲染却看不到 <multi_agent_role
 CODEX_TEST_NO_MA=1 sc c13 review "$d/task.md" "$d/c13.log" "$d/repo" >/dev/null 2>"$d/c13.err"; rc=$?
 check "C6: 对照组:目录里本来就没有子 agent 字段的模型 ⇒ 自检不误拒、照常派发" \
   $([[ $rc -eq 0 && -e "$d/cap/c13.argv" ]]; echo $?)
+
+# C7: 发布的正文是 codex -o 的最后一条消息，不是事件流里的过程。
+LAST=$'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS'
+printf '%s' "$LAST" > "$d/last.txt"
+CODEX_TEST_MODE=final_report CODEX_TEST_LAST="$d/last.txt" \
+  AIWORK_REVIEW_REPORT_PATH="$d/report.md" \
+  sc c7 review "$d/task.md" "$d/c7.log" "$d/repo" >/dev/null 2>"$d/c7.err"; rc=$?
+check "C7: 评审退出 0，裁决来自最后一条消息" \
+  $([[ $rc -eq 0 ]] && facts c7 "f['verdict']=='PASS'"; echo $?)
+cmp -s "$d/report.md" "$d/last.txt"
+check "C7: 报告文件和 -o 最后一条消息一字不差" $?
+if grep -q 'pending ? null' "$d/c7.stream.jsonl" 2>/dev/null \
+   && grep -q '## 过程' "$d/c7.stream.jsonl" \
+   && ! grep -q 'pending ? null' "$d/report.md"; then
+  ok "C7: 过程留在事件流里，不进报告"
+else
+  bad "C7: 过程留在事件流里，不进报告"
+fi
+python3 - "$ROOT/bin/review-pr" "$d/report.md" "$d/last.txt" <<'PY'
+import importlib.machinery, importlib.util, pathlib, sys
+loader = importlib.machinery.SourceFileLoader("review_pr", sys.argv[1])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+mod = importlib.util.module_from_spec(spec)
+loader.exec_module(mod)
+got = mod.review_report(pathlib.Path(sys.argv[2]))
+want = pathlib.Path(sys.argv[3]).read_text(encoding="utf-8")
+raise SystemExit(0 if got == want and "## 过程" not in got and "pending ? null" not in got else 1)
+PY
+check "C7: review-pr 发布的正文就是最后一条消息" $?
 
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

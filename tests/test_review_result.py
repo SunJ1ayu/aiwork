@@ -176,6 +176,13 @@ class ReviewResultTest(unittest.TestCase):
         self.assertEqual(normalize_verdict("Conclusion: PASS | BLOCK | NEEDS_MORE_INFO\n"), "UNKNOWN")
         self.assertEqual(normalize_verdict("Conclusion: PASS but uncertain\n"), "UNKNOWN")
 
+    def test_verdict_line_table_matches_the_shared_fixture(self) -> None:
+        cases = json.loads((ROOT / "tests/fixtures/verdict-lines.json").read_text(encoding="utf-8"))
+        for case in cases:
+            with self.subTest(line=case["line"]):
+                want = case["verdict"] or "UNKNOWN"
+                self.assertEqual(normalize_verdict(case["line"] + "\n"), want)
+
     def test_subject_canonicalization_is_stable_and_byte_sensitive(self) -> None:
         subject = self.result["subject"]
         raw = canonical_subject_bytes(subject)

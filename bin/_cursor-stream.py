@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Decode Cursor's non-partial stream; tool/user text never supplies a verdict."""
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -48,6 +49,7 @@ def consume(lines, report, expected):
         except (ValueError, KeyError, TypeError, AttributeError):
             malformed = True
     terminal = terminal or {}
+    final = terminal.get("result") if isinstance(terminal.get("result"), str) else None
     # Init contains a human label, not an ID. Cursor's parameterized models even
     # have different labels in `models` and init. Check family without inventing
     # exact reported IDs; the shared result contract records the invoked --model.
@@ -67,11 +69,19 @@ def consume(lines, report, expected):
         "reported_model": None,
         "subtype": terminal.get("subtype"), "session_id": session,
         "usage": terminal.get("usage"), "duration_ms": terminal.get("duration_ms"),
+        "final_message": final,
     }
 
 
 if __name__ == "__main__":
     with Path(sys.argv[1]).open("a", encoding="utf-8") as report:
         result = consume(sys.stdin, report, sys.argv[3])
+    final = result.pop("final_message", None)
     Path(sys.argv[2]).write_text(json.dumps(result) + "\n", encoding="utf-8")
+    if isinstance(final, str):
+        if len(sys.argv) > 4:
+            Path(sys.argv[4]).write_text(final)
+        dest = os.environ.get("AIWORK_REVIEW_REPORT_PATH")
+        if dest:
+            Path(dest).write_text(final)
     sys.exit(0 if result["success"] else 1)

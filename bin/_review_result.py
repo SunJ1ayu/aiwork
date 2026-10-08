@@ -541,8 +541,13 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
             "ref": evidence_ref(args.log),
             "digest": sha256_file(args.log),
         }
-        if verdict is None:
+        if verdict is None and args.report is None:
             verdict = normalize_verdict(evidence_text)
+    if verdict is None and args.report is not None:
+        if args.report.is_file():
+            verdict = normalize_verdict(args.report.read_text(encoding="utf-8"))
+        else:
+            verdict = "UNKNOWN"
     if verdict is None:
         verdict = "UNKNOWN"
 
@@ -744,6 +749,7 @@ def parser() -> argparse.ArgumentParser:
     emit.add_argument("--verdict", choices=sorted(VERDICTS))
     emit.add_argument("--degraded", choices=("true", "false"), default="false")
     emit.add_argument("--log", type=Path)
+    emit.add_argument("--report", type=Path)
     emit.add_argument("--diagnostic", type=Path)
     emit.add_argument("--evidence-completeness", choices=sorted(EVIDENCE_COMPLETENESS))
     emit.add_argument("--duration-ms", type=int)

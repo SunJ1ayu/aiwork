@@ -18,7 +18,7 @@ import tempfile
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _review_result import leg_identity, load_result, sha256_file
+from _review_result import leg_identity, load_result, normalize_verdict, sha256_file
 from _aiwork_config import ConfigError, data_path, model as configured_model
 from _secret_shapes import redact_shapes
 
@@ -370,24 +370,23 @@ def _change_line(change: Change) -> str:
     return f"- {change.status} {shown} {counts}\n"
 
 
-def compose_task(repo: Path, *, reader: bool, number: int, pr: dict, merge_base: str,
+def compose_task(repo: Path, *, number: int, pr: dict, merge_base: str,
                  files: list[str], diff: str, changes: list[Change], review_rules: str,
                  risks: str, rules_sha: str, repository: str) -> str:
     diff_file = None
-    if reader and len(diff.encode("utf-8")) > READER_INLINE_DIFF_BYTES:
+    if len(diff.encode("utf-8")) > READER_INLINE_DIFF_BYTES:
         diff_file = place_review_diff(repo, diff)
     return task_text(number, pr, merge_base, files, diff, review_rules, risks,
                      rules_sha=rules_sha, repository=repository, changes=changes,
-                     reader=reader, diff_file=diff_file)
+                     diff_file=diff_file)
 
 
 def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
               review_rules: str, risks: str, *, rules_sha: str, repository: str,
-              changes: list[Change] | None = None, reader: bool = False,
-              diff_file: str | None = None) -> str:
+              changes: list[Change] | None = None, diff_file: str | None = None) -> str:
     rules_repository, rules_path = REVIEW_RULES_SOURCE
     inline_bytes = len(diff.encode("utf-8"))
-    omit_inline = reader and inline_bytes > READER_INLINE_DIFF_BYTES
+    omit_inline = inline_bytes > READER_INLINE_DIFF_BYTES
     head = pr["head"]["sha"]
     if omit_inline:
         if not diff_file:
@@ -454,30 +453,33 @@ def completeness(result: dict) -> str:
     return "partial"
 
 
-def build_body(leg: str, model: str, report: str, block: dict) -> str:
-    clean = re.sub(r"```json\b", "```text", report.strip(), flags=re.I)
-    return (f"**aiwork-review · {leg} · {model}**\n\n{clean}\n\n"
+def build_body(leg: str, model: str, report: str, block: dict,
+               notices: list[str] | None = None) -> str:
+    clean = re.sub(r"```json\b", "```text", report, flags=re.I)
+    note = ""
+    if notices:
+        note = "\n\n".join(f"**Execution:** {item}" for item in notices) + "\n\n"
+    return (f"**aiwork-review · {leg} · {model}**\n\n{note}{clean}\n\n"
             f"```json\n{json.dumps(block, ensure_ascii=False, separators=(',', ':'))}\n```\n")
 
 
-def review_report(log: Path) -> str:
-    # Leg log contract: a "# <leg> <mode> log" header, one empty line, then the model's
-    # report. A log without that header is refused, not guessed at: cutting at the first
-    # empty line would silently drop the opening of the report.
-    text = log.read_text(encoding="utf-8", errors="replace")
-    if not text.startswith("# ") or "\n\n" not in text:
-        raise ReviewError("review leg log has no '# <leg> <mode> log' header; cannot separate the report")
-    report = text.split("\n\n", 1)[1].strip()
-    if not report:
-        raise ReviewError("review leg log has an empty model report")
-    return report
+def review_report(report: Path) -> str:
+    # The leg writes the model's last message to this file. The log keeps the
+    # whole process; publication never reconstructs a report from that text.
+    if not report.is_file():
+        raise ReviewError(f"review leg did not write the report file {report}; refusing to publish")
+    text = report.read_text(encoding="utf-8")
+    if not text.strip():
+        raise ReviewError(f"review leg wrote an empty report file {report}; refusing to publish")
+    return text
 
 
 def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, directory: Path,
                     env: dict[str, str], run_id: str, frozen_model: str | None) -> tuple[dict, Path]:
     log, facts = directory / "review.log", directory / "facts.json"
+    report = directory / "report.md"
     result_file, diagnostic = directory / "result.json", directory / "leg.stderr"
-    env = dict(env, AIWORK_REVIEW_FACTS_PATH=str(facts))
+    env = dict(env, AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_REPORT_PATH=str(report))
     leg = subprocess.run([str(BIN / leg_name), "review", str(task), str(log), str(repo)],
                          text=True, capture_output=True, env=env, check=False)
     diagnostic.write_text(leg.stderr, encoding="utf-8")
@@ -487,10 +489,12 @@ def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, director
                "--log", str(log), "--diagnostic", str(diagnostic)]
     if facts.is_file():
         command += ["--facts", str(facts)]
+    if report.is_file():
+        command += ["--report", str(report)]
     if frozen_model is not None:
         command += ["--expected-model", frozen_model]
     run(command)
-    return load_result(result_file), log
+    return load_result(result_file), report
 
 
 def main() -> int:
@@ -520,13 +524,13 @@ def main() -> int:
                 risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
                 task = directory / "task.md"
 
-                def write_task(reader: bool) -> None:
+                def write_task() -> None:
                     task.write_text(compose_task(
-                        repo, reader=reader, number=args.pr, pr=pr, merge_base=merge_base,
+                        repo, number=args.pr, pr=pr, merge_base=merge_base,
                         files=files, diff=diff, changes=changes, review_rules=review_rules,
                         risks=risks, rules_sha=rules_sha, repository=repository), encoding="utf-8")
 
-                write_task(True)
+                write_task()
                 selected_leg = args.leg
                 notices = []
                 env = dict(os.environ)
@@ -540,9 +544,11 @@ def main() -> int:
                 if frozen_model is not None:
                     env["CURSOR_MODEL"] = frozen_model
                 attempt_directory = directory
+                report_path = directory / "report.md"
                 for attempt in range(2):
-                    result, log = run_leg_attempt(selected_leg, family, task, repo, attempt_directory,
-                                                  env, run_id, frozen_model)
+                    result, report_path = run_leg_attempt(
+                        selected_leg, family, task, repo, attempt_directory,
+                        env, run_id, frozen_model)
                     if (attempt == 0 and result["process"]["state"] == "exited"
                             and result["failure_kind"] in {"no_verdict", "output_truncated"}):
                         report_failure(directory, run_id + "-attempt-1")
@@ -553,17 +559,19 @@ def main() -> int:
                         attempt_directory.mkdir()
                         continue
                     break
+                report = review_report(report_path)
+                result = dict(result)
+                result["verdict"] = normalize_verdict(report)
+                if result["verdict"] == "UNKNOWN" and result["failure_kind"] == "none":
+                    result["failure_kind"] = "no_verdict"
                 model = publishable_model(result)
                 identity = leg_identity(selected_leg, model)
                 if identity is None or identity[0] != family or not model.startswith(identity[1]):
                     raise ReviewError("review leg model does not match selected family")
-                report = review_report(log)
-                if notices:
-                    report = "\n\n".join(f"**Execution:** {note}" for note in notices) + "\n\n" + report
                 block = {"verdict": result["verdict"], "head_sha": pr["head"]["sha"],
                          "model": model, "family": family, "completeness": completeness(result),
                          "files_read": files}
-                body = build_body(selected_leg, model, report, block)
+                body = build_body(selected_leg, model, report, block, notices=notices)
                 body_file = directory / "review-body.md"
                 body_file.write_text(body, encoding="utf-8")
                 privacy = subprocess.run([str(BIN / "privacy-check"), "--files", str(body_file)],

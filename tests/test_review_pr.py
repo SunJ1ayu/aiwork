@@ -383,11 +383,11 @@ class ReviewPrTests(unittest.TestCase):
         git('config', 'user.email', 'test@example.invalid')
         return repo, git
 
-    def compose(self, repo, base, head, *, reader, number=17):
+    def compose(self, repo, base, head, *, number=17):
         files, diff, changes = self.review.collect_review_diff(repo, base, head)
         pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
         task = self.review.compose_task(
-            repo, reader=reader, number=number, pr=pr, merge_base=base,
+            repo, number=number, pr=pr, merge_base=base,
             files=files, diff=diff, changes=changes, review_rules='rules\n', risks='无',
             rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
         return files, diff, changes, task
@@ -411,15 +411,13 @@ class ReviewPrTests(unittest.TestCase):
         git('rm', '-q', 'gone.txt')
         git('commit', '-qm', 'edit')
         head = git('rev-parse', 'HEAD').stdout.strip()
-        for reader in (False, True):
-            with self.subTest(reader=reader):
-                _files, diff, _changes, task = self.compose(repo, base, head, reader=reader, number=3)
-                self.assertIn('\n+changed\n', task)
-                self.assertIn('\n-' + marker + '\n', task)
-                self.assertIn('## 完整 diff（merge base → HEAD）', task)
-                self.assertLessEqual(len(diff.encode()), self.review.READER_INLINE_DIFF_BYTES)
-                self.assert_one_complete_diff(task)
-                self.assertFalse((repo / self.review.REVIEW_DIFF_PATH).exists())
+        _files, diff, _changes, task = self.compose(repo, base, head, number=3)
+        self.assertIn('\n+changed\n', task)
+        self.assertIn('\n-' + marker + '\n', task)
+        self.assertIn('## 完整 diff（merge base → HEAD）', task)
+        self.assertLessEqual(len(diff.encode()), self.review.READER_INLINE_DIFF_BYTES)
+        self.assert_one_complete_diff(task)
+        self.assertFalse((repo / self.review.REVIEW_DIFF_PATH).exists())
 
     def test_small_binary_deletion_stays_in_the_diff(self):
         repo, git = self.git_repo()
@@ -430,7 +428,7 @@ class ReviewPrTests(unittest.TestCase):
         git('rm', '-q', '--', 'a.bin')
         git('commit', '-qm', 'delete')
         head = git('rev-parse', 'HEAD').stdout.strip()
-        files, _diff, changes, task = self.compose(repo, base, head, reader=False, number=4)
+        files, _diff, changes, task = self.compose(repo, base, head, number=4)
         self.assertEqual(files, ['a.bin'])
         self.assertEqual([(c.status, c.path, c.added, c.removed) for c in changes],
                          [('D', 'a.bin', None, None)])
@@ -460,7 +458,7 @@ class ReviewPrTests(unittest.TestCase):
         git('add', '-A')
         git('commit', '-qm', 'edit')
         head = git('rev-parse', 'HEAD').stdout.strip()
-        files, _diff, changes, task = self.compose(repo, base, head, reader=True, number=5)
+        files, _diff, changes, task = self.compose(repo, base, head, number=5)
         got = {(c.status, c.path, c.old_path, c.added, c.removed) for c in changes}
         self.assertEqual(got, {
             ('A', 'added.txt', None, 1, 0),
@@ -506,7 +504,7 @@ class ReviewPrTests(unittest.TestCase):
         git('add', '-A')
         git('commit', '-qm', 'edit')
         head = git('rev-parse', 'HEAD').stdout.strip()
-        _files, diff, changes, task = self.compose(repo, base, head, reader=True, number=8)
+        _files, diff, changes, task = self.compose(repo, base, head, number=8)
         limit = self.review.READER_INLINE_DIFF_BYTES
         self.assertGreater(len(diff.encode()), limit)
         self.assertLessEqual(len(task.encode()), limit)
@@ -552,7 +550,7 @@ grep -q -F -- "$3" "$clone/$4"
         git('add', '-A')
         git('commit', '-qm', 'edit')
         head = git('rev-parse', 'HEAD').stdout.strip()
-        _files, diff, changes, task = self.compose(repo, base, head, reader=True, number=17)
+        _files, diff, changes, task = self.compose(repo, base, head, number=17)
         self.assertGreaterEqual(len(diff.encode()), 8_900_000)
         self.assertLessEqual(len(task.encode()), self.review.READER_INLINE_DIFF_BYTES)
         self.assertNotIn('PR17_DELETED_LINE', task)
@@ -744,16 +742,27 @@ grep -q -F -- "$3" "$clone/$4"
         self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/aiwork/pulls/12/reviews"])
         self.assertEqual(stdout.strip(), "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1")
 
-    def test_report_is_separated_only_at_the_leg_log_header(self):
+    def test_missing_report_file_is_not_published(self):
         with tempfile.TemporaryDirectory() as temporary:
-            log = Path(temporary) / "review.log"
-            log.write_text("# subcursor review log\nmodel: gpt-5.6\n\nFirst paragraph.\n\n"
-                           "Conclusion: PASS\n", encoding="utf-8")
-            self.assertEqual(self.review.review_report(log), "First paragraph.\n\nConclusion: PASS")
-            # Without the header, cutting at the first empty line would drop the report's opening.
-            log.write_text("First paragraph.\n\nConclusion: PASS\n", encoding="utf-8")
-            with self.assertRaisesRegex(self.review.ReviewError, "header"):
-                self.review.review_report(log)
+            report = Path(temporary) / "report.md"
+            with self.assertRaisesRegex(self.review.ReviewError, "did not write the report file"):
+                self.review.review_report(report)
+
+    def test_report_file_is_the_published_prose_verbatim(self):
+        last = "Findings.\n\nConclusion: PASS"
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.md"
+            report.write_text(last, encoding="utf-8")
+            self.assertEqual(self.review.review_report(report), last)
+            body = self.review.build_body(
+                "subkimi", "kimi-code/kimi-for-coding", last,
+                {"verdict": "PASS", "head_sha": "a" * 40, "model": "kimi-code/kimi-for-coding",
+                 "family": "moonshot", "completeness": "complete", "files_read": ["gate/decide.mjs"]},
+                notices=["retry 2/2 for subkimi: no_verdict; first failure artifacts preserved"],
+            )
+            self.assertIn(last, body)
+            self.assertLess(body.index("**Execution:**"), body.index(last))
+            self.assertNotIn("**Execution:**", last)
 
     def test_stale_head_is_refused_before_post(self):
         with self.assertRaises(ValueError):

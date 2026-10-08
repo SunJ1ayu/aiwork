@@ -230,19 +230,46 @@ $(cat "$TASK_FILE")"
 } > "$LOG_FILE"
 
 RC=0
+STREAM="${LOG_FILE}.stream.jsonl"
 (
   cd "$REPO_DIR"
   KIMI_CODE_HOME="$REVIEW_HOME" \
   KIMI_CODE_NO_AUTO_UPDATE=1 \
-    "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" kimi -m "$MODEL" -p "$PROMPT"
-) >> "$LOG_FILE" 2>&1 || RC=$?
+    "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" kimi --output-format stream-json -m "$MODEL" -p "$PROMPT"
+) > "$STREAM" 2>>"$LOG_FILE" || RC=$?
+if [[ -s "$STREAM" ]]; then cat "$STREAM" >> "$LOG_FILE"; fi
+python3 - "$STREAM" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
+import json, pathlib, sys
+stream, local, dest = sys.argv[1:]
+last = None
+if pathlib.Path(stream).is_file():
+    for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("role") == "assistant" and isinstance(event.get("content"), str) and event["content"]:
+            last = event["content"]
+if last is None:
+    raise SystemExit(0)
+pathlib.Path(local).write_text(last)
+if dest:
+    pathlib.Path(dest).write_text(last)
+PY
 
 # Verdict gate shares the contract normalizer with the terminal producer.  The
 # adapter publishes what it actually observed; it does not decide coverage.
 _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
 [ -f "$_RR" ] || die "typed verdict normalizer missing"
-VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
-  || die "typed verdict normalization failed (log: $LOG_FILE)"
+if [[ -f "${LOG_FILE}.report" ]]; then
+  VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
+    || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
+else
+  VERDICT=UNKNOWN
+fi
 
 # Timeout may preserve an early verdict as partial evidence, but it is never a
 # successful/coverage-eligible review.  Keep rc=124 and publish the atomic facts

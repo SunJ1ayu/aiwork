@@ -327,6 +327,28 @@ with open(log, "a", encoding="utf-8") as fh:
     fh.write(body + "\n" + "\n".join(footer) + "\n")
 PY
 
+# 最后一条消息是 stream-json 的 result.result，不是渲染进日志的过程。
+python3 - "$STREAM_FILE" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
+import json, pathlib, sys
+stream, local, dest = sys.argv[1:]
+last = None
+for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").splitlines():
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
+        last = event["result"]
+if last is None:
+    raise SystemExit(0)
+pathlib.Path(local).write_text(last)
+if dest:
+    pathlib.Path(dest).write_text(last)
+PY
+
 if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
 
@@ -335,8 +357,12 @@ if [[ "$MODE" == "review" ]]; then
   # 不许在这条底座路径复活一份宽松 regex。
   _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
   [ -f "$_RR" ] || die "typed verdict normalizer missing"
-  VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
-    || die "typed verdict normalization failed (log: $LOG_FILE)"
+  if [[ -f "${LOG_FILE}.report" ]]; then
+    VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
+      || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
+  else
+    VERDICT=UNKNOWN
+  fi
   if [[ $RC -eq 124 ]]; then
     review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
       timed_out partial timeout "$VERDICT" || exit 78

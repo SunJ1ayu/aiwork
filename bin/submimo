@@ -276,7 +276,9 @@ case "$TASK_REAL" in
     ;;
 esac
 
-CMD=(mimo run --agent "$AGENT" --dir "$REPO_DIR" --format default -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
+MIMO_FORMAT=default
+[[ "$MODE" == review ]] && MIMO_FORMAT=json
+CMD=(mimo run --agent "$AGENT" --dir "$REPO_DIR" --format "$MIMO_FORMAT" -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
 if [[ -n "$MIMO_MODEL_CFG" ]]; then
   CMD=(env "MIMOCODE_CONFIG_CONTENT=$MIMO_MODEL_CFG" "${CMD[@]}")
 fi
@@ -319,8 +321,50 @@ if [[ -z "$ORACLE_CMD" ]]; then
   if [[ "$MODE" == "review" ]]; then
     _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
     [ -f "$_RR" ] || die "typed verdict normalizer missing"
-    VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
-      || die "typed verdict normalization failed (log: $LOG_FILE)"
+    python3 - "$LOG_FILE" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
+import json, pathlib, sys
+log, local, dest = sys.argv[1:]
+last_id = None
+parts, order = {}, {}
+for line in pathlib.Path(log).read_text(encoding="utf-8", errors="replace").splitlines():
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if not isinstance(event, dict):
+        continue
+    props = event.get("properties") or {}
+    if event.get("type") == "message.updated":
+        info = props.get("info") or {}
+        mid = info.get("id")
+        if info.get("role") == "assistant" and isinstance(mid, str):
+            last_id = mid
+    elif event.get("type") == "message.part.updated":
+        part = props.get("part") or {}
+        if part.get("type") != "text" or part.get("synthetic") is True or part.get("ignored") is True:
+            continue
+        mid, pid, text = part.get("messageID"), part.get("id"), part.get("text")
+        if not isinstance(mid, str) or not isinstance(pid, str) or not isinstance(text, str):
+            continue
+        if pid not in order.setdefault(mid, []):
+            order[mid].append(pid)
+        parts.setdefault(mid, {})[pid] = text
+if last_id is None or last_id not in parts:
+    raise SystemExit(0)
+body = "".join(parts[last_id][pid] for pid in order[last_id])
+pathlib.Path(local).write_text(body)
+if dest:
+    pathlib.Path(dest).write_text(body)
+PY
+    if [[ -f "${LOG_FILE}.report" ]]; then
+      VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
+        || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
+    else
+      VERDICT=UNKNOWN
+    fi
     if [[ $mimo_rc -eq 124 ]]; then
       review_workspace_write_facts "$MODEL" "$MODEL" subscription \
         timed_out partial timeout "$VERDICT" || exit 78
