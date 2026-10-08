@@ -64,7 +64,7 @@ for p in ${RW+"${RW[@]}"}; do
     # `--rw <仓根>` = 整仓开闸,防线等于没有。这是配置错误里最危险的一种,
     # 因为**一切照常工作**,没人会发现 ⇒ **拒跑**。
     #
-    # 2026-08-19 第二轮改的(四审命中):第一版这里只警告不拒绝,
+    # 2026-08-19 第二轮改的(四审 subglm 孤腿命中):第一版这里只警告不拒绝,
     # 理由是"判据里几十条老夹具的日志落在仓根,拒绝会误伤一大片"。那一轮把三条
     # wrapper 的写口全删了(V37),**生产调用方归零** ⇒ 理由过期。更糟的是下面那道
     # 挂完自检对这种配置**主动跳过** —— 最危险的配置错正好绕开最贵的那道自检,
@@ -91,7 +91,7 @@ if command -v git >/dev/null 2>&1; then
   # ⚠️ `--path-format=absolute` 要 git ≥2.31(2021-03)。**老 git 不认这个参数会静默返回空**,
   # rc 又被 `|| true` 吞掉 ⇒ 共同目录不挂只读 ⇒ 腿照样 git tag / 直接写 objects 改主仓,
   # 而仓根探针一路绿灯。这曾是全工具唯一一处失败被吞而不是 fail-closed 的地方
-  # (2026-08-19 第三轮四审 F1,我实测复现:V42 红 2 条)。
+  # (2026-08-19 第三轮四审 subdeepseek F1,我实测复现:V42 红 2 条)。
   # 兜底:老 git 用不带 --path-format 的版本(可能给相对路径,相对 REPO 解析)。
   _common="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   if [ -z "$_common" ]; then
@@ -150,7 +150,7 @@ RO_REPO="$REPO" RO_RW="$_rw_list" RO_GITDIRS="$GITDIRS" RO_MARK="$MARK" unshare 
   # ⚠️ 探针的报错**必须包在花括号里**再重定向:`: > "$p" 2>/dev/null` 是从左往右处理的,
   # 重定向失败的那句 `Read-only file system` 在 `2>/dev/null` 生效**之前**就打出去了。
   # 后果不是难看而已 —— 它出现在每条腿的日志里,长得像腿自己崩了,而本单的老账正是
-  # "cryptic 报错被误读成额度耗尽"。防线不该长得像故障。(第二轮四审 F4。)
+  # "cryptic 报错被误读成额度耗尽"。防线不该长得像故障。(第二轮四审 subdeepseek F4。)
   _probe="$RO_REPO/.ro-selfcheck-$$"
   if { : > "$_probe"; } 2>/dev/null; then
     rm -f "$_probe" 2>/dev/null
@@ -159,7 +159,7 @@ RO_REPO="$REPO" RO_RW="$_rw_list" RO_GITDIRS="$GITDIRS" RO_MARK="$MARK" unshare 
 
   # ── ④ git 目录也各探一次 ────────────────────────────────────────────────────
   # 这道自检存在的**全部理由**就是"不许相信 mount 的退出码",而第一版对 GITDIRS
-  # 恰恰只信退出码(第二轮四审 F6各自独立命中)。
+  # 恰恰只信退出码(第二轮四审 subdeepseek F6 + subglm 各自独立命中)。
   # 漏在这儿的后果不是小事:worktree 的真 git 目录还可写 ⇒ 腿照样 commit/tag 改主仓,
   # 而仓根探针一路绿灯 —— 安静失效的靶心上留了个洞。
   while IFS= read -r g; do

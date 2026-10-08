@@ -202,7 +202,7 @@ PY_LOCAL_BASH
     bad "agent: 裸 Bash 可用(腿在副本里可跑 tests/lint/build)"
   fi
 
-  # **能力清单要说实话**(评审指出:V28⑮ 只钉了 opencode 腿,claude 壳这条漏了)。
+  # **能力清单要说实话**(四审 subdeepseek 指出:V28⑮ 只钉了 opencode 腿,claude 壳这条漏了)。
   # 这条钉的不是方向,是"清单和实际能力必须一致" —— 两个方向都出过事:
   # 08-18 宣称了没有的工具(腿当场顶回来、白花几轮)、08-19 瞒着有的(腿不会去用)。
   python3 -c "
@@ -884,7 +884,7 @@ PWN
   # ── ① claude 壳(subdeepseek-agent)
   rm -f "$d/o1" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1" CAPTURE="$d/c1.json" \
-    DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" DEEPSEEK_MODEL= REVIEW_NO_MY_REVIEW=1 AIWORK_REVIEW_FACTS_PATH="$d/deepseek.facts.json" \
+    DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" DEEPSEEK_MODEL= AIWORK_REVIEW_FACTS_PATH="$d/deepseek.facts.json" \
     AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l1.log" "$repo" >/dev/null 2>&1; rc=$?
   grep -q '^work=WROTE$' "$d/o1" 2>/dev/null \
@@ -913,7 +913,7 @@ PY
   # ⚠️ MIMO_REVIEW_HOME 必须指进夹具:①b/③ 都设了,唯独这条没设 ⇒ submimo 会去写
   #    **业主真实的** ~/.cache/aiwork/mimo-review-home(判据每跑一次重写一次它的配置)。
   #    同族第三处,2026-08-25 panel 抓到、V45 当场红过。
-  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" \
     MIMO_REVIEW_HOME="$d/mimo-home-v36" AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" \
     AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
@@ -958,7 +958,7 @@ PY
   printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
   echo '{}' > "$rh/credentials/kimi-code.json"
   rm -f "$d/o3" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
-  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" KIMI_REVIEW_HOME="$rh" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" KIMI_REVIEW_HOME="$rh" \
     AIWORK_REVIEW_FACTS_PATH="$d/kimi.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     bash "$b/subkimi" review "$d/t.md" "$repo/logs/l3.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o3" 2>/dev/null \
@@ -979,7 +979,7 @@ PY
   # ── ④ **对照组:fix 一个字都不许被连累**。submimo fix 是执行腿,写代码是它的本职;
   #    "加一道防线顺手拆掉另一道"是本仓记过的账(V33 里有同款对照)。
   rm -f "$d/o4" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
-  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" \
     MIMO_REVIEW_HOME="$d/mimo-home-v36d" \
     bash "$b/submimo" fix --no-oracle "$d/t.md" "$repo/logs/l4.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o4" 2>/dev/null \
@@ -1042,12 +1042,12 @@ echo "Conclusion: PASS"
 PWN2
     chmod +x "$1"
   }
-  _mk_pwn_stub2 "$b/claude"; _mk_pwn_stub2 "$b/mimo"; _mk_pwn_stub2 "$b/kimi"; _mk_pwn_stub2 "$b/opencode"
+  _mk_pwn_stub2 "$b/claude"; _mk_pwn_stub2 "$b/mimo"; _mk_pwn_stub2 "$b/kimi"
 
   # ── ① 腿日志确实写得出来(这条立住了,写口才可以去掉)
   rm -f "$repo/logs/l.log" "$d/o"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o" CAPTURE="$d/c.json" \
-    DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" REVIEW_NO_MY_REVIEW=1 \
+    DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l.log" "$repo" >/dev/null 2>&1
   [[ -s "$repo/logs/l.log" ]]
   check "V37: 腿日志不靠写口也写得出(fd 在父 namespace 打开)" $?
@@ -1064,7 +1064,7 @@ RECORD
   chmod +x "$b/ro-repo-exec"
   rm -f "$d/argv.txt"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o" CAPTURE="$d/c.json" \
-    RO_ARGV_OUT="$d/argv.txt" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" REVIEW_NO_MY_REVIEW=1 \
+    RO_ARGV_OUT="$d/argv.txt" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
   ! grep -q -- '^--rw$' "$d/argv.txt" 2>/dev/null
   check "V37: wrapper 一个 --rw 都不传(写口为零 —— 多余的写口正是那两条 bug 的来源)" $?
@@ -1074,13 +1074,13 @@ RECORD
   rm -f "$d/o3" "$repo/PWNED_BY_LEG"
   ( cd "$repo" && env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" \
       MIMO_REVIEW_HOME="$d/mimo-home-v37a" \
-      REVIEW_NO_MY_REVIEW=1 bash "$b/submimo" review "$d/t.md" "relative.log" "$repo" ) >/dev/null 2>&1
+      bash "$b/submimo" review "$d/t.md" "relative.log" "$repo" ) >/dev/null 2>&1
   [[ "$(cat "$d/o3" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]
   check "V37: 相对日志路径 + cwd=仓根 ⇒ 防线**仍然生效**(第一版这里整仓开闸,还不报错)" $?
 
   # ── ④ 日志目录还不存在:wrapper 应当自己建好并跑起来,不是拒跑(回归)
   rm -rf "$repo/fresh" ; rm -f "$d/o4" "$repo/PWNED_BY_LEG"
-  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" \
     MIMO_REVIEW_HOME="$d/mimo-home-v37b" \
     bash "$b/submimo" review "$d/t.md" "$repo/fresh/leg.log" "$repo" >/dev/null 2>&1
   [[ -e "$repo/fresh/leg.log" && "$(cat "$d/o4" 2>/dev/null)" == "BLOCKED" ]]
@@ -1120,7 +1120,7 @@ v38_leg_runtime_home_outside_repo() {
   #    判据每跑一次就把他的 config/hooks 重置一次。假 HOME 一样问得出"默认 home
   #    在不在仓外",而那正是本条要查的东西。2026-08-25 panel 抓到,V45 红过。
   local home_default fh38="$d/fh38"; mkdir -p "$fh38"
-  home_default="$(env -u AIWORK_DATA_DIR HOME="$fh38" REVIEW_PRINT_HOME=1 REVIEW_NO_MY_REVIEW=1 bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/x.log" "$repo" 2>/dev/null | tail -1)"
+  home_default="$(env -u AIWORK_DATA_DIR HOME="$fh38" REVIEW_PRINT_HOME=1 bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/x.log" "$repo" 2>/dev/null | tail -1)"
   [[ -n "$home_default" ]] && case "$home_default" in "$repo"/*|"$repo") false ;; *) true ;; esac
   check "V38: subkimi 的默认运行期 home 在**被评审的仓外面**(解析出来的是:${home_default:-没打印})" $?
   # ⚠️ **"问一句默认值"不许有副作用**。假 HOME 让运行期 home 不存在 ⇒ subkimi 的
@@ -1153,9 +1153,6 @@ v38_leg_runtime_home_outside_repo() {
   # 我自己又写了一条。⇒ 改成问**拒跑发生在什么时候**:必须在调起底座**之前**。
   # 用一个会留痕的假 kimi 来问,和 V35 ④「挂不上时命令根本没跑」同款。
   #
-  # ⚠️ 每一次调用都要带 REVIEW_NO_MY_REVIEW=1:**反锚定闸拦在最前面**,
-  # 不带的话 subkimi 在碰到 home 之前就退了 —— 第一版三处全漏,于是
-  # "底座没被调起"两边都成立、断言绿得毫无意义。是**对照组**把它照出来的。
   local fb="$d/fakebin"; mkdir -p "$fb"
   printf '#!/usr/bin/env bash\necho ran > "$KIMI_RAN_MARK"\necho "Conclusion: PASS"\n' > "$fb/kimi"
   chmod +x "$fb/kimi"
@@ -1163,7 +1160,7 @@ v38_leg_runtime_home_outside_repo() {
   local out
   _mk_kimi_home "$repo/kimi-home"
   rm -f "$d/kimi-ran"
-  out="$(PATH="$fb:$PATH" KIMI_RAN_MARK="$d/kimi-ran" KIMI_REVIEW_HOME="$repo/kimi-home" REVIEW_NO_MY_REVIEW=1 \
+  out="$(PATH="$fb:$PATH" KIMI_RAN_MARK="$d/kimi-ran" KIMI_REVIEW_HOME="$repo/kimi-home" \
          bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/y.log" "$repo" 2>&1)"
   [[ ! -e "$d/kimi-ran" ]]
   check "V38: home 在被评审的仓内 ⇒ **底座根本没被调起**(拒在前面,不是让它去撞 EROFS)" $?
@@ -1175,7 +1172,7 @@ v38_leg_runtime_home_outside_repo() {
   local out2
   _mk_kimi_home "$d/outside-home"
   rm -f "$d/kimi-ran"
-  out2="$(PATH="$fb:$PATH" KIMI_RAN_MARK="$d/kimi-ran" KIMI_REVIEW_HOME="$d/outside-home" REVIEW_NO_MY_REVIEW=1 \
+  out2="$(PATH="$fb:$PATH" KIMI_RAN_MARK="$d/kimi-ran" KIMI_REVIEW_HOME="$d/outside-home" \
           bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/z.log" "$repo" 2>&1)"
   [[ -e "$d/kimi-ran" ]]
   check "V38: 对照组 —— home 在仓外时底座照常被调起(拒的是位置,不是别的)" $?

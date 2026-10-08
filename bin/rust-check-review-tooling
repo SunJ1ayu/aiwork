@@ -26,7 +26,6 @@ SUITES=(
   "review-tooling|bash|$ROOT/tests/test-review-tooling.sh"
   "subcodex|bash|$ROOT/tests/test-subcodex.sh"
   "fix-oracle|bash|$ROOT/tests/test-submimo-fix-oracle.sh"
-  "pruned-surface|bash|$ROOT/tests/test-pruned-surface.sh"
   "delegate-entry|bash|$ROOT/tests/test-delegate-entry.sh"
   "delegate-isolate|bash|$ROOT/tests/test-delegate-isolate.sh"
   "no-egress|bash|$ROOT/tests/test-no-egress.sh"

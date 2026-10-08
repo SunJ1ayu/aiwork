@@ -77,7 +77,7 @@ class LocalDataTests(unittest.TestCase):
         task = self.d / 'task.md'
         task.write_text('fixture')
         result = self.run_tool('subkimi', 'review', str(task), str(self.d / 'log'), str(repo),
-                               env=dict(self.env, REVIEW_PRINT_HOME='1', REVIEW_NO_MY_REVIEW='1'))
+                               env=dict(self.env, REVIEW_PRINT_HOME='1'))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), str(self.data / 'kimi-review-home'))
         self.assertFalse(self.data.exists())
@@ -97,7 +97,7 @@ class LocalDataTests(unittest.TestCase):
         subprocess.run(['git', 'init', '-q', str(repo)], check=True)
         task = self.d / 'task.md'
         task.write_text('fixture')
-        env = dict(self.env, REVIEW_NO_MY_REVIEW='1')
+        env = dict(self.env)
         env.pop('KIMI_REVIEW_HOME', None)
         runtime = self.data / 'kimi-review-home'
         for existing in (False, True):
@@ -129,7 +129,7 @@ class LocalDataTests(unittest.TestCase):
         link = self.d / 'data-link'
         link.symlink_to(repo, target_is_directory=True)
         result = self.run_tool('subkimi', 'review', str(task), str(self.d / 'log'), str(repo),
-                               env=dict(self.env, AIWORK_DATA_DIR=str(link / 'runtime'), REVIEW_NO_MY_REVIEW='1'))
+                               env=dict(self.env, AIWORK_DATA_DIR=str(link / 'runtime')))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('仓内', result.stderr)
         self.assertFalse((repo / 'runtime').exists())

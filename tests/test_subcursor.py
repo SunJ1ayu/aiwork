@@ -137,7 +137,7 @@ class CursorTest(unittest.TestCase):
         self.env = {k:v for k,v in os.environ.items()
                     if not k.startswith(('CURSOR_',)) and k != 'CURSOR_API_KEY'}
         self.env.update(AIWORK_CONFIG_DIR=str(self.config), PATH=str(self.fake)+os.pathsep+os.environ['PATH'],
-            CURSOR_AUTH_FILE=str(self.auth), REVIEW_NO_MY_REVIEW='1',
+            CURSOR_AUTH_FILE=str(self.auth),
             REVIEW_WORKSPACE_BASE=str(self.d/'workspaces'),
             AIWORK_REVIEW_RESULT_BIN=str(self.bin/'_review_result.py'),
             FAKE_SOURCE=str(self.repo), FAKE_RECORD=str(self.d/'record.json'),

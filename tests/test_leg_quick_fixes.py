@@ -9,10 +9,6 @@ Each test pins one observed failure of a real review leg:
       runtime (09-09): the CLI's error line lives in the leg log, not in our diagnostic,
       and `403` would have matched auth before any limit wording anyway.
   A3  self-healing window limits must not push a leg toward the dead streak.
-  A4  opencode stops the whole round on the first denied tool call unless
-      experimental.continue_loop_on_deny is true (GLM 09-10).
-  A5  the OpenCode Go chat endpoint rejects requests without x-opencode-session
-      (HTTP 400 MissingSessionID, GLM chat fallback 09-09).
 """
 import os
 import sys
@@ -75,7 +71,7 @@ class LegCase(unittest.TestCase):
 
     def env(self, **extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-        env.update(PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}", REVIEW_NO_MY_REVIEW="1",
+        env.update(PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}",
                    REVIEW_WORKSPACE_BASE=str(self.d / "workspaces"))
         env.update(extra)
         return env

@@ -57,12 +57,12 @@ git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || die "--base 解�
 
 # 【高危,四审 subkimi 抓的】`--impl` 必须在仓内。
 # 下面这行 `rm -rf "$REPO/$p"` 是本脚本**两处**破坏性动作之一(另一处是 `purge_pycache`
-# 全仓清 `__pycache__`,根钉在 `REPO_REAL`、跟踪的跳过;2026-08-08 四审 F2
+# 全仓清 `__pycache__`,根钉在 `REPO_REAL`、跟踪的跳过;2026-08-08 四审 subdeepseek F2
 # 提醒:这句原本写着"唯一",会让后来的审者以为破坏面只有被守卫的这份清单):
 # `--impl ../x` 会真删到仓外,
 # 而**旧版没有任何拦截** —— 前置脏检查的 git 报错走 stderr、stdout 为空 ⇒ 静默放行,
 # 收尾自证同样为空 ⇒ 还会打印"✅ 已恢复,工作树干净"。
-# **不需要攻击者,敲错一个路径就够。**(核对后判成"低危、预检已挡",核对代码是错的:
+# **不需要攻击者,敲错一个路径就够。**(subdeepseek 判成"低危、预检已挡",核对代码是错的:
 # 那一行没有 2>&1。两腿判断打架时以代码为准。)
 REPO_REAL="$(realpath "$REPO")"
 for p in "${IMPL[@]}"; do
@@ -103,7 +103,7 @@ echo "  实现:${IMPL[*]}"
 # 而收尾自证会因此喊 rc=9 —— 一个为了正确性加的动作不该反过来触发"恢复没干净")。
 #
 # 三处是 2026-08-08 四审改的,都别改回去:
-#   1. **`:(literal)`**(评审 F3):pathspec 默认按 glob 解释。未跟踪的
+#   1. **`:(literal)`**(subdeepseek F3):pathspec 默认按 glob 解释。未跟踪的
 #      `a[1]/__pycache__` 会撞上已跟踪的同名普通文件 `a1/__pycache__` ⇒ 误判"被跟踪"
 #      ⇒ 跳过不清 ⇒ 残留旧字节码 ⇒ **假绿**。(腿举的另一个例子实测不成立:带通配符的
 #      pathspec 不做目录前缀展开。方向核对过才落的。)
@@ -158,7 +158,7 @@ restore() {
   if [[ -n "$BUILD" ]]; then
     ( cd "$REPO" && bash -c "$BUILD" ) >/dev/null 2>&1 || build_failed=1
   fi
-  # 恢复 build 失败**必须非零退出**(四审 F6):旧版只 echo 一句警告就照常
+  # 恢复 build 失败**必须非零退出**(四审 subdeepseek F6):旧版只 echo 一句警告就照常
   # exit 0 —— 而那时树里躺的是没重建的源码/基线产物,正是"盘上和运行时对不上"。
   if [[ $build_failed -eq 1 ]]; then
     echo "  ❌ 恢复后的 build 没过 —— 工作树里可能还带着基线的产物,**不算恢复完成**。" >&2
@@ -167,7 +167,7 @@ restore() {
   fi
   # 自证:不喊"恢复好了",而是让 git 说话。
   # 范围**不止 --impl**:build 产物常落在 impl 之外(本机 dist 入库),
-  # 只查 impl 就会出现"树是脏的、自证说干净"(四审 F5:design 写了、实现漏了)。
+  # 只查 impl 就会出现"树是脏的、自证说干净"(四审 subdeepseek F5:design 写了、实现漏了)。
   # 拿开工前的**全仓快照**做基准比较:仓里本来就有的无关脏东西(别的 track 的草稿之类)
   # 不算我留下的,否则这道自证会天天误报、然后被忽略。
   local left

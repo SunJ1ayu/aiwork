@@ -107,7 +107,7 @@ d_refuses_without_evidence() {
     $([[ $rc -ne 0 && "$(calls_of "$rec")" -eq 0 ]]; echo $?)
   grep -qi "空文件" "$d/o3"; check "D1: 说清是**空文件**应付" $?
 
-  # ④ 攻题记录放在**仓内** = 把考卷的洞递给考生(和 评审命令 的 my-review 闸同源)
+  # ④ 攻题记录放在**仓内** = 把考卷的洞递给考生
   cp "$d/attack.md" "$repo/attack.md"
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$repo/attack.md" --protect tests/oracle.sh >"$d/o4" 2>&1; rc=$?
@@ -357,7 +357,7 @@ EOF
   #    基线那份留在索引里 ⇒ 工作树没干净。当时是"恢复自证"那道闸响的(rc=9,大声退出),
   #    没有静默把一棵混合树留在盘上 —— 但**响了不等于修了**,这一幕要求它真的收拾干净。
   local r2="$d/repo2"; mkdir -p "$r2/src" "$r2/out" "$r2/tests"
-  # ⚠️ BUILD **不带** `rm -f out/asset-*.js`(四审 F11 抓的):
+  # ⚠️ BUILD **不带** `rm -f out/asset-*.js`(四审 subdeepseek F11 抓的):
   #    带了的话,恢复时那次 build 会把基线残留的产物顺手删掉 ⇒
   #    就算把 restore 里的 `git clean` 整步删掉,这一幕照样全绿 —— 判据钉不住它。
   #    真实的 vite 会清 dist,但**红检要问的是恢复逻辑自己干不干净**,不是靠 build 兜底。
@@ -382,7 +382,7 @@ EOF
     $([[ -z "$(git -C "$r2" status --porcelain -uall)" ]]; echo $?)
 
   # ⑪ 【高危】`--impl` 指到仓外 ⇒ 必须拒跑,**一个字节都不许删**。
-  #    四审 subkimi 抓的(核对后判成"低危、预检已挡"是错的,我核实过:
+  #    四审 subkimi 抓的(subdeepseek 判成"低危、预检已挡"是错的,我核实过:
   #    预检 `git status ... -- ../x` 的报错走 stderr,stdout 为空 ⇒ 静默放行,
   #    然后 `rm -rf "$REPO/../x"` 真删,收尾自证同样 stdout 为空 ⇒ 还打印"✅ 已恢复")。
   #    这条不需要攻击者,**敲错一个路径就够**。
@@ -395,7 +395,7 @@ EOF
   grep -qi "仓外\|仓库之外\|outside" "$d/e12"; check "E1: 拒跑时说清是「路径在仓外」" $?
 
   # ⑫ 恢复时 build 失败 ⇒ **不许说"已恢复,干净"**(自证的意义就在这)。
-  #    评审 F6:原来只 echo 一句警告就照常 exit 0。
+  #    subdeepseek F6:原来只 echo 一句警告就照常 exit 0。
   local r3="$d/repo3"; cp -a "$r2" "$r3"
   bash "$BIN/redcheck" --repo "$r3" --base HEAD~1 --impl src/impl.sh \
        --build "if [ -f $d/first_build_done ]; then exit 1; fi; touch $d/first_build_done" \
@@ -448,7 +448,7 @@ py_compile.compile('src/impl.py', doraise=True,
   check "E1: 跑完盘上没留下 .pyc 缓存(git status 空)" \
     $([[ -z "$(git -C "$pr" status --porcelain)" ]]; echo $?)
 
-  # ⑭ 【四审 F4】事故的**另一半**:还原之后在**干净的树**上假红。
+  # ⑭ 【四审 subdeepseek F4】事故的**另一半**:还原之后在**干净的树**上假红。
   #    ⑬ 只钉住了"退回之后跑的是盘上的源码";`restore()` 里那次清缓存它证明不了 ——
   #    一个"只在退回后清一次 + `PYTHONDONTWRITEBYTECODE=1`"的实现也能让 ⑬ 全绿。
   #    这里让**判据自己**每跑一次就把当前源码钉成 unchecked-hash 的字节码
@@ -486,7 +486,7 @@ EOF
   check "E1: 还原之后在**干净的树**上判据必须绿 —— 否则就是那天晚上的假红" \
     $([[ $rc -eq 0 ]]; echo $?)
 
-  # ⑮ 【四审 F3 起的头,方向我核对过一遍才落这一幕】
+  # ⑮ 【四审 subdeepseek F3 起的头,方向我核对过一遍才落这一幕】
   #    "被 git 跟踪就跳过"那一判用的是 **pathspec,默认按 glob 解释**
   #    (实测 `git ls-files -- 'bin/[r]edcheck'` 命中 `bin/redcheck`)。
   #    危险方向是 **fail-open**:目录名带 glob 字符的**未跟踪**缓存,
@@ -539,7 +539,7 @@ d_gate_blind_spots() {
   grep -qx -- "-C" "$rec/argv.1" && grep -qx -- "$repo" "$rec/argv.1"
   check "D4: 命令行显式给 -C <仓>(不靠 cwd)" $?
 
-  # ② 判卷文件被 .gitignore 藏起来 ⇒ 拒发(评审 F2:执行腿只要往 .gitignore
+  # ② 判卷文件被 .gitignore 藏起来 ⇒ 拒发(subdeepseek F2:执行腿只要往 .gitignore
   #    追一行,再塞 conftest.py,闸①两臂全空 —— D3④ 那招被绕过)
   printf 'tests/conftest.py\n' > "$repo/.gitignore"
   git -C "$repo" add -A >/dev/null 2>&1; git -C "$repo" commit -qm "ignore 一条"
@@ -579,7 +579,7 @@ d_gate_blind_spots() {
   check "D4: 放行 __pycache__ 之后,被 ignore 的 conftest.py 仍然拒发" \
         $([[ $rc -ne 0 ]]; echo $?)
 
-  # ②c 【四审 F5;subkimi 额度用尽前的日志里也独立指到同一处;主 agent 亦然】
+  # ②c 【四审 subdeepseek F5;subkimi 额度用尽前的日志里也独立指到同一处;主 agent 亦然】
   #    上面那条放行当初写成了 `grep -v '__pycache__'` —— **子串匹配,不是路径成分匹配**。
   #    执行腿同时握着 `.gitignore` 和文件名 ⇒ 只要名字里带上这个子串,它就能在判卷目录里
   #    放一个闸①三条臂全照不到的文件。而放行的安全性论证(PEP 3147:没有源码的 .pyc
@@ -607,7 +607,7 @@ d_gate_blind_spots() {
   git -C "$repo" rm -q --cached .gitignore >/dev/null 2>&1; rm -f "$repo/.gitignore"
   git -C "$repo" commit -qm "撤掉 ignore2" >/dev/null 2>&1
 
-  # ③ 判卷被 skip-worktree/assume-unchanged 标记 ⇒ 闸① 两臂同时失明(评审 F1)
+  # ③ 判卷被 skip-worktree/assume-unchanged 标记 ⇒ 闸① 两臂同时失明(subdeepseek F1)
   stamp_hash "$d/attack.md" "$repo" tests/
   env PATH="$b:$PATH" bash "$BIN/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
       --attack-log "$d/attack.md" --protect tests/ --log "$d/s1.log" >/dev/null 2>&1
@@ -618,7 +618,7 @@ d_gate_blind_spots() {
   git -C "$repo" update-index --no-skip-worktree tests/oracle.sh
   git -C "$repo" checkout -- tests/oracle.sh
 
-  # ④ 回执/日志落在**被派活的仓里** ⇒ 执行腿能改回执让闸①自证(评审 F15 / subkimi F3)
+  # ④ 回执/日志落在**被派活的仓里** ⇒ 执行腿能改回执让闸①自证(subdeepseek F15 / subkimi F3)
   # 调用数写成"这一次没变",不写累计常数:常数会让"加一幕"顺带改断言,
   # 而改断言正是最容易把闸悄悄放松的动作(2026-08-07 加 __pycache__ 那一幕时撞到)。
   _calls_before="$(calls_of "$rec")"

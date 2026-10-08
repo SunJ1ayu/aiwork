@@ -56,7 +56,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_public_test_startup_clears_inherited_review_context(self):
         inherited = {'AIWORK_REVIEW_PR': '1', 'AIWORK_REVIEW_FUTURE': 'fixture',
-                     'PANEL_DIFF_BASE': 'fixture', 'REVIEW_NO_MY_REVIEW': '1'}
+                     'PANEL_DIFF_BASE': 'fixture'}
         control = {'TEST_REVIEW_WORKSPACE_CASE': 'write-boundary'}
         keys = [*inherited, *control, 'AIWORK_CONFIG_DIR', 'AIWORK_DATA_DIR']
         output = f'print(json.dumps({{k: os.environ[k] for k in {keys!r} if k in os.environ}}))'
@@ -140,7 +140,7 @@ class SettingsTest(unittest.TestCase):
                    'kimi': 'subkimi', 'mimo': 'submimo',
                    'deepseek': 'subdeepseek-agent'}
         env = dict(self.env, PATH=str(fake) + os.pathsep + self.env['PATH'],
-                   REVIEW_NO_MY_REVIEW='1', PROVIDER_MARKER=str(marker))
+                   PROVIDER_MARKER=str(marker))
         for leg, caller in callers.items():
             for missing_file in (True, False):
                 path = self.config / 'models.env'
@@ -175,7 +175,7 @@ class SettingsTest(unittest.TestCase):
             link.symlink_to(ROOT / 'bin' / name)
             result = subprocess.run([str(link), *prefix, 'review', str(task),
                                      str(self.d / (name + '.log')), str(repo)],
-                                    env=dict(self.env, REVIEW_NO_MY_REVIEW='1'),
+                                    env=dict(self.env),
                                     capture_output=True, text=True, timeout=10)
             with self.subTest(caller=name):
                 self.assertNotEqual(result.returncode, 0)
@@ -184,7 +184,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_codex_and_delegate_dry_runs_read_local_settings_and_keep_overrides(self):
         repo, task = self.repo_fixture()
-        env = dict(self.env, REVIEW_NO_MY_REVIEW='1')
+        env = dict(self.env)
         attack = self.d / 'attack.md'
         hashed = subprocess.run([str(ROOT / 'bin/delegate-codex'), '--print-oracle-hash',
                                  '--repo', str(repo), '--protect', 'oracle.txt'],

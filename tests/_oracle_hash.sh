@@ -22,7 +22,7 @@ oracle_hash() {
   local p full
   for p in "$@"; do
     # 实现侧用 python 的 `strip("/")`(剥掉**所有**首尾斜杠);这里原来只剥一个尾斜杠 ⇒
-    # `--protect tests//` 两边算出不同的相对路径 = 判据假红(四审 指出)。
+    # `--protect tests//` 两边算出不同的相对路径 = 判据假红(四审 subdeepseek 指出)。
     while [[ "$p" == */ ]]; do p="${p%/}"; done
     while [[ "$p" == /* ]]; do p="${p#/}"; done
     full="$repo/$p"

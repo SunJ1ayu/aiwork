@@ -130,7 +130,7 @@ class ReliabilityTests(unittest.TestCase):
 
         clean = {k: v for k, v in os.environ.items() if not k.startswith(
             ('MIMO_', 'DEEPSEEK_', 'ZHIPU_'))}
-        clean.update(REVIEW_NO_MY_REVIEW='1', DEEPSEEK_API_KEY='fixture-key',
+        clean.update(DEEPSEEK_API_KEY='fixture-key',
                      DEEPSEEK_API_BASE=endpoint, CURSOR_MODEL='gpt-6-sol',
                      AIWORK_DATA_DIR=str(self.directory / 'data'))
         clean.update(env or {})

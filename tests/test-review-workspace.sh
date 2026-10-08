@@ -264,11 +264,6 @@ MODEL_STUB
 printf claude > "$MODEL_COUNT"
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Conclusion: PASS"}]}}'
 MODEL_STUB
-  cat > "$b/opencode" <<'MODEL_STUB'
-#!/usr/bin/env bash
-printf opencode > "$MODEL_COUNT"
-echo 'Conclusion: PASS'
-MODEL_STUB
   cat > "$b/kimi" <<'MODEL_STUB'
 #!/usr/bin/env bash
 printf kimi > "$MODEL_COUNT"
@@ -278,17 +273,17 @@ MODEL_STUB
 #!/usr/bin/env bash
 exit 2
 MODEL_STUB
-  chmod +x "$b/ro-repo-exec" "$b/mimo" "$b/claude" "$b/opencode" "$b/kimi" "$b/node"
+  chmod +x "$b/ro-repo-exec" "$b/mimo" "$b/claude" "$b/kimi" "$b/node"
   printf '# review\n' > "$d/task.md"
 
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
     MIMO_REVIEW_HOME="$d/mimo-home" \
     bash "$b/submimo" review "$d/task.md" "$d/out.log" "$repo" >/dev/null 2>&1
   mimo_rc=$?
   [[ $mimo_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: submimo helper failure is nonzero with zero model calls' $?
 
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
     DEEPSEEK_API_KEY=test \
     bash "$b/subdeepseek-agent" review "$d/task.md" "$d/deepseek.log" "$repo" >/dev/null 2>&1
   deepseek_rc=$?
@@ -299,7 +294,7 @@ MODEL_STUB
   printf '[hooks]\n' > "$d/kimi-home/config.toml"
   printf 'guard\n' > "$d/kimi-home/hooks/guard.mjs"
   printf '{}\n' > "$d/kimi-home/credentials/kimi-code.json"
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" REVIEW_NO_MY_REVIEW=1 \
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
     KIMI_REVIEW_HOME="$d/kimi-home" \
     bash "$b/subkimi" review "$d/task.md" "$d/kimi.log" "$repo" >/dev/null 2>&1
   kimi_rc=$?
