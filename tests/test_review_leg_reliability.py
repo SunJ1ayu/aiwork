@@ -172,11 +172,10 @@ class ReliabilityTests(unittest.TestCase):
         padded = self.diff + 'x\n' * 75000
         task = self.review.task_text(1, pr, self.base, ['file'], padded,
                                      'Trusted rules.', '无', rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
+        requirement = self.review.CONCLUSION_REQUIREMENT
         tail = '\n'.join(task.splitlines()[-3:])
-        self.assertIn('最后独占一行写 Conclusion: PASS', tail)
-        self.assertIn('Conclusion: BLOCK', tail)
-        self.assertIn('Conclusion: NEEDS_MORE_INFO', tail)
-        self.assertGreater(task.rfind('最后独占一行写'), task.rfind('```'))
+        self.assertIn(requirement, tail)
+        self.assertGreater(task.rfind(requirement), task.rfind('```'))
 
     def whole_file_deletion_view(self):
         marker = 'DELETED_PAYLOAD_9f3c'
@@ -243,6 +242,18 @@ class ReliabilityTests(unittest.TestCase):
                     self.assertEqual(rc, 0, stderr)
                     self.assertEqual(self.leg_calls[0][1].get(variable), override or '2400')
                     self.assertEqual(len(posted), 1)
+
+    def test_last_message_without_conclusion_is_not_published(self):
+        earlier = 'P1 remains.\n\nConclusion: BLOCK\n'
+        last = '补充核对完毕，判断不变。'
+        log = '# fixture review log\n\n' + earlier + '\n' + last + '\n'
+        rc, _, posted, _, stderr = self.run_review(
+            'subkimi', fake_attempts=[{'log': log, 'report': last, 'exit': 0}])
+        self.assertEqual(rc, 1, stderr)
+        self.assertEqual(posted, [])
+        self.assertIn('no_verdict', stderr)
+        self.assertIn('verdict=UNKNOWN', stderr)
+        self.assertEqual(len(self.leg_calls), 2)
 
     def test_reader_missing_conclusion_retries_using_fresh_artifacts(self):
         attempts = [{'report': 'No conclusion.', 'failure': 'no_verdict', 'exit': 1}, {}]

@@ -512,7 +512,9 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn(json.dumps(self.review.REVIEW_DIFF_PATH, ensure_ascii=False), task)
         self.assertIn('含删除内容', task)
         self.assertIn('请读取这个文件', task)
-        self.assertGreater(task.rfind('最后独占一行写'), task.find(self.review.REVIEW_DIFF_PATH))
+        self.assertGreater(
+            task.rfind(self.review.CONCLUSION_REQUIREMENT),
+            task.find(self.review.REVIEW_DIFF_PATH))
         for change in changes:
             self.assertIn(self.review._change_line(change).rstrip('\n'), task)
         for body in bodies.values():

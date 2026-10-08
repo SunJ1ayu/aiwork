@@ -545,7 +545,7 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
             verdict = normalize_verdict(evidence_text)
     if verdict is None and args.report is not None:
         if args.report.is_file():
-            verdict = normalize_verdict(args.report.read_text(encoding="utf-8"))
+            verdict = normalize_verdict(args.report.read_text(encoding="utf-8", errors="replace"))
         else:
             verdict = "UNKNOWN"
     if verdict is None:
@@ -716,7 +716,7 @@ def parser() -> argparse.ArgumentParser:
     commands = top.add_subparsers(dest="command", required=True)
     family = commands.add_parser("cursor-family", help="resolve a Cursor model's coverage family")
     family.add_argument("model")
-    normalize = commands.add_parser("normalize", help="normalize a raw reviewer log")
+    normalize = commands.add_parser("normalize", help="normalize the verdict in a review report")
     normalize.add_argument("log", type=Path)
     validate = commands.add_parser("validate", help="validate a ReviewLegResult v2 file")
     validate.add_argument("result", type=Path)

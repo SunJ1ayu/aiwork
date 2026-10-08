@@ -30,8 +30,9 @@ ORIGIN_REPO = re.compile(
     r"([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*?)(?:\.git)?/?$"
 )
 SHA = re.compile(r"^[0-9a-f]{40}$")
-CONCLUSION_REQUIREMENT = ("最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
-                          "Conclusion: NEEDS_MORE_INFO。")
+CONCLUSION_REQUIREMENT = (
+    "你的最后一条消息就是发布出去的评审：要写完整的报告，并以独占一行的 Conclusion 结束。"
+)
 # A repository reader past this size reads the complete diff from the snapshot
 # file instead of pasting it. The review is of the complete diff, deletions included.
 READER_INLINE_DIFF_BYTES = 200 * 1024
@@ -544,7 +545,6 @@ def main() -> int:
                 if frozen_model is not None:
                     env["CURSOR_MODEL"] = frozen_model
                 attempt_directory = directory
-                report_path = directory / "report.md"
                 for attempt in range(2):
                     result, report_path = run_leg_attempt(
                         selected_leg, family, task, repo, attempt_directory,

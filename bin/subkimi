@@ -202,15 +202,6 @@ do not intentionally edit source files. Do not push, merge, install dependencies
 run migrations, access production systems, or change credentials.
 
 Report findings with file:line references and a severity each.
-
-Write the verdict line AS SOON AS you have enough to judge, immediately after
-your findings — do not save it for the end. You may keep analysing afterwards
-and restate the line at the end if your judgement changes; the last one counts.
-(This harness kills long reviews on a timeout. 2026-07-27: a run was cut off
-with its best finding already written out but no verdict line, so the whole
-review was discarded. Verdict first preserves that judgement as partial
-evidence; a timed-out review is still not eligible for coverage.)
-
 The verdict line must be exactly this form:
 Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 
@@ -271,17 +262,12 @@ else
   VERDICT=UNKNOWN
 fi
 
-# Timeout may preserve an early verdict as partial evidence, but it is never a
-# successful/coverage-eligible review.  Keep rc=124 and publish the atomic facts
-# before returning so the detached terminal producer cannot promote it later.
+# A timeout is not a successful review. Publish the facts, then return 124 so a
+# later reader cannot treat the run as coverage.
 if [[ $RC -eq 124 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" subscription \
     timed_out partial timeout "$VERDICT" || exit 78
-  if [[ "$VERDICT" == "UNKNOWN" ]]; then
-    echo "subkimi: timed out after ${TIMEOUT_SECONDS}s with no verdict (log: $LOG_FILE)" >&2
-  else
-    echo "subkimi: timed out after ${TIMEOUT_SECONDS}s; preserving verdict=$VERDICT as partial evidence, not coverage (log: $LOG_FILE)" >&2
-  fi
+  echo "subkimi: timed out after ${TIMEOUT_SECONDS}s (log: $LOG_FILE)" >&2
   exit 124
 fi
 if [[ $RC -ne 0 ]]; then

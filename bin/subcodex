@@ -148,7 +148,8 @@ invoke other AI models / AI CLIs. Do not wait for user input.
 EOF
 if [[ "$MODE" == review ]]; then
   cat >> "$PROMPT_FILE" <<'EOF'
-Give findings with severity, file:line evidence and reasoning. End with exactly one standalone line:
+Give findings with severity, file:line evidence and reasoning.
+The verdict line must be exactly one of:
 Conclusion: PASS
 Conclusion: BLOCK
 Conclusion: NEEDS_MORE_INFO

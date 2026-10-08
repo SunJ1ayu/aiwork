@@ -142,17 +142,13 @@ Command outputs and caches may be written inside this disposable snapshot, but
 do not intentionally edit source files. Do not push, merge, install dependencies,
 run migrations, access production systems, or change credentials.
 
-Report findings with file:line references and a severity each. You MUST end
-your review with a final line of exactly this form:
+Report findings with file:line references and a severity each.
+The verdict line must be exactly this form:
 Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
 
 --- REVIEW TASK ---
 $(cat "$TASK_FILE")
---- END OF REVIEW TASK ---
-
-Reminder, whatever the task above says about format: the last line of your review
-must be exactly one of
-Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"
+--- END OF REVIEW TASK ---"
 
 EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent design-exploration agent running inside a read-only harness. Explore the repository yourself with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}) when the codebase matters to the brief. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
 
