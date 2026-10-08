@@ -477,8 +477,44 @@ def completeness(result: dict) -> str:
     return "partial"
 
 
+_TOOL_LINE = re.compile(r"^[ \t]*→[ \t]+\S")
+_REPORT_HEADING = re.compile(r"^[ \t]*(?:•[ \t]+)?#[ \t]+\S")
+
+
+def publishable_report(text: str) -> str:
+    """The one report review-pr publishes, for every leg.
+
+    A leg log keeps the exploration transcript: model narration, rendered tool
+    calls (``→ Bash …``), harness footers, and CLI prompts such as
+    ``To resume this session: kimi -r …``. The published review is the last
+    report the leg handed over, plus the machine conclusion block added by
+    ``build_body``. A short report with no heading is already that report.
+    """
+    lines = text.replace("\r\n", "\n").split("\n")
+    end = len(lines)
+    for index, line in enumerate(lines):
+        if (re.fullmatch(r"-{10,}", line.strip()) and index + 1 < len(lines)
+                and lines[index + 1].startswith("turns:")):
+            end = index
+            break
+    kept = []
+    for line in lines[:end]:
+        stripped = line.strip()
+        if (_TOOL_LINE.match(line) or stripped.startswith("To resume this session:")
+                or re.match(r"^kimi version \d", stripped)
+                or stripped.startswith("(原始 stream-json:")):
+            continue
+        kept.append(line)
+    start = 0
+    for index, line in enumerate(kept):
+        if _REPORT_HEADING.match(line):
+            start = index
+    report = "\n".join(kept[start:]).strip()
+    return re.sub(r"^(?:[ \t]*•[ \t]+)", "", report, count=1)
+
+
 def build_body(leg: str, model: str, report: str, block: dict) -> str:
-    clean = re.sub(r"```json\b", "```text", report.strip(), flags=re.I)
+    clean = re.sub(r"```json\b", "```text", publishable_report(report), flags=re.I)
     return (f"**aiwork-review · {leg} · {model}**\n\n{clean}\n\n"
             f"```json\n{json.dumps(block, ensure_ascii=False, separators=(',', ':'))}\n```\n")
 

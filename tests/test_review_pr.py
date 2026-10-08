@@ -75,7 +75,7 @@ class ReviewPrTests(unittest.TestCase):
             self.assertEqual(self.review.choose_leg("subcursor")[1], configured)
 
     def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True,
-                                 repository=None, source_failure=None, project_rules=False,
+                                 repository="SunJ1ayu/aiwork", source_failure=None, project_rules=False,
                                  local_rules="LOCAL WORKSPACE RULES", risks_present=True,
                                  leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False,
                                  report="Finding\nConclusion: PASS", private_terms='unused\n'):
@@ -185,8 +185,8 @@ class ReviewPrTests(unittest.TestCase):
             git("commit", "-qm", "project main")
             git("update-ref", "refs/aiwork/main", "HEAD")
             (repo / ".aiwork/accepted-risks.md").write_text("PR RISK DECOY", encoding="utf-8")
-            with patch("sys.argv", ["review-pr", "12", "--leg", "subcursor"]
-                       + (["--repo", repository] if repository else []) + (["--dry-run"] if dry_run else [])), \
+            with patch("sys.argv", ["review-pr", "12", "--repo", repository, "--leg", "subcursor"]
+                       + (["--dry-run"] if dry_run else [])), \
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
                     patch.object(self.review, "BIN", bin_dir), \
                     patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data"), AIWORK_CONFIG_DIR=str(config)), \
@@ -790,11 +790,52 @@ grep -q -F -- "$3" "$clone/$4"
     def test_publishing_writes_only_the_review(self):
         # The review itself wakes the gate (the repo's aiwork-review-ping); a second write
         # such as a recheck label is a second doorbell, and its failure would turn a posted
-        # review into exit 1. The target is this checkout's origin.
+        # review into exit 1. The target is the --repo this test passes explicitly.
         rc, calls, stdout, stderr = self.run_main_with_leg_result("gpt-5.6", dry_run=False)
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/aiwork/pulls/12/reviews"])
         self.assertEqual(stdout.strip(), "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1")
+
+    def test_published_body_keeps_only_the_final_report(self):
+        # Real leg transcripts: subdeepseek-agent renders tool use as "→ Bash …",
+        # subkimi prints a session-resume hint. Both mix that with the report.
+        block = {"verdict": "PASS", "head_sha": "a" * 40, "model": "model",
+                 "family": "deepseek", "completeness": "complete", "files_read": ["src/a.py"]}
+        deepseek = (
+            "I'll start by exploring the repository structure and the diff.\n\n"
+            "  → Bash git log --oneline -5 && git status\n\n"
+            "  → Read tests/test-review-tooling.sh\n\n"
+            "This is a large PR. Let me examine the actual content changes.\n\n"
+            "# PR #17「retire-track」独立评审\n\n"
+            "未发现 P1。\n\n"
+            "Conclusion: PASS\n\n"
+            "------------------------------------------------------------\n"
+            "turns: 182 / 上限 200\n"
+            "(原始 stream-json:/tmp/aiwork-review-pr-obktjfip/review.stream.jsonl)\n"
+        )
+        kimi = (
+            "kimi version 0.36.1\n"
+            "• Let me start by exploring the repository structure and understanding the diff.\n\n"
+            "• Let me write the final review.\n\n"
+            "• # 独立复审报告\n\n"
+            "  没有 P1。\n\n"
+            "  Conclusion: BLOCK\n\n"
+            "To resume this session: kimi -r session_e5610b86-4d28-4459-9ae8-442448a7278e\n"
+        )
+        cases = (
+            ("subdeepseek-agent", deepseek, "PASS", "未发现 P1。", "deepseek"),
+            ("subkimi", kimi, "BLOCK", "没有 P1。", "moonshot"),
+        )
+        for leg, raw, verdict, keep, family in cases:
+            with self.subTest(leg=leg):
+                body = self.review.build_body(leg, "model", raw, block | {"verdict": verdict, "family": family})
+                self.assertIn(keep, body)
+                self.assertIn(f"Conclusion: {verdict}", body)
+                self.assertEqual(body.count("```json"), 1)
+                self.assertIn(f'"verdict":"{verdict}"', body)
+                for junk in ("Let me start by exploring", "→ Bash", "→ Read",
+                             "To resume this session", "kimi version", "turns:", "stream-json"):
+                    self.assertNotIn(junk, body, junk)
 
     def test_report_is_separated_only_at_the_leg_log_header(self):
         with tempfile.TemporaryDirectory() as temporary:

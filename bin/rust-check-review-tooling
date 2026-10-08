@@ -40,24 +40,11 @@ SUITES=(
   "aiwork-gate|bash|$ROOT/tests/test-aiwork-gate.sh"
 )
 
-# ── 名单漏网报告(2026-08-06)────────────────────────────────────────────
-# 规矩4 的名单是**手列**的 ⇒ 新起一个不匹配的工具名就漏,而且漏的时候没人会知道。
-# 硬堵不行(把运维脚本也拖进来 = 误报 = 守卫被绕过),所以只**报**不拦:
-# 每次总跑列一次「bin/ 里哪些可执行文件不在名单内」,让清单腐烂时有人吭一声。
-. "$ROOT/bin/_tooling-paths.sh" 2>/dev/null || true
-uncovered=""
-if declare -f is_judging_surface >/dev/null; then
-  for f in "${COVERAGE_BIN_DIR:-$ROOT/bin}"/*; do
-    [ -f "$f" ] && [ -x "$f" ] || continue
-    is_judging_surface "bin/$(basename "$f")" || uncovered="$uncovered $(basename "$f")"
-  done
-fi
-
 # ── 孤儿判据套件(2026-08-08 四审 F2 实证)──────────────────────────────
 # 新写的判据套件没被加进上面那张表 ⇒ 落盘当天绿的,此后**没有任何入口
 # 再跑它**,烂掉不会有人知道。本文件头部自己写着「新增判据套件 = 往那张表里加一行」——
-# 靠"记得加"就等于没有闸,和 bin/ 名单那条债是同一笔。
-# 和 bin/ 名单**不同的是这里硬红**:`tests/test-*` 没有"运维脚本"那种歧义,
+# 靠"记得加"就等于没有闸。判卷面以 .aiwork/policy.json 为准,不在这里另列一份。
+# 套件漏登记则硬红:`tests/test-*` 没有"运维脚本"那种歧义,
 # 一个判据套件不进总跑,没有任何正当理由。
 TESTS_DIR="${COVERAGE_TESTS_DIR:-$ROOT/bin/../tests}"
 orphans=""
@@ -67,13 +54,8 @@ for f in "$TESTS_DIR"/test-*.sh "$TESTS_DIR"/test_*.sh "$TESTS_DIR"/test-*.py "$
   case " ${SUITES[*]} " in *"/$b|"*|*"/$b "*) ;; *) orphans="$orphans $b" ;; esac
 done
 
-# --coverage-only:只出漏网报告就退出(判据要问这件事,不该为此跑完 10 分钟的全套件)
+# --coverage-only:只问孤儿套件就退出(判据要问这件事,不该为此跑完 10 分钟的全套件)
 if [[ "${1:-}" == "--coverage-only" ]]; then
-  if [[ -n "$uncovered" ]]; then
-    echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(只扫 bin/):$uncovered"
-  else
-    echo "ℹ️  规矩4 名单覆盖了 bin/ 下所有可执行文件(只扫 bin/)"
-  fi
   if [[ -n "$orphans" ]]; then
     echo "🔴 有判据套件不在 SUITES 里(写了没人跑 = 从此静默腐烂):$orphans"
     exit 1
@@ -106,10 +88,6 @@ for i in "${!names[@]}"; do
   line+=" | ${names[$i]}: ${summaries[$i]:-?}"
 done
 
-if [[ -n "$uncovered" ]]; then
-  echo "ℹ️  规矩4 名单未覆盖的 bin/ 工具(**只扫了 bin/**;只报不拦):"
-  echo "   $uncovered"
-fi
 if [[ -n "$orphans" ]]; then
   echo "🔴 有判据套件不在 SUITES 里(写了没人跑 = 从此静默腐烂):$orphans"
   fail=$((fail+1))

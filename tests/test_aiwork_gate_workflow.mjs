@@ -188,6 +188,24 @@ test("aiwork 自己的策略：只报不拦，不登记共用的 build 账号，
   }
 });
 
+test("关卡自己的测试在判卷面", () => {
+  const current = policy();
+  const gateTests = tracked("tests").filter((path) =>
+    /^tests\/test_aiwork_gate[^/]*\.mjs$/.test(path) || path === "tests/test-aiwork-gate.sh");
+  for (const path of [
+    "tests/test_aiwork_gate.mjs",
+    "tests/test_aiwork_gate_workflow.mjs",
+    "tests/test_aiwork_gate_run.mjs",
+    "tests/test_aiwork_gate_main.mjs",
+    "tests/test-aiwork-gate.sh",
+  ]) {
+    assert.ok(gateTests.includes(path), path);
+  }
+  const missing = gateTests.filter((path) => !matchAny(current.judging_surface, path));
+  assert.deepEqual(missing, [], `关卡自己的测试改了不用业主批准:${missing.join("、")}`);
+  assert.equal(matchAny(current.judging_surface, "tests/test_review_pr.py"), false, "普通测试文件不算判卷面");
+});
+
 test("判卷框架按 tests/_* 约定，并且都在判卷面", () => {
   const current = policy();
   const framework = judgingFramework();

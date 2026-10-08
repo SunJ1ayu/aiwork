@@ -29,6 +29,8 @@
     "bin/rust-check-review-tooling",
     "bin/_review_result.py",
     "tests/_*",
+    "tests/test_aiwork_gate*.mjs",
+    "tests/test-aiwork-gate.sh",
     "templates/aiwork-gate.yml",
     "templates/aiwork-review-ping.yml"
   ],

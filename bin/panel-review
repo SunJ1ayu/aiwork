@@ -251,7 +251,6 @@ fi
 
 TS="$(date +%Y%m%d-%H%M%S)"
 PANEL_RUN_ID="$TS-$$-panel-review"
-PANEL_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PANEL_START_NS="$(date +%s%N)"
 TASKNAME="$(basename "${TASK_FILE%.*}")"
 LOG_PREFIX="${3:-$DATA_ROOT/logs/panel-${TASKNAME}-${TS}}"
