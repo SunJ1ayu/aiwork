@@ -7,7 +7,7 @@ function deny(reason) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       permissionDecision: "deny",
-      permissionDecisionReason: `[review-only sandbox] ${reason}`,
+      permissionDecisionReason: `[read-only sandbox] ${reason}`,
     },
   }));
   process.exit(2);

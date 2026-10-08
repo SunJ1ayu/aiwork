@@ -190,7 +190,7 @@ h_hash_edges() {
   git -C "$repo" reset -q --hard HEAD~1
 
   # ④ protect 指到一个**空目录** ⇒ 文件集为空 = 这道闸没有强度可言 ⇒ 拒发。
-  #    ⚠️ 四审 subdeepseek 抓到:这一幕原来**绿在错误的原因上** —— 前面几幕建的 `.gitignore`
+  #    ⚠️ 四审 抓到:这一幕原来**绿在错误的原因上** —— 前面几幕建的 `.gitignore`
   #    会被自动并进 protect,文件集根本不空,rc≠0 其实来自哈希对不上。
   #    把 .gitignore 撤掉、并给空清单这一版盖上哈希,让"空清单"成为**唯一**能让它红的理由。
   git -C "$repo" rm -q --cached .gitignore 2>/dev/null; rm -f "$repo/.gitignore"
@@ -203,7 +203,7 @@ h_hash_edges() {
   check "H2: protect 匹配不到任何文件 ⇒ 拒发(空清单 = 没有闸)" $([[ $rc -ne 0 ]]; echo $?)
   check "H2: 空清单那次 codex 没被启动" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
 
-  # ⑤ 【四审 submimo + subdeepseek 各自独立指到】**哈希只覆盖 protect 清单里的路径本身**:
+  # ⑤ 【四审 submimo + 评审 各自独立指到】**哈希只覆盖 protect 清单里的路径本身**:
   #    链接指向的东西在清单外,就在闸外(改目标的**内容**哈希不变)。
   #    这是规格选择不是 bug(跟进链接会跑出仓、还会成环),但必须**钉住**,
   #    免得哪天悄悄变了没人知道;真要覆盖,就把目标一起列进 --protect。
@@ -348,7 +348,7 @@ i_isolate_refusals() {
   check "I2: 建树失败 ⇒ 拒发" $([[ $rc -ne 0 ]]; echo $?)
   check "I2: 建树失败时 codex 一次都没启动" $([[ "$(calls_of "$rec")" -eq "$_c" ]]; echo $?)
 
-  # ④b 【四审 subdeepseek】直通参数能**静默撤销隔离**:`-- -C <别处>` / `-- -s <别的沙箱>`
+  # ④b 【四审 评审】直通参数能**静默撤销隔离**:`-- -C <别处>` / `-- -s <别的沙箱>`
   #     排在工具自己给的 `-C "$RUNDIR"` `-s workspace-write` **后面**,last-wins。
   #     只有我自己会传直通参数(是脚枪不是攻击面),但"我以为它隔离了、其实没有"正是
   #     本单最不能出的错 ⇒ 隔离下直接拒发,想传就显式 --no-isolate。

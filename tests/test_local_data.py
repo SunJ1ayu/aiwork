@@ -134,24 +134,5 @@ class LocalDataTests(unittest.TestCase):
         self.assertIn('仓内', result.stderr)
         self.assertFalse((repo / 'runtime').exists())
 
-    def test_review_gate_resolves_default_self_review_outside_relocated_source(self):
-        task = self.d / 'task.md'
-        task.write_text('fixture')
-        review = self.data / 'tasks/task-my-review.md'
-        review.parent.mkdir(parents=True)
-        review.write_text('first review')
-        command = ['bash', '-c', '. "$1"; my_review_gate review "$2" "$3" fixture',
-                   'fixture', str(self.tool / 'bin/_my-review-gate.sh'), str(task), str(self.tool)]
-        env = dict(self.env)
-        env.pop('REVIEW_NO_MY_REVIEW', None)
-        env.pop('REVIEW_MY_REVIEW', None)
-        result = subprocess.run(command, env=env, text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        review.unlink()
-        result = subprocess.run(command, env=env, text=True, capture_output=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(str(review), result.stderr)
-
-
 if __name__ == '__main__':
     unittest.main()

@@ -3,15 +3,12 @@ set -euo pipefail
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
-# subkimi - Kimi (Moonshot) review employee on an AGENT base: kimi-code CLI
-# run headless (`kimi -p`). Like subglm-agent/subdeepseek-agent, the model
-# explores the repo itself (Read/Glob/Grep + Bash), so no blind reviews and no
-# manual INCLUDE feeding. Review runs in a writable disposable clone while the
-# original repository stays physically read-only.
+# subkimi - Kimi (Moonshot) review command on kimi-code CLI, headless (`kimi -p`).
+# The model explores the repo itself (Read/Glob/Grep + Bash). Review runs in a
+# writable disposable clone while the original repository stays physically read-only.
 #
-#   review -> kimi -p, review-only guard, verdict-gated. Works now.
-#   fix    -> NOT supported here on purpose: panel reviewers stay review-only.
-#             Use `submimo fix` (mimo) for fix work.
+#   review -> kimi -p, verdict-gated.
+#   fix    -> not on this command. Change code in your own worktree.
 #
 # Isolation: KIMI_CODE_HOME points at a dedicated review home whose config
 # carries a PreToolUse guard hook. Read/ReadMediaFile/Glob/Grep/todo-goal and
@@ -24,12 +21,6 @@ BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sy
 # so this wrapper preflights the guard (must deny a canary Write with rc=2)
 # and refuses to dispatch if the guard is broken or node is missing.
 
-
-# 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
-_GATE="$BIN_DIR/_my-review-gate.sh"
-[ -f "$_GATE" ] || { echo "subkimi: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
-. "$_GATE"
-gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
@@ -82,11 +73,6 @@ if [[ "$MODE" == "review" ]]; then
   REPO_DIR="$SOURCE_REPO"
 fi
 
-
-# 反锚定闸(2026-08-06 补):第四条腿也要接 —— 上一版只接了三条躯干,
-# 而 subkimi 是**默认开着**的那条,直调它就能跳过"先写自己的一遍"。
-# 四审两条腿把这条顶成 HIGH:目标说的是"每一条评审路径",实现漏了一条 = 实质落差。
-my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subkimi" || exit 1
 
 # 自省开关:让 wrapper 自己把解析结果打出来,判据据此断言(**查工件不查自述**,
 # 别让判据去 grep 源码里的默认值 —— 那查的是我写了什么,不是它算出了什么)。
@@ -147,7 +133,7 @@ RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 
 if [[ "$MODE" == "fix" ]]; then
-  die "fix is not supported: panel reviewers are review-only. Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
+  die "fix is not supported on this command. Change code in your own worktree."
 fi
 [[ "$MODE" == "review" ]] || { usage; exit 2; }
 

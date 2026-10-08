@@ -38,8 +38,7 @@ class SettingsTest(unittest.TestCase):
         self.config = self.d / 'settings'
         self.config.mkdir()
         self.models = {'codex': 'gpt-fixture', 'cursor': 'composer-2.5',
-                       'deepseek': 'deepseek-fixture', 'gemini': 'gemini-fixture',
-                       'glm': 'glm-fixture', 'grok': 'grok-4.6',
+                       'deepseek': 'deepseek-fixture',
                        'kimi': 'kimi-code/k3', 'mimo': 'xiaomi/mimo-v2.5-pro',
                        'triage': 'jev-fixture'}
         self.write_models()
@@ -88,15 +87,6 @@ class SettingsTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
 
-    def test_chat_engine_requires_its_selected_leg_only(self):
-        self.models.pop('mimo')
-        self.write_models()
-        engine = load_script('submimo-review')
-        for leg in ('deepseek', 'glm'):
-            with self.subTest(leg=leg), patch.dict(os.environ,
-                    AIWORK_MODEL_LEG=leg, MIMO_MODEL=self.models[leg]):
-                self.assertEqual(engine.selected_model(), self.models[leg])
-
     def test_missing_file_and_each_missing_leg_name_the_path_and_leg(self):
         path = self.config / 'models.env'
         path.unlink()
@@ -142,13 +132,13 @@ class SettingsTest(unittest.TestCase):
         fake = self.d / 'fake'
         fake.mkdir()
         marker = self.d / 'provider-called'
-        for name in ('codex', 'cursor-agent', 'grok', 'kimi', 'mimo', 'agy', 'claude', 'opencode'):
+        for name in ('codex', 'cursor-agent', 'kimi', 'mimo', 'claude'):
             script = fake / name
             script.write_text('#!/bin/sh\ntouch "$PROVIDER_MARKER"\nexit 1\n')
             script.chmod(0o755)
-        callers = {'codex': 'subcodex', 'cursor': 'subcursor', 'grok': 'subgrok',
-                   'kimi': 'subkimi', 'mimo': 'submimo', 'gemini': 'subgemini',
-                   'deepseek': 'subdeepseek-agent', 'glm': 'subglm-agent'}
+        callers = {'codex': 'subcodex', 'cursor': 'subcursor',
+                   'kimi': 'subkimi', 'mimo': 'submimo',
+                   'deepseek': 'subdeepseek-agent'}
         env = dict(self.env, PATH=str(fake) + os.pathsep + self.env['PATH'],
                    REVIEW_NO_MY_REVIEW='1', PROVIDER_MARKER=str(marker))
         for leg, caller in callers.items():
@@ -172,14 +162,13 @@ class SettingsTest(unittest.TestCase):
         repo, task = self.repo_fixture()
         installed = self.d / 'installed'
         installed.mkdir()
-        callers = {'subcodex': [], 'subcursor': [], 'subgrok': [], 'subkimi': [],
-                   'submimo': [], 'subgemini': [], 'subagent': ['deepseek'],
-                   'subchat': ['deepseek']}
+        callers = {'subcodex': [], 'subcursor': [], 'subkimi': [],
+                   'submimo': [], 'subagent': ['deepseek']}
         # Derive coverage from the shell callers so another migrated leg cannot be missed.
         actual = {p.name for p in (ROOT / 'bin').iterdir()
                   if p.is_file() and p.read_bytes().startswith(b'#!/usr/bin/env bash')
                   and re.search(r'/aiwork-config" model ', p.read_text())}
-        self.assertEqual(actual, set(callers) | {'delegate-codex', '_panel-roster-lib.sh'})
+        self.assertEqual(actual, set(callers) | {'delegate-codex'})
         (self.config / 'models.env').unlink()
         for name, prefix in callers.items():
             link = installed / name
@@ -270,26 +259,6 @@ class SettingsTest(unittest.TestCase):
                                         capture_output=True, text=True)
                 with self.subTest(file=name, tracked_rc=tracked_rc):
                     self.assertEqual(result.returncode, int(tracked_rc), result.stderr)
-
-    def test_panel_settings_failure_names_the_initialization_failure(self):
-        for missing_file in (True, False):
-            if missing_file:
-                (self.config / 'models.env').unlink()
-            else:
-                self.models.pop('cursor')
-                self.write_models()
-            for caller in ('panel-review', 'panel-slice'):
-                result = subprocess.run([str(ROOT / 'bin' / caller), '--help'],
-                                        env=dict(self.env, PANEL_CURSOR_LEG='off'),
-                                        capture_output=True, text=True, timeout=10)
-                with self.subTest(caller=caller, missing_file=missing_file):
-                    self.assertEqual(result.returncode, 70)
-                    self.assertIn(str(self.config / 'models.env'), result.stderr)
-                    self.assertIn('cursor', result.stderr)
-                    self.assertIn('加载失败', result.stderr)
-                    self.assertNotIn('找不到', result.stderr)
-            self.models['cursor'] = 'composer-2.5'
-            self.write_models()
 
     def cursor_fixture(self):
         import test_subcursor

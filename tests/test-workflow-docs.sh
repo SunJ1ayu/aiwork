@@ -15,8 +15,6 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 
 MAPPINGS=(
   "CLAUDE.md|CLAUDE.md"
-  "skills/panel/SKILL.md|.claude/skills/panel/SKILL.md"
-  "skills/panel/references/legs.md|.claude/skills/panel/references/legs.md"
   "skills/delegate/SKILL.md|.claude/skills/delegate/SKILL.md"
 )
 
@@ -70,65 +68,41 @@ else
 fi
 
 echo "[W3] 流程规则只有一个来源:说明文档指向 REVIEW-RULES.md,且没有任何文档要求自定风险等级或评审预算"
-for f in "$ROOT/README.md" "$SOURCE/CLAUDE.md" "$SOURCE"/skills/*/SKILL.md "$SOURCE"/skills/*/references/*.md; do
+shopt -s nullglob
+docs=("$ROOT/README.md" "$SOURCE/CLAUDE.md" "$SOURCE"/skills/*/SKILL.md "$SOURCE"/skills/*/references/*.md)
+shopt -u nullglob
+for f in "${docs[@]}"; do
+  [[ -f "$f" ]] || continue
   grep -q 'REVIEW-RULES.md' "$f"
   check "W3: ${f#$ROOT/} 指向 REVIEW-RULES.md" $?
 done
-for f in "$ROOT/README.md" "$SOURCE/CLAUDE.md" "$SOURCE"/skills/*/SKILL.md "$SOURCE"/skills/*/references/*.md; do
+for f in "${docs[@]}"; do
+  [[ -f "$f" ]] || continue
   ! grep -qE 'impact-risk|design-uncertainty|--risk |self/standard/high|self=0|standard=1|high=2|评审预算|decision\.json|lane:|必须挂.*track|--track NAME' "$f"
   check "W3: ${f#$ROOT/} 没有自定风险等级/评审预算的旧流程" $?
 done
 [[ ! -e "$SOURCE/skills/track/SKILL.md" ]] && ! grep -q 'skills/track' "$ROOT/bin/sync-workflow-docs"
 check "W3: track skill 已退役,且不在 sync-workflow-docs 清单里" $?
-grep -q -- '--all.*current reviewer pool' "$ROOT/README.md" \
-  && grep -q '全池评审' "$SOURCE/skills/panel/SKILL.md"
-check "W3: README/panel skill 把 --all 表述为全池语义，不绑定四审或五审" $?
-
-echo "[W3] 文档说的默认模型和 agent 档与实现一致"
-
-# 🔴 2026-09-04(track gemini-leg-38,DeepSeek F1 抓到的):W3 给 glm / mimo 都钉了
-# 「文档说的默认档 == 代码里的默认档」,**唯独 gemini 没钉** ⇒ 3.7→3.8 那天
-# `workflow/skills/panel/references/legs.md` 还写着 3.7、还引着 3.7 的选型实测,
-# 而 W3 照样 36/36 全绿。文档是代码的第二份拷贝,没有闸盯着它就一定会过期。
-grep -q 'model gemini' "$ROOT/bin/subgemini" \
-  && grep -q 'models.env.*gemini' "$SOURCE/skills/panel/references/legs.md"
-check "W3: Gemini 默认模型只指向本机设置，文档不复制版本号" $?
-
-grep -q 'model glm' "$ROOT/bin/subagent" \
-  && ! grep -q 'OC_MODEL_ID=' "$ROOT/bin/subagent" \
-  && grep -q 'models.env.*glm' "$SOURCE/skills/panel/references/legs.md"
-check "W3: GLM 默认模型来自本机设置，agent 没有第二模型源" $?
-grep -q 'AGENT_BASE="opencode"' "$ROOT/bin/subagent" \
-  && grep -q 'OC_BASE_URL="https://opencode.ai/zen/go/v1"' "$ROOT/bin/subagent" \
-  && grep -q 'GLM_LEG="${PANEL_GLM_LEG:-agent}"' "$ROOT/bin/panel-explore" \
-  && grep -q '当前 agent =' "$SOURCE/skills/panel/references/legs.md" \
-  && grep -q '`opencode.ai/zen/go/v1`(OpenAI-compatible provider base)' "$SOURCE/skills/panel/references/legs.md" \
-  && grep -q 'agent 腿(默认)' "$SOURCE/skills/panel/references/legs.md" \
-  && grep -q '底座是 opencode CLI' "$SOURCE/skills/panel/references/legs.md"
-check "W3: GLM 当前默认路径是 opencode agent，文档端点与实现一致" $?
-! grep -Eq '就是 GLM 的默认腿|default=chat|默认档必须.*聊天腿|08-18 起不是了|GLM 跑在 Claude Code 壳上|底座腿那边的.*x-api-key' \
-  "$ROOT/bin/subchat" "$ROOT/tests/test-review-tooling.sh" "$SOURCE/skills/panel/references/legs.md" \
-  && ! grep -q 'agent = `opencode.ai/zen/go`' "$SOURCE/skills/panel/references/legs.md"
-check "W3: 活文档和承重注释不再把聊天腿或 Claude 壳写成当前默认" $?
+echo "[W3] 留下的通道：文档与实现读同一份本机模型设置"
 grep -q 'subdeepseek-agent' "$ROOT/README.md" \
-  && grep -q 'subglm-agent' "$ROOT/README.md" \
-  && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'dormant for OpenCode GLM' \
-  && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'DeepSeek ~/.config/deepseek/auth.json' \
-  && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'OpenCode GLM ~/.config/opencode-go/auth.json' \
-  && ! grep -q 'fix-capable base would be Claude Code' "$ROOT/bin/subchat"
-check "W3: README 列出默认 agent wrapper，帮助文本标清休眠变量" $?
-grep -q 'Gemini' "$SOURCE/CLAUDE.md"
-check "W3: 主工作流员工枚举包含 Gemini" $?
+  && grep -q 'subkimi' "$ROOT/README.md" \
+  && grep -q 'submimo' "$ROOT/README.md" \
+  && grep -q 'subcursor' "$ROOT/README.md" \
+  && grep -q 'subcodex' "$ROOT/README.md"
+check "W3: README 列出留下的五条评审命令" $?
+grep -q 'Codex、Cursor、DeepSeek、Kimi、MiMo' "$SOURCE/CLAUDE.md" \
+  && grep -q '每个通道都能写代码也能评审；同一个 PR 的评审要换一家，由关卡判断' "$SOURCE/CLAUDE.md"
+check "W3: 主工作流只列留下的五家，并写明换评审由关卡判断" $?
 grep -q 'DEFAULT_MAX_TURNS=200' "$ROOT/bin/subagent" \
-  && grep -q '轮次上限.*\*\*200\*\*' "$SOURCE/skills/panel/references/legs.md"
-check "W3: DeepSeek 唯一源与实现都是 200 turns" $?
-grep -q 'KIMI_TIMEOUT:-1500' "$ROOT/bin/subkimi" \
-  && grep -q 'KIMI_TIMEOUT.*默认 1500' "$SOURCE/skills/panel/references/legs.md"
-check "W3: Kimi 唯一源与实现都是 1500s" $?
+  && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'default ~/.config/deepseek/auth.json'
+check "W3: DeepSeek 默认轮次是 200，帮助文本指向本机凭证" $?
+grep -q 'KIMI_TIMEOUT:-1500' "$ROOT/bin/subkimi"
+check "W3: Kimi 超时默认 1500 秒" $?
 grep -q 'aiwork-config.*model mimo' "$ROOT/bin/submimo" \
-  && ! grep -q 'DEFAULT_MODEL="xiaomi/' "$ROOT/bin/submimo" \
-  && grep -q 'models.env.*mimo' "$SOURCE/skills/panel/references/legs.md"
-check "W3: MiMo 默认模型来自本机设置，文档不复制版本号" $?
+  && ! grep -q 'DEFAULT_MODEL="xiaomi/' "$ROOT/bin/submimo"
+check "W3: MiMo 默认模型来自本机设置，代码不复制版本号" $?
+! grep -q 'skills/panel' "$ROOT/bin/sync-workflow-docs"
+check "W3: 同步清单不再部署已删除的方案说明" $?
 
 echo "[W4] 操作流程与保留的方法"
 grep -q '最新 main' "$SOURCE/CLAUDE.md" \
@@ -138,7 +112,7 @@ grep -q '最新 main' "$SOURCE/CLAUDE.md" \
 check "W4: 任务通过分支、实现、全测、机器人 PR 收尾" $?
 grep -q '另一家族' "$SOURCE/CLAUDE.md" \
   && grep -q 'review-pr.*沙箱外' "$SOURCE/CLAUDE.md" \
-  && grep -q 'review-pr' "$SOURCE/skills/panel/SKILL.md"
+  && grep -q 'review-pr' "$SOURCE/CLAUDE.md"
 check "W4: 正式评审在 PR 上使用沙箱外 review-pr" $?
 grep -q '不改考卷让自己及格' "$SOURCE/CLAUDE.md" \
   && grep -q '不信执行腿的自述' "$SOURCE/CLAUDE.md"

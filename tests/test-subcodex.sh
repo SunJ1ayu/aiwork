@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# subcodex oracle —— GPT 只读评审腿(track sliced-panel-review 的整体腿)。codex 是桩,
-# 只读挂载 ro-repo-exec 是真的。
+# subcodex oracle。codex 是桩,只读挂载 ro-repo-exec 是真的。
 #
 # 桩只证明「我们递给 codex 的参数长这样、结果被这样收尾」;开关在真 codex 里是否生效,
 # **这份判据证明不了**,要靠真跑(verify.md 里单列)。
@@ -16,7 +15,6 @@ set -uo pipefail
 
 if [[ "${SUBCODEX_ENV_SCRUBBED:-}" != "1" ]]; then
   exec env -u SUBCODEX_MODEL -u SUBCODEX_TIMEOUT -u SUBCODEX_EFFORT -u CODEX_BIN \
-    -u GATE_PANEL_DISPATCH \
     SUBCODEX_ENV_SCRUBBED=1 bash "$0" "$@"
 fi
 
@@ -29,7 +27,7 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 echo "=== subcodex oracle ==="
 d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/bin" "$d/fake" "$d/ws" "$d/cap"
-for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec _review-workspace.sh _my-review-gate.sh _review_result.py _review-home-guard.sh; do
+for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec _review-workspace.sh _review_result.py _review-home-guard.sh; do
   [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$d/bin/"
 done
 check "C0: bin/subcodex 与本机设置读取入口都在" \
@@ -199,15 +197,15 @@ check "C3: 超时 ⇒ rc=124 且没有干等 30 秒" $([[ $rc -eq 124 && $(( $(d
 facts c5 "f['process_state'] == 'timed_out'"
 check "C3: facts 记 timed_out" $?
 
-echo "[C4] 模式与反锚定闸"
+echo "[C4] 模式"
 REVIEW_NO_MY_REVIEW=1 sc c6 fix "$d/task.md" "$d/c6.log" "$d/repo" >/dev/null 2>"$d/c6.err"; rc=$?
-check "C4: fix 模式拒绝(评审腿只读)且没调用 codex" \
+check "C4: fix 模式拒绝且没调用 codex" \
   $([[ $rc -eq 2 && ! -e "$d/cap/c6.argv" ]] && grep -qi 'usage' "$d/c6.err"; echo $?)
 CODEX_TEST_MODE=explore REVIEW_NO_MY_REVIEW=1 sc c7 explore "$d/task.md" "$d/c7.log" "$d/repo" >/dev/null 2>&1; rc=$?
 check "C4: explore 不要求裁决行" $([[ $rc -eq 0 ]] && grep -q 'Direction' "$d/c7.log"; echo $?)
 sc c8 review "$d/task.md" "$d/c8.log" "$d/repo" >/dev/null 2>"$d/c8.err"; rc=$?
-check "C4: 没写自审又没显式跳过 ⇒ review 拒绝且没调用 codex(共享反锚定闸在说话)" \
-  $([[ $rc -ne 0 && ! -e "$d/cap/c8.argv" ]] && grep -q 'my-review' "$d/c8.err"; echo $?)
+check "C4: 没有自审文件也调用 codex" \
+  $([[ $rc -eq 0 && -e "$d/cap/c8.argv" ]]; echo $?)
 CODEX_TEST_REPORTED=gpt-something-else REVIEW_NO_MY_REVIEW=1 sc c9 review "$d/task.md" "$d/c9.log" "$d/repo" >/dev/null 2>&1
 facts c9 "f['model']['reported'] == 'gpt-something-else' and f['model']['invoked'] == '$MODEL'"
 check "C4: 事件流报告的模型与请求不符时如实记下(不许用请求值盖掉)" $?
@@ -256,7 +254,7 @@ CODEX_TEST_CATALOG="$MODEL $MODEL gpt-some-other" REVIEW_NO_MY_REVIEW=1 sc c13 r
 check "C5: 模型在 codex 模型目录里出现两次 ⇒ 拒跑、没派发 codex exec、理由点名 exactly once" \
   $([[ $rc -ne 0 && ! -e "$d/cap/c13.argv" ]] && grep -q 'exactly once' "$d/c13.err"; echo $?)
 check "C5: 拒跑之后可丢弃副本同样清理干净" $([[ -z "$(ls -A "$d/ws" 2>/dev/null)" ]]; echo $?)
-# C6:2026-09-14 panel-review 高风险评审(subdeepseek)发现 E 后补 —— 检测器自检。
+# C6:检测器自检。
 # 只看「覆盖后的渲染里没有 <multi_agent_role>」,codex 一改标记名就恒过(注释却写着会拒跑)。
 # 自检:模型目录声明了 multi_agent_version 时,**不覆盖目录**的基线渲染里必须看得见标记,看不见 = 检测器瞎了。
 awk 'BEGIN{blk=""; found=0} /^----$/ {if (blk !~ /model_catalog_json=/ && blk ~ /(^|\n)prompt-input(\n|$)/) found=1; blk=""; next} {blk = blk $0 "\n"} END{exit found?0:1}' "$d/cap/c1.preview.all" 2>/dev/null

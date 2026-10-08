@@ -20,7 +20,6 @@ from urllib.parse import unquote, urlparse
 
 
 SCHEMA_VERSION = 2
-DEFAULT_CHAT_MAX_FILE_BYTES = 120000
 SUBJECT_MANIFEST_VERSION = 1
 NORMALIZER_VERSION = 1
 REVIEW_CONTRACT_VERSION = 1
@@ -113,13 +112,8 @@ FACT_KEYS = (
 ADAPTER_IDENTITIES = {
     "submimo": ("xiaomi", "xiaomi/"),
     "subdeepseek-agent": ("deepseek", "deepseek-"),
-    "subdeepseek": ("deepseek", "deepseek-"),
-    "subglm-agent": ("zhipu", "go/glm-"),
-    "subglm": ("zhipu", "glm-"),
     "subkimi": ("moonshot", "kimi-code/"),
-    "subgemini": ("google", "gemini-"),
     "subcodex": ("openai", "gpt-"),
-    "subgrok": ("xai", "grok-"),
 }
 
 

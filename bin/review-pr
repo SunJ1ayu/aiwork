@@ -18,7 +18,7 @@ import tempfile
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _review_result import ADAPTER_IDENTITIES, DEFAULT_CHAT_MAX_FILE_BYTES, leg_identity, load_result, sha256_file
+from _review_result import leg_identity, load_result, sha256_file
 from _aiwork_config import ConfigError, data_path, model as configured_model
 from _secret_shapes import redact_shapes
 
@@ -32,11 +32,8 @@ ORIGIN_REPO = re.compile(
 SHA = re.compile(r"^[0-9a-f]{40}$")
 CONCLUSION_REQUIREMENT = ("最后独占一行写 Conclusion: PASS、Conclusion: BLOCK 或 "
                           "Conclusion: NEEDS_MORE_INFO。")
-CHAT_LEGS = frozenset({"subdeepseek", "subglm"})
-# Chat legs always receive the inline diff; route_task switches them when the
-# task exceeds the chat limit. A repository reader past this size reads the
-# complete diff from the snapshot file instead of pasting it. Either way the
-# review is of the complete diff, deletions included.
+# A repository reader past this size reads the complete diff from the snapshot
+# file instead of pasting it. The review is of the complete diff, deletions included.
 READER_INLINE_DIFF_BYTES = 200 * 1024
 REVIEW_DIFF_PATH = "aiwork-review.diff"
 
@@ -50,10 +47,9 @@ class Change(NamedTuple):
 
 
 READER_TIMEOUT_ENV = {
-    "subdeepseek-agent": "DEEPSEEK_TIMEOUT", "subglm-agent": "ZHIPU_TIMEOUT",
+    "subdeepseek-agent": "DEEPSEEK_TIMEOUT",
     "subcodex": "SUBCODEX_TIMEOUT", "subcursor": "CURSOR_TIMEOUT",
     "submimo": "MIMO_CLI_TIMEOUT", "subkimi": "KIMI_TIMEOUT",
-    "subgemini": "AGY_TIMEOUT", "subgrok": "GROK_TIMEOUT",
 }
 
 
@@ -88,8 +84,8 @@ def choose_leg(name: str) -> tuple[str, str | None]:
 
     A leg only has to be attributable to one family. Which families count for which
     PR is the gate's call (gate/decide.mjs), not this tool's.
-    Cursor's model is frozen once here, from the same source as the panel
-    (CURSOR_MODEL, else ~/.config/aiwork/models.env), and decides the family.
+    Cursor's model is frozen once here (CURSOR_MODEL, else ~/.config/aiwork/models.env)
+    and decides the family.
     """
     model = None
     if name == "subcursor":
@@ -110,25 +106,6 @@ def redact(text: str) -> str:
                   r"\1\2[redacted]", text)
     text = re.sub(r"(?i)(\bBearer\s+)" + value, r"\1[redacted]", text)
     return text
-
-
-def route_task(leg: str, task: Path, family: str) -> tuple[str, str | None]:
-    """A chat leg must receive the whole task, or yield to its family's reader."""
-    if leg not in CHAT_LEGS:
-        return leg, None
-    limit = int(os.environ.get("MIMO_MAX_FILE_BYTES", DEFAULT_CHAT_MAX_FILE_BYTES))
-    if limit <= 0:
-        raise ReviewError("MIMO_MAX_FILE_BYTES must be a positive integer")
-    size = task.stat().st_size
-    if size <= limit:
-        return leg, None
-    readers = [name for name, identity in ADAPTER_IDENTITIES.items()
-               if name.endswith("-agent") and identity[0] == family and (BIN / name).is_file()]
-    if not readers:
-        raise ReviewError(f"task is {size} bytes, exceeding {leg}'s {limit}-byte limit; "
-                          f"no available same-family repository reader ({family}); no model called or review posted")
-    reader = readers[0]
-    return reader, f"task is {size} bytes, exceeding the {limit}-byte chat limit; switched {leg} → {reader}"
 
 
 def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = True) -> None:
@@ -549,14 +526,9 @@ def main() -> int:
                         files=files, diff=diff, changes=changes, review_rules=review_rules,
                         risks=risks, rules_sha=rules_sha, repository=repository), encoding="utf-8")
 
-                requested_reader = args.leg not in CHAT_LEGS
-                write_task(requested_reader)
-                selected_leg, switch_note = route_task(args.leg, task, family)
-                if selected_leg not in CHAT_LEGS and not requested_reader:
-                    write_task(True)
-                if switch_note:
-                    print(f"review-pr: {switch_note}", file=sys.stderr)
-                notices = [switch_note] if switch_note else []
+                write_task(True)
+                selected_leg = args.leg
+                notices = []
                 env = dict(os.environ)
                 for key in ("GH_TOKEN", "GITHUB_TOKEN", "AIWORK_REVIEW_GIT_TOKEN", "GIT_ASKPASS"):
                     env.pop(key, None)

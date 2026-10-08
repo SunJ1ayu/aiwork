@@ -127,7 +127,7 @@ def main():
                       "新写口/权限/auth/钱/数据一致性默认 high(外审预算 2);动了判卷面还要闸① 逐行读判据 diff"))
     if hi_unc:
         flags.append(("design-uncertainty 看着像 high", hi_unc,
-                      "该先 premise attack / 双出 / panel-explore,别直接实现"))
+                      "该先做小实验,别直接实现"))
     if echo:
         flags.append(("交付物可能跑在仓外", echo,
                       "『做完了』的标准是运行中的目标自己回显版本,盘上和运行时对不上 = BLOCK"))

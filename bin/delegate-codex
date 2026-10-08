@@ -117,18 +117,18 @@ do_receive() {
   diff_out="$(git -C "$tree" diff "$head" -- "${protect[@]}" 2>&1)"
   # -uall:不带它 git 会把未跟踪目录折叠成 `tests/`,里面塞的文件就漏检了
   status_out="$(git -C "$tree" status --porcelain -uall -- "${protect[@]}" 2>&1)"
-  # 第三臂(四审 subdeepseek F2):被 gitignore 藏起来的新文件,上面两臂都看不见。
+  # 第三臂(四审 F2):被 gitignore 藏起来的新文件,上面两臂都看不见。
   # `__pycache__` 是唯一放行的 ignored 形状:python 仓跑一次判据就会生成它,
   # 而 PEP 3147 布局下没有对应源码的 .pyc **import 不进来**(2026-08-07 实测),
   # 所以它藏不了判卷逻辑。别的 ignored 文件照拒。
-  # **按路径成分匹配,不是子串**(2026-08-08 四审 subdeepseek F5 / subkimi / 我 三方独立命中):
+  # **按路径成分匹配,不是子串**(2026-08-08 四审 F5 / subkimi / 我 三方独立命中):
   # 写成 `grep -v '__pycache__'` 的话,`tests/__pycache__-evil/conftest.py` 和
   # `tests/x__pycache__conftest.py` 都会被一起滤掉 —— 执行腿同时握着 .gitignore
   # 和文件名,于是它能在判卷目录里放一个闸①三条臂全照不到的文件,
   # 而上面那条"没有源码的 .pyc import 不进来"对这种文件根本不成立(它不是字节码)。
   ignored_out="$(git -C "$tree" status --porcelain -uall --ignored -- "${protect[@]}" 2>/dev/null \
                  | grep '^!!' | grep -vE '(^|[ /])__pycache__/' || true)"
-  # 第四臂(四审 subdeepseek F1):`git update-index --skip-worktree/--assume-unchanged`
+  # 第四臂(四审 F1):`git update-index --skip-worktree/--assume-unchanged`
   # 一挂,diff 和 status **同时**把该文件当没改过 —— 工件查证退化回自述,正好打在
   # 这道闸的立足点上。`git ls-files -v` 的标志位:**小写字母 = assume-unchanged**,
   # **`S` = skip-worktree**(两者都要抓;只抓小写会漏掉 skip-worktree 那一半)。
@@ -184,7 +184,7 @@ do_receive() {
   # 而误报的守卫活不过一周。判断留给闸③,这里只保证它有一份不是自述的清单。
   local writeset
   writeset="$( { git -C "$tree" diff --name-only "$head"
-    # 路径含空格时 `awk '{print $NF}'` 只取最后一个词 —— 底账会失真(四审 subdeepseek F3)。
+    # 路径含空格时 `awk '{print $NF}'` 只取最后一个词 —— 底账会失真(四审 F3)。
     # porcelain 的格式是「两位状态 + 空格 + 路径」,直接砍前三个字符。
     git -C "$tree" status --porcelain -uall | cut -c4-
   } | sort -u | grep -v '^$' )"
@@ -353,7 +353,7 @@ for p in "${PROTECT[@]}"; do
   [[ -e "$REPO/$p" ]] || die "--protect 的路径在仓里不存在:$p(相对 $REPO)"
 done
 
-# 判卷路径**不许有被 gitignore 的东西**(四审 subdeepseek F2):
+# 判卷路径**不许有被 gitignore 的东西**(四审 F2):
 # 执行腿只要往 .gitignore 追一行、再塞一个 `tests/conftest.py`,闸①两臂就全空 ——
 # `git status --porcelain -uall` 默认不显示 ignored 文件,那招(闸①最值钱的一幕)被绕过。
 # 在派活这一刻查:判卷目录里现在就有 ignored 文件的话,这套闸从一开始就不成立。
@@ -449,7 +449,7 @@ done
 # ⑤b 直通参数排在工具自己给的 `-C <树>` `-s workspace-write` **后面**,last-wins ⇒
 #     `-- -C /别处` 或 `-- -s danger-full-access` 能**静默撤销隔离**,而我会以为它隔离着。
 #     只有我自己会传直通参数(是脚枪不是攻击面),但"我以为隔离了、其实没有"正是本单
-#     最不能出的错(四审 subdeepseek)。要传就显式 --no-isolate,别在隔离下偷偷换掉。
+#     最不能出的错(四审)。要传就显式 --no-isolate,别在隔离下偷偷换掉。
 if [[ $ISOLATE -eq 1 && ${#PASSTHRU[@]} -gt 0 ]]; then
   for _pt in "${PASSTHRU[@]}"; do
     case "$_pt" in
@@ -471,7 +471,7 @@ grep -Fq "$HASH_LINE" "$ATTACK" || die "攻题记录对不上当前这版判卷,
 LOG="${LOG:-$DATA_ROOT/logs/delegate-${NAME}-${TS}.log}"
 mkdir -p "$(dirname "$LOG")"
 RECEIPT="${LOG}.receipt.json"
-# 回执/日志同理(四审 subdeepseek F15 / subkimi F3):它们是闸① 的卷宗,
+# 回执/日志同理(四审 F15 / subkimi F3):它们是闸① 的卷宗,
 # 腿能改 head/protect 就等于让闸① 自己给自己开绿灯。考生不许碰卷宗。
 for _l in "$(realpath -m "$LOG")" "$(realpath -m "$RECEIPT")"; do
   if _in_forbidden "$_l"; then

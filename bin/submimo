@@ -4,12 +4,6 @@ set -euo pipefail
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
 
-# 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
-_GATE="$BIN_DIR/_my-review-gate.sh"
-[ -f "$_GATE" ] || { echo "submimo: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
-. "$_GATE"
-gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
-
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
 # 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
@@ -33,7 +27,7 @@ Modes:
            `plan` agent: 2026-08-19 实测它自称 Disallows all edit tools,
            实际 bash/write/edit/task 全开 + 权限 `*` allow。
   explore  Read-only divergent design pass: propose ONE direction from this
-           model's angle + flag blind spots in the brief. Used by panel-explore.
+           model's angle + flag blind spots in the brief.
   fix      Small scoped code changes. Uses MiMoCode build agent.
 
 Fix-only options (goal-based bounded loop; oracle is DEFAULT-ON):
@@ -115,11 +109,6 @@ if [[ "$MODE" != "fix" ]]; then
   SOURCE_REPO="$(cd "$_SOURCE_TOP" && pwd -P)" || die "cannot resolve source repo: $_SOURCE_TOP"
   REPO_DIR="$SOURCE_REPO"
 fi
-
-# 反锚定闸(2026-08-06):review 模式下,主 agent 自己那一遍必须先落盘。
-# fast lane 走的就是这条命令 —— 此前只有 panel-review 那条路有闸。
-# shellcheck source=_my-review-gate.sh
-my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "submimo" || exit 1
 
 # 模型读本机设置;MIMO_CLI_MODEL 单次覆盖。
 MODEL="$("$BIN_DIR/aiwork-config" model mimo "${MIMO_CLI_MODEL:-}")" || exit 1

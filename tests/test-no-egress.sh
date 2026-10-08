@@ -4,7 +4,7 @@
 #
 # 为什么有这份判据(08-10 事故):OpenClaw cron「评审工具链-每周防锈」每周一 08:00 跑
 # `bin/rust-check-review-tooling`;`tests/test-review-tooling.sh` 的 V23/V24 为了考
-# 反锚定闸,把**真的** subkimi/submimo/subchat/subagent 拷进临时目录直接跑,其中两种
+# 反锚定闸,把**真的** subkimi/submimo/subagent/subagent 拷进临时目录直接跑,其中两种
 # 情形是**故意让闸放行**的 —— 闸一放行,脚本就真的往外打。一上午 12 次真实 kimi 调用,
 # 全花在一个内容是单字母 `x` 的假仓库上,机主当天额度归零。
 # 08-08 那天本该暴露,但当时额度已空、全被 403 挡下 —— **失败得太安静,把 bug 藏了两天**。
@@ -71,7 +71,7 @@ PY
 
 
 __noeg_suites() {  # 要覆盖的判据套件 = tests/ 下的命名约定 ∪ **总跑 SUITES 里点名的**
-  # 08-10 四审 subdeepseek 指出:两条覆盖闸都按文件名 glob 扫,
+  # 08-10 四审 指出:两条覆盖闸都按文件名 glob 扫,
   # 而总跑的 SUITES 是**手列**的 —— 往里加一个不叫 test-* 的判据,两条闸完全看不见,
   # 孤儿闸只查反方向(tests/ 里有没有落单的)。这里把两边取并集。
   {
@@ -186,7 +186,7 @@ n3_every_suite_carries_the_guard() {
     b="$(basename "$f")"
     [[ "$b" == "test-no-egress.sh" ]] && continue
     # 只看**能执行的**行:整行注释里提一句 nsenter 不是逃逸。
-    # 08-10 四审 subdeepseek 抓到:守卫文件头部的强度声明里写了这个词,
+    # 08-10 四审 抓到:守卫文件头部的强度声明里写了这个词,
     # N3b 于是把**守卫自己**报成逃逸口(而且那笔 commit 在我全部绿收据之后,
     # 收据没覆盖到它 —— verify.md 上写着 18/0,HEAD 上其实是 17/1)。
     grep -vE '^[[:space:]]*#' "$f" | grep -q "nsenter" && leak="$leak $b"

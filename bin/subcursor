@@ -19,14 +19,10 @@ Environment:
   CURSOR_AUTH_FILE   login credentials (default $XDG_CONFIG_HOME/cursor/auth.json,
                      or $HOME/.config/cursor/auth.json)
   CURSOR_API_KEY     explicit API-key authentication instead of session login
-  PANEL_CURSOR_LEG  agent (default) or off in both panel dispatchers
-
 Logs: LOG_FILE = header + assistant text; sibling .stream.jsonl contains
 raw events, and .stream-summary.json records completion, reported model and usage.
 EOF
 }
-. "$BIN_DIR/_my-review-gate.sh" || die 'missing review gate'
-gate_strip_flags "$@"; set -- "${GATE_ARGS[@]}"
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
 [[ $# -ge 3 && $# -le 4 ]] || { usage >&2; exit 2; }
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
@@ -36,7 +32,6 @@ TASK_FILE="$(realpath "$TASK_FILE")"
 LOG_FILE="$(realpath -m "$LOG_FILE")"
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
-my_review_gate "$MODE" "$TASK_FILE" "$SOURCE_REPO" subcursor || exit 1
 MODEL="$("$BIN_DIR/aiwork-config" model cursor "${CURSOR_MODEL:-}")" || exit 1
 python3 "$BIN_DIR/_review_result.py" cursor-family "$MODEL" >/dev/null \
   || die 'CURSOR_MODEL must identify an explicit supported model family (no auto routing)'

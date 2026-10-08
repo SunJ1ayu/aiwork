@@ -53,7 +53,7 @@ class ReviewPrTests(unittest.TestCase):
 
     def test_leg_selection_needs_an_attributable_family(self):
         self.assertEqual(self.review.choose_leg("subcodex"), ("openai", None))
-        self.assertEqual(self.review.choose_leg("subdeepseek"), ("deepseek", None))
+        self.assertEqual(self.review.choose_leg("subdeepseek-agent"), ("deepseek", None))
         for name in ("subclaude", "../subcodex"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.review.choose_leg(name)
@@ -360,62 +360,10 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn('gh-app-token: 目标仓库不在角色配置范围内', stderr)
         self.assertEqual(calls['github_writes'], [])
 
-    def run_chat_engine(self, *, oversized=None, finish_reason='stop', content='Conclusion: PASS'):
-        engine = load_script('submimo-review')
-        with tempfile.TemporaryDirectory() as temporary:
-            d = Path(temporary)
-            repo = d / 'repo'
-            repo.mkdir()
-            for args in (('init', '-q'), ('config', 'user.name', 'Test'),
-                         ('config', 'user.email', 'test@example.invalid')):
-                subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
-            (repo / 'file').write_text('base\n')
-            subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True, capture_output=True)
-            subprocess.run(['git', '-C', str(repo), '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'base'],
-                           check=True, capture_output=True)
-            task = d / 'task.md'
-            task.write_text('Review this change.\n' + ('task\n' * 30000 if oversized == 'task' else ''))
-            (repo / 'file').write_text('base\n' + ('diff\n' * 100000 if oversized == 'diff' else 'change\n'))
-            facts, log = d / 'facts.json', d / 'review.log'
-            response = json.dumps({'choices': [{'message': {'content': content}, 'finish_reason': finish_reason}]})
-            stdout, stderr = io.StringIO(), io.StringIO()
-            with patch.dict(os.environ, {'AIWORK_REVIEW_FACTS_PATH': str(facts), 'PANEL_DIFF_BASE': '',
-                    'MIMO_API_KEY': '-'.join(('fake', 'key')), 'MIMO_BASE_URL': 'http://127.0.0.1',
-                    'AIWORK_MODEL_LEG': 'cursor', 'MIMO_MODEL': 'gpt-5.6'}), \
-                    patch('sys.argv', ['submimo-review', str(task), str(log), '--repo', str(repo), '--git-diff']), \
-                    patch.object(engine.urllib.request, 'urlopen', return_value=io.BytesIO(response.encode())), \
-                    redirect_stdout(stdout), redirect_stderr(stderr):
-                try:
-                    engine.main()
-                    rc = 0
-                except SystemExit as exc:
-                    rc = exc.code
-            return rc, json.loads(facts.read_text()), log.read_text() if log.exists() else '', stderr.getvalue()
-
-    def test_oversized_diff_and_task_publish_partial_completeness(self):
-        for oversized in ('diff', 'task'):
-            with self.subTest(oversized=oversized):
-                rc, facts, _, stderr = self.run_chat_engine(oversized=oversized)
-                self.assertEqual(rc, 0, stderr)
-                self.assertEqual(facts['view']['delivery_state'], 'partial')
-                rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', dry_run=False,
-                                                        view_state=facts['view']['delivery_state'])
-                self.assertEqual(rc, 0, stderr)
-                self.assertEqual(calls['posted_block']['completeness'], 'partial')
-
-    def test_untruncated_chat_delivery_stays_complete(self):
-        rc, facts, _, stderr = self.run_chat_engine()
+    def test_partial_view_publishes_partial_completeness(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', dry_run=False, view_state='partial')
         self.assertEqual(rc, 0, stderr)
-        self.assertEqual(facts['view']['delivery_state'], 'complete')
-
-    def test_length_finish_reason_reports_output_truncation_and_keeps_raw_text(self):
-        for content in ('missing verdict', 'Conclusion: PASS'):
-            with self.subTest(content=content):
-                rc, _, log, stderr = self.run_chat_engine(finish_reason='length', content=content)
-                self.assertNotEqual(rc, 0)
-                self.assertIn('模型输出被截断', stderr)
-                self.assertNotIn('no standalone', stderr)
-                self.assertIn(content, log)
+        self.assertEqual(calls['posted_block']['completeness'], 'partial')
 
     def test_readme_documents_review_pr_network_credentials_and_sandbox(self):
         readme = (ROOT / 'README.md').read_text()

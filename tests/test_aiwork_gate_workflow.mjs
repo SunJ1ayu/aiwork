@@ -60,7 +60,6 @@ function judgingFramework() {
   }
   assert.deepEqual(violations, [], `tests/ 里这些文件既不是套件也不是 tests/_* 框架:${violations.join("、")}`);
   for (const path of [
-    "tests/_mutation-guard.sh",
     "tests/_no-egress.sh",
     "tests/_no_egress.py",
     "tests/_oracle_hash.sh",
@@ -100,7 +99,7 @@ function highFiles() {
   for (const path of ["bin/gh-app-token", "bin/_secret-shapes", "bin/_secret_shapes.py", "bin/privacy-check", "bin/review-pr", "bin/aiwork-config", "bin/_aiwork_config.py"]) {
     assert.ok(found.includes(path), `量具:扫得到 ${path}`);
   }
-  for (const path of ["bin/submimo", "bin/panel-review", "bin/_review_result.py", "bin/rust-check-review-tooling"]) {
+  for (const path of ["bin/submimo", "bin/subkimi", "bin/_review_result.py", "bin/rust-check-review-tooling"]) {
     assert.ok(!found.includes(path), `对照:${path} 只在字面上碰到这些词,不算`);
   }
   assert.equal(HIGH_RE.test("git push origin HEAD"), true);
@@ -214,7 +213,7 @@ test("判卷框架按 tests/_* 约定，并且都在判卷面", () => {
   assert.deepEqual(missing, [], `这些框架文件改了不用业主批准:${missing.join("、")}`);
   assert.equal(matchAny(current.judging_surface, "tests/_future_harness.sh"), true, "tests/_* 是一条 glob，新框架文件也要罩住");
   assert.equal(matchAny(current.judging_surface, "tests/test_foo.py"), false, "普通测试文件不算判卷面");
-  assert.equal(matchAny(current.judging_surface, "bin/_panel-roster-lib.sh"), false, "被测代码不进判卷面");
+  assert.equal(matchAny(current.judging_surface, "bin/subcodex"), false, "被测代码不进判卷面");
 });
 
 test("决定评审归属和家族的代码在判卷面或 high", () => {

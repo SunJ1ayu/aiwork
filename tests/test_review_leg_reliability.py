@@ -70,7 +70,7 @@ class ReliabilityTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         return f'http://127.0.0.1:{server.server_port}', payloads
 
-    def run_review(self, leg='subdeepseek', *, responses=None, env=None,
+    def run_review(self, leg='subdeepseek-agent', *, responses=None, env=None,
                    fake_attempts=None, missing_agent=False, files=None, changes=None):
         """Run the real publisher, leg, chat engine and result producer offline."""
         default_response = [
@@ -106,11 +106,9 @@ class ReliabilityTests(unittest.TestCase):
                 return real_subprocess_run(command, **kwargs)
             name = Path(command[0]).name
             attempt = fake_attempts[min(len(self.leg_calls) - 1, len(fake_attempts) - 1)]
-            model = {'subdeepseek': 'deepseek-flash', 'subdeepseek-agent': 'deepseek-flash',
-                     'subglm': 'glm-5.3-flash', 'subglm-agent': 'go/glm-5.3-flash',
+            model = {'subdeepseek-agent': 'deepseek-flash',
                      'subcursor': 'gpt-6-sol', 'subcodex': 'gpt-6-sol',
-                     'submimo': 'xiaomi/mimo-v2.6-pro', 'subkimi': 'kimi-code/kimi-for-coding',
-                     'subgemini': 'gemini-3.8-flash-high', 'subgrok': 'grok-4.6'}[name]
+                     'submimo': 'xiaomi/mimo-v2.6-pro', 'subkimi': 'kimi-code/kimi-for-coding'}[name]
             Path(command[3]).write_text('# fixture review log\n\n' + attempt.get('report', 'Conclusion: PASS') + '\n')
             facts_cmd = [sys.executable, str(BIN / '_review_result.py'), 'facts', '--output',
                          kwargs['env']['AIWORK_REVIEW_FACTS_PATH'], '--requested-model', model,
@@ -154,12 +152,11 @@ class ReliabilityTests(unittest.TestCase):
             rc = self.review.main()
         return rc, payloads, posted, stdout.getvalue(), stderr.getvalue()
 
-    def test_review_pr_sends_diff_to_model_exactly_once(self):
-        rc, payloads, posted, _, stderr = self.run_review()
+    def test_review_pr_puts_the_diff_in_the_reader_task_once(self):
+        rc, payloads, posted, _, stderr = self.run_review('subdeepseek-agent', fake_attempts=[{}])
         self.assertEqual(rc, 0, stderr)
-        self.assertEqual(len(payloads), 1)
-        prompt = payloads[0]['messages'][1]['content']
-        self.assertEqual(prompt.count('+' + DIFF_MARKER), 1)
+        self.assertEqual(payloads, [])
+        self.assertEqual(self.seen_tasks[0].count(DIFF_MARKER), 1)
         self.assertEqual(len(posted), 1)
 
     def test_conclusion_requirement_is_after_full_diff_at_task_end(self):
@@ -174,19 +171,27 @@ class ReliabilityTests(unittest.TestCase):
         self.assertIn('Conclusion: NEEDS_MORE_INFO', tail)
         self.assertGreater(task.rfind('最后独占一行写'), task.rfind('```'))
 
-    def test_oversized_task_switches_to_same_family_reader_and_discloses_it(self):
-        self.diff += 'x\n' * 70000
-        for leg, family in [('subdeepseek', 'deepseek'), ('subglm', 'zhipu')]:
-            with self.subTest(leg=leg):
-                rc, payloads, posted, _, stderr = self.run_review(leg, fake_attempts=[{}])
-                self.assertEqual(rc, 0, stderr)
-                self.assertEqual(self.leg_calls[0][0], leg + '-agent')
-                self.assertEqual(payloads, [])
-                notice = f'{leg} → {leg}-agent'
-                self.assertIn(notice, stderr)
-                self.assertIn(notice, posted[0]['body'])
-                block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
-                self.assertEqual(block['family'], family)
+    def whole_file_deletion_view(self):
+        marker = 'DELETED_PAYLOAD_9f3c'
+        count = (200 * 1024) // (len(marker) + 1) + 80
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True)
+            git('init', '-q')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'gone.txt').write_text((marker + '\n') * count)
+            git('add', 'gone.txt')
+            git('commit', '-qm', 'add')
+            base = git('rev-parse', 'HEAD').stdout.strip()
+            git('rm', '-q', 'gone.txt')
+            git('commit', '-qm', 'delete')
+            head = git('rev-parse', 'HEAD').stdout.strip()
+            full = git('diff', '--binary', '--no-ext-diff', '--find-renames', base, head).stdout
+            files, diff, changes = self.review.collect_review_diff(repo, base, head)
+        return full, files, diff, changes, count
+
 
     def test_large_deletion_reader_points_at_the_snapshot_diff(self):
         full, files, diff, changes, count = self.whole_file_deletion_view()
@@ -210,28 +215,6 @@ class ReliabilityTests(unittest.TestCase):
         block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
         self.assertEqual(block['completeness'], 'complete')
 
-    def test_large_deletion_switches_chat_to_the_reader(self):
-        full, files, diff, changes, count = self.whole_file_deletion_view()
-        self.diff = diff
-        self.assertIn('DELETED_PAYLOAD_9f3c', full)
-        self.assertGreater(len(diff.encode()), 120000)
-        rc, payloads, posted, _, stderr = self.run_review(
-            'subdeepseek', files=files, changes=changes, fake_attempts=[{}])
-        self.assertEqual(rc, 0, stderr)
-        self.assertEqual(payloads, [])
-        self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
-        self.assertIn('subdeepseek → subdeepseek-agent', stderr)
-        self.assertIn('120000', stderr)
-        task = self.seen_tasks[0]
-        self.assertLessEqual(len(task.encode()), self.review.READER_INLINE_DIFF_BYTES)
-        self.assertNotIn('DELETED_PAYLOAD_9f3c', task)
-        self.assertNotIn('git diff ', task)
-        self.assertNotIn('[TRUNCATED:', task)
-        self.assertIn(f'- D {json.dumps("gone.txt")} +0 -{count}', task)
-        self.assertIn('DELETED_PAYLOAD_9f3c', (self.repo / self.review.REVIEW_DIFF_PATH).read_text())
-        block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
-        self.assertEqual(block['completeness'], 'complete')
-
     def test_reader_under_the_limit_still_receives_the_inline_diff(self):
         rc, _, posted, _, stderr = self.run_review('subdeepseek-agent', fake_attempts=[{}])
         self.assertEqual(rc, 0, stderr)
@@ -241,81 +224,10 @@ class ReliabilityTests(unittest.TestCase):
         block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
         self.assertEqual(block['completeness'], 'complete')
 
-    def test_switched_reader_still_inlines_a_diff_under_the_cap(self):
-        self.diff += 'x\n' * 65000
-        self.assertGreater(len(self.diff.encode()), 120000)
-        self.assertLess(len(self.diff.encode()), 200 * 1024)
-        rc, _, posted, _, stderr = self.run_review('subdeepseek', fake_attempts=[{}])
-        self.assertEqual(rc, 0, stderr)
-        self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
-        self.assertIn('\nx\n', self.seen_tasks[0])
-        self.assertNotIn('不内联', self.seen_tasks[0])
-        self.assertNotIn('[TRUNCATED:', self.seen_tasks[0])
-        self.assertFalse((self.repo / self.review.REVIEW_DIFF_PATH).exists())
-        block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
-        self.assertEqual(block['completeness'], 'complete')
-
-    def test_switched_reader_is_not_handed_the_oversize_inline_diff(self):
-        payload = 'KEEP_SWITCH_PAYLOAD\n'
-        self.diff += payload * 12000
-        self.assertGreater(len(self.diff.encode()), 200 * 1024)
-        rc, payloads, posted, _, stderr = self.run_review('subdeepseek', fake_attempts=[{}])
-        self.assertEqual(rc, 0, stderr)
-        self.assertEqual(payloads, [])
-        self.assertEqual(self.leg_calls[0][0], 'subdeepseek-agent')
-        self.assertNotIn('KEEP_SWITCH_PAYLOAD', self.seen_tasks[0])
-        self.assertNotIn('[TRUNCATED:', self.seen_tasks[0])
-        self.assertNotIn('git diff ', self.seen_tasks[0])
-        self.assertIn(self.review.REVIEW_DIFF_PATH, self.seen_tasks[0])
-        self.assertLessEqual(len(self.seen_tasks[0].encode()), self.review.READER_INLINE_DIFF_BYTES)
-        self.assertIn('KEEP_SWITCH_PAYLOAD', (self.repo / self.review.REVIEW_DIFF_PATH).read_text())
-        block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
-        self.assertEqual(block['completeness'], 'complete')
-        self.assertIn('subdeepseek → subdeepseek-agent', posted[0]['body'])
-
-    def whole_file_deletion_view(self):
-        marker = 'DELETED_PAYLOAD_9f3c'
-        count = (200 * 1024) // (len(marker) + 1) + 80
-        with tempfile.TemporaryDirectory() as temporary:
-            repo = Path(temporary)
-            def git(*args):
-                return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True)
-            git('init', '-q')
-            git('config', 'user.name', 'Test')
-            git('config', 'user.email', 'test@example.invalid')
-            (repo / 'gone.txt').write_text((marker + '\n') * count)
-            git('add', 'gone.txt')
-            git('commit', '-qm', 'add')
-            base = git('rev-parse', 'HEAD').stdout.strip()
-            git('rm', '-q', 'gone.txt')
-            git('commit', '-qm', 'delete')
-            head = git('rev-parse', 'HEAD').stdout.strip()
-            full = git('diff', '--binary', '--no-ext-diff', '--find-renames', base, head).stdout
-            files, diff, changes = self.review.collect_review_diff(repo, base, head)
-        return full, files, diff, changes, count
-
-    def test_oversized_task_without_available_reader_stops_before_leg_or_post(self):
-        self.diff += 'x\n' * 70000
-        rc, payloads, posted, _, stderr = self.run_review(fake_attempts=[{}], missing_agent=True)
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.leg_calls, [])
-        self.assertEqual((payloads, posted), ([], []))
-        self.assertIn('no available same-family', stderr)
-        self.assertIn('120000', stderr)
-
-    def test_review_pr_never_sends_truncated_included_context(self):
-        included = self.directory / 'context.txt'
-        included.write_text('x' * 120001)
-        rc, payloads, posted, _, stderr = self.run_review(env={'DEEPSEEK_INCLUDE': str(included)})
-        self.assertEqual(rc, 1)
-        self.assertEqual((payloads, posted), ([], []))
-        self.assertIn('refusing truncated', stderr)
-
     def test_all_repository_readers_get_2400_seconds_unless_caller_overrides(self):
-        timeouts = {'subdeepseek-agent': 'DEEPSEEK_TIMEOUT', 'subglm-agent': 'ZHIPU_TIMEOUT',
+        timeouts = {'subdeepseek-agent': 'DEEPSEEK_TIMEOUT',
                     'subcodex': 'SUBCODEX_TIMEOUT', 'subcursor': 'CURSOR_TIMEOUT',
-                    'submimo': 'MIMO_CLI_TIMEOUT', 'subkimi': 'KIMI_TIMEOUT',
-                    'subgemini': 'AGY_TIMEOUT', 'subgrok': 'GROK_TIMEOUT'}
+                    'submimo': 'MIMO_CLI_TIMEOUT', 'subkimi': 'KIMI_TIMEOUT'}
         for leg, variable in timeouts.items():
             for override in (None, '', '317'):
                 with self.subTest(leg=leg, override=override):
@@ -324,45 +236,6 @@ class ReliabilityTests(unittest.TestCase):
                     self.assertEqual(rc, 0, stderr)
                     self.assertEqual(self.leg_calls[0][1].get(variable), override or '2400')
                     self.assertEqual(len(posted), 1)
-
-    def test_missing_conclusion_retries_once_and_keeps_first_failure(self):
-        responses = [{'choices': [{'message': {'content': text}, 'finish_reason': 'stop'}]}
-                     for text in ('First report without conclusion.', 'Second report.\nConclusion: PASS')]
-        rc, payloads, posted, _, stderr = self.run_review(responses=responses)
-        self.assertEqual(rc, 0, stderr)
-        self.assertEqual(len(payloads), 2)
-        self.assertIn('retry 2/2', stderr)
-        self.assertIn('no_verdict', stderr)
-        self.assertIn('retry 2/2', posted[0]['body'])
-        archives = list((self.directory / 'data/logs/review-pr-failures').iterdir())
-        self.assertEqual(len(archives), 1)
-        self.assertIn('First report without conclusion.', (archives[0] / 'review.log').read_text())
-        self.assertEqual(json.loads((archives[0] / 'result.json').read_text())['failure_kind'], 'no_verdict')
-
-    def test_length_finish_reason_retries_even_if_truncated_output_has_conclusion(self):
-        responses = [{'choices': [{'message': {'content': 'Cut report.\nConclusion: PASS'}, 'finish_reason': 'length'}]},
-                     {'choices': [{'message': {'content': 'Complete report.\nConclusion: PASS'}, 'finish_reason': 'stop'}]}]
-        rc, payloads, posted, _, stderr = self.run_review(responses=responses)
-        self.assertEqual(rc, 0, stderr)
-        self.assertEqual(len(payloads), 2)
-        self.assertIn('output_truncated', stderr)
-        self.assertIn('retry 2/2', posted[0]['body'])
-        self.assertNotIn('Cut report.', posted[0]['body'])
-        archives = list((self.directory / 'data/logs/review-pr-failures').iterdir())
-        self.assertIn('Cut report.', (archives[0] / 'review.log').read_text())
-
-    def test_persistent_missing_conclusion_stops_after_one_retry_and_preserves_both(self):
-        responses = [{'choices': [{'message': {'content': text}, 'finish_reason': 'stop'}]}
-                     for text in ('First failed report.', 'Second failed report.')]
-        rc, payloads, posted, _, stderr = self.run_review(responses=responses)
-        self.assertEqual(rc, 1)
-        self.assertEqual((len(payloads), posted), (2, []))
-        self.assertEqual(stderr.count('retry 2/2'), 1)
-        archives = list((self.directory / 'data/logs/review-pr-failures').iterdir())
-        self.assertEqual(len(archives), 2)
-        logs = [p.read_text() for archive in archives for p in archive.rglob('review.log')]
-        self.assertTrue(any('First failed report.' in text for text in logs))
-        self.assertTrue(any('Second failed report.' in text for text in logs))
 
     def test_reader_missing_conclusion_retries_using_fresh_artifacts(self):
         attempts = [{'report': 'No conclusion.', 'failure': 'no_verdict', 'exit': 1}, {}]
@@ -382,33 +255,6 @@ class ReliabilityTests(unittest.TestCase):
                 self.assertEqual(rc, 1)
                 self.assertEqual((len(self.leg_calls), posted), (1, []))
                 self.assertNotIn('retry 2/2', stderr)
-
-    def test_http_engine_retries_transient_failures_without_restarting_review_leg(self):
-        for status, requests in ((401, 1), (429, 3), (503, 3)):
-            with self.subTest(status=status):
-                rc, payloads, posted, _, stderr = self.run_review(
-                    responses=[{'_status': status, 'error': 'Provider failed.'}],
-                    env={'MIMO_RETRY_BASE_SECONDS': '0', 'MIMO_RETRY_CAP_SECONDS': '0'})
-                self.assertEqual(rc, 1)
-                self.assertEqual((len(payloads), posted), (requests, []))
-                self.assertEqual(len(self.leg_calls), 1)
-                self.assertNotIn('review-pr: retry 2/2', stderr)
-
-    def test_http_engine_recovers_transient_failures_and_honors_caller_attempt_limit(self):
-        for status in (429, 503):
-            with self.subTest(status=status):
-                rc, payloads, posted, _, stderr = self.run_review(responses=[
-                    {'_status': status, 'error': 'Temporary provider failure.'},
-                    {'choices': [{'message': {'content': 'Recovered.\nConclusion: PASS'},
-                                  'finish_reason': 'stop'}]}],
-                    env={'MIMO_RETRY_ATTEMPTS': '2', 'MIMO_RETRY_BASE_SECONDS': '0',
-                         'MIMO_RETRY_CAP_SECONDS': '0'})
-                self.assertEqual(rc, 0, stderr)
-                self.assertEqual(len(payloads), 2)
-                self.assertEqual(len(self.leg_calls), 1)
-                self.assertEqual(len(posted), 1)
-                self.assertNotIn('review-pr: retry 2/2', stderr)
-
 
 class FailureArchiveTests(unittest.TestCase):
     def setUp(self):
@@ -460,32 +306,24 @@ class FailureArchiveTests(unittest.TestCase):
 
 class ReaderFailureClassificationTests(LegCase):
     def test_real_readers_classify_completed_report_without_conclusion(self):
-        self.copy('subdeepseek-agent', 'subglm-agent', 'subagent', 'subkimi',
-                  'subgemini', 'ro-repo-exec')
-        self.fake('opencode', '#!/bin/sh\necho "Checked the authentication code."\n')
+        self.copy('subdeepseek-agent', 'subagent', 'subkimi', 'ro-repo-exec')
         self.fake('claude', '#!/bin/sh\necho \'{"type":"assistant","message":{"content":[{"type":"text","text":"Checked the authentication code."}]}}\'\n')
         self.fake('kimi', '#!/bin/sh\necho "Checked the authentication code."\n')
-        self.fake('agy', '#!/bin/sh\nif [ "$1" = models ]; then echo gemini-fixture; '
-                  'else echo "Checked the authentication code."; fi\n')
         home = self.d / 'kimi-home'
         (home / 'hooks').mkdir(parents=True)
         (home / 'credentials').mkdir()
         (home / 'config.toml').write_text('default_model = "fixture"\n')
         (home / 'hooks/guard.mjs').write_text('process.exit(2); // offline deny fixture\n')
         (home / 'credentials/kimi-code.json').write_text('{}')
-        token = self.d / 'agy-token'
-        token.write_text('{}')
-        for leg in ('subdeepseek-agent', 'subglm-agent', 'subkimi', 'subgemini'):
+        for leg in ('subdeepseek-agent', 'subkimi'):
             with self.subTest(leg=leg):
                 facts, log = self.d / (leg + '.json'), self.d / (leg + '.log')
                 proc = self.run_cmd([str(self.bin / leg), 'review', str(self.task),
                                      str(log), str(self.repo)],
                                     AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_PR='1',
                                     AIWORK_REVIEW_RESULT_BIN=str(self.bin / '_review_result.py'),
-                                    DEEPSEEK_API_KEY='fixture', ZHIPU_API_KEY='fixture',
-                                    OPENCODE_REVIEW_HOME=str(self.d / 'opencode-home'),
-                                    KIMI_REVIEW_HOME=str(home), AGY_REVIEW_HOME=str(self.d / 'agy-home'),
-                                    AGY_OWNER_TOKEN=str(token), AGY_BIN=str(self.bin / 'agy'))
+                                    DEEPSEEK_API_KEY='fixture',
+                                    KIMI_REVIEW_HOME=str(home))
                 self.assertNotEqual(proc.returncode, 0)
                 self.assertIn('no verdict', proc.stderr, proc.stderr)
                 self.assertIn('Checked the authentication code.', log.read_text())

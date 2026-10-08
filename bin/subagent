@@ -3,18 +3,13 @@ set -uo pipefail
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
-# subagent - 底座腿的**唯一躯干**:把 Claude Code headless(`claude -p`)指向某个
-# Anthropic 兼容端点,让模型自己读仓库并在 review 的可写副本里跑本地检查。
-# 今天服务 deepseek 与 zhipu 两条腿,经 `subdeepseek-agent` / `subglm-agent` 两个瘦
-# shim 调用,调用方一个字都不用改。加新供应商 = 在下面的供应商表里加一段。
+# subagent - DeepSeek 评审命令的躯干:把 Claude Code headless(`claude -p`)指向
+# DeepSeek 的 Anthropic 兼容端点,让模型自己读仓库并在 review 的可写副本里跑本地检查。
+# 经 `subdeepseek-agent` 这个瘦 shim 调用。
 #
-# 为什么要有这个文件(2026-08-03):`subdeepseek-agent` 与 `subglm-agent` 曾是 95%
-# 相同的两份拷贝(342 行只差 80 行,多半还是注释)⇒ 每条修法都要改两遍,而历史证明
-# **总有一份会落下**。聊天腿早就用 `subchat` + 供应商表治过这个病,底座腿一直没治。
-#
-#   review  -> claude -p,每腿可写副本 + 原仓只读,出卷闸(必须给裁决)。
+#   review  -> claude -p,可写副本 + 原仓只读,出卷闸(必须给裁决)。
 #   explore -> claude -p,同样只读,无裁决闸。
-#   fix     -> 故意不支持:评审腿保持只读。要改代码用 `submimo fix`。
+#   fix     -> 不在这条命令里做。要改代码,在自己的工作树里打开那家的命令行。
 #
 # 端点凭据只注入子进程,**绝不写 ~/.claude/settings.json**(那会劫持主 harness)。
 #
@@ -24,12 +19,6 @@ BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sy
 # stream-json,把模型说过的话与工具动作实时落盘再渲染成人能读的日志,并记下
 # 「用了 N / 上限 M 轮」——**下次调上限凭这个测量,不凭翻倍**。
 
-
-# 反锚定闸:先 source(只定义函数),并在解析位置参数**之前**摘掉 --panel-dispatch。
-_GATE="$BIN_DIR/_my-review-gate.sh"
-[ -f "$_GATE" ] || { echo "subagent: 找不到 _my-review-gate.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
-. "$_GATE"
-gate_strip_flags "$@"; set -- ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
@@ -50,17 +39,14 @@ Usage:
 
 Providers (thin shims in parentheses; callers normally use the shim):
   deepseek  (subdeepseek-agent)  model from ~/.config/aiwork/models.env, env DEEPSEEK_*
-  zhipu     (subglm-agent)       model from ~/.config/aiwork/models.env,     env ZHIPU_*
 
-Environment (PREFIX = DEEPSEEK | ZHIPU):
+Environment (PREFIX = DEEPSEEK):
   <PREFIX>_MODEL          model id
   <PREFIX>_TIMEOUT        seconds before timeout (default 900)
-  <PREFIX>_MAX_TURNS      agent turn cap (per-provider default; see the table)
+  <PREFIX>_MAX_TURNS      agent turn cap (default 200)
   <PREFIX>_API_KEY        overrides the key read from the auth file
-  <PREFIX>_ANTHROPIC_URL  Anthropic-compatible base URL (DeepSeek; dormant for OpenCode GLM)
-  <PREFIX>_AUTH_FILE      auth file, {"key":"..."}; defaults:
-                          DeepSeek ~/.config/deepseek/auth.json
-                          OpenCode GLM ~/.config/opencode-go/auth.json
+  <PREFIX>_ANTHROPIC_URL  Anthropic-compatible base URL
+  <PREFIX>_AUTH_FILE      auth file, {"key":"..."}; default ~/.config/deepseek/auth.json
 EOF
 }
 
@@ -83,11 +69,6 @@ if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   REPO_DIR="$SOURCE_REPO"
 fi
 
-# 反锚定闸(2026-08-06):review 模式下,主 agent 自己那一遍必须先落盘;
-# panel-review 派发时在命令行末尾带 --panel-dispatch,不重复拦。共享实现,不抄第二份。
-# shellcheck source=_my-review-gate.sh
-my_review_gate "$MODE" "$TASK_FILE" "$REPO_DIR" "subagent" || exit 1
-
 # ── 供应商表:腿与腿之间的差异**只准活在这里** ────────────────────────────
 case "$PROVIDER" in
   deepseek)
@@ -109,55 +90,10 @@ case "$PROVIDER" in
     # 所以这条路对它是通的(GLM 那格 08-18 换走的原因正是 Go 那边不转换)。
     AGENT_BASE="claude"
     ;;
-  zhipu)
-    PREFIX="ZHIPU"; LABEL="subglm-agent"
-    BILLING_MODE="subscription"
-    # GLM 后端沿革:bigmodel(1113 余额不足)→ 百炼(429)→ 火山方舟(07-17,Anthropic
-    # 面只有 /api/coding 且要 CodingPlan 订阅)→ 07-25 切回智谱开放平台 bigmodel
-    # → **2026-08-18 换到 OpenCode Go**(业主的 $10/月订阅)。
-    # 换的理由不是端点更好,是 bigmodel 那把 key 欠费:这条腿 08-04 起默认关着,
-    # "四审"实际只有三腿、已经两周。Go 的 Anthropic 面 = /zen/go/v1。
-    # 旧 key 原样留在 ~/.config/zhipu/auth.json(那是另一家的账,将来充值可切回);
-    # 方舟 key 仍在 auth.json.ark-bak。
-    # 模型只解析一次:下面的公共查表把 DEFAULT_MODEL / ZHIPU_MODEL 收敛成 MODEL，
-    # opencode 与将来可能切回的 claude 底座都只消费 MODEL。不要再给 opencode 另立
-    # 一份模型字段——那会让环境变量看似支持、实际主路径继续跑硬编码旧模型。
-    DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model glm "${ZHIPU_MODEL:-}")" || exit 1
-    # **不带尾部 /v1**:claude CLI 自己会补 `/v1/messages`。写成 .../go/v1 会发到
-    # /zen/go/v1/v1/messages(实测 404),而 CLI 把 404 报成"模型不存在",
-    # 于是看起来像模型名错了 —— 实际是地址多了一层。
-    # (opencode 走 OpenAI 兼容面,要的反而是**完整的** .../zen/go/v1,见 OC_BASE_URL。)
-    DEFAULT_BASE_URL="https://opencode.ai/zen/go"  # 休眠:claude 底座才读
-    DEFAULT_AUTH_FILE="$HOME/.config/opencode-go/auth.json"
-    # 认证 header 风格:**Go 的 Anthropic 面只认 x-api-key**(= claude 的
-    # ANTHROPIC_API_KEY);实测 Authorization: Bearer 直接 401 "Missing API key"。
-    # 这一格是这次换后端的真 bug 面:key 传对了、header 传错了,腿照样是死的,
-    # 而日志上只看得见"模型没回话"。
-    AUTH_ENV="ANTHROPIC_API_KEY"   # (只在 claude 底座下有意义,留着供将来切回)
-    # ── 底座:**opencode CLI 自己**(2026-08-18,track opencode-agent-base)────────
-    # 为什么不再借 Claude Code 当壳:Go 的 Anthropic 面**不做工具格式转换**,
-    # 带 Anthropic 形状的 tools 一律 400 ⇒ 借壳这条路上这条腿根本起不来,
-    # 只能退化成看不见仓库的聊天腿。而 opencode 自己就是个 agent 底座,
-    # 工具形状天然对得上 —— 和 subkimi 用原生 kimi-code、submimo 用官方 MiMoCode
-    # 是同一个形状,不是新腿,是同一条腿换底座。
-    AGENT_BASE="opencode"
-    # provider 必须自定义指到**订阅端点**:opencode 默认的 provider 走按量付费网关,
-    # 实测直接 `Insufficient balance`(订阅和按量是两笔账)。
-    OC_PROVIDER="go"
-    OC_BASE_URL="https://opencode.ai/zen/go/v1"
-    # 我们自配的只读 agent。**绝不用 opencode 内置的 `plan` 档**:它自称
-    # "禁掉所有编辑工具",而解析出来的配置是 write/edit/bash 全开 + 权限 `*` allow;
-    # 实测它两次不写文件(含一次话术攻击)靠的都是**模型自觉**,不是闸。
-    OC_AGENT="aiwork-review"
-    # 保持这条腿的**历史值 40**。合并躯干时我一度把它统一成 80,等于在没有任何
-    # glm 轮次实测的情况下把它的单次预算翻倍 —— 顺手统一别人的预算不是重构。
-    # 要改请先跑一次真腿、拿 turns 说话(日志末尾那行现在会告诉你)。
-    DEFAULT_MAX_TURNS=40
-    ;;
-  *) LABEL="subagent"; die "unknown provider: $PROVIDER (supported: deepseek, zhipu)" ;;
+  *) LABEL="subagent"; die "unknown provider: $PROVIDER (supported: deepseek)" ;;
 esac
 
-# 前缀化 env 查表(保持 DEEPSEEK_* / ZHIPU_* 这些公开变量名不变)
+# 前缀化 env 查表(DEEPSEEK_*)
 v="${PREFIX}_MODEL";          MODEL="${!v:-$DEFAULT_MODEL}"
 v="${PREFIX}_TIMEOUT";        TIMEOUT_SECONDS="${!v:-900}"
 v="${PREFIX}_MAX_TURNS";      MAX_TURNS="${!v:-$DEFAULT_MAX_TURNS}"
@@ -166,19 +102,13 @@ v="${PREFIX}_ANTHROPIC_URL";  BASE_URL="${!v:-$DEFAULT_BASE_URL}"
 v="${PREFIX}_AUTH_FILE";      AUTH_FILE="${!v:-$DEFAULT_AUTH_FILE}"
 
 if [[ "$MODE" == "fix" ]]; then
-  die "fix is not supported: panel reviewers are review-only. Use: submimo fix $TASK_FILE $LOG_FILE $REPO_DIR"
+  die "fix is not supported on this command. Change code in your own worktree."
 fi
 [[ "$MODE" == "review" || "$MODE" == "explore" ]] || { usage; exit 2; }
 
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
-# 查**这条腿真正要用的那个**:opencode 底座不依赖 claude(四审两条腿独立点到 ——
-# claude 没装而 opencode 装了会被误杀,反过来会跑到 opencode run 才报误导性的 rc=127)。
-if [[ "$AGENT_BASE" == "opencode" ]]; then
-  command -v opencode >/dev/null 2>&1 || die "opencode CLI not found on PATH"
-else
-  command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
-fi
+command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
 
 if [[ -z "$API_KEY" ]]; then
   [[ -f "$AUTH_FILE" ]] || die "auth file not found: $AUTH_FILE (set ${PREFIX}_API_KEY or create it as {\"key\":\"...\"})"
@@ -275,7 +205,6 @@ if [[ "$MODE" == "review" ]]; then
   SOURCE_REPO="$REVIEW_SOURCE_REPO"
   REPO_DIR="$(review_workspace_repo)" || exit 78
   FACT_MODEL="$MODEL"
-  [[ "$AGENT_BASE" != "opencode" ]] || FACT_MODEL="$OC_PROVIDER/$MODEL"
   review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" || exit 78
 fi
 
@@ -296,23 +225,9 @@ ERR_FILE="$(mktemp)"
 {
   echo "# $LABEL $MODE log"
   echo "time: $(date -Iseconds)"
-  if [[ "$AGENT_BASE" == "opencode" ]]; then
-    echo "mode: $MODE (agent base: opencode CLI headless -> $PROVIDER)"
-  else
-    echo "mode: $MODE (agent base: claude-code headless -> $PROVIDER)"
-  fi
-  # 印**实际在用的**那个:$BASE_URL 是 claude 底座那条路的值,opencode 这条路不用它
-  # (供应商表里它作为休眠值留着,供将来切回)。取证材料不许印一个没在用的地址。
-  if [[ "$AGENT_BASE" == "opencode" ]]; then
-    echo "base_url: $OC_BASE_URL"
-  else
-    echo "base_url: $BASE_URL"
-  fi
-  if [[ "$AGENT_BASE" == "opencode" ]]; then
-    echo "model: $OC_PROVIDER/$MODEL"   # 完整 id;裸名字在调用时并不存在
-  else
-    echo "model: $MODEL"
-  fi
+  echo "mode: $MODE (agent base: claude-code headless -> $PROVIDER)"
+  echo "base_url: $BASE_URL"
+  echo "model: $MODEL"
   echo "repo: $REPO_DIR"
   [[ "$MODE" == "review" ]] && echo "source_repo: $SOURCE_REPO"
   echo "task: $TASK_FILE"
@@ -338,101 +253,9 @@ RC=0
 # 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
 #
-# ⚠️ **这一段刻意放在两个底座分支的外面。** 第一版把它焊在 claude 那一支里,
-# 于是走 opencode 的 GLM 腿完全在防线外面,而 V36 照样全绿(它挑的腿恰好都在
-# 已接的那条路径上)。定义一次、两支共用 ⇒ **将来再加底座也自动带上**,
-# 这比在新分支里记得抄一遍可靠。本仓的老账:同一件事写两处、只更新一处。
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
 RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 
-if [[ "$AGENT_BASE" == "opencode" ]]; then
-  # ── opencode 底座 ───────────────────────────────────────────────────────────
-  # 配置**每次重写**:这份配置就是只读锁本身,不许留隔夜残留(判据查的也是它)。
-  # HOME 换成隔离目录 —— 否则会写进 /root/.config/opencode,污染我自己那份真配置。
-  OC_HOME="${OPENCODE_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path opencode-review-home)}" || exit 1
-  # 运行期 HOME 不许在被评审的仓里(共享闸)—— 底座在只读仓里写状态会当场 EROFS,
-  # 而报出来的错看不出是自家防线干的。默认值在仓外不等于这条路被挡住了。
-  review_home_guard opencode "$OC_HOME" "$SOURCE_REPO" OPENCODE_REVIEW_HOME || exit 1
-  # umask 077:配置文件**创建即 600**。先 644 再 chmod 会留一个窗口,中断在中间
-  # 就是一个人人可读的 key 文件。key 走 **env 不走 argv** —— argv 在进程存续期间
-  # `ps` 就看得见(四审 subdeepseek F3)。
-  umask 077
-  mkdir -p "$OC_HOME/.config/opencode"
-  OC_KEY="$API_KEY" python3 - "$OC_HOME/.config/opencode/opencode.json" \
-           "$OC_PROVIDER" "$MODEL" "$OC_BASE_URL" "$OC_AGENT" "$MAX_TURNS" "$MODE" <<'PYOC'
-import json, os, sys
-cfgpath, prov, model, base, agent, steps, mode = sys.argv[1:8]
-key = os.environ["OC_KEY"]
-# 只读锁:**写工具全关,bash 留着**。
-#
-# 这一格 08-18 收紧过、08-19 又放回来,两次的事实和判断都留着,别再来回翻:
-#   事实(仍成立):bash 的命令行白名单**挡不住 git 自己的参数** ——
-#     `git diff --output=<path>` 写任意文件、`git diff --no-index <仓外文件> /dev/null`
-#     把任意可读文件打进 stdout。这些选项在 git log -p / git show 上一样吃。
-#     ⇒ **对 git 这么灵活的程序做命令行白名单本身不成立**。
-#   08-18 我从这个事实推出"所以关掉 bash",错的是这一步。
-#   关掉之后腿读不了 git ⇒ 主 agent 得算好 diff 喂进去 ⇒ E2BIG(腿直接起不来)、
-#   SIGPIPE 静默暴毙、基线打错字静默变瞎。**最坏形态是腿没跑起来而 panel 照常出结论。**
-#   而评审腿**没有**"改判据让自己及格"的动机(那是执行腿的威胁模型)⇒
-#   对面是误伤和提示注入,不是有动机的对手 ⇒ **检测代替预防**。
-#   防线换成跑完的写审计(track `repo-write-audit`,**还没上线**,窗口期是明账)。
-#
-# 写口(write/edit/patch/task/webfetch/websearch/skill)照旧全关 —— 那是**零成本**的,
-# 腿读代码本来就不需要;`task` 尤其要关:spawn 子代理 = 子代理有自己的工具面 = 绕过通道。
-tools = {"write": False, "edit": False, "patch": False, "task": False,
-         "todowrite": False, "webfetch": False, "websearch": False, "skill": False,
-         "bash": True,
-         "read": True, "glob": True, "grep": True}
-# Bash 整项允许：cwd/--dir 是可丢弃副本，测试/build 产生的文件只污染该副本。
-# 原仓保护由 RO_EXEC 承重，不再把命令字符串白名单冒充隔离边界。
-if mode == "review":
-    bash_perm = "allow"
-else:
-    bash_perm = {"*": "deny", "git diff*": "allow", "git log*": "allow",
-                 "git status*": "allow", "git show*": "allow"}
-perm = {"edit": "deny", "write": "deny", "bash": bash_perm}
-cfg = {"$schema": "https://opencode.ai/config.json",
-       "provider": {prov: {"npm": "@ai-sdk/openai-compatible",
-                           "name": "OpenCode Go (subscription)",
-                           "options": {"baseURL": base, "apiKey": key},
-                           "models": {model: {}}}},
-       "agent": {agent: {"description": "aiwork isolated review leg",
-                         "mode": "primary", "model": prov + "/" + model,
-                         # 轮次上限:供应商表里那个历史值,换底座也得跟着搬。
-                         # opencode 没有 --max-turns 这类命令行开关,只有配置里这个
-                         # `steps`(schema 里 maxSteps 已标废弃,别用那个名字)。
-                         # 没有它,这条腿在 opencode 上就只剩挂钟超时兜着 = 上限丢了。
-                         "steps": int(steps),
-                         "tools": tools, "permission": perm}},
-       # opencode 默认「一次工具被拒就结束整轮」(1.18.18 源码:shouldBreak = continue_loop_on_deny !== true)。
-       # GLM 09-10 碰了一次仓外目录被拒,整轮评审作废;被拒的调用照样被拒,只是让它换条路继续。
-       "experimental": {"continue_loop_on_deny": True}}
-tmpath = cfgpath + ".tmp." + str(os.getpid())
-with open(tmpath, "w") as fh:
-    json.dump(cfg, fh, indent=2)
-os.replace(tmpath, cfgpath)
-PYOC
-  chmod 600 "$OC_HOME/.config/opencode/opencode.json"   # 配置里含 key
-  (
-    cd "$REPO_DIR"
-    AIWORK_CALLER_HOME="${AIWORK_CALLER_HOME:-$HOME}" \
-      HOME="$OC_HOME" "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" opencode run \
-      --dir "$REPO_DIR" --agent "$OC_AGENT" -m "$OC_PROVIDER/$MODEL" "$PROMPT"
-  ) < /dev/null 2>"$ERR_FILE" | sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' >> "$LOG_FILE" || RC=$?
-  # ↑ **`< /dev/null` 不是可有可无的整洁**:opencode 在 stdin 是一个还开着的管道时
-  #   会一直等输入。2026-08-18 实测:直接跑正常,一经 runlog(走 tee 管道)就挂死
-  #   12 分钟、一次模型调用都没发,而日志头已经写好、从外面看像"正在跑"。
-  # ⚠️ **rc 信不得**:实测 opencode 余额不足时把错误打在 stdout 上、退出码仍是 0。
-  # 这条腿的死活由下面那道裁决 gate 判,rc 只当补充信号。
-  #
-  # 工具轨迹(读了哪些文件、跑了哪些命令)opencode 打在 **stderr** 上。把它并进日志:
-  # 四审时我读的是腿的日志,"它到底看没看"正是底座腿最该被看见的东西 ——
-  # 只落在 runlog 收据里等于没有(claude 那条腿的渲染日志一直带轨迹,不许换底座就丢)。
-  if [[ -s "$ERR_FILE" ]]; then
-    { echo; echo "---- 工具轨迹(底座 stderr)----"; \
-      sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' "$ERR_FILE"; } >> "$LOG_FILE"
-  fi
-else
 # 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,
 # 否则它会盖过供应商 token。提示词走 stdin:--allowedTools/--disallowedTools 是变长
 # 参数,尾随的位置参数会被当成又一个工具名吞掉。
@@ -503,13 +326,12 @@ footer.append(f"(原始 stream-json:{stream})")
 with open(log, "a", encoding="utf-8") as fh:
     fh.write(body + "\n" + "\n".join(footer) + "\n")
 PY
-fi
 
 if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
 
 if [[ "$MODE" == "review" ]]; then
-  # 出卷闸与 panel/adapter 共用唯一 normalizer；缺 helper 只能 fail closed，
+  # 出卷闸与结果归一共用唯一 normalizer；缺 helper 只能 fail closed，
   # 不许在这条底座路径复活一份宽松 regex。
   _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
   [ -f "$_RR" ] || die "typed verdict normalizer missing"
@@ -518,14 +340,12 @@ if [[ "$MODE" == "review" ]]; then
   if [[ $RC -eq 124 ]]; then
     review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
       timed_out partial timeout "$VERDICT" || exit 78
-    _BASE_CMD="claude"; [[ "$AGENT_BASE" == "opencode" ]] && _BASE_CMD="opencode"
-    echo "$LABEL: $_BASE_CMD timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)" >&2
+    echo "$LABEL: claude timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)" >&2
     exit 124
   elif [[ $RC -ne 0 ]]; then
     review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
       exited partial runtime "$VERDICT" || exit 78
-    _BASE_CMD="claude"; [[ "$AGENT_BASE" == "opencode" ]] && _BASE_CMD="opencode"
-    die "$_BASE_CMD exited rc=$RC (partial work kept in $LOG_FILE)"
+    die "claude exited rc=$RC (partial work kept in $LOG_FILE)"
   fi
   if [[ "$VERDICT" == "UNKNOWN" ]]; then
     review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
@@ -535,9 +355,8 @@ if [[ "$MODE" == "review" ]]; then
   review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
     exited complete "" "$VERDICT" || exit 78
 elif [[ $RC -ne 0 ]]; then
-  _BASE_CMD="claude"; [[ "$AGENT_BASE" == "opencode" ]] && _BASE_CMD="opencode"
-  [[ $RC -eq 124 ]] && die "$_BASE_CMD timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)"
-  die "$_BASE_CMD exited rc=$RC (partial work kept in $LOG_FILE)"
+  [[ $RC -eq 124 ]] && die "claude timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)"
+  die "claude exited rc=$RC (partial work kept in $LOG_FILE)"
 fi
 
 exit 0

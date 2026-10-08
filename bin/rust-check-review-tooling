@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 本仓(/root/aiwork)的**总跑入口**:一条命令跑完全部离线判据套件,并给一行汇总。
 # Exit 0 = 全绿,非零 = 有东西烂了(外部漂移、环境升级、我自己改坏了)——
-# 目的是在真跑一次 panel-review / 真派一次活之前就把静默腐烂抓出来。
+# 目的是在真跑一次 review-pr / 真派一次活之前就把静默腐烂抓出来。
 # 绿了也打一行心跳,这样 cron 死了本身也看得见(P0-2「静默过期」的教训)。
 # 只跑桩/离线套件,不做真供应商探活(不烧额度)。
 #
@@ -20,18 +20,13 @@ SUITES=(
   "review-pr|python3|$ROOT/tests/test_review_pr.py"
   "review-leg-reliability|python3|$ROOT/tests/test_review_leg_reliability.py"
   "app-token-scope|python3|$ROOT/tests/test_app_token_scope.py"
-  "panel-candidates|python3|$ROOT/tests/test_panel_candidates.py"
   "review-result|python3|$ROOT/tests/test_review_result.py"
-  "subgrok|python3|$ROOT/tests/test_subgrok.py"
   "subcursor|python3|$ROOT/tests/test_subcursor.py"
   "leg-quick-fixes|python3|$ROOT/tests/test_leg_quick_fixes.py"
   "review-tooling|bash|$ROOT/tests/test-review-tooling.sh"
-  "panel-observation|bash|$ROOT/tests/test-panel-observation.sh"
-  "panel-roster|bash|$ROOT/tests/test-panel-roster.sh"
-  "panel-slice|bash|$ROOT/tests/test-panel-slice.sh"
   "subcodex|bash|$ROOT/tests/test-subcodex.sh"
   "fix-oracle|bash|$ROOT/tests/test-submimo-fix-oracle.sh"
-  "retry|python3|$ROOT/tests/test_submimo_retry.py"
+  "pruned-surface|bash|$ROOT/tests/test-pruned-surface.sh"
   "delegate-entry|bash|$ROOT/tests/test-delegate-entry.sh"
   "delegate-isolate|bash|$ROOT/tests/test-delegate-isolate.sh"
   "no-egress|bash|$ROOT/tests/test-no-egress.sh"
