@@ -148,22 +148,7 @@ Report findings with file:line references and a severity each.
 $(cat "$TASK_FILE")
 --- END OF REVIEW TASK ---"
 
-EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent design-exploration agent running inside a read-only harness. Explore the repository yourself with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}) when the codebase matters to the brief. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
-
-Rules:
-- Propose exactly ONE concrete direction. Do NOT hedge across multiple options or output a menu.
-- Do NOT output PASS/BLOCK/approve/reject - this is not a review.
-- Commit to a position even under uncertainty; state your assumptions.
-- Ground claims in the supplied brief and the repository; do not invent facts about the codebase.
-
-Output format (use exactly these labels):
-Direction: <one-line name of the approach you propose>
-Core bet: <the single key assumption/trade-off this direction bets on>
-How it works: <concrete shape - components, flow, key decisions>
-Best at: <what it optimizes for / where it wins>
-Sacrifices: <what it gives up; when it is the wrong choice>
-Blind spots in the brief: <what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen>
-Smallest first step: <the first concrete thing to build to validate this>}"
+EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent agent running inside a read-only harness. Read the repository with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}). Do not modify files, push, merge, install dependencies, or spawn other agents.}"
 
 # ── 把 diff 算好塞进提示词 ─────────────────────────────────────────────────
 # 提示词就是"系统提示 + 任务书"。**不再往里塞 diff** —— 腿自己有 shell,

@@ -230,11 +230,12 @@ class CursorTest(unittest.TestCase):
         self.assertEqual(facts['process_state'],'timed_out')
         self.assertEqual(facts['evidence_completeness'],'partial')
 
-    def test_explore_requires_sections_but_no_verdict(self):
-        result = self.run_leg('explore')
-        self.assertEqual(result.returncode,0,result.stderr)
-        self.assertNotIn('Conclusion:',(self.d/'leg.log').read_text())
-        self.assertNotEqual(self.run_leg('explore',case='bad_explore').returncode,0)
+    def test_explore_does_not_require_a_conclusion(self):
+        result = self.run_leg('explore', case='no_verdict')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('Conclusion:', (self.d/'leg.log').read_text())
+        facts = json.loads((self.d/'leg.facts.json').read_text())
+        self.assertNotEqual(facts['failure_kind'], 'no_verdict')
 
     def test_explore_accepts_markdown_section_labels(self):
         result = self.run_leg('explore',case='markdown_explore')
