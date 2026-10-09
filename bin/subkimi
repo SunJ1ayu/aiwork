@@ -160,6 +160,9 @@ _RW="$BIN_DIR/_review-workspace.sh"
 [ -f "$_RW" ] || die '找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)'
 # shellcheck source=_review-workspace.sh
 . "$_RW"
+# Absolute log path: the agent runs with cwd = REPO_DIR.
+case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
+review_workspace_reset_report || exit 78
 if ! review_workspace_prepare "$SOURCE_REPO" subkimi; then
   die 'review workspace 准备失败 ⇒ 模型未启动'
 fi
@@ -180,15 +183,7 @@ _subkimi_cleanup() {
 }
 trap _subkimi_cleanup EXIT
 
-# Absolute log path: the agent runs with cwd = REPO_DIR.
-case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
-if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
-  REPORT="$AIWORK_REVIEW_REPORT_PATH"
-else
-  REPORT="${LOG_FILE}.report"
-fi
-rm -f -- "$REPORT"
 
 # 08-18~08-19 这里曾经有一整套 diff 注入(为了补偿"把 bash 关掉"造成的失明):
 # 按 argv 预算截断、基线校验、工件排除。业主推翻了那个方向 —— 评审腿没有
@@ -293,11 +288,7 @@ fi
 [[ $RC -eq 0 ]] || die "kimi exited rc=$RC (log: $LOG_FILE)"
 
 if [[ "$MODE" == "explore" ]]; then
-  if [[ ! -s "$REPORT" ]]; then
-    review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-      exited partial runtime "" || exit 78
-    die "explore produced no final message (log: $LOG_FILE)"
-  fi
+  review_workspace_require_explore_message "$MODEL" "$MODEL" subscription
   review_workspace_write_facts "$MODEL" "$MODEL" subscription \
     exited complete "" "" || exit 78
   exit 0

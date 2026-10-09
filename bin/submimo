@@ -238,6 +238,7 @@ if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   [ -f "$_RW" ] || { echo "submimo: 找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)" >&2; exit 78; }
   # shellcheck source=_review-workspace.sh
   . "$_RW"
+  review_workspace_reset_report || exit 78
   if ! review_workspace_prepare "$SOURCE_REPO" submimo; then
     echo "submimo: review workspace 准备失败 ⇒ 模型未启动" >&2
     exit 78
@@ -315,14 +316,6 @@ protect_hash() {
 
 # Simple single-shot (review/explore/fix without oracle) — behavior unchanged.
 if [[ -z "$ORACLE_CMD" ]]; then
-  if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
-    if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
-      REPORT="$AIWORK_REVIEW_REPORT_PATH"
-    else
-      REPORT="${LOG_FILE}.report"
-    fi
-    rm -f -- "$REPORT"
-  fi
   : > "$LOG_FILE"
   mimo_rc=0; run_mimo_once || mimo_rc=$?
   if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
@@ -394,11 +387,8 @@ PY
       elif [[ $mimo_rc -ne 0 ]]; then
         review_workspace_write_facts "$MODEL" "$MODEL" subscription \
           exited partial runtime "" || exit 78
-      elif [[ ! -s "$REPORT" ]]; then
-        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-          exited partial runtime "" || exit 78
-        die "explore produced no final message (log: $LOG_FILE)"
       else
+        review_workspace_require_explore_message "$MODEL" "$MODEL" subscription
         review_workspace_write_facts "$MODEL" "$MODEL" subscription \
           exited complete "" "" || exit 78
       fi

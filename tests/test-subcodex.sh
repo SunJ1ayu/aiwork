@@ -212,7 +212,7 @@ printf 'OLD\n' > "$d/old-report.md"
 CODEX_TEST_MODE=silent AIWORK_REVIEW_REPORT_PATH="$d/old-report.md" \
   sc c7b explore "$d/task.md" "$d/c7b.log" "$d/repo" >/dev/null 2>"$d/c7b.err"; rc=$?
 check "C4: explore 没有最后一条消息就失败，并清掉上一次的报告" \
-  $([[ $rc -ne 0 ]] && grep -q 'no answer' "$d/c7b.err" && [[ ! -e "$d/old-report.md" ]]; echo $?)
+  $([[ $rc -ne 0 ]] && grep -q 'no final message' "$d/c7b.err" && [[ ! -e "$d/old-report.md" ]]; echo $?)
 CODEX_TEST_MODE=explore AIWORK_REVIEW_REPORT_PATH="$d/c7c.md" \
   sc c7c explore "$d/task.md" "$d/c7c.log" "$d/repo" >/dev/null 2>&1
 check 'C4: explore 设了报告路径时不另写 ${LOG_FILE}.report' \

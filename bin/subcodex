@@ -58,12 +58,6 @@ if [[ "$DRY_RUN" == 1 ]]; then
   printf 'subcodex: model=%s settings=%s (dry-run; no dispatch)\n' "$MODEL" "$("$BIN_DIR/aiwork-config" path models.env)"
   exit 0
 fi
-if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
-  REPORT="$AIWORK_REVIEW_REPORT_PATH"
-else
-  REPORT="${LOG_FILE}.report"
-fi
-rm -f -- "$REPORT"
 EFFORT="${SUBCODEX_EFFORT:-high}"
 [[ "$EFFORT" =~ ^[a-z]+$ ]] || die "SUBCODEX_EFFORT must be a lowercase word, got '$EFFORT'"
 TIMEOUT_SECONDS="${SUBCODEX_TIMEOUT:-1500}"
@@ -74,6 +68,7 @@ command -v "$CODEX" >/dev/null 2>&1 || die "codex CLI not found ($CODEX)"
 [[ -f "$BIN_DIR/_review_result.py" || -n "${AIWORK_REVIEW_RESULT_BIN:-}" ]] || die 'missing _review_result.py'
 
 . "$BIN_DIR/_review-workspace.sh" || die 'missing _review-workspace.sh'
+review_workspace_reset_report || exit 78
 review_workspace_prepare "$SOURCE_REPO" subcodex || exit 78
 cleanup() {
   local rc=$?
@@ -248,9 +243,8 @@ if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial no_verdict UNKNOWN "" "$REPORTED" || exit 78
   die "review output contains no standalone verdict line (log: $LOG_FILE)"
 fi
-if [[ "$MODE" == explore && ! -s "$REPORT" ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial runtime "" "" "$REPORTED" || exit 78
-  die "explore produced no answer (log: $LOG_FILE)"
+if [[ "$MODE" == explore ]]; then
+  review_workspace_require_explore_message "$MODEL" "$MODEL" subscription "$REPORTED"
 fi
 review_workspace_write_facts "$MODEL" "$MODEL" subscription exited complete "" \
   "$([[ "$MODE" == review ]] && echo "$VERDICT")" "" "$REPORTED" || exit 78

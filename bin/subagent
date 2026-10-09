@@ -126,12 +126,6 @@ fi
 # 绝对日志路径:agent 以 cwd = REPO_DIR 运行
 case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
-if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
-  REPORT="$AIWORK_REVIEW_REPORT_PATH"
-else
-  REPORT="${LOG_FILE}.report"
-fi
-rm -f -- "$REPORT"
 
 # 能力清单按底座给:**不许宣称一个它没有的工具,也不许瞒着它有的**。
 # 08-18 真跑撞过一次:bash 关掉后提示词还写着 "read-only git commands",
@@ -182,6 +176,7 @@ if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   [ -f "$_RW" ] || { echo "$LABEL: 找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)" >&2; exit 78; }
   # shellcheck source=_review-workspace.sh
   . "$_RW"
+  review_workspace_reset_report || exit 78
   if ! review_workspace_prepare "$SOURCE_REPO" "$LABEL"; then
     echo "$LABEL: review workspace 准备失败 ⇒ 模型未启动" >&2
     exit 78
@@ -360,11 +355,7 @@ if [[ $RC -ne 0 ]]; then
   die "claude exited rc=$RC (partial work kept in $LOG_FILE)"
 fi
 if [[ "$MODE" == "explore" ]]; then
-  if [[ ! -s "$REPORT" ]]; then
-    review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-      exited partial runtime "" || exit 78
-    die "explore produced no final message (log: $LOG_FILE)"
-  fi
+  review_workspace_require_explore_message "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE"
   review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
     exited complete "" "" || exit 78
   exit 0

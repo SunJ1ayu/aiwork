@@ -30,12 +30,6 @@ MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 TASK_FILE="$(realpath "$TASK_FILE")"
 LOG_FILE="$(realpath -m "$LOG_FILE")"
-if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
-  REPORT="$AIWORK_REVIEW_REPORT_PATH"
-else
-  REPORT="${LOG_FILE}.report"
-fi
-rm -f -- "$REPORT"
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 MODEL="$("$BIN_DIR/aiwork-config" model cursor "${CURSOR_MODEL:-}")" || exit 1
@@ -55,6 +49,7 @@ fi
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcursor: missing ro-repo-exec; refusing dispatch' >&2; exit 78; }
 [[ -f "$BIN_DIR/_cursor-stream.py" ]] || die 'missing Composer stream decoder'
 . "$BIN_DIR/_review-workspace.sh" || die 'missing review workspace helper'
+review_workspace_reset_report || exit 78
 review_workspace_prepare "$SOURCE_REPO" subcursor || exit 78
 cleanup() {
   local rc=$?
@@ -174,6 +169,9 @@ if [[ "$RC" == 124 || "$RC" == 137 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" timed_out partial timeout "$VERDICT" || exit 78
   echo "subcursor: timed out after ${TIMEOUT_SECONDS}s; partial output kept in $LOG_FILE" >&2
   exit 124
+fi
+if [[ "$MODE" == explore ]]; then
+  review_workspace_require_explore_message "$MODEL" "$MODEL" "$BILLING" "$REPORTED"
 fi
 if [[ "$RC" != 0 || "${STATUS[1]}" != 0 || "${STATUS[2]}" != 0 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial "" "$VERDICT" || exit 78

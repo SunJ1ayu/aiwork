@@ -303,6 +303,71 @@ MODEL_STUB
   rm -rf "$d"
 }
 
+test_report_path_and_missing_explore_message() {
+  echo '[RW8] one report path, and one exit when explore has no final message'
+  local d repo rc want
+  d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
+  LOG_FILE="$d/leg.log"
+  unset AIWORK_REVIEW_REPORT_PATH
+  printf 'OLD\n' > "${LOG_FILE}.report"
+  printf 'OTHER\n' > "$d/other.md"
+  review_workspace_reset_report
+  rc=$?
+  [[ $rc -eq 0 && "$REPORT" == "${LOG_FILE}.report" && ! -e "${LOG_FILE}.report" && -f "$d/other.md" ]]
+  check 'RW8: without AIWORK_REVIEW_REPORT_PATH the report is ${LOG_FILE}.report and the old file is removed' $?
+
+  printf 'OLD\n' > "$d/explicit.md"
+  printf 'KEEP\n' > "${LOG_FILE}.report"
+  AIWORK_REVIEW_REPORT_PATH="$d/explicit.md"
+  review_workspace_reset_report
+  rc=$?
+  unset AIWORK_REVIEW_REPORT_PATH
+  [[ $rc -eq 0 && "$REPORT" == "$d/explicit.md" && ! -e "$d/explicit.md" && -f "${LOG_FILE}.report" ]]
+  check 'RW8: AIWORK_REVIEW_REPORT_PATH wins and the log sidecar is left alone' $?
+
+  REVIEW_WORKSPACE_BASE="$d/workspaces"
+  review_workspace_prepare "$repo" report-fn >/dev/null 2>&1
+  rc=$?
+  [[ $rc -eq 0 ]]
+  check 'RW8: workspace is ready for the missing-message function' $?
+  AIWORK_REVIEW_FACTS_PATH="$d/facts.json"
+  AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py"
+  REPORT="$d/present.md"
+  printf 'answer\n' > "$REPORT"
+  review_workspace_require_explore_message requested-model invoked-model subscription reported-model
+  rc=$?
+  [[ $rc -eq 0 && ! -e "$d/facts.json" ]]
+  check 'RW8: a non-empty report returns without publishing facts' $?
+
+  rm -f -- "$REPORT"
+  want="explore produced no final message (log: $LOG_FILE)"
+  (
+    review_workspace_require_explore_message requested-model invoked-model subscription reported-model
+  ) >"$d/msg.out" 2>"$d/msg.err"
+  rc=$?
+  [[ $rc -eq 1 && "$(cat "$d/msg.err")" == "$want" && ! -s "$d/msg.out" ]]
+  check 'RW8: a missing final message exits 1 with one sentence' $?
+  python3 - "$d/facts.json" <<'PY'
+import json, sys
+facts = json.load(open(sys.argv[1], encoding="utf-8"))
+ok = (
+    facts["process_state"] == "exited"
+    and facts["evidence_completeness"] == "partial"
+    and facts["failure_kind"] == "runtime"
+    and facts["verdict"] is None
+    and facts["billing_mode"] == "subscription"
+    and facts["model"]["requested"] == "requested-model"
+    and facts["model"]["invoked"] == "invoked-model"
+    and facts["model"]["reported"] == "reported-model"
+)
+raise SystemExit(0 if ok else 1)
+PY
+  check 'RW8: a missing final message publishes exited/partial/runtime facts' $?
+  review_workspace_cleanup >/dev/null 2>&1 || true
+  unset LOG_FILE REPORT AIWORK_REVIEW_FACTS_PATH AIWORK_REVIEW_RESULT_BIN REVIEW_WORKSPACE_BASE
+  rm -rf "$d"
+}
+
 test_mutation_sensitivity() {
   echo '[RW7] oracle rejects direct-source and shared-clone mutations'
   local d direct fake rc real_mktemp
@@ -378,6 +443,7 @@ else
   test_parallel_isolation
   test_source_race_and_cleanup_guard
   test_gitlink_fails_closed
+  test_report_path_and_missing_explore_message
 fi
 test_wrapper_helper_failure
 [[ -f "$HELPER" ]] && test_mutation_sensitivity
