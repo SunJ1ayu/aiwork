@@ -25,6 +25,7 @@ from _review_result import (  # noqa: E402
     coverage_eligible,
     eligibility_reasons,
     evidence_ref,
+    conclusion_lines,
     normalize_verdict,
     sha256_bytes,
     sha256_file,
@@ -176,6 +177,15 @@ class ReviewResultTest(unittest.TestCase):
         self.assertEqual(normalize_verdict("Conclusion: PASS | BLOCK | NEEDS_MORE_INFO\n"), "UNKNOWN")
         self.assertEqual(normalize_verdict("Conclusion: PASS but uncertain\n"), "UNKNOWN")
 
+    def test_verdict_line_table_matches_the_shared_fixture(self) -> None:
+        cases = json.loads((ROOT / "tests/fixtures/verdict-lines.json").read_text(encoding="utf-8"))
+        for case in cases:
+            text = case["text"] if "text" in case else case["line"]
+            want = case["lines"] if "lines" in case else ([case["verdict"]] if case["verdict"] else [])
+            with self.subTest(text=text):
+                self.assertEqual(conclusion_lines(text), want)
+                self.assertEqual(normalize_verdict(text), want[-1] if want else "UNKNOWN")
+
     def test_subject_canonicalization_is_stable_and_byte_sensitive(self) -> None:
         subject = self.result["subject"]
         raw = canonical_subject_bytes(subject)
@@ -266,7 +276,7 @@ class ReviewResultTest(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         result = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["verdict"], "UNKNOWN")
         self.assertEqual(result["subject"]["source"], None)
         self.assertEqual(result["view"], {"delivery_state": "none", "mode": None})
         self.assertFalse(coverage_eligible(result))
@@ -425,11 +435,14 @@ class ReviewResultTest(unittest.TestCase):
              "--view-delivery-state", "complete", "--view-mode", "full_snapshot"],
             check=True,
         )
+        report = self.root / f"{name}.report.md"
+        report.write_text(self.log.read_text(encoding="utf-8"), encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, helper, "emit", "--result", str(path), "--facts", str(facts),
              "--run-id", f"panel-{name}", "--name", adapter, "--family", family,
              "--adapter", adapter, "--exit-code", "0",
-             "--task-sha256", self.result["subject"]["task_sha256"], "--log", str(self.log), *extra],
+             "--task-sha256", self.result["subject"]["task_sha256"], "--log", str(self.log),
+             "--report", str(report), *extra],
             text=True, capture_output=True, check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)

@@ -197,10 +197,10 @@ def _sha256(value: Any, path: str, *, nullable: bool = False) -> str | None:
     return value
 
 
-def normalize_verdict(text: str) -> str:
-    """Return the last standalone verdict line, or UNKNOWN."""
+def conclusion_lines(text: str) -> list[str]:
+    """Return every standalone verdict line, in order."""
 
-    found = "UNKNOWN"
+    found = []
     for line in text.splitlines():
         match = VERDICT_LINE_RE.fullmatch(line)
         if not match:
@@ -209,8 +209,15 @@ def normalize_verdict(text: str) -> str:
         echo = match.group(2)
         if echo is not None and _canonical_verdict(echo) != value:
             continue
-        found = value
+        found.append(value)
     return found
+
+
+def normalize_verdict(text: str) -> str:
+    """Return the last standalone verdict line, or UNKNOWN."""
+
+    found = conclusion_lines(text)
+    return found[-1] if found else "UNKNOWN"
 
 
 def _canonical_verdict(word: str) -> str:
@@ -541,8 +548,11 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
             "ref": evidence_ref(args.log),
             "digest": sha256_file(args.log),
         }
-        if verdict is None:
-            verdict = normalize_verdict(evidence_text)
+    if verdict is None and args.report is not None:
+        if args.report.is_file():
+            verdict = normalize_verdict(args.report.read_text(encoding="utf-8", errors="replace"))
+        else:
+            verdict = "UNKNOWN"
     if verdict is None:
         verdict = "UNKNOWN"
 
@@ -711,7 +721,7 @@ def parser() -> argparse.ArgumentParser:
     commands = top.add_subparsers(dest="command", required=True)
     family = commands.add_parser("cursor-family", help="resolve a Cursor model's coverage family")
     family.add_argument("model")
-    normalize = commands.add_parser("normalize", help="normalize a raw reviewer log")
+    normalize = commands.add_parser("normalize", help="normalize the verdict in a review report")
     normalize.add_argument("log", type=Path)
     validate = commands.add_parser("validate", help="validate a ReviewLegResult v2 file")
     validate.add_argument("result", type=Path)
@@ -744,6 +754,7 @@ def parser() -> argparse.ArgumentParser:
     emit.add_argument("--verdict", choices=sorted(VERDICTS))
     emit.add_argument("--degraded", choices=("true", "false"), default="false")
     emit.add_argument("--log", type=Path)
+    emit.add_argument("--report", type=Path)
     emit.add_argument("--diagnostic", type=Path)
     emit.add_argument("--evidence-completeness", choices=sorted(EVIDENCE_COMPLETENESS))
     emit.add_argument("--duration-ms", type=int)

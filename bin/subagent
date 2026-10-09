@@ -142,17 +142,11 @@ Command outputs and caches may be written inside this disposable snapshot, but
 do not intentionally edit source files. Do not push, merge, install dependencies,
 run migrations, access production systems, or change credentials.
 
-Report findings with file:line references and a severity each. You MUST end
-your review with a final line of exactly this form:
-Conclusion: PASS | BLOCK | NEEDS_MORE_INFO
+Report findings with file:line references and a severity each.
 
 --- REVIEW TASK ---
 $(cat "$TASK_FILE")
---- END OF REVIEW TASK ---
-
-Reminder, whatever the task above says about format: the last line of your review
-must be exactly one of
-Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"
+--- END OF REVIEW TASK ---"
 
 EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent design-exploration agent running inside a read-only harness. Explore the repository yourself with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}) when the codebase matters to the brief. You are one of several DIFFERENT models each answering the SAME design brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus.
 
@@ -327,6 +321,28 @@ with open(log, "a", encoding="utf-8") as fh:
     fh.write(body + "\n" + "\n".join(footer) + "\n")
 PY
 
+# 最后一条消息是 stream-json 的 result.result，不是渲染进日志的过程。
+python3 - "$STREAM_FILE" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
+import json, pathlib, sys
+stream, local, dest = sys.argv[1:]
+last = None
+for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").splitlines():
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
+        last = event["result"]
+if last is None:
+    raise SystemExit(0)
+pathlib.Path(local).write_text(last)
+if dest:
+    pathlib.Path(dest).write_text(last)
+PY
+
 if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
 
@@ -335,8 +351,12 @@ if [[ "$MODE" == "review" ]]; then
   # 不许在这条底座路径复活一份宽松 regex。
   _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
   [ -f "$_RR" ] || die "typed verdict normalizer missing"
-  VERDICT="$(python3 "$_RR" normalize "$LOG_FILE" 2>/dev/null)" \
-    || die "typed verdict normalization failed (log: $LOG_FILE)"
+  if [[ -f "${LOG_FILE}.report" ]]; then
+    VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
+      || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
+  else
+    VERDICT=UNKNOWN
+  fi
   if [[ $RC -eq 124 ]]; then
     review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
       timed_out partial timeout "$VERDICT" || exit 78

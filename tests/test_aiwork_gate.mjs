@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const { decide, parseReviewBlock, matchAny } = await import("../gate/decide.mjs");
+const { decide, parseReviewBlock, matchAny, conclusionLines } = await import("../gate/decide.mjs");
 const { collect, collectCi, collectPushes, paginate } = await import("../gate/collect.mjs");
 const policy = JSON.parse(readFileSync(new URL("./fixtures/gate-logic-policy.json", import.meta.url), "utf8"));
 
@@ -580,12 +580,36 @@ test("R29 正文结论行和结论块不一样(哪怕不是写 BLOCK)→ 按 BLO
     r.body = `**aiwork-review · subcodex · gpt-x**\n\n${lines.join("\n\n")}\n\n${r.body}`;
     return r;
   };
-  for (const line of ["Conclusion: NEEDS_MORE_INFO", "Conclusion: UNKNOWN", "**Conclusion:** needs_more_info"]) {
+  for (const line of ["Conclusion: NEEDS_MORE_INFO", "Verdict: BLOCK", "结论：阻断", "**Conclusion: NEEDS_MORE_INFO**"]) {
     blocked(run({ reviews: [withLine(4, line)] }), "G5");
   }
   blocked(run({ reviews: [withLine(4, "Conclusion: PASS", "Conclusion: BLOCK")] }), "G5");
   assert.equal(run({ reviews: [withLine(4, "Conclusion: PASS")] }).conclusion, "success", "对照:两处都是 PASS");
-  assert.equal(run({ reviews: [withLine(4, "**Conclusion:** Pass")] }).conclusion, "success", "对照:加粗、大小写不同照样认");
+  assert.equal(run({ reviews: [withLine(4, "**Conclusion: PASS**")] }).conclusion, "success", "对照:加粗、大小写不同照样认");
   assert.equal(run({ reviews: [withLine(4, "评审提到 Conclusion: BLOCK 的写法(不在行首)")] }).conclusion, "success", "对照:不在行首的不算结论行");
+  assert.equal(run({ reviews: [withLine(4, "Conclusion: UNKNOWN")] }).conclusion, "success", "对照:UNKNOWN 不是结论词");
+  assert.equal(run({ reviews: [withLine(4, "**Conclusion:** needs_more_info")] }).conclusion, "success", "对照:冒号和结论词之间夹着标记，不是这一条规则");
+});
+
+test("结论行规则和 Python 共用 tests/fixtures/verdict-lines.json", () => {
+  const cases = JSON.parse(readFileSync(new URL("./fixtures/verdict-lines.json", import.meta.url), "utf8"));
+  for (const item of cases) {
+    const text = "text" in item ? item.text : item.line;
+    const want = "lines" in item ? item.lines : (item.verdict ? [item.verdict] : []);
+    assert.deepEqual(conclusionLines(text), want, JSON.stringify(text));
+  }
+});
+
+// PR #20 Kimi 评审结论块是 PASS，正文里有一行关卡源码 `conclusion: pending ? null : ...`。
+// 旧关卡把 pending 认成结论行，和 PASS 不一致，按反对。新关卡只认独占一行的结论行。
+test("R30 代码里的 conclusion: pending 不是结论行；独占一行的 Conclusion: BLOCK 仍是反对", () => {
+  const pending = '    conclusion: pending ? null : disagreed ? "block" : "pass"';
+  const withLine = (id, ...lines) => {
+    const r = review({ id });
+    r.body = `**aiwork-review · subkimi · kimi-code/kimi-for-coding**\n\n${lines.join("\n")}\n\n${r.body}`;
+    return r;
+  };
+  assert.equal(run({ reviews: [withLine(8, pending)] }).conclusion, "success", "pending 三元式不是结论行");
+  blocked(run({ reviews: [withLine(9, "Conclusion: BLOCK")] }), "G5");
 });
 

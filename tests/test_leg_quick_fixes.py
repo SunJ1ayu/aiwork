@@ -26,7 +26,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "bin"
-CONTRACT = "Conclusion: PASS | BLOCK | NEEDS_MORE_INFO"
 TASK_MARKER = "UNIQUE_TASK_BODY_7f3a91"
 # Both lines are verbatim kimi-code CLI output from real review legs, not fabricated shapes:
 # logs/panel-delivery-r3-20260909T040119Z.subkimi.log (09-09) and logs/panel-rcpycache.subkimi.log (08-08).
@@ -89,9 +88,9 @@ print("Conclusion: PASS")
 
 
 class VerdictContract(LegCase):
-    """A1: every agent review leg states the verdict contract where the model reads it last."""
+    """The leg prompt does not hand the model a conclusion line. The three lines live in review-pr."""
 
-    def test_mimo_leg_message_states_contract(self):
+    def test_mimo_leg_message_does_not_state_a_conclusion_line(self):
         self.copy("submimo", "ro-repo-exec")
         self.fake("mimo", ARGV_CAPTURE)
         cap = self.d / "mimo.json"
@@ -101,7 +100,7 @@ class VerdictContract(LegCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         argv = json.loads(cap.read_text())["argv"]
         message = argv[argv.index("--file") - 1]
-        self.assertIn(CONTRACT, message)
+        self.assertNotIn("Conclusion:", message)
 
 
 class FailureKind(LegCase):

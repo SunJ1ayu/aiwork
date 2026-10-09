@@ -109,7 +109,14 @@ class ReliabilityTests(unittest.TestCase):
             model = {'subdeepseek-agent': 'deepseek-flash',
                      'subcursor': 'gpt-6-sol', 'subcodex': 'gpt-6-sol',
                      'submimo': 'xiaomi/mimo-v2.6-pro', 'subkimi': 'kimi-code/kimi-for-coding'}[name]
-            Path(command[3]).write_text('# fixture review log\n\n' + attempt.get('report', 'Conclusion: PASS') + '\n')
+            report_text = attempt.get('report', 'Conclusion: PASS')
+            log_text = attempt.get('log')
+            if log_text is None:
+                log_text = '# fixture review log\n\n' + report_text + '\n'
+            Path(command[3]).write_text(log_text)
+            report_path = kwargs['env'].get('AIWORK_REVIEW_REPORT_PATH')
+            if report_path and attempt.get('write_report', True):
+                Path(report_path).write_text(report_text)
             facts_cmd = [sys.executable, str(BIN / '_review_result.py'), 'facts', '--output',
                          kwargs['env']['AIWORK_REVIEW_FACTS_PATH'], '--requested-model', model,
                          '--invoked-model', model, '--view-delivery-state', 'complete',
@@ -165,11 +172,13 @@ class ReliabilityTests(unittest.TestCase):
         padded = self.diff + 'x\n' * 75000
         task = self.review.task_text(1, pr, self.base, ['file'], padded,
                                      'Trusted rules.', '无', rules_sha='d' * 40, repository='SunJ1ayu/aiwork')
-        tail = '\n'.join(task.splitlines()[-3:])
-        self.assertIn('最后独占一行写 Conclusion: PASS', tail)
-        self.assertIn('Conclusion: BLOCK', tail)
-        self.assertIn('Conclusion: NEEDS_MORE_INFO', tail)
-        self.assertGreater(task.rfind('最后独占一行写'), task.rfind('```'))
+        requirement = self.review.CONCLUSION_REQUIREMENT
+        self.assertTrue(task.endswith(requirement + "\n"))
+        self.assertGreater(task.rfind(requirement), task.rfind('```'))
+        self.assertEqual(
+            [line for line in requirement.splitlines() if line.startswith("Conclusion:")],
+            ["Conclusion: PASS", "Conclusion: BLOCK", "Conclusion: NEEDS_MORE_INFO"],
+        )
 
     def whole_file_deletion_view(self):
         marker = 'DELETED_PAYLOAD_9f3c'
@@ -237,6 +246,18 @@ class ReliabilityTests(unittest.TestCase):
                     self.assertEqual(self.leg_calls[0][1].get(variable), override or '2400')
                     self.assertEqual(len(posted), 1)
 
+    def test_last_message_without_conclusion_is_not_published(self):
+        earlier = 'P1 remains.\n\nConclusion: BLOCK\n'
+        last = '补充核对完毕，判断不变。'
+        log = '# fixture review log\n\n' + earlier + '\n' + last + '\n'
+        rc, _, posted, _, stderr = self.run_review(
+            'subkimi', fake_attempts=[{'log': log, 'report': last, 'exit': 0}])
+        self.assertEqual(rc, 1, stderr)
+        self.assertEqual(posted, [])
+        self.assertIn('no_verdict', stderr)
+        self.assertIn('verdict=UNKNOWN', stderr)
+        self.assertEqual(len(self.leg_calls), 2)
+
     def test_reader_missing_conclusion_retries_using_fresh_artifacts(self):
         attempts = [{'report': 'No conclusion.', 'failure': 'no_verdict', 'exit': 1}, {}]
         rc, _, posted, _, stderr = self.run_review('subcursor', fake_attempts=attempts)
@@ -245,6 +266,44 @@ class ReliabilityTests(unittest.TestCase):
         self.assertNotEqual(self.leg_calls[0][1]['AIWORK_REVIEW_FACTS_PATH'],
                             self.leg_calls[1][1]['AIWORK_REVIEW_FACTS_PATH'])
         self.assertIn('retry 2/2', posted[0]['body'])
+        body = posted[0]['body']
+        self.assertLess(body.index('**Execution:**'), body.index('Conclusion: PASS'))
+        self.assertNotIn('**Execution:**', body.split('Conclusion: PASS', 1)[1].split('```json', 1)[0])
+
+    def test_missing_report_file_is_not_published(self):
+        rc, _, posted, _, stderr = self.run_review('subkimi', fake_attempts=[{'write_report': False}])
+        self.assertEqual(rc, 1, stderr)
+        self.assertEqual(posted, [])
+        self.assertIn('no_verdict', stderr)
+        self.assertIn('verdict=UNKNOWN', stderr)
+
+    def test_rate_limit_without_a_report_names_the_failure(self):
+        rc, _, posted, _, stderr = self.run_review(
+            'subkimi', fake_attempts=[{
+                'failure': 'rate_limit', 'exit': 1, 'write_report': False,
+                'log': '# fixture review log\n',
+            }])
+        self.assertEqual(rc, 1, stderr)
+        self.assertEqual(posted, [])
+        self.assertEqual(len(self.leg_calls), 1)
+        self.assertIn('rate_limit', stderr)
+        self.assertNotIn('did not write the report file', stderr)
+
+    def test_published_body_is_the_report_file_not_the_leg_log(self):
+        last = 'Findings.\n\nConclusion: PASS'
+        log = ('# fixture review log\n\n## 过程\n'
+               '```python\n# 注释\nconclusion: pending ? null : value\n```\n'
+               "  → Bash sed -n '1,20p' gate/decide.mjs\n"
+               'kimi> \nConclusion: BLOCK\n')
+        rc, _, posted, _, stderr = self.run_review('subkimi', fake_attempts=[{'log': log, 'report': last}])
+        self.assertEqual(rc, 0, stderr)
+        body = posted[0]['body']
+        self.assertIn(last, body)
+        self.assertNotIn('## 过程', body)
+        self.assertNotIn('pending ? null', body)
+        self.assertNotIn('Conclusion: BLOCK', body)
+        block = json.loads(body.split('```json\n', 1)[1].split('\n```', 1)[0])
+        self.assertEqual(block['verdict'], 'PASS')
 
     def test_other_reader_failures_are_never_retried(self):
         for failure in ('auth', 'quota', 'rate_limit', 'timeout', 'runtime',

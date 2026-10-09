@@ -148,10 +148,7 @@ invoke other AI models / AI CLIs. Do not wait for user input.
 EOF
 if [[ "$MODE" == review ]]; then
   cat >> "$PROMPT_FILE" <<'EOF'
-Give findings with severity, file:line evidence and reasoning. End with exactly one standalone line:
-Conclusion: PASS
-Conclusion: BLOCK
-Conclusion: NEEDS_MORE_INFO
+Give findings with severity, file:line evidence and reasoning.
 EOF
 else
   cat >> "$PROMPT_FILE" <<'EOF'
@@ -188,6 +185,9 @@ RC=$?
 
 if [[ -s "$LAST_MSG" ]]; then
   cat "$LAST_MSG" >> "$LOG_FILE"
+  if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
+    cp -- "$LAST_MSG" "$AIWORK_REVIEW_REPORT_PATH"
+  fi
 else
   echo "(codex produced no final message; see ${STREAM##*/} and ${STDERR_LOG##*/})" >> "$LOG_FILE"
 fi
@@ -222,8 +222,8 @@ PY
 )"
 
 VERDICT=UNKNOWN
-if [[ "$MODE" == review ]]; then
-  VERDICT="$(python3 "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}" normalize "$LOG_FILE" 2>/dev/null || echo UNKNOWN)"
+if [[ "$MODE" == review && -s "$LAST_MSG" ]]; then
+  VERDICT="$(python3 "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}" normalize "$LAST_MSG" 2>/dev/null || echo UNKNOWN)"
 fi
 FAILURE=""
 if grep -qE 'usage_limit_exceeded|hit your usage limit' "$STREAM" "$STDERR_LOG" 2>/dev/null; then FAILURE=quota; fi

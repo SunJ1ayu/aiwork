@@ -104,11 +104,6 @@ EOF
 if [[ "$MODE" == review ]]; then
   cat >> "$PROMPT_FILE" <<'EOF'
 Review the task. Give findings with severity, file:line evidence and reasoning.
-Write a verdict as soon as you can judge; restate it if your judgement changes.
-The last standalone verdict line counts. Choose exactly one:
-Conclusion: PASS
-Conclusion: BLOCK
-Conclusion: NEEDS_MORE_INFO
 EOF
 else
   cat >> "$PROMPT_FILE" <<'EOF'
@@ -125,7 +120,7 @@ cat "$TASK_FILE" >> "$PROMPT_FILE"
 mkdir -p "$(dirname "$LOG_FILE")"
 BASE="${LOG_FILE%.log}"
 STREAM="$BASE.stream.jsonl"; SUMMARY="$BASE.stream-summary.json"
-# Same header shape as the other legs: review-pr separates the report at its end.
+# Same header shape as the other legs. The report file is the model's last message.
 {
   echo "# subcursor $MODE log"
   echo "time: $(date -Iseconds)"
@@ -160,7 +155,7 @@ run_cursor --workspace "$EMPTY_WORKSPACE" --add-dir "$REPO_DIR" \
       --disable-auto-update --disable-project-configs \
       --allowed-tools read_tool_call,grep_tool_call,glob_tool_call,ls_tool_call \
       < "$PROMPT_FILE" \
-  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL"
+  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL" "${LOG_FILE}.report"
 STATUS=("${PIPESTATUS[@]}")
 set -e
 RC="${STATUS[0]}"
@@ -173,8 +168,8 @@ except (OSError, ValueError):
 PY
 )"
 VERDICT=UNKNOWN
-if [[ "$MODE" == review ]]; then
-  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "$LOG_FILE")"
+if [[ "$MODE" == review && -f "${LOG_FILE}.report" ]]; then
+  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "${LOG_FILE}.report")"
 fi
 if [[ "$RC" == 124 || "$RC" == 137 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" timed_out partial timeout "$VERDICT" || exit 78

@@ -94,6 +94,7 @@ open(os.environ["CAPTURE"], "w").write(json.dumps(out))
 # 真 claude 在 --output-format stream-json 下吐的是 JSONL;stub 照同一个契约说话。
 text = os.environ.get("STUB_REVIEW_OUT", "stub review\nConclusion: PASS")
 print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}))
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": text}))
 PYEOF
   chmod +x "$b/claude"
   printf '# review this\n' > "$d/t.md"
@@ -323,7 +324,8 @@ out = {"argv": sys.argv[1:],
                ["KIMI_CODE_HOME", "KIMI_CODE_NO_AUTO_UPDATE"]},
        "cwd": os.getcwd()}
 open(os.environ["CAPTURE"], "w").write(json.dumps(out))
-print(os.environ.get("STUB_REVIEW_OUT", "stub review\nConclusion: PASS"))
+text = os.environ.get("STUB_REVIEW_OUT", "stub review\nConclusion: PASS")
+print(json.dumps({"role": "assistant", "content": text}))
 PYEOF
   chmod +x "$b/kimi"
   printf '# review this\n' > "$d/t.md"
@@ -455,6 +457,7 @@ v21_agent_leg_body_is_single_source() {
 import sys, os, json
 open(os.environ["CAPTURE"], "w").write(json.dumps({"argv": sys.argv[1:]}))
 print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Conclusion: PASS"}]}}))
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Conclusion: PASS"}))
 CAPEOF
   chmod +x "$ab/claude"
   printf '# t\n' > "$d/t.md"
@@ -869,9 +872,26 @@ touch "$PWN_REPO/PWNED_IN_SOURCE" 2>/dev/null && source=WROTE
 printf 'repo=%s\ncwd=%s\nwork=%s\nsource=%s\n' "$target" "$PWD" "$work" "$source" > "$PWN_OUT"
 printf 'model=%s\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" >> "$PWN_OUT"
 printf 'mimocfg=%s\n' "${MIMOCODE_CONFIG_CONTENT:-}" >> "$PWN_OUT"
-# claude 壳要 stream-json;别的腿吃纯文本。两种都吐,谁读谁的。
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
-echo "Conclusion: PASS"
+# 每条腿只认自己命令行的最后一条消息。claude 是 result 事件，kimi 是 role=assistant，
+# mimo review 是 --format json 里最后一条 text 事件所属消息的正文。
+case "$(basename "$0")" in
+  claude)
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"stub\nConclusion: PASS"}'
+    ;;
+  kimi)
+    echo '{"role":"assistant","content":"stub\nConclusion: PASS"}'
+    ;;
+  *)
+    if [[ " $* " == *" json "* ]]; then
+      echo '{"type":"step_start","timestamp":1,"sessionID":"ses_fixture","part":{"id":"prt_fixture_start","messageID":"msg_fixture","sessionID":"ses_fixture","snapshot":"fixture-snapshot","type":"step-start"}}'
+      echo '{"type":"text","timestamp":2,"sessionID":"ses_fixture","part":{"id":"prt_fixture_text","messageID":"msg_fixture","sessionID":"ses_fixture","type":"text","text":"stub\nConclusion: PASS","time":{"start":1,"end":2}}}'
+      echo '{"type":"step_finish","timestamp":3,"sessionID":"ses_fixture","part":{"id":"prt_fixture_finish","reason":"stop","snapshot":"fixture-snapshot","messageID":"msg_fixture","sessionID":"ses_fixture","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}'
+    else
+      echo "Conclusion: PASS"
+    fi
+    ;;
+esac
 PWN
     chmod +x "$1"
   }
@@ -1037,8 +1057,24 @@ v37_wrappers_open_no_write_hole() {
     cat > "$1" <<'PWN2'
 #!/usr/bin/env bash
 if touch "$PWN_REPO/PWNED_BY_LEG" 2>/dev/null; then echo WROTE > "$PWN_OUT"; else echo BLOCKED > "$PWN_OUT"; fi
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
-echo "Conclusion: PASS"
+case "$(basename "$0")" in
+  claude)
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"stub\nConclusion: PASS"}'
+    ;;
+  kimi)
+    echo '{"role":"assistant","content":"stub\nConclusion: PASS"}'
+    ;;
+  *)
+    if [[ " $* " == *" json "* ]]; then
+      echo '{"type":"step_start","timestamp":1,"sessionID":"ses_fixture","part":{"id":"prt_fixture_start","messageID":"msg_fixture","sessionID":"ses_fixture","snapshot":"fixture-snapshot","type":"step-start"}}'
+      echo '{"type":"text","timestamp":2,"sessionID":"ses_fixture","part":{"id":"prt_fixture_text","messageID":"msg_fixture","sessionID":"ses_fixture","type":"text","text":"stub\nConclusion: PASS","time":{"start":1,"end":2}}}'
+      echo '{"type":"step_finish","timestamp":3,"sessionID":"ses_fixture","part":{"id":"prt_fixture_finish","reason":"stop","snapshot":"fixture-snapshot","messageID":"msg_fixture","sessionID":"ses_fixture","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}'
+    else
+      echo "Conclusion: PASS"
+    fi
+    ;;
+esac
 PWN2
     chmod +x "$1"
   }
@@ -1571,6 +1607,125 @@ v45_oracle_never_touches_owner_credentials() {
   fi
 }
 
+# 发布正文是各家命令行结构里的最后一条消息，不是渲染后的过程。
+v46_final_report_is_the_last_message() {
+  echo "[V46] 评审腿把最后一条消息原样写入报告文件"
+  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
+  fixture_git_repo "$d/repo"
+  printf '# t\n' > "$d/t.md"
+  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
+    "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" \
+    "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/ro-repo-exec" "$b/"
+  printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"
+  local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
+  printf 'default_model = "x"\n' > "$rh/config.toml"
+  printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
+  echo '{}' > "$rh/credentials/kimi-code.json"
+
+  cat > "$b/claude" <<'PY'
+#!/usr/bin/env python3
+import json, os, sys
+sys.stdin.read()
+noise = ("## 过程\n\n```python\n# 注释\nconclusion: pending ? null : value\n```\n\n"
+         "  → Bash sed -n '1,40p' gate/decide.mjs\necho hi\n\nkimi> \n\nConclusion: BLOCK")
+last = open(os.environ["FINAL_LAST"], encoding="utf-8").read()
+print(json.dumps({"type":"assistant","message":{"content":[
+    {"type":"text","text":noise},
+    {"type":"tool_use","name":"Bash","input":{"command":"sed -n '1,40p' gate/decide.mjs\n# 注释\necho hi"}}]}}))
+print(json.dumps({"type":"result","subtype":"success","is_error":False,"result":last}))
+PY
+  cat > "$b/kimi" <<'PY'
+#!/usr/bin/env python3
+import json, os
+noise = ("## 过程\n\n```python\n# 注释\nconclusion: pending ? null : value\n```\n\n"
+         "kimi> \n  → Bash sed -n '1,40p' gate/decide.mjs\n# 注释\necho hi\n\nConclusion: BLOCK")
+last = open(os.environ["FINAL_LAST"], encoding="utf-8").read()
+print(json.dumps({"role":"assistant","content":noise,"tool_calls":[
+    {"id":"1","type":"function","function":{"name":"bash","arguments":"sed -n '1,40p' gate/decide.mjs\n# 注释\necho hi"}}]}, ensure_ascii=False))
+print(json.dumps({"role":"tool","tool_call_id":"1","content":"## 过程\nkimi> \nconclusion: pending ? null : value"}, ensure_ascii=False))
+print(json.dumps({"role":"assistant","content":last}, ensure_ascii=False))
+print(json.dumps({"role":"meta","type":"session.resume_hint","content":"To resume this session: kimi -r x"}, ensure_ascii=False))
+PY
+  cat > "$b/mimo" <<'PY'
+#!/usr/bin/env python3
+import os, sys
+if "--format" not in sys.argv or sys.argv[sys.argv.index("--format")+1] != "json":
+    raise SystemExit("review must request --format json")
+sys.stdout.write(open(os.environ["MIMO_JSON_FIXTURE"], encoding="utf-8").read())
+PY
+  chmod +x "$b/claude" "$b/kimi" "$b/mimo"
+
+  _published() {  # $1 report $2 log
+    python3 - "$BIN/review-pr" "$1" "$d/last.txt" "$2" <<'PY'
+import importlib.machinery, importlib.util, pathlib, sys
+loader = importlib.machinery.SourceFileLoader("review_pr", sys.argv[1])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+mod = importlib.util.module_from_spec(spec)
+loader.exec_module(mod)
+report, want, log = sys.argv[2:]
+got = mod.review_report(pathlib.Path(report))
+text = pathlib.Path(want).read_text(encoding="utf-8")
+body_log = pathlib.Path(log).read_text(encoding="utf-8")
+ok = (got == text and "## 过程" not in got and "pending ? null" not in got
+      and "## 过程" in body_log and "pending ? null" in body_log and "# 注释" in body_log)
+raise SystemExit(0 if ok else 1)
+PY
+  }
+
+  env PATH="$b:$PATH" FINAL_LAST="$d/last.txt" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
+    AIWORK_REVIEW_FACTS_PATH="$d/ds.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
+    AIWORK_REVIEW_REPORT_PATH="$d/ds-report.md" \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds.log" "$d/repo" >/dev/null 2>"$d/ds.err"; rc=$?
+  check "V46: subdeepseek-agent 退出 0" $([[ $rc -eq 0 ]]; echo $?)
+  cmp -s "$d/ds-report.md" "$d/last.txt"; check "V46: subdeepseek-agent 报告与最后一条消息一字不差" $?
+  check "V46: subdeepseek-agent 发布正文只有报告，过程留在日志" \
+    $(_published "$d/ds-report.md" "$d/ds.log"; echo $?)
+  check "V46: subdeepseek-agent 裁决来自报告而不是过程里的 BLOCK" \
+    $(python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); sys.exit(0 if f["verdict"]=="PASS" else 1)' "$d/ds.facts.json"; echo $?)
+
+  env PATH="$b:$PATH" FINAL_LAST="$d/last.txt" KIMI_REVIEW_HOME="$rh" \
+    AIWORK_REVIEW_FACTS_PATH="$d/kimi.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
+    AIWORK_REVIEW_REPORT_PATH="$d/kimi-report.md" \
+    bash "$b/subkimi" review "$d/t.md" "$d/kimi.log" "$d/repo" >/dev/null 2>"$d/kimi.err"; rc=$?
+  check "V46: subkimi 退出 0" $([[ $rc -eq 0 ]]; echo $?)
+  cmp -s "$d/kimi-report.md" "$d/last.txt"; check "V46: subkimi 报告与最后一条消息一字不差" $?
+  check "V46: subkimi 发布正文只有报告，过程留在日志" \
+    $(_published "$d/kimi-report.md" "$d/kimi.log"; echo $?)
+  check "V46: subkimi 裁决来自报告而不是过程里的 BLOCK" \
+    $(python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); sys.exit(0 if f["verdict"]=="PASS" else 1)' "$d/kimi.facts.json"; echo $?)
+
+  # 样本从真实 mimo run --format json 日志裁出：几条 step_start / tool_use / text /
+  # step_finish，会话号换成占位符，正文缩短。最后一条消息的 text 部分先出现一次
+  # 旧快照，再用同 part.id 的后一次内容和后一个 part 拼成报告。
+  printf '%s' $'Shared fixture checked.\n\nConclusion: PASS' > "$d/mimo-want.txt"
+  env PATH="$b:$PATH" MIMO_JSON_FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/mimo-run-json.jsonl" \
+    MIMO_REVIEW_HOME="$d/mimo-home" \
+    AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
+    AIWORK_REVIEW_REPORT_PATH="$d/mimo-report.md" \
+    bash "$b/submimo" review "$d/t.md" "$d/mimo.log" "$d/repo" >/dev/null 2>"$d/mimo.err"; rc=$?
+  check "V46: submimo 退出 0" $([[ $rc -eq 0 ]]; echo $?)
+  cmp -s "$d/mimo-report.md" "$d/mimo-want.txt"; check "V46: submimo 报告是最后一条消息按真实事件拼出的正文" $?
+  python3 - "$d/mimo-report.md" "$d/mimo.log" <<'PY'
+import pathlib, sys
+paths = [pathlib.Path(p) for p in sys.argv[1:]]
+if not all(path.is_file() for path in paths):
+    raise SystemExit(1)
+report, log = (path.read_text(encoding="utf-8") for path in paths)
+kept_out = (
+    "All suites pass.",
+    "python: all 23 cases checked",
+    "earlier snapshot",
+)
+ok = all(piece not in report and piece in log for piece in kept_out)
+raise SystemExit(0 if ok else 1)
+PY
+  check "V46: submimo 发布正文只有报告，过程和旧快照留在日志" $?
+  check "V46: submimo 裁决来自报告而不是更早的消息" \
+    $(python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); sys.exit(0 if f["verdict"]=="PASS" else 1)' "$d/mimo.facts.json"; echo $?)
+
+  rm -rf "$d"
+}
+
 v9_claude_shell_base
 v13_subkimi_leg
 v20_max_turns_does_not_discard_work
@@ -1585,5 +1740,6 @@ v39_readonly_blind_spots
 v41_oracle_never_executes_its_own_comments
 v42_git_common_dir_no_silent_gap
 v45_oracle_never_touches_owner_credentials
+v46_final_report_is_the_last_message
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
