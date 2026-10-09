@@ -363,6 +363,27 @@ ok = (
 raise SystemExit(0 if ok else 1)
 PY
   check 'RW8: a missing final message publishes exited/partial/runtime facts' $?
+
+  printf ' \t\n' > "$REPORT"
+  rm -f -- "$d/facts.json"
+  (
+    review_workspace_require_explore_message requested-model invoked-model subscription reported-model
+  ) >"$d/blank.out" 2>"$d/blank.err"
+  rc=$?
+  [[ $rc -eq 1 && "$(cat "$d/blank.err")" == "$want" && ! -s "$d/blank.out" ]]
+  check 'RW8: a whitespace-only report is not a final message' $?
+  python3 - "$d/facts.json" <<'PY'
+import json, sys
+facts = json.load(open(sys.argv[1], encoding="utf-8"))
+ok = (
+    facts["process_state"] == "exited"
+    and facts["evidence_completeness"] == "partial"
+    and facts["failure_kind"] == "runtime"
+    and facts["verdict"] is None
+)
+raise SystemExit(0 if ok else 1)
+PY
+  check 'RW8: a whitespace-only report publishes the same facts as a missing one' $?
   review_workspace_cleanup >/dev/null 2>&1 || true
   unset LOG_FILE REPORT AIWORK_REVIEW_FACTS_PATH AIWORK_REVIEW_RESULT_BIN REVIEW_WORKSPACE_BASE
   rm -rf "$d"

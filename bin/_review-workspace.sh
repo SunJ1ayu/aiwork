@@ -299,10 +299,13 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
     "${outcome[@]}"
 }
 
-# Explore has to hand over a final message. A non-empty REPORT returns.
-# Otherwise every leg writes the same facts and exits with the same sentence.
+# Explore has to hand over a final message. A report with at least one
+# non-whitespace character returns. Otherwise every leg writes the same
+# facts and exits with the same sentence.
 review_workspace_require_explore_message() { # requested invoked billing [reported]
-  [[ -s "${REPORT:-}" ]] && return 0
+  if [[ -f "${REPORT:-}" ]] && grep -q '[^[:space:]]' -- "$REPORT"; then
+    return 0
+  fi
   local requested="${1:-}" invoked="${2:-}" billing="${3:-subscription}" reported="${4:-}"
   review_workspace_write_facts "$requested" "$invoked" "$billing" \
     exited partial runtime "" "" "$reported" || exit 78

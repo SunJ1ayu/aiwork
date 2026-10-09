@@ -252,7 +252,7 @@ if pathlib.Path(stream).is_file():
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(event, dict) and event.get("role") == "assistant" and isinstance(event.get("content"), str) and event["content"].strip():
+        if isinstance(event, dict) and event.get("role") == "assistant" and isinstance(event.get("content"), str):
             last = event["content"]
 if last is None:
     raise SystemExit(0)

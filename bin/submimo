@@ -352,8 +352,6 @@ for line in pathlib.Path(log).read_text(encoding="utf-8", errors="replace").spli
 if last_id is None or last_id not in parts:
     raise SystemExit(0)
 body = "".join(parts[last_id][pid] for pid in order[last_id])
-if not body.strip():
-    raise SystemExit(0)
 pathlib.Path(dest).write_text(body)
 PY
     if [[ "$MODE" == "review" ]]; then

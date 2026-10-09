@@ -105,6 +105,9 @@ case "${CODEX_TEST_MODE:-pass}" in
   explore)
     printf '{"type":"thread.started","model":"%s"}\n' "$model"
     printf 'Direction: keep it simple\n' > "$out" ;;
+  blank)
+    printf '{"type":"thread.started","model":"%s"}\n' "$model"
+    printf ' \t\n' > "$out" ;;
   noverdict)
     printf 'I looked around.\n' > "$out" ;;
   quota)
@@ -217,6 +220,14 @@ CODEX_TEST_MODE=explore AIWORK_REVIEW_REPORT_PATH="$d/c7c.md" \
   sc c7c explore "$d/task.md" "$d/c7c.log" "$d/repo" >/dev/null 2>&1
 check 'C4: explore 设了报告路径时不另写 ${LOG_FILE}.report' \
   $([[ -s "$d/c7c.md" && ! -e "$d/c7c.log.report" ]]; echo $?)
+printf ' \t\n' > "$d/blank-expect"
+CODEX_TEST_MODE=blank AIWORK_REVIEW_REPORT_PATH="$d/c7d.md" \
+  sc c7d explore "$d/task.md" "$d/c7d.log" "$d/repo" >/dev/null 2>"$d/c7d.err"; rc=$?
+want="explore produced no final message (log: $d/c7d.log)"
+check 'C4: explore 最后一条消息只有空白时失败，句子与其他腿相同' \
+  $([[ $rc -eq 1 && "$(cat "$d/c7d.err")" == "$want" ]] && cmp -s "$d/c7d.md" "$d/blank-expect"; echo $?)
+facts c7d "f['process_state']=='exited' and f['evidence_completeness']=='partial' and f['failure_kind']=='runtime' and f['verdict'] is None"
+check 'C4: 空白消息的 facts 与缺消息相同(exited/partial/runtime)' $?
 sc c8 review "$d/task.md" "$d/c8.log" "$d/repo" >/dev/null 2>"$d/c8.err"; rc=$?
 check "C4: 没有自审文件也调用 codex" \
   $([[ $rc -eq 0 && -e "$d/cap/c8.argv" ]]; echo $?)

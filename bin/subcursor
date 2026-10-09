@@ -170,14 +170,14 @@ if [[ "$RC" == 124 || "$RC" == 137 ]]; then
   echo "subcursor: timed out after ${TIMEOUT_SECONDS}s; partial output kept in $LOG_FILE" >&2
   exit 124
 fi
-if [[ "$MODE" == explore ]]; then
-  review_workspace_require_explore_message "$MODEL" "$MODEL" "$BILLING" "$REPORTED"
-fi
 if [[ "$RC" != 0 || "${STATUS[1]}" != 0 || "${STATUS[2]}" != 0 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial "" "$VERDICT" || exit 78
   echo "subcursor: incomplete/failed run (cli=$RC, stream=${STATUS[1]}, decoder=${STATUS[2]}); see $STREAM and $SUMMARY" >&2
   [[ "$RC" != 0 ]] || RC=1
   exit "$RC"
+fi
+if [[ "$MODE" == explore ]]; then
+  review_workspace_require_explore_message "$MODEL" "$MODEL" "$BILLING" "$REPORTED"
 fi
 if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial no_verdict UNKNOWN || exit 78

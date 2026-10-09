@@ -39,9 +39,13 @@ def consume(lines, report, expected):
                 if message.get("role") != "assistant":
                     raise ValueError("wrong role")
                 for block in message["content"]:
-                    if block.get("type") == "text" and block.get("text", "").strip():
-                        report.write(block["text"] + "\n")
-                        report.flush()
+                    text = block.get("text")
+                    if block.get("type") == "text" and isinstance(text, str):
+                        # Blank blocks stay out of the process log. Whether the
+                        # last message has content is decided later, on the report.
+                        if text.strip():
+                            report.write(text + "\n")
+                            report.flush()
                         has_text = True
             elif kind == "result":
                 terminal = event
@@ -60,8 +64,7 @@ def consume(lines, report, expected):
     success = (not malformed and has_text and family_ok
                and terminal.get("subtype") == "success"
                and terminal.get("is_error") is False
-               and isinstance(terminal.get("result"), str)
-               and bool(terminal["result"].strip()))
+               and isinstance(terminal.get("result"), str))
     return {
         "success": success, "family_ok": family_ok,
         "models": sorted(models), "malformed": malformed, "has_text": has_text,
@@ -77,6 +80,6 @@ if __name__ == "__main__":
         result = consume(sys.stdin, report, sys.argv[3])
     final = result.pop("final_message", None)
     Path(sys.argv[2]).write_text(json.dumps(result) + "\n", encoding="utf-8")
-    if isinstance(final, str) and final.strip() and len(sys.argv) > 4:
+    if isinstance(final, str) and len(sys.argv) > 4:
         Path(sys.argv[4]).write_text(final)
     sys.exit(0 if result["success"] else 1)

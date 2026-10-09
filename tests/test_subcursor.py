@@ -86,6 +86,9 @@ if case in ('daemon', 'daemon_timeout'):
 record = {'model':model, 'cwd':str(repo), 'home':str(home), 'prompt':prompt,
           'cursor_env':{k:v for k,v in os.environ.items() if k.startswith('CURSOR_')}}
 pathlib.Path(os.environ['FAKE_RECORD']).write_text(json.dumps(record))
+if case=='quota':
+    sys.stderr.write('quota exceeded\n')
+    raise SystemExit(1)
 def emit(e):
     e.setdefault('session_id','fixture-session')
     print(json.dumps(e), flush=True)
@@ -94,6 +97,7 @@ emit({'type':'tool_call','subtype':'completed','tool_call':{'readToolCall':{'res
 text = 'Verified tracked.txt:1 against the task.\nConclusion: BLOCK'
 if case=='empty': text=''
 if case=='no_verdict': text='Review has evidence but no decision.'
+if case=='blank': text=' \t\n'
 result_text = text
 if case == 'final_report':
     text = ('## 过程\n\n$ cursor-agent --print\n\n```python\n# 注释\n'
@@ -227,9 +231,50 @@ class CursorTest(unittest.TestCase):
         report = self.d / 'report.md'
         report.write_text('OLD\n', encoding='utf-8')
         result = self.run_leg('explore', case='empty', extra={'AIWORK_REVIEW_REPORT_PATH': str(report)})
-        self.assertNotEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(report.exists())
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stderr.strip(),
+                         f'explore produced no final message (log: {self.d / "leg.log"})')
+        self.assertEqual(report.read_text(encoding='utf-8'), '')
         self.assertFalse((self.d / 'leg.log.report').exists())
+
+    def test_explore_blank_last_message_fails_with_the_shared_sentence(self):
+        report = self.d / 'blank.md'
+        result = self.run_leg('explore', case='blank', tag='blank',
+                              extra={'AIWORK_REVIEW_REPORT_PATH': str(report)})
+        log = self.d / 'blank.log'
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stderr.strip(),
+                         f'explore produced no final message (log: {log})')
+        self.assertTrue(report.is_file(), result.stderr)
+        self.assertEqual(report.read_text(encoding='utf-8'), ' \t\n')
+        facts = json.loads((self.d / 'blank.facts.json').read_text(encoding='utf-8'))
+        self.assertEqual(facts['process_state'], 'exited')
+        self.assertEqual(facts['evidence_completeness'], 'partial')
+        self.assertEqual(facts['failure_kind'], 'runtime')
+        self.assertIsNone(facts['verdict'])
+
+    def test_explore_quota_exit_is_recorded_as_quota(self):
+        result = self.run_leg('explore', case='quota', tag='quota')
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn('quota exceeded', result.stderr)
+        self.assertIn('incomplete/failed run', result.stderr)
+        diagnostic = self.d / 'quota.diagnostic'
+        diagnostic.write_text(result.stderr, encoding='utf-8')
+        produced = self.d / 'quota.result.json'
+        digest = 'sha256:' + __import__('hashlib').sha256(self.task.read_bytes()).hexdigest()
+        emit = subprocess.run([
+            sys.executable, str(self.bin / '_review_result.py'), 'emit',
+            '--result', str(produced), '--run-id', 'explore-quota',
+            '--name', 'subcursor', '--family', 'cursor', '--adapter', 'subcursor',
+            '--exit-code', str(result.returncode), '--task-sha256', digest,
+            '--log', str(self.d / 'quota.log'), '--diagnostic', str(diagnostic),
+            '--report', str(self.d / 'quota.log.report'),
+            '--facts', str(self.d / 'quota.facts.json'),
+            '--review-contract-version', '3',
+        ], capture_output=True, text=True)
+        self.assertEqual(emit.returncode, 0, emit.stderr)
+        recorded = json.loads(produced.read_text(encoding='utf-8'))
+        self.assertEqual(recorded['failure_kind'], 'quota')
 
     def test_explore_does_not_require_a_conclusion(self):
         result = self.run_leg('explore', case='no_verdict')

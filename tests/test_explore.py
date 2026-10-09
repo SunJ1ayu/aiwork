@@ -603,6 +603,83 @@ class ExploreLegContractTests(unittest.TestCase):
         self.assertFalse((self.root / "leg.log.report").exists())
         self.assertNotIn("normalize must not run", result.stderr)
 
+    def test_whitespace_only_last_message_fails_with_the_shared_sentence(self):
+        blank = " \t\n"
+        legs = (
+            ("subagent", self._blank_subagent),
+            ("subkimi", self._blank_subkimi),
+            ("submimo", self._blank_submimo),
+        )
+        for name, prepare in legs:
+            with self.subTest(leg=name):
+                slot = self.root / name
+                slot.mkdir()
+                log = slot / "leg.log"
+                report = slot / "report.md"
+                facts = slot / "facts.json"
+                report.write_text("OLD\n", encoding="utf-8")
+                argv, env = prepare(log, report, facts)
+                result = self._run(argv, env)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(
+                    result.stderr.strip(),
+                    f"explore produced no final message (log: {log})",
+                )
+                self.assertTrue(report.is_file(), result.stderr)
+                self.assertEqual(report.read_text(encoding="utf-8"), blank)
+                self.assertFalse((slot / "leg.log.report").exists())
+                recorded = json.loads(facts.read_text(encoding="utf-8"))
+                self.assertEqual(recorded["process_state"], "exited")
+                self.assertEqual(recorded["evidence_completeness"], "partial")
+                self.assertEqual(recorded["failure_kind"], "runtime")
+                self.assertIsNone(recorded["verdict"])
+
+    def _blank_subagent(self, log, report, facts):
+        self._stub("claude", textwrap.dedent('''\
+            #!/usr/bin/env python3
+            import json
+            print(json.dumps({"type": "result", "result": " \\t\\n"}))
+        '''))
+        return (
+            [str(ROOT / "bin" / "subagent"), "deepseek", "explore",
+             str(self.task), str(log), str(self.repo)],
+            self._env(
+                DEEPSEEK_API_KEY="fixture-key",
+                AIWORK_REVIEW_REPORT_PATH=str(report),
+                AIWORK_REVIEW_FACTS_PATH=str(facts)),
+        )
+
+    def _blank_subkimi(self, log, report, facts):
+        self._stub("kimi", textwrap.dedent('''\
+            #!/usr/bin/env python3
+            import json
+            print(json.dumps({"role": "assistant", "content": " \\t\\n"}))
+        '''))
+        return (
+            [str(ROOT / "bin" / "subkimi"), "explore", str(self.task), str(log), str(self.repo)],
+            self._env(
+                KIMI_REVIEW_HOME=str(self._kimi_home()),
+                AIWORK_REVIEW_REPORT_PATH=str(report),
+                AIWORK_REVIEW_FACTS_PATH=str(facts)),
+        )
+
+    def _blank_submimo(self, log, report, facts):
+        payload = json.dumps({
+            "type": "text",
+            "part": {"id": "p", "messageID": "m", "text": " \t\n"},
+        })
+        self._stub("mimo", textwrap.dedent(f'''\
+            #!/usr/bin/env python3
+            print({payload!r})
+        '''))
+        return (
+            [str(ROOT / "bin" / "submimo"), "explore", str(self.task), str(log), str(self.repo)],
+            self._env(
+                MIMO_REVIEW_HOME=str(self.root / "mimo-home"),
+                AIWORK_REVIEW_REPORT_PATH=str(report),
+                AIWORK_REVIEW_FACTS_PATH=str(facts)),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

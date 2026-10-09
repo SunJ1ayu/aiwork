@@ -322,7 +322,7 @@ for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").s
         continue
     if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
         last = event["result"]
-if not isinstance(last, str) or not last.strip():
+if not isinstance(last, str):
     raise SystemExit(0)
 pathlib.Path(dest).write_text(last)
 PY
