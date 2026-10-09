@@ -30,6 +30,12 @@ MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 TASK_FILE="$(realpath "$TASK_FILE")"
 LOG_FILE="$(realpath -m "$LOG_FILE")"
+if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
+  REPORT="$AIWORK_REVIEW_REPORT_PATH"
+else
+  REPORT="${LOG_FILE}.report"
+fi
+rm -f -- "$REPORT"
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 MODEL="$("$BIN_DIR/aiwork-config" model cursor "${CURSOR_MODEL:-}")" || exit 1
@@ -147,7 +153,7 @@ run_cursor --workspace "$EMPTY_WORKSPACE" --add-dir "$REPO_DIR" \
       --disable-auto-update --disable-project-configs \
       --allowed-tools read_tool_call,grep_tool_call,glob_tool_call,ls_tool_call \
       < "$PROMPT_FILE" \
-  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL" "${LOG_FILE}.report"
+  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL" "$REPORT"
 STATUS=("${PIPESTATUS[@]}")
 set -e
 RC="${STATUS[0]}"
@@ -160,8 +166,9 @@ except (OSError, ValueError):
 PY
 )"
 VERDICT=UNKNOWN
-if [[ "$MODE" == review && -f "${LOG_FILE}.report" ]]; then
-  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "${LOG_FILE}.report")"
+if [[ "$MODE" == review && -s "$REPORT" ]]; then
+  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "$REPORT")" \
+    || die "typed verdict normalization failed (report: $REPORT)"
 fi
 if [[ "$RC" == 124 || "$RC" == 137 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" timed_out partial timeout "$VERDICT" || exit 78

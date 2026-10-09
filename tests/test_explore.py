@@ -9,6 +9,7 @@ import _no_egress  # noqa: E402,F401
 import importlib.machinery
 import importlib.util
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ import tempfile
 import textwrap
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 import io
 
 from _test_settings import write_settings
@@ -185,6 +187,10 @@ class ExploreTests(unittest.TestCase):
         saved = self._saved()
         fixture_path = saved / "subcodex.md"
         plain_path = saved / "submimo.md"
+        self.assertEqual(saved.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(saved.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(fixture_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(plain_path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(fixture_path.read_text(encoding="utf-8"), FIXTURE_LAST)
         self.assertEqual(plain_path.read_text(encoding="utf-8"), NO_CONCLUSION)
         self.assertNotIn("Conclusion:", NO_CONCLUSION)
@@ -215,6 +221,57 @@ class ExploreTests(unittest.TestCase):
         self.assertIn("subkimi", stderr)
         self.assertIn("quota", stderr)
         self.assertNotIn(FIXTURE_LAST, stderr)
+
+    def test_repo_subdirectory_resolves_to_toplevel_and_snapshots_main(self):
+        nested = self.repo / "nested"
+        nested.mkdir()
+        (nested / "note.txt").write_text("note\n", encoding="utf-8")
+        self._git("add", "nested")
+        self._git("commit", "-qm", "nested")
+        self.main_sha = subprocess.check_output(
+            ["git", "-C", str(self.repo), "rev-parse", "refs/heads/main"], text=True).strip()
+        self._link("subcodex")
+        self.env["EXPLORE_PEERS"] = "subcodex"
+        self.env["EXPLORE_STUB_subcodex"] = "plain"
+        rc, _stdout, stderr = self._run_at(["subcodex"], str(nested), None)
+        self.assertEqual(rc, 0, stderr)
+        head, names = self._view("subcodex")
+        self.assertEqual(head, self.main_sha)
+        self.assertEqual(names, ["nested", "on-main.txt"])
+
+    def test_path_outside_a_git_repository_is_a_usage_error(self):
+        outside = self.root / "notes"
+        outside.mkdir()
+        self._link("subcodex")
+        self.env["EXPLORE_PEERS"] = "subcodex"
+        rc, _stdout, stderr = self._run_at(["subcodex"], str(outside), None)
+        self.assertEqual(rc, 2, stderr)
+        self.assertIn("not a git repository", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_taken_stamp_and_pid_still_creates_a_private_directory(self):
+        self._link("subcodex")
+        self.env["EXPLORE_PEERS"] = "subcodex"
+        stamp = "20260102T030405Z"
+        root = self.data / "explore"
+        root.mkdir(parents=True)
+        (root / f"brief-{stamp}").mkdir()
+        (root / f"brief-{stamp}-{os.getpid()}").mkdir()
+        class _FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+        with patch.object(self.explore, "datetime", _FrozenDateTime):
+            rc, stdout, stderr = self._run(["subcodex"])
+        self.assertEqual(rc, 0, stderr)
+        report = Path(stdout.strip())
+        path = report.parent
+        self.assertTrue(path.is_dir(), stdout)
+        self.assertTrue(path.name.startswith("brief-"))
+        self.assertNotIn(path.name, {f"brief-{stamp}", f"brief-{stamp}-{os.getpid()}"})
+        self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(report.stat().st_mode & 0o777, 0o600)
 
     def test_relative_repo_dot_and_subdirectory_snapshot_local_main(self):
         self._link("subcodex")
@@ -309,7 +366,7 @@ unittest.mock_argv = unittest_mock_argv
 class MimoExploreTests(unittest.TestCase):
     """submimo explore must return the fixture's last message and not demand a conclusion."""
 
-    def run_leg(self, fixture: Path):
+    def run_leg(self, fixture: Path, *, preseed: str | None = None):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
@@ -336,6 +393,8 @@ class MimoExploreTests(unittest.TestCase):
         task = root / "task.md"
         task.write_text("# brief\n", encoding="utf-8")
         report = root / "report.md"
+        if preseed is not None:
+            report.write_text(preseed, encoding="utf-8")
         env = dict(os.environ)
         env.update(
             PATH=str(fake) + os.pathsep + env.get("PATH", ""),
@@ -352,12 +411,13 @@ class MimoExploreTests(unittest.TestCase):
             env=env, capture_output=True, text=True)
         argv = (root / "argv.txt").read_text(encoding="utf-8") if (root / "argv.txt").is_file() else ""
         body = report.read_text(encoding="utf-8") if report.is_file() else ""
-        return result, argv, body
+        return result, argv, body, (root / "leg.log.report").exists()
 
     def test_explore_returns_the_fixture_last_message(self):
-        result, argv, body = self.run_leg(FIXTURE)
+        result, argv, body, sidecar = self.run_leg(FIXTURE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(body, FIXTURE_LAST)
+        self.assertFalse(sidecar)
         self.assertNotIn("Do NOT use any tools", argv)
         self.assertNotIn("Direction / Core bet", argv)
 
@@ -368,10 +428,19 @@ class MimoExploreTests(unittest.TestCase):
                 continue
             kept.append(line)
         fixture = self._write("mimo-no-conclusion.jsonl", "".join(kept))
-        result, _argv, body = self.run_leg(fixture)
+        result, _argv, body, sidecar = self.run_leg(fixture)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(body, "Shared fixture checked.\n\n")
+        self.assertFalse(sidecar)
         self.assertNotIn("Conclusion:", body)
+
+    def test_missing_last_message_fails_and_drops_the_previous_report(self):
+        empty = self._write("mimo-empty.jsonl", "")
+        result, _argv, body, sidecar = self.run_leg(empty, preseed="OLD\n")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no final message", result.stderr)
+        self.assertEqual(body, "")
+        self.assertFalse(sidecar)
 
     def _write(self, name, text):
         path = Path(self.id().replace(".", "_") + "-" + name)
@@ -381,6 +450,158 @@ class MimoExploreTests(unittest.TestCase):
         target.write_text(text, encoding="utf-8")
         self.addCleanup(target.unlink, missing_ok=True)
         return target
+
+
+def _git_repo(root: Path) -> Path:
+    repo = root / "repo"
+    repo.mkdir()
+    subprocess.check_call(["git", "init", "-q", "-b", "main", str(repo)])
+    subprocess.check_call(["git", "-C", str(repo), "config", "user.email", "t@example.com"])
+    subprocess.check_call(["git", "-C", str(repo), "config", "user.name", "t"])
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    subprocess.check_call(["git", "-C", str(repo), "add", "-A"])
+    subprocess.check_call(["git", "-C", str(repo), "commit", "-qm", "base"])
+    return repo
+
+
+class ExploreLegContractTests(unittest.TestCase):
+    """Explore mode records timeout, fails without a last message, and writes one report."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.repo = _git_repo(self.root)
+        self.config = write_settings(self.root / "settings")
+        self.fake = self.root / "fake"
+        self.fake.mkdir()
+        self.task = self.root / "task.md"
+        self.task.write_text("# brief\n", encoding="utf-8")
+        self.log = self.root / "leg.log"
+        self.report = self.root / "report.md"
+        self.facts = self.root / "facts.json"
+
+    def _env(self, **extra):
+        env = dict(os.environ)
+        env.update(
+            PATH=str(self.fake) + os.pathsep + env.get("PATH", ""),
+            AIWORK_CONFIG_DIR=str(self.config),
+            AIWORK_REVIEW_FACTS_PATH=str(self.facts),
+            AIWORK_REVIEW_RESULT_BIN=str(ROOT / "bin" / "_review_result.py"),
+        )
+        env.pop("AIWORK_REVIEW_REPORT_PATH", None)
+        env.update(extra)
+        return env
+
+    def _stub(self, name, text):
+        path = self.fake / name
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o755)
+
+    def _kimi_home(self):
+        home = self.root / "kimi-home"
+        (home / "hooks").mkdir(parents=True)
+        (home / "hooks" / "guard.mjs").write_text("process.exit(2)\n", encoding="utf-8")
+        (home / "credentials").mkdir()
+        (home / "credentials" / "kimi-code.json").write_text("{}\n", encoding="utf-8")
+        (home / "config.toml").write_text('default_model = "x"\n', encoding="utf-8")
+        return home
+
+    def _run(self, argv, env):
+        return subprocess.run(argv, env=env, capture_output=True, text=True)
+
+    def test_subagent_explore_timeout_is_timeout_not_runtime(self):
+        self._stub("claude", "#!/usr/bin/env python3\nimport time\ntime.sleep(30)\n")
+        result = self._run(
+            [str(ROOT / "bin" / "subagent"), "deepseek", "explore",
+             str(self.task), str(self.log), str(self.repo)],
+            self._env(DEEPSEEK_API_KEY="fixture-key", DEEPSEEK_TIMEOUT="1"))
+        self.assertEqual(result.returncode, 124, result.stderr)
+        facts = json.loads(self.facts.read_text(encoding="utf-8"))
+        self.assertEqual(facts["process_state"], "timed_out")
+        self.assertEqual(facts["failure_kind"], "timeout")
+
+    def test_subagent_explore_without_a_last_message_fails_and_writes_one_report(self):
+        self._stub("claude", "#!/usr/bin/env python3\n")
+        self.report.write_text("OLD\n", encoding="utf-8")
+        result = self._run(
+            [str(ROOT / "bin" / "subagent"), "deepseek", "explore",
+             str(self.task), str(self.log), str(self.repo)],
+            self._env(DEEPSEEK_API_KEY="fixture-key", AIWORK_REVIEW_REPORT_PATH=str(self.report)))
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no final message", result.stderr)
+        self.assertFalse(self.report.exists())
+        self.assertFalse((self.root / "leg.log.report").exists())
+        facts = json.loads(self.facts.read_text(encoding="utf-8"))
+        self.assertEqual(facts["failure_kind"], "runtime")
+
+    def test_subagent_explore_writes_the_report_only_at_the_requested_path(self):
+        answer = "Direction noted.\n"
+        self._stub("claude", textwrap.dedent(f'''\
+            #!/usr/bin/env python3
+            import json
+            print(json.dumps({{"type": "result", "result": {answer!r}}}))
+        '''))
+        result = self._run(
+            [str(ROOT / "bin" / "subagent"), "deepseek", "explore",
+             str(self.task), str(self.log), str(self.repo)],
+            self._env(DEEPSEEK_API_KEY="fixture-key", AIWORK_REVIEW_REPORT_PATH=str(self.report)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.report.read_text(encoding="utf-8"), answer)
+        self.assertFalse((self.root / "leg.log.report").exists())
+
+    def test_subagent_explore_without_a_report_path_writes_the_log_sidecar(self):
+        answer = "Direction noted.\n"
+        self._stub("claude", textwrap.dedent(f'''\
+            #!/usr/bin/env python3
+            import json
+            print(json.dumps({{"type": "result", "result": {answer!r}}}))
+        '''))
+        result = self._run(
+            [str(ROOT / "bin" / "subagent"), "deepseek", "explore",
+             str(self.task), str(self.log), str(self.repo)],
+            self._env(DEEPSEEK_API_KEY="fixture-key"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "leg.log.report").read_text(encoding="utf-8"), answer)
+        self.assertFalse(self.report.exists())
+
+    def test_subkimi_explore_without_a_last_message_fails_and_drops_the_old_report(self):
+        self._stub("kimi", "#!/usr/bin/env python3\nprint('not-json')\n")
+        self.report.write_text("OLD\n", encoding="utf-8")
+        result = self._run(
+            [str(ROOT / "bin" / "subkimi"), "explore", str(self.task), str(self.log), str(self.repo)],
+            self._env(KIMI_REVIEW_HOME=str(self._kimi_home()), AIWORK_REVIEW_REPORT_PATH=str(self.report)))
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no final message", result.stderr)
+        self.assertFalse(self.report.exists())
+        self.assertFalse((self.root / "leg.log.report").exists())
+
+    def test_subkimi_explore_writes_one_report_and_does_not_normalize(self):
+        answer = "Direction noted.\n"
+        self._stub("kimi", textwrap.dedent(f'''\
+            #!/usr/bin/env python3
+            import json
+            print(json.dumps({{"role": "assistant", "content": {answer!r}}}))
+        '''))
+        normalizer = self.root / "normalizer.py"
+        real = ROOT / "bin" / "_review_result.py"
+        normalizer.write_text(
+            "import os, sys\n"
+            "if 'normalize' in sys.argv[1:]:\n"
+            "    sys.stderr.write('normalize must not run\\n')\n"
+            "    raise SystemExit(1)\n"
+            f"os.execv(sys.executable, [sys.executable, {str(real)!r}, *sys.argv[1:]])\n",
+            encoding="utf-8")
+        result = self._run(
+            [str(ROOT / "bin" / "subkimi"), "explore", str(self.task), str(self.log), str(self.repo)],
+            self._env(
+                KIMI_REVIEW_HOME=str(self._kimi_home()),
+                AIWORK_REVIEW_REPORT_PATH=str(self.report),
+                AIWORK_REVIEW_RESULT_BIN=str(normalizer)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.report.read_text(encoding="utf-8"), answer)
+        self.assertFalse((self.root / "leg.log.report").exists())
+        self.assertNotIn("normalize must not run", result.stderr)
 
 
 if __name__ == "__main__":

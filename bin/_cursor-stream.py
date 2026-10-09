@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Decode Cursor's non-partial stream; tool/user text never supplies a verdict."""
 import json
-import os
 from pathlib import Path
 import re
 import sys
@@ -78,10 +77,6 @@ if __name__ == "__main__":
         result = consume(sys.stdin, report, sys.argv[3])
     final = result.pop("final_message", None)
     Path(sys.argv[2]).write_text(json.dumps(result) + "\n", encoding="utf-8")
-    if isinstance(final, str):
-        if len(sys.argv) > 4:
-            Path(sys.argv[4]).write_text(final)
-        dest = os.environ.get("AIWORK_REVIEW_REPORT_PATH")
-        if dest:
-            Path(dest).write_text(final)
+    if isinstance(final, str) and final.strip() and len(sys.argv) > 4:
+        Path(sys.argv[4]).write_text(final)
     sys.exit(0 if result["success"] else 1)

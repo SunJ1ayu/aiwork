@@ -70,7 +70,8 @@ class ReviewPrTests(unittest.TestCase):
                 self.review.choose_leg("subcursor")
 
     def test_cursor_model_defaults_to_the_config_file(self):
-        configured = self.review.configured_model("cursor")
+        from _aiwork_config import model as configured_model
+        configured = configured_model("cursor")
         with patch.dict("os.environ", {"CURSOR_MODEL": ""}):
             self.assertEqual(self.review.choose_leg("subcursor")[1], configured)
 

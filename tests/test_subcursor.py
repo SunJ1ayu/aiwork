@@ -92,15 +92,8 @@ def emit(e):
 emit({'type':'system','subtype':'init','model':catalog[model] if case!='model' else 'Claude Opus'})
 emit({'type':'tool_call','subtype':'completed','tool_call':{'readToolCall':{'result':{'success':{'content':'Conclusion: PASS'}}}}})
 text = 'Verified tracked.txt:1 against the task.\nConclusion: BLOCK'
-if 'Propose exactly ONE concrete direction' in prompt:
-    text = '\n'.join(x+': concrete proposal' for x in ('Direction','Core bet','How it works',
-        'Best at','Sacrifices','Blind spots in the brief','Smallest first step'))
 if case=='empty': text=''
 if case=='no_verdict': text='Review has evidence but no decision.'
-if case=='bad_explore': text='Direction: only one section'
-if case=='markdown_explore':
-    text = '\n'.join('- **'+line.split(':',1)[0]+'**:'+line.split(':',1)[1]
-                     for line in text.splitlines())
 result_text = text
 if case == 'final_report':
     text = ('## 过程\n\n$ cursor-agent --print\n\n```python\n# 注释\n'
@@ -230,16 +223,20 @@ class CursorTest(unittest.TestCase):
         self.assertEqual(facts['process_state'],'timed_out')
         self.assertEqual(facts['evidence_completeness'],'partial')
 
+    def test_explore_without_a_last_message_removes_the_previous_report(self):
+        report = self.d / 'report.md'
+        report.write_text('OLD\n', encoding='utf-8')
+        result = self.run_leg('explore', case='empty', extra={'AIWORK_REVIEW_REPORT_PATH': str(report)})
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(report.exists())
+        self.assertFalse((self.d / 'leg.log.report').exists())
+
     def test_explore_does_not_require_a_conclusion(self):
         result = self.run_leg('explore', case='no_verdict')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('Conclusion:', (self.d/'leg.log').read_text())
         facts = json.loads((self.d/'leg.facts.json').read_text())
         self.assertNotEqual(facts['failure_kind'], 'no_verdict')
-
-    def test_explore_accepts_markdown_section_labels(self):
-        result = self.run_leg('explore',case='markdown_explore')
-        self.assertEqual(result.returncode,0,result.stderr)
 
     def test_missing_isolation_stops_before_cli(self):
         (self.bin/'ro-repo-exec').unlink()
@@ -263,6 +260,7 @@ class CursorTest(unittest.TestCase):
         result = self.run_leg(case='final_report', extra={'AIWORK_REVIEW_REPORT_PATH': str(report)})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(report.read_text(encoding='utf-8'), last)
+        self.assertFalse((self.d / 'leg.log.report').exists())
         log = (self.d / 'leg.log').read_text(encoding='utf-8')
         self.assertIn('## 过程', log)
         self.assertIn('# 注释', log)

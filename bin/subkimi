@@ -183,6 +183,12 @@ trap _subkimi_cleanup EXIT
 # Absolute log path: the agent runs with cwd = REPO_DIR.
 case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
 mkdir -p "$(dirname "$LOG_FILE")"
+if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
+  REPORT="$AIWORK_REVIEW_REPORT_PATH"
+else
+  REPORT="${LOG_FILE}.report"
+fi
+rm -f -- "$REPORT"
 
 # 08-18~08-19 这里曾经有一整套 diff 注入(为了补偿"把 bash 关掉"造成的失明):
 # 按 argv 预算截断、基线校验、工件排除。业主推翻了那个方向 —— 评审腿没有
@@ -238,9 +244,9 @@ STREAM="${LOG_FILE}.stream.jsonl"
     "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" kimi --output-format stream-json -m "$MODEL" -p "$PROMPT"
 ) > "$STREAM" 2>>"$LOG_FILE" || RC=$?
 if [[ -s "$STREAM" ]]; then cat "$STREAM" >> "$LOG_FILE"; fi
-python3 - "$STREAM" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
+python3 - "$STREAM" "$REPORT" <<'PY'
 import json, pathlib, sys
-stream, local, dest = sys.argv[1:]
+stream, dest = sys.argv[1:]
 last = None
 if pathlib.Path(stream).is_file():
     for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").splitlines():
@@ -251,24 +257,24 @@ if pathlib.Path(stream).is_file():
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(event, dict) and event.get("role") == "assistant" and isinstance(event.get("content"), str) and event["content"]:
+        if isinstance(event, dict) and event.get("role") == "assistant" and isinstance(event.get("content"), str) and event["content"].strip():
             last = event["content"]
 if last is None:
     raise SystemExit(0)
-pathlib.Path(local).write_text(last)
-if dest:
-    pathlib.Path(dest).write_text(last)
+pathlib.Path(dest).write_text(last)
 PY
 
 # Verdict gate shares the contract normalizer with the terminal producer.  The
 # adapter publishes what it actually observed; it does not decide coverage.
-_RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
-[ -f "$_RR" ] || die "typed verdict normalizer missing"
-if [[ -f "${LOG_FILE}.report" ]]; then
-  VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
-    || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
-else
-  VERDICT=UNKNOWN
+# explore 不归一结论行。
+VERDICT=UNKNOWN
+if [[ "$MODE" == "review" ]]; then
+  _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
+  [ -f "$_RR" ] || die "typed verdict normalizer missing"
+  if [[ -s "$REPORT" ]]; then
+    VERDICT="$(python3 "$_RR" normalize "$REPORT" 2>/dev/null)" \
+      || die "typed verdict normalization failed (report: $REPORT)"
+  fi
 fi
 
 # A timeout is not a successful review. Publish the facts, then return 124 so a
@@ -286,17 +292,22 @@ if [[ $RC -ne 0 ]]; then
 fi
 [[ $RC -eq 0 ]] || die "kimi exited rc=$RC (log: $LOG_FILE)"
 
-if [[ "$MODE" == "review" && "$VERDICT" == "UNKNOWN" ]]; then
+if [[ "$MODE" == "explore" ]]; then
+  if [[ ! -s "$REPORT" ]]; then
+    review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+      exited partial runtime "" || exit 78
+    die "explore produced no final message (log: $LOG_FILE)"
+  fi
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    exited complete "" "" || exit 78
+  exit 0
+fi
+if [[ "$VERDICT" == "UNKNOWN" ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" subscription \
     exited partial no_verdict "$VERDICT" || exit 78
   die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
 fi
-if [[ "$MODE" == "review" ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-    exited complete "" "$VERDICT" || exit 78
-else
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-    exited complete "" "" || exit 78
-fi
+review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+  exited complete "" "$VERDICT" || exit 78
 
 exit 0

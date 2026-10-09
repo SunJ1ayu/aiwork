@@ -58,6 +58,12 @@ if [[ "$DRY_RUN" == 1 ]]; then
   printf 'subcodex: model=%s settings=%s (dry-run; no dispatch)\n' "$MODEL" "$("$BIN_DIR/aiwork-config" path models.env)"
   exit 0
 fi
+if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
+  REPORT="$AIWORK_REVIEW_REPORT_PATH"
+else
+  REPORT="${LOG_FILE}.report"
+fi
+rm -f -- "$REPORT"
 EFFORT="${SUBCODEX_EFFORT:-high}"
 [[ "$EFFORT" =~ ^[a-z]+$ ]] || die "SUBCODEX_EFFORT must be a lowercase word, got '$EFFORT'"
 TIMEOUT_SECONDS="${SUBCODEX_TIMEOUT:-1500}"
@@ -92,7 +98,7 @@ REPO_DIR="$(review_workspace_repo)" || exit 78
 #   ② 覆盖目录后的渲染里还有 <multi_agent_role> ⇒ 拒跑(改了字段名、剥离没生效)。
 # 覆盖不到的一种(如实写):codex **同时**改了目录字段名和渲染标记名 ⇒ ①② 都看不见 ⇒ 放行。
 # 2026-09-14 之前这里写的是「换了字段名会拒跑」,只说对了一半(评审发现 E)。
-# 所以升 codex 后仍要重跑一次真探针;联网那件离线看不到工具表,更只能靠真探针(legs.md 记着怎么跑)。
+# 所以升 codex 后仍要重跑一次真探针;联网那件离线看不到工具表,更只能靠真探针(workflow/skills/explore/SKILL.md 里「五条腿」记着每条腿怎么跑)。
 # 敞着的两件(如实写,不宣称严格):业主 ~/.codex/skills 里的 skill 仍列在它的提示里、它会去读;
 # 每次 `codex exec` 会往业主 ~/.codex/config.toml 追加一条这个临时副本的 trust 记录。
 CODEX_CFG=(
@@ -187,9 +193,7 @@ RC=$?
 
 if [[ -s "$LAST_MSG" ]]; then
   cat "$LAST_MSG" >> "$LOG_FILE"
-  if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
-    cp -- "$LAST_MSG" "$AIWORK_REVIEW_REPORT_PATH"
-  fi
+  cp -- "$LAST_MSG" "$REPORT"
 else
   echo "(codex produced no final message; see ${STREAM##*/} and ${STDERR_LOG##*/})" >> "$LOG_FILE"
 fi
@@ -224,8 +228,8 @@ PY
 )"
 
 VERDICT=UNKNOWN
-if [[ "$MODE" == review && -s "$LAST_MSG" ]]; then
-  VERDICT="$(python3 "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}" normalize "$LAST_MSG" 2>/dev/null || echo UNKNOWN)"
+if [[ "$MODE" == review && -s "$REPORT" ]]; then
+  VERDICT="$(python3 "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}" normalize "$REPORT" 2>/dev/null || echo UNKNOWN)"
 fi
 FAILURE=""
 if grep -qE 'usage_limit_exceeded|hit your usage limit' "$STREAM" "$STDERR_LOG" 2>/dev/null; then FAILURE=quota; fi
@@ -244,7 +248,7 @@ if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial no_verdict UNKNOWN "" "$REPORTED" || exit 78
   die "review output contains no standalone verdict line (log: $LOG_FILE)"
 fi
-if [[ "$MODE" == explore && ! -s "$LAST_MSG" ]]; then
+if [[ "$MODE" == explore && ! -s "$REPORT" ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial runtime "" "" "$REPORTED" || exit 78
   die "explore produced no answer (log: $LOG_FILE)"
 fi

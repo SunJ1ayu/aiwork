@@ -4,7 +4,7 @@
 #
 # 为什么有这份判据(08-10 事故):OpenClaw cron「评审工具链-每周防锈」每周一 08:00 跑
 # `bin/rust-check-review-tooling`;`tests/test-review-tooling.sh` 的 V23/V24 为了考
-# 把**真的** subkimi/submimo/subchat/subagent 拷进临时目录直接跑,其中两种
+# 反锚定闸,把**真的** subkimi/submimo/subchat/subagent 拷进临时目录直接跑,其中两种
 # 情形是**故意让闸放行**的 —— 闸一放行,脚本就真的往外打。一上午 12 次真实 kimi 调用,
 # 全花在一个内容是单字母 `x` 的假仓库上,机主当天额度归零。
 # 08-08 那天本该暴露,但当时额度已空、全被 403 挡下 —— **失败得太安静,把 bug 藏了两天**。

@@ -1636,15 +1636,8 @@ print(json.dumps({"type":"result","subtype":"success","is_error":False,"result":
 PY
   cat > "$b/kimi" <<'PY'
 #!/usr/bin/env python3
-import json, os
-noise = ("## 过程\n\n```python\n# 注释\nconclusion: pending ? null : value\n```\n\n"
-         "kimi> \n  → Bash sed -n '1,40p' gate/decide.mjs\n# 注释\necho hi\n\nConclusion: BLOCK")
-last = open(os.environ["FINAL_LAST"], encoding="utf-8").read()
-print(json.dumps({"role":"assistant","content":noise,"tool_calls":[
-    {"id":"1","type":"function","function":{"name":"bash","arguments":"sed -n '1,40p' gate/decide.mjs\n# 注释\necho hi"}}]}, ensure_ascii=False))
-print(json.dumps({"role":"tool","tool_call_id":"1","content":"## 过程\nkimi> \nconclusion: pending ? null : value"}, ensure_ascii=False))
-print(json.dumps({"role":"assistant","content":last}, ensure_ascii=False))
-print(json.dumps({"role":"meta","type":"session.resume_hint","content":"To resume this session: kimi -r x"}, ensure_ascii=False))
+import os, sys
+sys.stdout.write(open(os.environ["KIMI_STREAM_FIXTURE"], encoding="utf-8").read())
 PY
   cat > "$b/mimo" <<'PY'
 #!/usr/bin/env python3
@@ -1683,14 +1676,24 @@ PY
   check "V46: subdeepseek-agent 裁决来自报告而不是过程里的 BLOCK" \
     $(python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); sys.exit(0 if f["verdict"]=="PASS" else 1)' "$d/ds.facts.json"; echo $?)
 
-  env PATH="$b:$PATH" FINAL_LAST="$d/last.txt" KIMI_REVIEW_HOME="$rh" \
+  # 样本从本机真实 kimi --output-format stream-json 日志裁出：meta / assistant /
+  # tool，工具调用号换成占位符，正文缩短。这次运行停在工具调用前，最后一条
+  # 助手消息补上评审契约要求的结论行，用来区分报告和更早的 Conclusion: BLOCK。
+  printf '%s' $'做最后的语法检查和一次差异总览。\n\nConclusion: PASS\n' > "$d/kimi-want.txt"
+  env PATH="$b:$PATH" KIMI_STREAM_FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/kimi-stream.jsonl" \
+    KIMI_REVIEW_HOME="$rh" \
     AIWORK_REVIEW_FACTS_PATH="$d/kimi.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
     AIWORK_REVIEW_REPORT_PATH="$d/kimi-report.md" \
     bash "$b/subkimi" review "$d/t.md" "$d/kimi.log" "$d/repo" >/dev/null 2>"$d/kimi.err"; rc=$?
   check "V46: subkimi 退出 0" $([[ $rc -eq 0 ]]; echo $?)
-  cmp -s "$d/kimi-report.md" "$d/last.txt"; check "V46: subkimi 报告与最后一条消息一字不差" $?
-  check "V46: subkimi 发布正文只有报告，过程留在日志" \
-    $(_published "$d/kimi-report.md" "$d/kimi.log"; echo $?)
+  cmp -s "$d/kimi-report.md" "$d/kimi-want.txt"; check "V46: subkimi 报告与最后一条消息一字不差" $?
+  python3 - "$d/kimi-report.md" "$d/kimi.log" <<'PY'
+import pathlib, sys
+report, log = (pathlib.Path(p).read_text(encoding="utf-8") for p in sys.argv[1:])
+kept_out = ("我先浏览仓库结构和关键文件。", "Conclusion: BLOCK")
+raise SystemExit(0 if all(piece not in report and piece in log for piece in kept_out) else 1)
+PY
+  check "V46: subkimi 发布正文只有报告，过程留在日志" $?
   check "V46: subkimi 裁决来自报告而不是过程里的 BLOCK" \
     $(python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); sys.exit(0 if f["verdict"]=="PASS" else 1)' "$d/kimi.facts.json"; echo $?)
 

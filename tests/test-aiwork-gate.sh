@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/_no-egress.sh" || exit 78
 ROOT="$(cd "$HERE/.." && pwd)"
 cd "$ROOT" || exit 78
-out="$(node --test "$ROOT"/tests/test_aiwork_gate*.mjs 2>&1)"
+out="$(node --test --test-reporter=tap "$ROOT"/tests/test_aiwork_gate*.mjs 2>&1)"
 rc=$?
 printf '%s\n' "$out"
 pass="$(printf '%s\n' "$out" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p' | tail -1)"
