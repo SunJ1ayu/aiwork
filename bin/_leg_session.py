@@ -15,11 +15,34 @@ READER_TIMEOUT_ENV = {
     "subcodex": "SUBCODEX_TIMEOUT", "subcursor": "CURSOR_TIMEOUT",
     "submimo": "MIMO_CLI_TIMEOUT", "subkimi": "KIMI_TIMEOUT",
 }
+READER_TIMEOUT_SECONDS = "2400"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ReviewError(ValueError):
     pass
+
+
+def choose_leg(name: str, bin_dir: Path) -> tuple[str, str | None]:
+    """The family this review is published under, and the model frozen for this run.
+
+    A leg only has to be attributable to one family. Which families count for which
+    PR is the gate's call (gate/decide.mjs), not this tool's.
+    Cursor's model is frozen once here (CURSOR_MODEL, else ~/.config/aiwork/models.env)
+    and decides the family.
+    """
+    from _aiwork_config import ConfigError, model as configured_model
+    from _review_result import leg_identity
+    model = None
+    if name == "subcursor":
+        try:
+            model = configured_model("cursor", os.environ.get("CURSOR_MODEL"))
+        except ConfigError as exc:
+            raise ReviewError(str(exc)) from exc
+    identity = leg_identity(name, model)
+    if identity is None or not (bin_dir / name).is_file():
+        raise ReviewError(f"unsupported review leg: {name}" + (f" (model {model!r})" if model else ""))
+    return identity[0], model
 
 
 def redact(text: str) -> str:

@@ -141,18 +141,25 @@ class ExploreTests(unittest.TestCase):
             os.symlink(self.bin / "leg-stub", self.bin / name)
 
     def _run(self, legs):
+        return self._run_at(legs, str(self.repo), None)
+
+    def _run_at(self, legs, repo_arg, cwd):
         stdout, stderr = io.StringIO(), io.StringIO()
-        argv = ["explore", str(self.brief), "--repo", str(self.repo)]
+        argv = ["explore", str(self.brief), "--repo", repo_arg]
         for leg in legs:
             argv += ["--leg", leg]
-        with redirect_stdout(stdout), redirect_stderr(stderr), \
-                self.subTest(legs=legs):
-            pass
-        with redirect_stdout(stdout), redirect_stderr(stderr), \
-                unittest.mock_argv(argv), \
-                patch_env(self.env), \
-                patch_bin(self.explore, self.bin):
-            rc = self.explore.main()
+        previous = os.getcwd()
+        if cwd is not None:
+            os.chdir(cwd)
+        try:
+            with redirect_stdout(stdout), redirect_stderr(stderr), \
+                    unittest.mock_argv(argv), \
+                    patch_env(self.env), \
+                    patch_bin(self.explore, self.bin):
+                rc = self.explore.main()
+        finally:
+            if cwd is not None:
+                os.chdir(previous)
         return rc, stdout.getvalue(), stderr.getvalue()
 
     def _saved(self):
@@ -208,6 +215,37 @@ class ExploreTests(unittest.TestCase):
         self.assertIn("subkimi", stderr)
         self.assertIn("quota", stderr)
         self.assertNotIn(FIXTURE_LAST, stderr)
+
+    def test_relative_repo_dot_and_subdirectory_snapshot_local_main(self):
+        self._link("subcodex")
+        self.env["EXPLORE_PEERS"] = "subcodex"
+        self.env["EXPLORE_STUB_subcodex"] = "fixture"
+        rc, _stdout, stderr = self._run_at(["subcodex"], ".", self.repo)
+        self.assertEqual(rc, 0, stderr)
+        head, names = self._view("subcodex")
+        self.assertEqual(head, self.main_sha)
+        self.assertEqual(names, ["on-main.txt"])
+        rc, _stdout, stderr = self._run_at(["subcodex"], f"./{self.repo.name}", self.repo.parent)
+        self.assertEqual(rc, 0, stderr)
+        head, names = self._view("subcodex")
+        self.assertEqual(head, self.main_sha)
+        self.assertEqual(names, ["on-main.txt"])
+
+    def test_unexecutable_leg_fails_without_traceback_and_keeps_the_other(self):
+        self._link("subcodex")
+        blocked = self.bin / "subkimi"
+        blocked.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n", encoding="utf-8")
+        blocked.chmod(0o644)
+        self.env["EXPLORE_PEERS"] = "subcodex"
+        self.env["EXPLORE_STUB_subcodex"] = "fixture"
+        rc, stdout, stderr = self._run(["subcodex", "subkimi"])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("subkimi", stderr)
+        self.assertNotIn("Traceback", stderr)
+        saved = self._saved()
+        self.assertEqual((saved / "subcodex.md").read_text(encoding="utf-8"), FIXTURE_LAST)
+        self.assertFalse((saved / "subkimi.md").exists())
+        self.assertEqual(stdout.splitlines(), [str(saved / "subcodex.md")])
 
 
 class _Argv:

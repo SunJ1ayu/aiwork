@@ -89,6 +89,7 @@ const HIGH_RE = new RegExp([
   /\bapp[-_]key\b/.source,
   /\/access_tokens\b/.source,
   /\bGH_TOKEN\s*=/.source,
+  /\bGIT_ASKPASS\s*=/.source,
   /\bload_shapes\b/.source,
   /\bgit push\b/.source,
   /\bgh release\b/.source,
@@ -104,6 +105,8 @@ function highFiles() {
   }
   assert.equal(HIGH_RE.test("git push origin HEAD"), true);
   assert.equal(HIGH_RE.test("gh release create v1"), true);
+  assert.equal(HIGH_RE.test("GIT_ASKPASS=helper"), true);
+  assert.equal(HIGH_RE.test("GIT_ASKPASS"), false);
   assert.equal(HIGH_RE.test("模型发布当天"), false);
   return found;
 }
