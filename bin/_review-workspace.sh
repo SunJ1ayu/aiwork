@@ -2,8 +2,10 @@
 # Per-leg writable review workspace.
 #
 # Source this file, then:
+#   review_workspace_reset_report
 #   review_workspace_prepare SOURCE_REPO LEG_NAME
 #   repo="$(review_workspace_repo)"
+#   review_workspace_require_explore_message REQUESTED INVOKED BILLING [REPORTED]
 #   review_workspace_cleanup
 #
 # The source repository is never checked out or indexed through its own .git.
@@ -73,6 +75,17 @@ review_workspace__scan_view() { # path-prefix
     git --git-dir="$REVIEW_WORK_REPO/.git" --work-tree="$REVIEW_SOURCE_REPO" \
       write-tree)" || return 1
   REVIEW_SCAN_SOURCE_INDEX="$source_index"
+}
+
+# One report path. Call before review_workspace_prepare. Sets REPORT and
+# removes the previous run's file.
+review_workspace_reset_report() {
+  if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
+    REPORT="$AIWORK_REVIEW_REPORT_PATH"
+  else
+    REPORT="${LOG_FILE}.report"
+  fi
+  rm -f -- "$REPORT"
 }
 
 review_workspace_prepare() { # source-repo leg-name
@@ -284,6 +297,20 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
     --worktree-tree-oid "$REVIEW_SNAPSHOT_TREE" \
     --view-delivery-state complete --view-mode full_snapshot --billing-mode "$billing" \
     "${outcome[@]}"
+}
+
+# Explore has to hand over a final message. A report with at least one
+# non-whitespace character returns. Otherwise every leg writes the same
+# facts and exits with the same sentence.
+review_workspace_require_explore_message() { # requested invoked billing [reported]
+  if [[ -f "${REPORT:-}" ]] && grep -q '[^[:space:]]' -- "$REPORT"; then
+    return 0
+  fi
+  local requested="${1:-}" invoked="${2:-}" billing="${3:-subscription}" reported="${4:-}"
+  review_workspace_write_facts "$requested" "$invoked" "$billing" \
+    exited partial runtime "" "" "$reported" || exit 78
+  printf '%s\n' "explore produced no final message (log: $LOG_FILE)" >&2
+  exit 1
 }
 
 review_workspace_cleanup() {

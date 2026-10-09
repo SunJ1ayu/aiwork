@@ -148,7 +148,7 @@ Report findings with file:line references and a severity each.
 $(cat "$TASK_FILE")
 --- END OF REVIEW TASK ---"
 
-EXPLORE_SYSTEM_PROMPT="${REVIEW_SYSTEM_PROMPT:-You are an independent agent running inside a read-only harness. Read the repository with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}). Do not modify files, push, merge, install dependencies, or spawn other agents.}"
+EXPLORE_SYSTEM_PROMPT="You are an independent agent running inside a read-only harness. Read the repository with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}). Do not modify files, push, merge, install dependencies, or spawn other agents."
 
 # ── 把 diff 算好塞进提示词 ─────────────────────────────────────────────────
 # 提示词就是"系统提示 + 任务书"。**不再往里塞 diff** —— 腿自己有 shell,
@@ -171,11 +171,12 @@ else
 fi
 
 REVIEW_WORKSPACE_ACTIVE=0
-if [[ "$MODE" == "review" ]]; then
+if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   _RW="$BIN_DIR/_review-workspace.sh"
   [ -f "$_RW" ] || { echo "$LABEL: 找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)" >&2; exit 78; }
   # shellcheck source=_review-workspace.sh
   . "$_RW"
+  review_workspace_reset_report || exit 78
   if ! review_workspace_prepare "$SOURCE_REPO" "$LABEL"; then
     echo "$LABEL: review workspace 准备失败 ⇒ 模型未启动" >&2
     exit 78
@@ -208,7 +209,7 @@ ERR_FILE="$(mktemp)"
   echo "base_url: $BASE_URL"
   echo "model: $MODEL"
   echo "repo: $REPO_DIR"
-  [[ "$MODE" == "review" ]] && echo "source_repo: $SOURCE_REPO"
+  echo "source_repo: $SOURCE_REPO"
   echo "task: $TASK_FILE"
   if [[ "$MODE" == "review" ]]; then
     echo "视野: 底座腿 —— 独立可写副本；Bash 可跑本地 tests/lint/build/诊断。"
@@ -307,9 +308,9 @@ with open(log, "a", encoding="utf-8") as fh:
 PY
 
 # 最后一条消息是 stream-json 的 result.result，不是渲染进日志的过程。
-python3 - "$STREAM_FILE" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
+python3 - "$STREAM_FILE" "$REPORT" <<'PY'
 import json, pathlib, sys
-stream, local, dest = sys.argv[1:]
+stream, dest = sys.argv[1:]
 last = None
 for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").splitlines():
     line = line.strip()
@@ -321,47 +322,49 @@ for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").s
         continue
     if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
         last = event["result"]
-if last is None:
+if not isinstance(last, str):
     raise SystemExit(0)
-pathlib.Path(local).write_text(last)
-if dest:
-    pathlib.Path(dest).write_text(last)
+pathlib.Path(dest).write_text(last)
 PY
 
 if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
 
+VERDICT=""
 if [[ "$MODE" == "review" ]]; then
   # 出卷闸与结果归一共用唯一 normalizer；缺 helper 只能 fail closed，
   # 不许在这条底座路径复活一份宽松 regex。
   _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
   [ -f "$_RR" ] || die "typed verdict normalizer missing"
-  if [[ -f "${LOG_FILE}.report" ]]; then
-    VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
-      || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
+  if [[ -s "$REPORT" ]]; then
+    VERDICT="$(python3 "$_RR" normalize "$REPORT" 2>/dev/null)" \
+      || die "typed verdict normalization failed (report: $REPORT)"
   else
     VERDICT=UNKNOWN
   fi
-  if [[ $RC -eq 124 ]]; then
-    review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-      timed_out partial timeout "$VERDICT" || exit 78
-    echo "$LABEL: claude timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)" >&2
-    exit 124
-  elif [[ $RC -ne 0 ]]; then
-    review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-      exited partial runtime "$VERDICT" || exit 78
-    die "claude exited rc=$RC (partial work kept in $LOG_FILE)"
-  fi
-  if [[ "$VERDICT" == "UNKNOWN" ]]; then
-    review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-      exited partial no_verdict "$VERDICT" || exit 78
-    die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
-  fi
+fi
+if [[ $RC -eq 124 ]]; then
   review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-    exited complete "" "$VERDICT" || exit 78
-elif [[ $RC -ne 0 ]]; then
-  [[ $RC -eq 124 ]] && die "claude timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)"
+    timed_out partial timeout "$VERDICT" || exit 78
+  echo "$LABEL: claude timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)" >&2
+  exit 124
+fi
+if [[ $RC -ne 0 ]]; then
+  review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
+    exited partial runtime "$VERDICT" || exit 78
   die "claude exited rc=$RC (partial work kept in $LOG_FILE)"
 fi
-
+if [[ "$MODE" == "explore" ]]; then
+  review_workspace_require_explore_message "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE"
+  review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
+    exited complete "" "" || exit 78
+  exit 0
+fi
+if [[ "$VERDICT" == "UNKNOWN" ]]; then
+  review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
+    exited partial no_verdict "$VERDICT" || exit 78
+  die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
+fi
+review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
+  exited complete "" "$VERDICT" || exit 78
 exit 0

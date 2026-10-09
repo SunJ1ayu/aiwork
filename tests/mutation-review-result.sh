@@ -24,7 +24,9 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/tests"
 # 静默 cp 会把"少抄了一个文件"变成"守卫没生效但judge照跑" ⇒ 一律不吞错。
 cp "$IMPL" "$work/bin/"
-cp "$ORACLE" "$ROOT/tests/_no_egress.py" "$work/tests/"
+cp "$ORACLE" "$ROOT/tests/_no_egress.py" "$ROOT/tests/_test_settings.py" "$work/tests/"
+mkdir -p "$work/tests/fixtures"
+cp "$ROOT/tests/fixtures/verdict-lines.json" "$work/tests/fixtures/"
 
 # 基线:没变异必须全绿。基线红了后面每条都会"红",红检就成了摆设。
 if python3 "$work/tests/test_review_result.py" >"$work/base.log" 2>&1; then

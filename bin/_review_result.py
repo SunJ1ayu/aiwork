@@ -722,7 +722,7 @@ def parser() -> argparse.ArgumentParser:
     family = commands.add_parser("cursor-family", help="resolve a Cursor model's coverage family")
     family.add_argument("model")
     normalize = commands.add_parser("normalize", help="normalize the verdict in a review report")
-    normalize.add_argument("log", type=Path)
+    normalize.add_argument("report", type=Path)
     validate = commands.add_parser("validate", help="validate a ReviewLegResult v2 file")
     validate.add_argument("result", type=Path)
     eligible = commands.add_parser("eligible", help="test the shared coverage predicate")
@@ -793,7 +793,7 @@ def main() -> int:
             print(family)
             return 0
         if args.command == "normalize":
-            print(normalize_verdict(args.log.read_text(encoding="utf-8", errors="replace")))
+            print(normalize_verdict(args.report.read_text(encoding="utf-8", errors="replace")))
             return 0
         if args.command == "validate":
             load_result(args.result)

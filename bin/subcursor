@@ -49,6 +49,7 @@ fi
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcursor: missing ro-repo-exec; refusing dispatch' >&2; exit 78; }
 [[ -f "$BIN_DIR/_cursor-stream.py" ]] || die 'missing Composer stream decoder'
 . "$BIN_DIR/_review-workspace.sh" || die 'missing review workspace helper'
+review_workspace_reset_report || exit 78
 review_workspace_prepare "$SOURCE_REPO" subcursor || exit 78
 cleanup() {
   local rc=$?
@@ -147,7 +148,7 @@ run_cursor --workspace "$EMPTY_WORKSPACE" --add-dir "$REPO_DIR" \
       --disable-auto-update --disable-project-configs \
       --allowed-tools read_tool_call,grep_tool_call,glob_tool_call,ls_tool_call \
       < "$PROMPT_FILE" \
-  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL" "${LOG_FILE}.report"
+  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL" "$REPORT"
 STATUS=("${PIPESTATUS[@]}")
 set -e
 RC="${STATUS[0]}"
@@ -160,8 +161,9 @@ except (OSError, ValueError):
 PY
 )"
 VERDICT=UNKNOWN
-if [[ "$MODE" == review && -f "${LOG_FILE}.report" ]]; then
-  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "${LOG_FILE}.report")"
+if [[ "$MODE" == review && -s "$REPORT" ]]; then
+  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "$REPORT")" \
+    || die "typed verdict normalization failed (report: $REPORT)"
 fi
 if [[ "$RC" == 124 || "$RC" == 137 ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" timed_out partial timeout "$VERDICT" || exit 78
@@ -173,6 +175,9 @@ if [[ "$RC" != 0 || "${STATUS[1]}" != 0 || "${STATUS[2]}" != 0 ]]; then
   echo "subcursor: incomplete/failed run (cli=$RC, stream=${STATUS[1]}, decoder=${STATUS[2]}); see $STREAM and $SUMMARY" >&2
   [[ "$RC" != 0 ]] || RC=1
   exit "$RC"
+fi
+if [[ "$MODE" == explore ]]; then
+  review_workspace_require_explore_message "$MODEL" "$MODEL" "$BILLING" "$REPORTED"
 fi
 if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial no_verdict UNKNOWN || exit 78

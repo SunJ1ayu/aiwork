@@ -238,6 +238,7 @@ if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   [ -f "$_RW" ] || { echo "submimo: 找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)" >&2; exit 78; }
   # shellcheck source=_review-workspace.sh
   . "$_RW"
+  review_workspace_reset_report || exit 78
   if ! review_workspace_prepare "$SOURCE_REPO" submimo; then
     echo "submimo: review workspace 准备失败 ⇒ 模型未启动" >&2
     exit 78
@@ -320,9 +321,9 @@ if [[ -z "$ORACLE_CMD" ]]; then
   if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
     _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
     [ -f "$_RR" ] || die "typed verdict normalizer missing"
-    python3 - "$LOG_FILE" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
+    python3 - "$LOG_FILE" "$REPORT" <<'PY'
 import json, pathlib, sys
-log, local, dest = sys.argv[1:]
+log, dest = sys.argv[1:]
 # `mimo run --format json` emits step_start / text / tool_use / step_finish.
 # The report is every text part of the last text event's message, in the order
 # each part.id first appeared; a repeated part.id keeps its later text.
@@ -351,14 +352,12 @@ for line in pathlib.Path(log).read_text(encoding="utf-8", errors="replace").spli
 if last_id is None or last_id not in parts:
     raise SystemExit(0)
 body = "".join(parts[last_id][pid] for pid in order[last_id])
-pathlib.Path(local).write_text(body)
-if dest:
-    pathlib.Path(dest).write_text(body)
+pathlib.Path(dest).write_text(body)
 PY
     if [[ "$MODE" == "review" ]]; then
-      if [[ -f "${LOG_FILE}.report" ]]; then
-        VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
-          || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
+      if [[ -s "$REPORT" ]]; then
+        VERDICT="$(python3 "$_RR" normalize "$REPORT" 2>/dev/null)" \
+          || die "typed verdict normalization failed (report: $REPORT)"
       else
         VERDICT=UNKNOWN
       fi
@@ -387,6 +386,7 @@ PY
         review_workspace_write_facts "$MODEL" "$MODEL" subscription \
           exited partial runtime "" || exit 78
       else
+        review_workspace_require_explore_message "$MODEL" "$MODEL" subscription
         review_workspace_write_facts "$MODEL" "$MODEL" subscription \
           exited complete "" "" || exit 78
       fi
