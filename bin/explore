@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Ask selected legs for one direction each, from a snapshot of the repo's current main.
+
+Usage: explore BRIEF --repo DIR --leg A [--leg B ...]
+
+Each leg reads its own snapshot of DIR's current main and returns its last message.
+Reports stay on this machine, under the data directory explore/<brief>-<time>/<leg>.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _aiwork_config import data_path
+from _leg_session import (
+    READER_TIMEOUT_ENV,
+    READER_TIMEOUT_SECONDS,
+    ReviewError,
+    choose_leg,
+    current_main,
+    redact,
+    review_report,
+    run as _run,
+    run_leg_attempt as _run_leg_attempt,
+    snapshot_main,
+)
+from _review_result import EXPLORE_CONTRACT_VERSION, load_result, sha256_file
+
+BIN = Path(__file__).resolve().parent
+# 对方案的要求只写在这里，随任务书交给每一条腿。
+DIRECTION_REQUIREMENT = (
+    "提出一个方向，写清核心取舍、看到的盲点、最小的验证实验；不要写 PASS / BLOCK"
+)
+
+
+class LegFailure(Exception):
+    def __init__(self, leg: str, reason: str):
+        super().__init__(reason)
+        self.leg = leg
+        self.reason = reason
+
+
+def git(command, **kwargs) -> str:
+    return _run(command, subprocess_run=subprocess.run, redact=redact, **kwargs)
+
+
+def brief_name(path: Path) -> str:
+    name = path.name
+    if name.lower().endswith(".md"):
+        name = name[:-3]
+    name = name.strip().replace("/", "-")
+    return name or "brief"
+
+
+def task_text(brief: str) -> str:
+    body = brief if brief.endswith("\n") else brief + "\n"
+    return body + "\n" + DIRECTION_REQUIREMENT + "\n"
+
+
+def leg_env(base: dict[str, str], leg: str, frozen_model: str | None) -> dict[str, str]:
+    env = dict(base)
+    for key in ("GH_TOKEN", "GITHUB_TOKEN", "AIWORK_REVIEW_GIT_TOKEN", "GIT_ASKPASS"):
+        env.pop(key, None)
+    env["AIWORK_REVIEW_RESULT_BIN"] = str(BIN / "_review_result.py")
+    variable = READER_TIMEOUT_ENV.get(leg)
+    if variable and not env.get(variable):
+        env[variable] = READER_TIMEOUT_SECONDS
+    if frozen_model is not None:
+        env["CURSOR_MODEL"] = frozen_model
+    return env
+
+
+def failure_reason(result: dict, stderr_text: str) -> str | None:
+    kind = result["failure_kind"]
+    process = result["process"]
+    if kind == "none" and process == {"state": "exited", "exit_code": 0}:
+        return None
+    if kind not in (None, "none"):
+        reason = kind
+    else:
+        reason = f"process {process['state']} {process['exit_code']}"
+    if kind in {"runtime", "unknown", "none"} and stderr_text.strip():
+        tail = "\n".join(redact(stderr_text).splitlines()[-8:])
+        reason = f"{reason}: {tail}"
+    return reason
+
+
+def run_one(leg: str, family: str, frozen_model: str | None, brief: str,
+            source: Path, main_sha: str, out_dir: Path, base_env: dict[str, str]) -> Path:
+    with tempfile.TemporaryDirectory(prefix=f"aiwork-explore-{leg}-") as temporary:
+        directory = Path(temporary)
+        try:
+            repo = snapshot_main(source, directory, main_sha, run=git)
+            task = directory / "task.md"
+            task.write_text(task_text(brief), encoding="utf-8")
+            env = leg_env(base_env, leg, frozen_model)
+            result, report_path = _run_leg_attempt(
+                leg, family, task, repo, directory, env,
+                f"explore-{leg}", frozen_model,
+                run=git, subprocess_run=subprocess.run,
+                load_result=load_result, sha256_file=sha256_file, bin_dir=BIN,
+                mode="explore", review_contract_version=EXPLORE_CONTRACT_VERSION)
+        except (ReviewError, OSError) as exc:
+            raise LegFailure(leg, str(exc)) from exc
+        stderr_text = ""
+        diagnostic = directory / "leg.stderr"
+        if diagnostic.is_file():
+            stderr_text = diagnostic.read_text(encoding="utf-8", errors="replace")
+        reason = failure_reason(result, stderr_text)
+        if reason is None:
+            try:
+                text = review_report(report_path)
+            except ReviewError as exc:
+                reason = str(exc)
+            else:
+                target = out_dir / f"{leg}.md"
+                target.write_text(text, encoding="utf-8")
+                return target
+        raise LegFailure(leg, reason)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("brief", type=Path, help="brief file: goal, facts, constraints, premises")
+    parser.add_argument("--repo", type=Path, required=True, help="repository whose current main is snapshotted")
+    parser.add_argument("--leg", action="append", required=True, dest="legs", help="leg command, repeatable")
+    args = parser.parse_args()
+    args.repo = args.repo.resolve()
+    if len(args.legs) != len(set(args.legs)):
+        print("explore: repeated --leg", file=sys.stderr)
+        return 2
+    if not args.brief.is_file():
+        print(f"explore: brief not found: {args.brief}", file=sys.stderr)
+        return 2
+    brief = args.brief.read_text(encoding="utf-8")
+    try:
+        main_sha = current_main(args.repo, git)
+    except ReviewError as exc:
+        print(f"explore: {exc}", file=sys.stderr)
+        return 1
+    jobs = []
+    failures: list[LegFailure] = []
+    for name in args.legs:
+        try:
+            family, frozen = choose_leg(name, BIN)
+        except ReviewError as exc:
+            failures.append(LegFailure(name, str(exc)))
+            continue
+        jobs.append((name, family, frozen))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out_dir = data_path("explore") / f"{brief_name(args.brief)}-{stamp}"
+    if out_dir.exists():
+        out_dir = data_path("explore") / f"{brief_name(args.brief)}-{stamp}-{os.getpid()}"
+    out_dir.mkdir(parents=True)
+    saved: dict[str, Path] = {}
+    if jobs:
+        base_env = dict(os.environ)
+        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            futures = [
+                pool.submit(run_one, name, family, frozen, brief, args.repo, main_sha, out_dir, base_env)
+                for name, family, frozen in jobs
+            ]
+            for future in futures:
+                try:
+                    path = future.result()
+                except LegFailure as exc:
+                    failures.append(exc)
+                else:
+                    saved[path.name[:-3]] = path
+    for name in args.legs:
+        if name in saved:
+            print(saved[name])
+    for failure in failures:
+        print(f"explore: {failure.leg} failed: {failure.reason}", file=sys.stderr)
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

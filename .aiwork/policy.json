@@ -41,6 +41,7 @@
     "bin/privacy-check",
     "bin/_secret-shapes",
     "bin/_secret_shapes.py",
-    "bin/review-pr"
+    "bin/review-pr",
+    "bin/_leg_session.py"
   ]
 }

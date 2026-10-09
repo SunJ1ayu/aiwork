@@ -138,22 +138,24 @@ fi
 
 PROMPT_FILE="$REVIEW_WORKSPACE_DIR/prompt.md"
 LAST_MSG="$REVIEW_WORKSPACE_DIR/last-message.md"
-cat > "$PROMPT_FILE" <<'EOF'
+if [[ "$MODE" == review ]]; then
+  cat > "$PROMPT_FILE" <<'EOF'
 You are an independent reviewer working in a disposable writable snapshot of a repository.
 Read the actual files yourself and verify the task's claims; do not take them at face value.
 You may run local tests, lint, builds and diagnostics; their outputs may be written only inside
 this snapshot. Do not intentionally edit source files. Do not push, merge, install dependencies,
 run migrations, access production, change credentials, browse the web, spawn sub-agents, or
 invoke other AI models / AI CLIs. Do not wait for user input.
-EOF
-if [[ "$MODE" == review ]]; then
-  cat >> "$PROMPT_FILE" <<'EOF'
 Give findings with severity, file:line evidence and reasoning.
 EOF
 else
-  cat >> "$PROMPT_FILE" <<'EOF'
-This is a design exploration, not a review: propose ONE concrete direction, state assumptions,
-tradeoffs and blind spots of the brief. Do not output PASS/BLOCK.
+  cat > "$PROMPT_FILE" <<'EOF'
+You are reading a disposable snapshot of a repository.
+Read the actual files yourself and verify the task's claims; do not take them at face value.
+You may run local tests, lint, builds and diagnostics; their outputs may be written only inside
+this snapshot. Do not intentionally edit source files. Do not push, merge, install dependencies,
+run migrations, access production, change credentials, browse the web, spawn sub-agents, or
+invoke other AI models / AI CLIs. Do not wait for user input.
 EOF
 fi
 printf '\n--- TASK ---\n' >> "$PROMPT_FILE"

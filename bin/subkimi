@@ -35,8 +35,9 @@ REVIEW_HOME="${KIMI_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path kimi-revie
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  subkimi review TASK_FILE LOG_FILE [REPO_DIR]
-  subkimi fix    TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
+  subkimi review  TASK_FILE LOG_FILE [REPO_DIR]
+  subkimi explore TASK_FILE LOG_FILE [REPO_DIR]
+  subkimi fix     TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
 
 Runs Kimi (Moonshot kimi-code CLI, headless) as an isolated review sub-agent.
 The reviewer reads and tests a disposable clone; the source repo remains
@@ -66,9 +67,9 @@ if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
 
-if [[ "$MODE" == "review" ]]; then
+if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
-    || die "review needs a Git worktree with HEAD: $SOURCE_REPO"
+    || die "review/explore needs a Git worktree with HEAD: $SOURCE_REPO"
   SOURCE_REPO="$(cd "$_SOURCE_TOP" && pwd -P)" || die "cannot resolve source repo: $_SOURCE_TOP"
   REPO_DIR="$SOURCE_REPO"
 fi
@@ -135,7 +136,7 @@ TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 if [[ "$MODE" == "fix" ]]; then
   die "fix is not supported on this command. Change code in your own worktree."
 fi
-[[ "$MODE" == "review" ]] || { usage; exit 2; }
+[[ "$MODE" == "review" || "$MODE" == "explore" ]] || { usage; exit 2; }
 
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
@@ -189,6 +190,15 @@ mkdir -p "$(dirname "$LOG_FILE")"
 # E2BIG(这条腿 rc=126 直接起不来)、`git diff | head -c N` 在本文件的
 # `set -euo pipefail` 下让 git 吃 SIGPIPE **静默暴毙 rc=141 一个字不留**。
 # 现在腿在独立副本里自己看 diff 并跑本地检查；原仓由只读挂载承重。
+if [[ "$MODE" == "explore" ]]; then
+PROMPT="You are reading a disposable snapshot of a repository.
+Read it with Read, Glob, Grep, and Bash. The original repository stays read-only.
+Answer the task in your final message. Do not modify source files, push, merge,
+install dependencies, or spawn other agents.
+
+--- TASK ---
+$(cat "$TASK_FILE")"
+else
 PROMPT="You are an independent code reviewer running inside a disposable writable repository snapshot.
 Explore the repository yourself with the tools you have
 (Read, Glob, Grep, and Bash for local tests, lint, build, and diagnostics).
@@ -205,11 +215,12 @@ Report findings with file:line references and a severity each.
 
 --- REVIEW TASK ---
 $(cat "$TASK_FILE")"
+fi
 
 {
-  echo "# subkimi review log"
+  echo "# subkimi $MODE log"
   echo "time: $(date -Iseconds)"
-  echo "mode: review (agent base: kimi-code headless)"
+  echo "mode: $MODE (agent base: kimi-code headless)"
   echo "model: $MODEL"
   echo "review_home: $REVIEW_HOME"
   echo "repo: $REPO_DIR"
@@ -275,12 +286,17 @@ if [[ $RC -ne 0 ]]; then
 fi
 [[ $RC -eq 0 ]] || die "kimi exited rc=$RC (log: $LOG_FILE)"
 
-if [[ "$VERDICT" == "UNKNOWN" ]]; then
+if [[ "$MODE" == "review" && "$VERDICT" == "UNKNOWN" ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" subscription \
     exited partial no_verdict "$VERDICT" || exit 78
   die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
 fi
-review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-  exited complete "" "$VERDICT" || exit 78
+if [[ "$MODE" == "review" ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    exited complete "" "$VERDICT" || exit 78
+else
+  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+    exited complete "" "" || exit 78
+fi
 
 exit 0

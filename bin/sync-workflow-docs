@@ -33,10 +33,16 @@ TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd -P)" || exit 2
 
 ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
 SOURCE="$ROOT/workflow"
-MAPPINGS=(
-  "CLAUDE.md|CLAUDE.md"
-  "skills/delegate/SKILL.md|.claude/skills/delegate/SKILL.md"
-)
+workflow_mappings() {
+  local skill name
+  printf '%s\n' 'CLAUDE.md|CLAUDE.md'
+  for skill in "$SOURCE"/skills/*/SKILL.md; do
+    [[ -f "$skill" ]] || continue
+    name="$(basename "$(dirname "$skill")")"
+    printf '%s\n' "skills/${name}/SKILL.md|.claude/skills/${name}/SKILL.md"
+  done
+}
+mapfile -t MAPPINGS < <(workflow_mappings)
 
 has_symlink_component() {  # has_symlink_component <relative destination>
   local rel="$1" here="$TARGET_ROOT" part

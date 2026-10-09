@@ -10,7 +10,7 @@ usage() {
 Usage: subcursor <review|explore> TASK_FILE LOG_FILE [REPO_DIR]
 
 Cursor reads a disposable snapshot with read/search/list tools only.
-review requires a verdict; explore requires one direction and its tradeoffs.
+review requires a verdict; explore returns the last message and does not require one.
 No fix mode, shell execution, or chat fallback.
 
 Environment:
@@ -105,14 +105,6 @@ if [[ "$MODE" == review ]]; then
   cat >> "$PROMPT_FILE" <<'EOF'
 Review the task. Give findings with severity, file:line evidence and reasoning.
 EOF
-else
-  cat >> "$PROMPT_FILE" <<'EOF'
-Propose exactly ONE concrete direction. State assumptions and tradeoffs, and
-ground it in the repository. Do not output PASS/BLOCK or a menu of alternatives.
-Use all these labels, with substantive content for each:
-Direction: / Core bet: / How it works: / Best at: / Sacrifices: /
-Blind spots in the brief: / Smallest first step:
-EOF
 fi
 printf '\nRepository snapshot to read: %s\n--- TASK ---\n' "$REPO_DIR" >> "$PROMPT_FILE"
 printf 'Snapshot diff to read: %s/review.diff\n' "$EMPTY_WORKSPACE" >> "$PROMPT_FILE"
@@ -186,15 +178,8 @@ if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
   review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial no_verdict UNKNOWN || exit 78
   die "model returned no verdict (log: $LOG_FILE)"
 fi
-if [[ "$MODE" == explore ]]; then
-  python3 - "$LOG_FILE" <<'PY' || die 'incomplete direction paper'
-import re, sys
-text = open(sys.argv[1]).read()
-for label in ('Direction', 'Core bet', 'How it works', 'Best at', 'Sacrifices',
-              'Blind spots in the brief', 'Smallest first step'):
-    if not re.search(r'(?m)^\s*(?:[-*+]\s+)?(?:#+\s*)?(?:\*{1,2})?'
-                     + re.escape(label) + r'(?:\*{1,2})?\s*:', text):
-        raise SystemExit('subcursor: missing explore section: ' + label)
-PY
+if [[ "$MODE" == review ]]; then
+  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited complete "" "$VERDICT" false "$REPORTED" || exit 78
+else
+  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited complete "" "" false "$REPORTED" || exit 78
 fi
-review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited complete "" "$VERDICT" false "$REPORTED" || exit 78

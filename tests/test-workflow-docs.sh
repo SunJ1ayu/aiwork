@@ -13,16 +13,22 @@ ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 
-MAPPINGS=(
-  "CLAUDE.md|CLAUDE.md"
-  "skills/delegate/SKILL.md|.claude/skills/delegate/SKILL.md"
-)
+workflow_mappings() {
+  local skill name
+  printf '%s\n' 'CLAUDE.md|CLAUDE.md'
+  for skill in "$SOURCE"/skills/*/SKILL.md; do
+    [[ -f "$skill" ]] || continue
+    name="$(basename "$(dirname "$skill")")"
+    printf '%s\n' "skills/${name}/SKILL.md|.claude/skills/${name}/SKILL.md"
+  done
+}
+mapfile -t MAPPINGS < <(workflow_mappings)
 
 echo "=== workflow docs oracle ==="
 # 家目录里那份部署副本是本机状态。同步器对临时目录的行为由下面 W2 问;
 # 这台机器的副本是否跟上,不在仓库判据里。
 
-echo "[W2] 同步器只管固定清单，漂移默认拒绝、显式 force 才覆盖"
+echo "[W2] 同步器按 workflow/skills/*/SKILL.md 推导 skill，漂移默认拒绝、显式 force 才覆盖"
 if [[ -x "$SYNC" ]]; then
   d="$(mktemp -d)"; outside="$(mktemp)"
   mkdir -p "$d/.claude/skills/track"

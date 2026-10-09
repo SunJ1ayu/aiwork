@@ -26,8 +26,7 @@ Modes:
            self-built `aiwork-review` agent — **NOT** the built-in
            `plan` agent: 2026-08-19 实测它自称 Disallows all edit tools,
            实际 bash/write/edit/task 全开 + 权限 `*` allow。
-  explore  Read-only divergent design pass: propose ONE direction from this
-           model's angle + flag blind spots in the brief.
+  explore  Read the repository and return the model's last message.
   fix      Small scoped code changes. Uses MiMoCode build agent.
 
 Fix-only options (goal-based bounded loop; oracle is DEFAULT-ON):
@@ -188,8 +187,8 @@ tools = {"write": False, "edit": False, "patch": False, "task": False,
 if mode == "review":
     bash_perm = "allow"
 else:
-    # explore remains the old no-execution divergent pass. Its prompt says no
-    # tools; keep the mechanical Bash surface at read-only git as a backstop.
+    # explore reads the repo. Bash stays limited to read-only git; read/glob/grep
+    # are the file tools. The task states what the answer must contain.
     bash_perm = {"*": "deny", "git diff*": "allow", "git log*": "allow",
                  "git status*": "allow", "git show*": "allow"}
 perm = {"write": "deny", "edit": "deny", "patch": "deny", "task": "deny",
@@ -217,7 +216,7 @@ case "$MODE" in
     ;;
   explore)
     AGENT="$REVIEW_AGENT"
-    MESSAGE='Read the attached task file first; it is a DESIGN BRIEF, not a review. You are one of several different models each answering the SAME brief in isolation - you cannot see the others. Your value is the angle YOUR perspective favors, not consensus. CRITICAL: Answer purely from the attached brief. Do NOT use any tools - no file reads, no glob, no grep, no codebase exploration, no shell. Your FIRST and ONLY action is to output the answer as text right now; calling any tool is a failure. The brief is self-contained; you do not need repo files. Propose exactly ONE concrete direction; do NOT hedge across multiple options and do NOT output PASS/BLOCK/approve/reject. Commit to a position even under uncertainty, stating your assumptions. Ground claims in the brief; do not invent facts. This is read-only: do not modify, create, or delete files, do not push, install dependencies, or access production systems, and do not wait for user input. Output now using exactly these labels: Direction / Core bet / How it works / Best at / Sacrifices / Blind spots in the brief / Smallest first step. Under "Blind spots in the brief", call out what the brief seems to be missing, mis-framing, or under-specifying - risks the author may not have seen.'
+    MESSAGE='Read the attached task file and the repository with read, glob, and grep. Answer in your final message. Do not modify, create, or delete files, do not push, install dependencies, access production systems, or spawn other agents.'
     ;;
   fix)
     AGENT="build"
@@ -231,10 +230,10 @@ esac
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# review 独占一份可写 snapshot；explore 仍是无工具发散，fix 仍直接写原仓。
+# review 和 explore 都在可写副本里读仓库，调用方给的原仓只读挂载。fix 仍直接写原仓。
 REVIEW_WORKSPACE_ACTIVE=0
 CLEANUP_TASK=""
-if [[ "$MODE" == "review" ]]; then
+if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   _RW="$BIN_DIR/_review-workspace.sh"
   [ -f "$_RW" ] || { echo "submimo: 找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)" >&2; exit 78; }
   # shellcheck source=_review-workspace.sh
@@ -277,7 +276,7 @@ case "$TASK_REAL" in
 esac
 
 MIMO_FORMAT=default
-[[ "$MODE" == review ]] && MIMO_FORMAT=json
+[[ "$MODE" == review || "$MODE" == explore ]] && MIMO_FORMAT=json
 CMD=(mimo run --agent "$AGENT" --dir "$REPO_DIR" --format "$MIMO_FORMAT" -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
 if [[ -n "$MIMO_MODEL_CFG" ]]; then
   CMD=(env "MIMOCODE_CONFIG_CONTENT=$MIMO_MODEL_CFG" "${CMD[@]}")
@@ -302,7 +301,7 @@ run_mimo_once() {
     # </dev/null:mimo 是交互优先 CLI,stdin 若是"开着但无数据"的管道会等输入 →
     # 挂死或启动后静默退出(2026-07-02 实测复现+对照确认);显式关死 stdin 免疫之。
     (
-      [[ "$MODE" != "review" ]] || cd "$REPO_DIR" || exit 78
+      [[ "$MODE" == "fix" ]] || cd "$REPO_DIR" || exit 78
       ${RO_EXEC[@]+"${RO_EXEC[@]}"} timeout -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
     )
   } 2>&1 | tee -a "$LOG_FILE"
@@ -318,7 +317,7 @@ protect_hash() {
 if [[ -z "$ORACLE_CMD" ]]; then
   : > "$LOG_FILE"
   mimo_rc=0; run_mimo_once || mimo_rc=$?
-  if [[ "$MODE" == "review" ]]; then
+  if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
     _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
     [ -f "$_RR" ] || die "typed verdict normalizer missing"
     python3 - "$LOG_FILE" "${LOG_FILE}.report" "${AIWORK_REVIEW_REPORT_PATH:-}" <<'PY'
@@ -356,24 +355,41 @@ pathlib.Path(local).write_text(body)
 if dest:
     pathlib.Path(dest).write_text(body)
 PY
-    if [[ -f "${LOG_FILE}.report" ]]; then
-      VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
-        || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
+    if [[ "$MODE" == "review" ]]; then
+      if [[ -f "${LOG_FILE}.report" ]]; then
+        VERDICT="$(python3 "$_RR" normalize "${LOG_FILE}.report" 2>/dev/null)" \
+          || die "typed verdict normalization failed (report: ${LOG_FILE}.report)"
+      else
+        VERDICT=UNKNOWN
+      fi
+      if [[ $mimo_rc -eq 124 ]]; then
+        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+          timed_out partial timeout "$VERDICT" || exit 78
+      elif [[ $mimo_rc -ne 0 ]]; then
+        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+          exited partial runtime "$VERDICT" || exit 78
+      elif [[ "$VERDICT" == "UNKNOWN" ]]; then
+        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+          exited complete no_verdict "$VERDICT" || exit 78
+      else
+        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+          exited complete "" "$VERDICT" || exit 78
+      fi
     else
-      VERDICT=UNKNOWN
-    fi
-    if [[ $mimo_rc -eq 124 ]]; then
-      review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-        timed_out partial timeout "$VERDICT" || exit 78
-    elif [[ $mimo_rc -ne 0 ]]; then
-      review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-        exited partial runtime "$VERDICT" || exit 78
-    elif [[ "$VERDICT" == "UNKNOWN" ]]; then
-      review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-        exited complete no_verdict "$VERDICT" || exit 78
-    else
-      review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-        exited complete "" "$VERDICT" || exit 78
+      # explore 不看裁决行。失败原因要出现在 stderr 上，调用方才写得清是这条腿。
+      if [[ $mimo_rc -ne 0 ]]; then
+        tail -n 8 "$LOG_FILE" >&2 || true
+      fi
+      if [[ $mimo_rc -eq 124 ]]; then
+        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+          timed_out partial timeout "" || exit 78
+      elif [[ $mimo_rc -ne 0 ]]; then
+        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+          exited partial runtime "" || exit 78
+      else
+        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
+          exited complete "" "" || exit 78
+      fi
     fi
   fi
   exit "$mimo_rc"

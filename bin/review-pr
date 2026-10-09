@@ -19,8 +19,18 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _review_result import leg_identity, load_result, sha256_file
-from _aiwork_config import ConfigError, data_path, model as configured_model
-from _secret_shapes import redact_shapes
+from _aiwork_config import data_path, model as configured_model
+from _leg_session import (
+    READER_TIMEOUT_ENV,
+    READER_TIMEOUT_SECONDS,
+    ReviewError,
+    choose_leg as _choose_leg,
+    redact,
+    review_report as _review_report,
+    run as _run,
+    run_leg_attempt as _run_leg_attempt,
+    snapshot as _snapshot,
+)
 
 
 BIN = Path(__file__).resolve().parent
@@ -51,17 +61,6 @@ class Change(NamedTuple):
     removed: int | None
 
 
-READER_TIMEOUT_ENV = {
-    "subdeepseek-agent": "DEEPSEEK_TIMEOUT",
-    "subcodex": "SUBCODEX_TIMEOUT", "subcursor": "CURSOR_TIMEOUT",
-    "submimo": "MIMO_CLI_TIMEOUT", "subkimi": "KIMI_TIMEOUT",
-}
-
-
-class ReviewError(ValueError):
-    pass
-
-
 class PrivacyError(ReviewError):
     pass
 
@@ -85,32 +84,7 @@ def repository_from_origin() -> str:
 
 
 def choose_leg(name: str) -> tuple[str, str | None]:
-    """The family this review is published under, and the model frozen for this run.
-
-    A leg only has to be attributable to one family. Which families count for which
-    PR is the gate's call (gate/decide.mjs), not this tool's.
-    Cursor's model is frozen once here (CURSOR_MODEL, else ~/.config/aiwork/models.env)
-    and decides the family.
-    """
-    model = None
-    if name == "subcursor":
-        try:
-            model = configured_model('cursor', os.environ.get('CURSOR_MODEL'))
-        except ConfigError as exc:
-            raise ReviewError(str(exc)) from exc
-    identity = leg_identity(name, model)
-    if identity is None or not (BIN / name).is_file():
-        raise ReviewError(f"unsupported review leg: {name}" + (f" (model {model!r})" if model else ""))
-    return identity[0], model
-
-
-def redact(text: str) -> str:
-    text = redact_shapes(text)
-    value = r'''(?:"[^"]*"|'[^']*'|[^\s,;]+)'''
-    text = re.sub(r'''(?i)(?<![\w-])((?:[a-z_][a-z0-9_]*)?(?:token|key|secret|password)|api-key)(["']?\s*[:=]\s*)''' + value,
-                  r"\1\2[redacted]", text)
-    text = re.sub(r"(?i)(\bBearer\s+)" + value, r"\1[redacted]", text)
-    return text
+    return _choose_leg(name, BIN)
 
 
 def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = True) -> None:
@@ -142,14 +116,8 @@ def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = T
 
 def run(command: list[str], *, env: dict[str, str] | None = None,
         input_text: str | None = None, cwd: Path | None = None) -> str:
-    process = subprocess.run(command, input=input_text, text=True, capture_output=True,
-                             cwd=cwd, env=env, check=False)
-    if process.returncode:
-        reason = process.stderr.strip() or process.stdout.strip() or f"exit {process.returncode}"
-        # Provider and Git errors are diagnostics, never a place to echo credentials.
-        reason = redact(reason)
-        raise ReviewError(f"{Path(command[0]).name} failed (rc={process.returncode}): {reason[:800]}")
-    return process.stdout
+    return _run(command, env=env, input_text=input_text, cwd=cwd,
+                subprocess_run=subprocess.run, redact=redact)
 
 
 def github(token: str, endpoint: str, payload: dict | None = None) -> dict:
@@ -191,34 +159,8 @@ def check_current_head(expected: str, current: dict) -> None:
 
 def snapshot(token: str, pr: dict, directory: Path, *, repository: str
              ) -> tuple[Path, str, list[str], str, list[Change]]:
-    repo = directory / "repo"
-    repo.mkdir()
-    run(["git", "init", "-q", str(repo)])
-    askpass = directory / "askpass"
-    askpass.write_text(
-        "#!/bin/sh\ncase \"$1\" in *sername*) printf x-access-token;; *) printf %s \"$AIWORK_REVIEW_GIT_TOKEN\";; esac\n",
-        encoding="utf-8",
-    )
-    askpass.chmod(0o700)
-    env = dict(os.environ, GIT_ASKPASS=str(askpass), GIT_TERMINAL_PROMPT="0",
-               AIWORK_REVIEW_GIT_TOKEN=token)
-    head = pr["head"]["sha"]
-    base = pr["base"]["sha"]
-    run(["git", "-C", str(repo), "-c", "credential.helper=", "fetch", "-q", "--no-tags",
-         f"https://github.com/{repository}.git", head, base, "refs/heads/main:refs/aiwork/main"], env=env)
-    run(["git", "-C", str(repo), "checkout", "-q", "--detach", head])
-    if run(["git", "-C", str(repo), "rev-parse", "HEAD"]).strip() != head:
-        raise ReviewError("snapshot HEAD differs from PR head")
-    # The reviewer sees a complete checkout, not a sparse or partial worktree.
-    if "160000 " in run(["git", "-C", str(repo), "ls-files", "--stage"]):
-        raise ReviewError("snapshot contains submodules; full view cannot be verified")
-    merge_base = run(["git", "-C", str(repo), "merge-base", base, head]).strip()
-    files, diff, changes = collect_review_diff(repo, merge_base, head)
-    if not files:
-        raise ReviewError("PR has no changed files relative to merge base")
-    if not diff.strip():
-        raise ReviewError("PR diff is empty")
-    return repo, merge_base, files, diff, changes
+    return _snapshot(token, pr, directory, repository=repository,
+                     run=run, collect_review_diff=collect_review_diff)
 
 
 def main_document(repo: Path, path: str, *, required: bool = True) -> str:
@@ -473,34 +415,15 @@ def build_body(leg: str, model: str, report: str, block: dict,
 def review_report(report: Path) -> str:
     # The leg writes the model's last message to this file. The log keeps the
     # whole process; publication never reconstructs a report from that text.
-    if not report.is_file():
-        raise ReviewError(f"review leg did not write the report file {report}; refusing to publish")
-    text = report.read_text(encoding="utf-8", errors="replace")
-    if not text.strip():
-        raise ReviewError(f"review leg wrote an empty report file {report}; refusing to publish")
-    return text
+    return _review_report(report)
 
 
 def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, directory: Path,
                     env: dict[str, str], run_id: str, frozen_model: str | None) -> tuple[dict, Path]:
-    log, facts = directory / "review.log", directory / "facts.json"
-    report = directory / "report.md"
-    result_file, diagnostic = directory / "result.json", directory / "leg.stderr"
-    env = dict(env, AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_REPORT_PATH=str(report))
-    leg = subprocess.run([str(BIN / leg_name), "review", str(task), str(log), str(repo)],
-                         text=True, capture_output=True, env=env, check=False)
-    diagnostic.write_text(leg.stderr, encoding="utf-8")
-    command = [sys.executable, str(BIN / "_review_result.py"), "emit", "--result", str(result_file),
-               "--run-id", run_id, "--name", leg_name, "--family", family, "--adapter", leg_name,
-               "--exit-code", str(leg.returncode), "--task-sha256", sha256_file(task),
-               "--log", str(log), "--diagnostic", str(diagnostic)]
-    if facts.is_file():
-        command += ["--facts", str(facts)]
-    command += ["--report", str(report)]
-    if frozen_model is not None:
-        command += ["--expected-model", frozen_model]
-    run(command)
-    return load_result(result_file), report
+    return _run_leg_attempt(
+        leg_name, family, task, repo, directory, env, run_id, frozen_model,
+        run=run, subprocess_run=subprocess.run, load_result=load_result,
+        sha256_file=sha256_file, bin_dir=BIN)
 
 
 def main() -> int:
@@ -546,7 +469,7 @@ def main() -> int:
                            PANEL_DIFF_BASE=merge_base, AIWORK_REVIEW_PR="1")
                 timeout_variable = READER_TIMEOUT_ENV.get(selected_leg)
                 if timeout_variable and not env.get(timeout_variable):
-                    env[timeout_variable] = "2400"
+                    env[timeout_variable] = READER_TIMEOUT_SECONDS
                 if frozen_model is not None:
                     env["CURSOR_MODEL"] = frozen_model
                 attempt_directory = directory
