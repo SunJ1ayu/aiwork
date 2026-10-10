@@ -61,7 +61,9 @@ class LegFinish(unittest.TestCase):
         env["DEEPSEEK_API_KEY"] = "test-key"
         env["KIMI_REVIEW_HOME"] = str(self.root / "kimi-home")
         env["MIMO_REVIEW_HOME"] = str(self.root / "mimo-home")
+        env["CURSOR_AUTH_FILE"] = str(self.root / "home" / ".config" / "cursor" / "auth.json")
         env.pop("CURSOR_API_KEY", None)
+        env.pop("XDG_CONFIG_HOME", None)
         return env
 
     def _write(self, name, body):
