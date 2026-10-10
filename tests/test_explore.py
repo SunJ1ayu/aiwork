@@ -533,7 +533,7 @@ class ExploreLegContractTests(unittest.TestCase):
         self.assertFalse(self.report.exists())
         self.assertFalse((self.root / "leg.log.report").exists())
         facts = json.loads(self.facts.read_text(encoding="utf-8"))
-        self.assertEqual(facts["failure_kind"], "runtime")
+        self.assertIsNone(facts["failure_kind"])
 
     def test_subagent_explore_writes_the_report_only_at_the_requested_path(self):
         answer = "Direction noted.\n"
@@ -631,7 +631,7 @@ class ExploreLegContractTests(unittest.TestCase):
                 recorded = json.loads(facts.read_text(encoding="utf-8"))
                 self.assertEqual(recorded["process_state"], "exited")
                 self.assertEqual(recorded["evidence_completeness"], "partial")
-                self.assertEqual(recorded["failure_kind"], "runtime")
+                self.assertIsNone(recorded["failure_kind"])
                 self.assertIsNone(recorded["verdict"])
 
     def _blank_subagent(self, log, report, facts):

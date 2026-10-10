@@ -262,43 +262,21 @@ PY
 # Verdict gate shares the contract normalizer with the terminal producer.  The
 # adapter publishes what it actually observed; it does not decide coverage.
 # explore 不归一结论行。
-VERDICT=UNKNOWN
+VERDICT=""
 if [[ "$MODE" == "review" ]]; then
   _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
   [ -f "$_RR" ] || die "typed verdict normalizer missing"
   if [[ -s "$REPORT" ]]; then
     VERDICT="$(python3 "$_RR" normalize "$REPORT" 2>/dev/null)" \
       || die "typed verdict normalization failed (report: $REPORT)"
+  else
+    VERDICT=UNKNOWN
   fi
 fi
 
-# A timeout is not a successful review. Publish the facts, then return 124 so a
-# later reader cannot treat the run as coverage.
-if [[ $RC -eq 124 ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-    timed_out partial timeout "$VERDICT" || exit 78
-  echo "subkimi: timed out after ${TIMEOUT_SECONDS}s (log: $LOG_FILE)" >&2
-  exit 124
-fi
-if [[ $RC -ne 0 ]]; then
-  # kimi 把供应商错误打在自己的输出里(进了腿日志),不在我们的 stderr;终端产物只按我们的
-  # 诊断归类(不扫模型正文)。09-09 "5-hour usage limit" 因此被记成 runtime。只抄 CLI 自己的错误行。
+# kimi 把供应商错误打在自己的输出里(进了腿日志),不在我们的 stderr;终端产物只按我们的
+# 诊断归类(不扫模型正文)。09-09 "5-hour usage limit" 因此被记成 runtime。只抄 CLI 自己的错误行。
+if [[ $RC -ne 0 && $RC -ne 124 ]]; then
   { grep -a -E '^error: failed to run prompt:' "$LOG_FILE" || true; } | tail -n 3 >&2
 fi
-[[ $RC -eq 0 ]] || die "kimi exited rc=$RC (log: $LOG_FILE)"
-
-if [[ "$MODE" == "explore" ]]; then
-  review_workspace_require_explore_message "$MODEL" "$MODEL" subscription
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-    exited complete "" "" || exit 78
-  exit 0
-fi
-if [[ "$VERDICT" == "UNKNOWN" ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-    exited partial no_verdict "$VERDICT" || exit 78
-  die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
-fi
-review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-  exited complete "" "$VERDICT" || exit 78
-
-exit 0
+review_workspace_finish subkimi "$RC" "$MODE" "$VERDICT" "$MODEL" subscription "" "" ""

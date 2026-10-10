@@ -97,7 +97,8 @@ class VerdictContract(LegCase):
         proc = self.run_cmd(["bash", str(self.bin / "submimo"), "review", str(self.task),
                              str(self.d / "m.log"), str(self.repo)],
                             CAPTURE=str(cap), MIMO_REVIEW_HOME=str(self.d / "mimohome"))
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("no verdict", proc.stderr)
         argv = json.loads(cap.read_text())["argv"]
         message = argv[argv.index("--file") - 1]
         self.assertNotIn("Conclusion:", message)

@@ -5,7 +5,7 @@
 #   review_workspace_reset_report
 #   review_workspace_prepare SOURCE_REPO LEG_NAME
 #   repo="$(review_workspace_repo)"
-#   review_workspace_require_explore_message REQUESTED INVOKED BILLING [REPORTED]
+#   review_workspace_finish LEG RC MODE VERDICT MODEL BILLING REPORTED DEGRADED RECOGNIZED
 #   review_workspace_cleanup
 #
 # The source repository is never checked out or indexed through its own .git.
@@ -299,18 +299,50 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
     "${outcome[@]}"
 }
 
-# Explore has to hand over a final message. A report with at least one
-# non-whitespace character returns. Otherwise every leg writes the same
-# facts and exits with the same sentence.
-review_workspace_require_explore_message() { # requested invoked billing [reported]
-  if [[ -f "${REPORT:-}" ]] && grep -q '[^[:space:]]' -- "$REPORT"; then
-    return 0
+# One finish for every leg, after the model returns. The leg passes what it
+# already observed. Exit 124, any other nonzero exit, explore with or without
+# a final message, and review with or without a verdict are decided here once.
+# A final explore message needs at least one non-whitespace character.
+review_workspace_finish() { # leg rc mode verdict model billing reported degraded recognized
+  local leg="${1:-}" rc="${2:-0}" mode="${3:-}" verdict="${4:-}" model="${5:-}"
+  [[ -n "$leg" ]] || { review_workspace__say 'finish 缺腿名'; exit 78; }
+  local billing="${6:-subscription}" reported="${7:-}" degraded="${8:-}" recognized="${9:-}"
+  if [[ "$rc" == 124 ]]; then
+    review_workspace_write_facts "$model" "$model" "$billing" \
+      timed_out partial timeout "$verdict" "$degraded" "$reported" || exit 78
+    printf '%s\n' "timed out (log: $LOG_FILE)" >&2
+    exit 124
   fi
-  local requested="${1:-}" invoked="${2:-}" billing="${3:-subscription}" reported="${4:-}"
-  review_workspace_write_facts "$requested" "$invoked" "$billing" \
-    exited partial runtime "" "" "$reported" || exit 78
-  printf '%s\n' "explore produced no final message (log: $LOG_FILE)" >&2
-  exit 1
+  if [[ "$rc" != 0 ]]; then
+    review_workspace_write_facts "$model" "$model" "$billing" \
+      exited partial "$recognized" "$verdict" "$degraded" "$reported" || exit 78
+    if [[ -n "$recognized" ]]; then
+      printf '%s\n' "exited rc=$rc ($recognized) (log: $LOG_FILE)" >&2
+    else
+      printf '%s\n' "exited rc=$rc (log: $LOG_FILE)" >&2
+    fi
+    exit "$rc"
+  fi
+  if [[ "$mode" == explore ]]; then
+    if [[ -f "${REPORT:-}" ]] && grep -q '[^[:space:]]' -- "$REPORT"; then
+      review_workspace_write_facts "$model" "$model" "$billing" \
+        exited complete "" "" "$degraded" "$reported" || exit 78
+      exit 0
+    fi
+    review_workspace_write_facts "$model" "$model" "$billing" \
+      exited partial "" "" "$degraded" "$reported" || exit 78
+    printf '%s\n' "explore produced no final message (log: $LOG_FILE)" >&2
+    exit 1
+  fi
+  if [[ -z "$verdict" || "$verdict" == UNKNOWN ]]; then
+    review_workspace_write_facts "$model" "$model" "$billing" \
+      exited partial no_verdict UNKNOWN "$degraded" "$reported" || exit 78
+    printf '%s\n' "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)" >&2
+    exit 1
+  fi
+  review_workspace_write_facts "$model" "$model" "$billing" \
+    exited complete "" "$verdict" "$degraded" "$reported" || exit 78
+  exit 0
 }
 
 review_workspace_cleanup() {

@@ -354,6 +354,7 @@ if last_id is None or last_id not in parts:
 body = "".join(parts[last_id][pid] for pid in order[last_id])
 pathlib.Path(dest).write_text(body)
 PY
+    VERDICT=""
     if [[ "$MODE" == "review" ]]; then
       if [[ -s "$REPORT" ]]; then
         VERDICT="$(python3 "$_RR" normalize "$REPORT" 2>/dev/null)" \
@@ -361,36 +362,8 @@ PY
       else
         VERDICT=UNKNOWN
       fi
-      if [[ $mimo_rc -eq 124 ]]; then
-        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-          timed_out partial timeout "$VERDICT" || exit 78
-      elif [[ $mimo_rc -ne 0 ]]; then
-        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-          exited partial runtime "$VERDICT" || exit 78
-      elif [[ "$VERDICT" == "UNKNOWN" ]]; then
-        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-          exited complete no_verdict "$VERDICT" || exit 78
-      else
-        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-          exited complete "" "$VERDICT" || exit 78
-      fi
-    else
-      # explore 不看裁决行。失败原因要出现在 stderr 上，调用方才写得清是这条腿。
-      if [[ $mimo_rc -ne 0 ]]; then
-        tail -n 8 "$LOG_FILE" >&2 || true
-      fi
-      if [[ $mimo_rc -eq 124 ]]; then
-        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-          timed_out partial timeout "" || exit 78
-      elif [[ $mimo_rc -ne 0 ]]; then
-        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-          exited partial runtime "" || exit 78
-      else
-        review_workspace_require_explore_message "$MODEL" "$MODEL" subscription
-        review_workspace_write_facts "$MODEL" "$MODEL" subscription \
-          exited complete "" "" || exit 78
-      fi
     fi
+    review_workspace_finish submimo "$mimo_rc" "$MODE" "$VERDICT" "$MODEL" subscription "" "" ""
   fi
   exit "$mimo_rc"
 fi

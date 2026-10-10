@@ -222,30 +222,15 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
 PY
 )"
 
-VERDICT=UNKNOWN
-if [[ "$MODE" == review && -s "$REPORT" ]]; then
-  VERDICT="$(python3 "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}" normalize "$REPORT" 2>/dev/null || echo UNKNOWN)"
+VERDICT=""
+if [[ "$MODE" == review ]]; then
+  if [[ -s "$REPORT" ]]; then
+    VERDICT="$(python3 "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}" normalize "$REPORT" 2>/dev/null || echo UNKNOWN)"
+  else
+    VERDICT=UNKNOWN
+  fi
 fi
 FAILURE=""
 if grep -qE 'usage_limit_exceeded|hit your usage limit' "$STREAM" "$STDERR_LOG" 2>/dev/null; then FAILURE=quota; fi
-
-if [[ "$RC" == 124 || "$RC" == 137 ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription timed_out partial timeout "$VERDICT" "" "$REPORTED" || exit 78
-  echo "subcodex: timed out after ${TIMEOUT_SECONDS}s; partial output kept in $LOG_FILE" >&2
-  exit 124
-fi
-if [[ "$RC" != 0 ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial "$FAILURE" "$VERDICT" "" "$REPORTED" || exit 78
-  echo "subcodex: codex exited rc=$RC${FAILURE:+ ($FAILURE)}; see $STREAM and $STDERR_LOG" >&2
-  exit "$RC"
-fi
-if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription exited partial no_verdict UNKNOWN "" "$REPORTED" || exit 78
-  die "review output contains no standalone verdict line (log: $LOG_FILE)"
-fi
-if [[ "$MODE" == explore ]]; then
-  review_workspace_require_explore_message "$MODEL" "$MODEL" subscription "$REPORTED"
-fi
-review_workspace_write_facts "$MODEL" "$MODEL" subscription exited complete "" \
-  "$([[ "$MODE" == review ]] && echo "$VERDICT")" "" "$REPORTED" || exit 78
-exit 0
+if [[ "$RC" == 137 ]]; then RC=124; fi
+review_workspace_finish subcodex "$RC" "$MODE" "$VERDICT" "$MODEL" subscription "$REPORTED" "" "$FAILURE"

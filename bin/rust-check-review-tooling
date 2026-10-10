@@ -24,6 +24,7 @@ SUITES=(
   "review-result|python3|$ROOT/tests/test_review_result.py"
   "subcursor|python3|$ROOT/tests/test_subcursor.py"
   "leg-quick-fixes|python3|$ROOT/tests/test_leg_quick_fixes.py"
+  "leg-finish|python3|$ROOT/tests/test_leg_finish.py"
   "review-tooling|bash|$ROOT/tests/test-review-tooling.sh"
   "subcodex|bash|$ROOT/tests/test-subcodex.sh"
   "fix-oracle|bash|$ROOT/tests/test-submimo-fix-oracle.sh"

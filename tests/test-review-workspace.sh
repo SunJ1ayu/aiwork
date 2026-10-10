@@ -334,15 +334,32 @@ test_report_path_and_missing_explore_message() {
   AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py"
   REPORT="$d/present.md"
   printf 'answer\n' > "$REPORT"
-  review_workspace_require_explore_message requested-model invoked-model subscription reported-model
+  (
+    review_workspace_finish report-fn 0 explore "" requested-model subscription reported-model "" ""
+  ) >"$d/ok.out" 2>"$d/ok.err"
   rc=$?
-  [[ $rc -eq 0 && ! -e "$d/facts.json" ]]
-  check 'RW8: a non-empty report returns without publishing facts' $?
+  [[ $rc -eq 0 && ! -s "$d/ok.out" && ! -s "$d/ok.err" ]]
+  check 'RW8: a real final message exits 0 without an extra sentence' $?
+  python3 - "$d/facts.json" <<'PY'
+import json, sys
+facts = json.load(open(sys.argv[1], encoding="utf-8"))
+ok = (
+    facts["process_state"] == "exited"
+    and facts["evidence_completeness"] == "complete"
+    and facts["failure_kind"] is None
+    and facts["verdict"] is None
+    and facts["model"]["requested"] == "requested-model"
+    and facts["model"]["invoked"] == "requested-model"
+    and facts["model"]["reported"] == "reported-model"
+)
+raise SystemExit(0 if ok else 1)
+PY
+  check 'RW8: a real final message publishes exited/complete facts' $?
 
-  rm -f -- "$REPORT"
+  rm -f -- "$REPORT" "$d/facts.json"
   want="explore produced no final message (log: $LOG_FILE)"
   (
-    review_workspace_require_explore_message requested-model invoked-model subscription reported-model
+    review_workspace_finish report-fn 0 explore "" requested-model subscription reported-model "" ""
   ) >"$d/msg.out" 2>"$d/msg.err"
   rc=$?
   [[ $rc -eq 1 && "$(cat "$d/msg.err")" == "$want" && ! -s "$d/msg.out" ]]
@@ -353,21 +370,21 @@ facts = json.load(open(sys.argv[1], encoding="utf-8"))
 ok = (
     facts["process_state"] == "exited"
     and facts["evidence_completeness"] == "partial"
-    and facts["failure_kind"] == "runtime"
+    and facts["failure_kind"] is None
     and facts["verdict"] is None
     and facts["billing_mode"] == "subscription"
     and facts["model"]["requested"] == "requested-model"
-    and facts["model"]["invoked"] == "invoked-model"
+    and facts["model"]["invoked"] == "requested-model"
     and facts["model"]["reported"] == "reported-model"
 )
 raise SystemExit(0 if ok else 1)
 PY
-  check 'RW8: a missing final message publishes exited/partial/runtime facts' $?
+  check 'RW8: a missing final message publishes exited/partial facts and leaves failure_kind empty' $?
 
   printf ' \t\n' > "$REPORT"
   rm -f -- "$d/facts.json"
   (
-    review_workspace_require_explore_message requested-model invoked-model subscription reported-model
+    review_workspace_finish report-fn 0 explore "" requested-model subscription reported-model "" ""
   ) >"$d/blank.out" 2>"$d/blank.err"
   rc=$?
   [[ $rc -eq 1 && "$(cat "$d/blank.err")" == "$want" && ! -s "$d/blank.out" ]]
@@ -378,7 +395,7 @@ facts = json.load(open(sys.argv[1], encoding="utf-8"))
 ok = (
     facts["process_state"] == "exited"
     and facts["evidence_completeness"] == "partial"
-    and facts["failure_kind"] == "runtime"
+    and facts["failure_kind"] is None
     and facts["verdict"] is None
 )
 raise SystemExit(0 if ok else 1)

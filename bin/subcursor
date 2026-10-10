@@ -160,31 +160,17 @@ except (OSError, ValueError):
     print('')
 PY
 )"
-VERDICT=UNKNOWN
-if [[ "$MODE" == review && -s "$REPORT" ]]; then
-  VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "$REPORT")" \
-    || die "typed verdict normalization failed (report: $REPORT)"
-fi
-if [[ "$RC" == 124 || "$RC" == 137 ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" timed_out partial timeout "$VERDICT" || exit 78
-  echo "subcursor: timed out after ${TIMEOUT_SECONDS}s; partial output kept in $LOG_FILE" >&2
-  exit 124
-fi
-if [[ "$RC" != 0 || "${STATUS[1]}" != 0 || "${STATUS[2]}" != 0 ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial "" "$VERDICT" || exit 78
-  echo "subcursor: incomplete/failed run (cli=$RC, stream=${STATUS[1]}, decoder=${STATUS[2]}); see $STREAM and $SUMMARY" >&2
+if [[ "$RC" == 137 ]]; then RC=124; fi
+if [[ "$RC" != 124 && ( "$RC" != 0 || "${STATUS[1]}" != 0 || "${STATUS[2]}" != 0 ) ]]; then
   [[ "$RC" != 0 ]] || RC=1
-  exit "$RC"
 fi
-if [[ "$MODE" == explore ]]; then
-  review_workspace_require_explore_message "$MODEL" "$MODEL" "$BILLING" "$REPORTED"
-fi
-if [[ "$MODE" == review && "$VERDICT" == UNKNOWN ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited partial no_verdict UNKNOWN || exit 78
-  die "model returned no verdict (log: $LOG_FILE)"
-fi
+VERDICT=""
 if [[ "$MODE" == review ]]; then
-  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited complete "" "$VERDICT" false "$REPORTED" || exit 78
-else
-  review_workspace_write_facts "$MODEL" "$MODEL" "$BILLING" exited complete "" "" false "$REPORTED" || exit 78
+  if [[ -s "$REPORT" ]]; then
+    VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "$REPORT")" \
+      || die "typed verdict normalization failed (report: $REPORT)"
+  else
+    VERDICT=UNKNOWN
+  fi
 fi
+review_workspace_finish subcursor "$RC" "$MODE" "$VERDICT" "$MODEL" "$BILLING" "$REPORTED" false ""
