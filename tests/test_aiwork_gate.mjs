@@ -116,6 +116,38 @@ test("C high 路径 + 两个不同非作者家族 PASS + 业主批准 + CI 绿 �
   assert.equal(r.conclusion, "success", r.summary);
 });
 
+test("high 路径 2 家不同家族 PASS、策略要 3 家 → G6 不通过,摘要写要 3 家", () => {
+  const want3 = { ...policy, high_min_families: 3 };
+  const r = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [review({ id: 1 }), review({ id: 2, family: "deepseek", model: "deepseek-v4" }), approve()],
+  }), want3);
+  blocked(r, "G6");
+  assert.match(r.summary, /不同家族 PASS 2 家\(要 3 家\)/);
+});
+
+test("high 路径 3 家不同家族 PASS、策略要 3 家 → 放行", () => {
+  const want3 = { ...policy, high_min_families: 3 };
+  const r = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [
+      review({ id: 1 }),
+      review({ id: 2, family: "deepseek", model: "deepseek-v4" }),
+      review({ id: 3, family: "google", model: "gemini-test" }),
+      approve(),
+    ],
+  }), want3);
+  assert.equal(r.conclusion, "success", r.summary);
+  assert.match(r.summary, /不同家族 PASS 3 家\(要 3 家\)/);
+});
+
+test("不是 high 路径时一条 PASS 放行,不受 high_min_families 影响", () => {
+  const want3 = { ...policy, high_min_families: 3 };
+  const r = decide(facts(), want3);
+  assert.equal(r.conclusion, "success", r.summary);
+  assert.doesNotMatch(r.summary, /G6/);
+});
+
 // ── 应拦下 ──────────────────────────────────────────────────────────────
 test("1 CI 红 / 被跳过 / neutral / 还在跑 / 没跑 → 不放行(G1),业主批准也豁免不了", () => {
   for (const conclusion of ["failure", "skipped", "neutral", "cancelled"]) {
@@ -288,6 +320,7 @@ test("策略:check 名是 aiwork-gate(已转真拦截);判卷面罩住 .github �
   assert.equal(policy.check_name, "aiwork-gate");
   for (const p of [".github/**", ".aiwork/**"]) assert.ok(policy.judging_surface.includes(p));
   assert.deepEqual(policy.builders, { SunJ1ayuBoT: "anthropic" });
+  assert.equal(policy.high_min_families, 2, "这份夹具上的现有 high 对照是两家就放行");
   assert.equal(policy.reviewer_bot, "aiwork-review[bot]");
   assert.ok(Number.isInteger(policy.gate_app_id) && policy.gate_app_id > 0, "gate_app_id 要填 aiwork-gate App 的 App ID");
 });

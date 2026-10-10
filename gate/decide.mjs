@@ -9,7 +9,7 @@
 //      除"格式完整且结论不是 BLOCK"以外的一切(BLOCK 结论、Request changes、正文结论行写 BLOCK、结论块看不懂),
 //      或任何其他评审人在当前 head 上最后一次表态是 Request changes / 被撤销(撤销只要写权限,Builder 就有,
 //      撤销抹不掉反对;被撤销的评审看不出原来是什么,一律按反对算,反对的时刻是撤销那一刻)
-//   G6 high 路径:两个不同的非作者家族 PASS(豁免不了)+ 业主批准
+//   G6 high 路径:至少 high_min_families 个不同的非作者家族 PASS(豁免不了)+ 业主批准
 //   G7 业主批准 = 业主在当前 head 上最后一次表态是 Approve;最后一次是 Request changes 或被撤销则一律不放行
 //   G8 数据不全 → 由 collect.mjs 抛错,run.mjs 判 failure
 //
@@ -246,9 +246,9 @@ export function decide(facts, policy) {
   const high = facts.files.filter((f) => matchAny(policy.high, f));
   if (judging.length) add(false, "G2", `改了判卷面:${judging.slice(0, 5).join("、")}${judging.length > 5 ? " 等" : ""}`);
   const families = [...new Set(passes.map((p) => p.family))];
-  const highOk = !high.length || families.length >= 2;
+  const highOk = !high.length || families.length >= policy.high_min_families;
   if (high.length) {
-    add(highOk, "G6", `high 路径:${high.slice(0, 5).join("、")}${high.length > 5 ? " 等" : ""};不同家族 PASS ${families.length} 家(要 2 家)`);
+    add(highOk, "G6", `high 路径:${high.slice(0, 5).join("、")}${high.length > 5 ? " 等" : ""};不同家族 PASS ${families.length} 家(要 ${policy.high_min_families} 家)`);
   }
 
   // G7
@@ -272,7 +272,7 @@ export function decide(facts, policy) {
   const verdictLine = (() => {
     if (!ciOk) return pending ? "等 CI" : baseMoved ? "不放行:目标分支改过,CI 要在新目标上重跑" : "不放行:CI 没通过";
     if (!reviewOk) return "不放行:缺合格评审";
-    if (!highOk) return "不放行:high 路径要两家不同模型都 PASS";
+    if (!highOk) return `不放行:high 路径要 ${policy.high_min_families} 家不同家族都 PASS`;
     if (ownerObjection) return `不放行:${ownerObjection}`;
     if (!ownerOk) return `等业主批准:${needOwner.join("、")}`;
     return "放行";

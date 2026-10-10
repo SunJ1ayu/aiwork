@@ -163,6 +163,7 @@ test("aiwork 自己的策略：只报不拦，不登记共用的 build 账号，
   assert.equal(policy.check_name, "aiwork-gate-shadow");
   assert.equal(policy.builders["aiwork-build[bot]"], undefined);
   assert.equal(policy.builders.SunJ1ayuBoT, "anthropic");
+  assert.equal(policy.high_min_families, 3);
   for (const path of [
     ".github/workflows/ci.yml",
     ".aiwork/policy.json",

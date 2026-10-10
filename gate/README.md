@@ -10,7 +10,7 @@
 | `decide.mjs` | 纯判定,不碰网络(G1–G7) |
 | `run.mjs` | 流程:每次运行把所有开着的 PR 全重算一遍(事件只是门铃)。列出开着的 PR、按 head 分组 → 先在每个 head 上占位 → 每个 head 把以它为 head 的 PR 全判一遍、合成一个结论写一次;读不全就不放行;写上的是放行,就合并有合并请求的 PR(见下「合并」) |
 | `main.mjs` | 接线:真实 API、`aiwork-gate` App 令牌、发 / 改检查、合并、用 `GITHUB_TOKEN` 拨保险丝。策略路径只认 `AIWORK_POLICY_PATH` |
-| 调用方的 `.aiwork/policy.json` | 策略:判卷面、high 路径、Builder、评审 App、检查名、App ID、合并标签和谁贴的算数 |
+| 调用方的 `.aiwork/policy.json` | 策略:判卷面、high 路径、`high_min_families`、Builder、评审 App、检查名、App ID、合并标签和谁贴的算数 |
 
 测试:`tests/test_aiwork_gate.mjs`(判定与收集)、`tests/test_aiwork_gate_run.mjs`(流程与失败处理)、
 `tests/test_aiwork_gate_main.mjs`(假 GitHub API 上真跑 `main.mjs`)、`tests/test_aiwork_gate_workflow.mjs`(workflow 形状和本仓库策略)。
@@ -21,7 +21,7 @@
 只有一种接法。
 
 1. 把 `templates/aiwork-gate.yml` 和 `templates/aiwork-review-ping.yml` 复制到项目的 `.github/workflows/`，文件名不变。
-2. 写该项目自己的 `.aiwork/policy.json`。`check_name` 在只报不拦阶段用 `aiwork-gate-shadow`。
+2. 写该项目自己的 `.aiwork/policy.json`，要有 `high_min_families`（high 路径要几家不同家族的合格 PASS，G6 读这个字段）。`check_name` 在只报不拦阶段用 `aiwork-gate-shadow`。
 3. 把 `aiwork-gate` App 装到该仓库。发检查要 Checks 读写；合并还要 Contents、Pull requests、Workflows 读写。改了 App 权限后，要在仓库的安装处接受新权限。
 4. 建 environment `aiwork-gate`，部署分支只许 `main`，不设审批人，放入 secret `AIWORK_GATE_PRIVATE_KEY`。
 5. 只报不拦阶段不要把检查设为必过。转真拦截见文末。
@@ -130,7 +130,7 @@
 | S3 | 本机 `review-pr` 在当前 head 发 PASS(openai) | 一两分钟内自动重算为 success「放行」 | 评审 → `aiwork-review-ping` → 关卡重算这条链通 |
 | S4 | 同一 head 再发一条 BLOCK | failure(G5);业主**在 BLOCK 之后**批准 → success | BLOCK 与批准的先后被认 |
 | S5 | 业主在网页上改测试 PR 的一个文件(非机器账号推送) | failure,作者 UNKNOWN(G4);业主在新 head 批准 + 有 PASS → success | 混合作者要业主批准 |
-| S6 | 测试 PR 改 `judging_surface` 里的一个文件 / 改 `high` 里的一个文件 | 分别要业主批准(G2)/ 两家 PASS + 业主批准(G6) | 判卷面与 high 路径 |
+| S6 | 测试 PR 改 `judging_surface` 里的一个文件 / 改 `high` 里的一个文件 | 分别要业主批准(G2)/ `high_min_families` 家不同家族 PASS + 业主批准(G6) | 判卷面与 high 路径 |
 | S7 | 给 PR 加标签 `aiwork:recheck` | 重算一次;算的时候合并框里这条检查显示"重算中",保险丝变黄 | 手动重算可用;占位压得住上一次的结论 |
 | S8 | 编辑测试 PR 的标题;再改一次目标分支 | 各重算一次;改目标分支后 G1 ❌「目标分支在这次 CI 之后改过」,推一个新提交(或关掉再重开 PR)让 CI 重跑后恢复 | edited 事件会触发重判;旧目标上的 CI 不算数 |
 | S9 | 任选上面一次重算,看测试 PR 的检查列表;再连着触发两次(比如先后加两个标签),看 Actions 里 aiwork-gate 的运行 | `aiwork-gate/fuse` 先变黄(pending),算完与 `aiwork-gate-shadow` 同结论,发出者是 GitHub Actions;两次运行一个跑完另一个才开始 | 保险丝接通,不靠 App 私钥;同一时间只有一次运行 |
