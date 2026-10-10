@@ -183,9 +183,12 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             argv + [str(self.root / "task.md"), str(log), str(self.repo)],
             capture_output=True, text=True, env=env, timeout=40)
 
-    def _facts(self, leg, case):
+    def _facts(self, leg, case, result):
         path = self.root / f"{leg}-{case}.facts.json"
-        self.assertTrue(path.is_file(), f"{leg} {case} wrote no facts")
+        self.assertTrue(
+            path.is_file(),
+            f"FAIL {leg} {case} rc={result.returncode} "
+            f"stderr={result.stderr[-800:]!r} stdout={result.stdout[-400:]!r}")
         return json.loads(path.read_text())
 
     def _signature(self, result, facts, log):
@@ -220,7 +223,7 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             for leg in ("subagent", "subkimi", "submimo", "subcodex", "subcursor"):
                 result = self._run(leg, modes[case], case)
                 seen[case][leg] = self._signature(
-                    result, self._facts(leg, case), self.root / f"{leg}-{case}.log")
+                    result, self._facts(leg, case, result), self.root / f"{leg}-{case}.log")
         for case in CASES:
             rows = seen[case]
             if len(set(rows.values())) != 1:
