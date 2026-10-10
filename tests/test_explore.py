@@ -621,9 +621,11 @@ class ExploreLegContractTests(unittest.TestCase):
                 argv, env = prepare(log, report, facts)
                 result = self._run(argv, env)
                 self.assertEqual(result.returncode, 1, result.stderr)
+                label = {"subagent": "subdeepseek-agent", "subkimi": "subkimi",
+                         "submimo": "submimo"}[name]
                 self.assertEqual(
                     result.stderr.strip(),
-                    f"explore produced no final message (log: {log})",
+                    f"{label}: explore produced no final message (log: {log})",
                 )
                 self.assertTrue(report.is_file(), result.stderr)
                 self.assertEqual(report.read_text(encoding="utf-8"), blank)

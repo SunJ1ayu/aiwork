@@ -335,7 +335,7 @@ test_report_path_and_missing_explore_message() {
   REPORT="$d/present.md"
   printf 'answer\n' > "$REPORT"
   (
-    review_workspace_finish report-fn 0 explore "" requested-model subscription reported-model "" ""
+    review_workspace_finish report-fn 0 explore requested-model subscription reported-model ""
   ) >"$d/ok.out" 2>"$d/ok.err"
   rc=$?
   [[ $rc -eq 0 && ! -s "$d/ok.out" && ! -s "$d/ok.err" ]]
@@ -357,9 +357,9 @@ PY
   check 'RW8: a real final message publishes exited/complete facts' $?
 
   rm -f -- "$REPORT" "$d/facts.json"
-  want="explore produced no final message (log: $LOG_FILE)"
+  want="report-fn: explore produced no final message (log: $LOG_FILE)"
   (
-    review_workspace_finish report-fn 0 explore "" requested-model subscription reported-model "" ""
+    review_workspace_finish report-fn 0 explore requested-model subscription reported-model ""
   ) >"$d/msg.out" 2>"$d/msg.err"
   rc=$?
   [[ $rc -eq 1 && "$(cat "$d/msg.err")" == "$want" && ! -s "$d/msg.out" ]]
@@ -384,7 +384,7 @@ PY
   printf ' \t\n' > "$REPORT"
   rm -f -- "$d/facts.json"
   (
-    review_workspace_finish report-fn 0 explore "" requested-model subscription reported-model "" ""
+    review_workspace_finish report-fn 0 explore requested-model subscription reported-model ""
   ) >"$d/blank.out" 2>"$d/blank.err"
   rc=$?
   [[ $rc -eq 1 && "$(cat "$d/blank.err")" == "$want" && ! -s "$d/blank.out" ]]

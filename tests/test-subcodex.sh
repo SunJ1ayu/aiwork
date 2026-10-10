@@ -111,7 +111,10 @@ case "${CODEX_TEST_MODE:-pass}" in
   noverdict)
     printf 'I looked around.\n' > "$out" ;;
   quota)
-    printf '{"type":"error","message":"You have hit your usage limit.","codex_error_info":"usage_limit_exceeded"}\n'
+    cat "${CODEX_USAGE_FIXTURE:?}"
+    exit 1 ;;
+  body)
+    printf '%s\n' '{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"You have hit your usage limit. This is model text."}}'
     exit 1 ;;
   sleep)
     sleep 30 ;;
@@ -193,10 +196,20 @@ CODEX_TEST_MODE=noverdict sc c3 review "$d/task.md" "$d/c3.log" "$d/repo" >/dev/
 check "C3: 没有裁决行 ⇒ rc≠0,但报告原样留着" $([[ $rc -ne 0 ]] && grep -q 'I looked around' "$d/c3.log"; echo $?)
 facts c3 "f['verdict'] == 'UNKNOWN' and f['failure_kind'] == 'no_verdict'"
 check "C3: facts 记 UNKNOWN / no_verdict" $?
-CODEX_TEST_MODE=quota sc c4 review "$d/task.md" "$d/c4.log" "$d/repo" >/dev/null 2>&1; rc=$?
-check "C3: 额度耗尽 ⇒ rc≠0,事件流原样留着" $([[ $rc -ne 0 ]] && grep -q 'usage_limit_exceeded' "$d/c4.stream.jsonl"; echo $?)
-facts c4 "f['failure_kind'] == 'quota'"
-check "C3: 额度耗尽被分型为 quota(健康池据此冷却,而不是记成 runtime)" $?
+CODEX_USAGE_FIXTURE="$ROOT/tests/fixtures/codex-usage-limit.jsonl" \
+  CODEX_TEST_MODE=quota sc c4 review "$d/task.md" "$d/c4.log" "$d/repo" >/dev/null 2>"$d/c4.err"; rc=$?
+sentence="$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1],encoding="utf-8").readline())["message"])' "$ROOT/tests/fixtures/codex-usage-limit.jsonl")"
+check "C3: 额度事件原样留在事件流，手写的 usage_limit_exceeded 不在" \
+  $([[ $rc -ne 0 ]] && grep -qF "$sentence" "$d/c4.stream.jsonl" && ! grep -q 'usage_limit_exceeded' "$d/c4.stream.jsonl"; echo $?)
+check "C3: 额度原话被抄到 stderr，腿自己不把 failure_kind 写成 quota" \
+  $(grep -qF "$sentence" "$d/c4.err"; echo $?)
+facts c4 "f['failure_kind'] is None"
+check "C3: facts 的 failure_kind 留空，分类留给 emit" $?
+CODEX_TEST_MODE=body sc c4b explore "$d/task.md" "$d/c4b.log" "$d/repo" >/dev/null 2>"$d/c4b.err"; rc=$?
+check "C3: 模型正文里的 usage limit 不会被抄到 stderr" \
+  $([[ $rc -ne 0 ]] && ! grep -q 'usage limit' "$d/c4b.err"; echo $?)
+facts c4b "f['failure_kind'] is None"
+check "C3: 模型正文不让腿自己写成 quota" $?
 _t0=$(date +%s)
 CODEX_TEST_MODE=sleep SUBCODEX_TIMEOUT=1 sc c5 review "$d/task.md" "$d/c5.log" "$d/repo" >/dev/null 2>&1; rc=$?
 check "C3: 超时 ⇒ rc=124 且没有干等 30 秒" $([[ $rc -eq 124 && $(( $(date +%s) - _t0 )) -lt 20 ]]; echo $?)
@@ -223,7 +236,7 @@ check 'C4: explore 设了报告路径时不另写 ${LOG_FILE}.report' \
 printf ' \t\n' > "$d/blank-expect"
 CODEX_TEST_MODE=blank AIWORK_REVIEW_REPORT_PATH="$d/c7d.md" \
   sc c7d explore "$d/task.md" "$d/c7d.log" "$d/repo" >/dev/null 2>"$d/c7d.err"; rc=$?
-want="explore produced no final message (log: $d/c7d.log)"
+want="subcodex: explore produced no final message (log: $d/c7d.log)"
 check 'C4: explore 最后一条消息只有空白时失败，句子与其他腿相同' \
   $([[ $rc -eq 1 && "$(cat "$d/c7d.err")" == "$want" ]] && cmp -s "$d/c7d.md" "$d/blank-expect"; echo $?)
 facts c7d "f['process_state']=='exited' and f['evidence_completeness']=='partial' and f['failure_kind'] is None and f['verdict'] is None"

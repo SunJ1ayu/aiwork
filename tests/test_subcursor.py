@@ -233,7 +233,7 @@ class CursorTest(unittest.TestCase):
         result = self.run_leg('explore', case='empty', extra={'AIWORK_REVIEW_REPORT_PATH': str(report)})
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(result.stderr.strip(),
-                         f'explore produced no final message (log: {self.d / "leg.log"})')
+                         f'subcursor: explore produced no final message (log: {self.d / "leg.log"})')
         self.assertEqual(report.read_text(encoding='utf-8'), '')
         self.assertFalse((self.d / 'leg.log.report').exists())
 
@@ -244,7 +244,7 @@ class CursorTest(unittest.TestCase):
         log = self.d / 'blank.log'
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(result.stderr.strip(),
-                         f'explore produced no final message (log: {log})')
+                         f'subcursor: explore produced no final message (log: {log})')
         self.assertTrue(report.is_file(), result.stderr)
         self.assertEqual(report.read_text(encoding='utf-8'), ' \t\n')
         facts = json.loads((self.d / 'blank.facts.json').read_text(encoding='utf-8'))
