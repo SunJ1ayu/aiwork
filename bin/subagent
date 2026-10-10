@@ -343,28 +343,5 @@ if [[ "$MODE" == "review" ]]; then
     VERDICT=UNKNOWN
   fi
 fi
-if [[ $RC -eq 124 ]]; then
-  review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-    timed_out partial timeout "$VERDICT" || exit 78
-  echo "$LABEL: claude timed out after ${TIMEOUT_SECONDS}s (partial work kept in $LOG_FILE)" >&2
-  exit 124
-fi
-if [[ $RC -ne 0 ]]; then
-  review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-    exited partial runtime "$VERDICT" || exit 78
-  die "claude exited rc=$RC (partial work kept in $LOG_FILE)"
-fi
-if [[ "$MODE" == "explore" ]]; then
-  review_workspace_require_explore_message "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE"
-  review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-    exited complete "" "" || exit 78
-  exit 0
-fi
-if [[ "$VERDICT" == "UNKNOWN" ]]; then
-  review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-    exited partial no_verdict "$VERDICT" || exit 78
-  die "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)"
-fi
-review_workspace_write_facts "$FACT_MODEL" "$FACT_MODEL" "$BILLING_MODE" \
-  exited complete "" "$VERDICT" || exit 78
-exit 0
+review_workspace_finish "${LABEL:-subagent}" "$RC" "$MODE" "$VERDICT" \
+  "$FACT_MODEL" "$BILLING_MODE" "" "" ""

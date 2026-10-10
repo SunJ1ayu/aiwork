@@ -226,8 +226,8 @@ CODEX_TEST_MODE=blank AIWORK_REVIEW_REPORT_PATH="$d/c7d.md" \
 want="explore produced no final message (log: $d/c7d.log)"
 check 'C4: explore 最后一条消息只有空白时失败，句子与其他腿相同' \
   $([[ $rc -eq 1 && "$(cat "$d/c7d.err")" == "$want" ]] && cmp -s "$d/c7d.md" "$d/blank-expect"; echo $?)
-facts c7d "f['process_state']=='exited' and f['evidence_completeness']=='partial' and f['failure_kind']=='runtime' and f['verdict'] is None"
-check 'C4: 空白消息的 facts 与缺消息相同(exited/partial/runtime)' $?
+facts c7d "f['process_state']=='exited' and f['evidence_completeness']=='partial' and f['failure_kind'] is None and f['verdict'] is None"
+check 'C4: 空白消息的 facts 与缺消息相同(exited/partial、failure_kind 留空)' $?
 sc c8 review "$d/task.md" "$d/c8.log" "$d/repo" >/dev/null 2>"$d/c8.err"; rc=$?
 check "C4: 没有自审文件也调用 codex" \
   $([[ $rc -eq 0 && -e "$d/cap/c8.argv" ]]; echo $?)

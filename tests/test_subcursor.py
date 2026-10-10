@@ -250,14 +250,14 @@ class CursorTest(unittest.TestCase):
         facts = json.loads((self.d / 'blank.facts.json').read_text(encoding='utf-8'))
         self.assertEqual(facts['process_state'], 'exited')
         self.assertEqual(facts['evidence_completeness'], 'partial')
-        self.assertEqual(facts['failure_kind'], 'runtime')
+        self.assertIsNone(facts['failure_kind'])
         self.assertIsNone(facts['verdict'])
 
     def test_explore_quota_exit_is_recorded_as_quota(self):
         result = self.run_leg('explore', case='quota', tag='quota')
         self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertIn('quota exceeded', result.stderr)
-        self.assertIn('incomplete/failed run', result.stderr)
+        self.assertIn(f'exited rc=1 (log: {self.d / "quota.log"})', result.stderr)
         diagnostic = self.d / 'quota.diagnostic'
         diagnostic.write_text(result.stderr, encoding='utf-8')
         produced = self.d / 'quota.result.json'
