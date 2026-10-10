@@ -287,8 +287,11 @@ if [[ "$MODE" != "fix" ]]; then
   CMD=(env "XDG_CONFIG_HOME=$MIMO_CFG_HOME" "${CMD[@]}")
 fi
 
-# One mimo pass. $1 = attempt label for the log header. Appends to LOG_FILE.
+# One mimo pass. $1 = attempt label for the log header. Appends the header and
+# mimo's output to LOG_FILE. MIMO_RAW is this call's mimo output only, replaced
+# every call; the filter reads that file and never the header.
 run_mimo_once() {
+  MIMO_RAW="${LOG_FILE}.mimo"
   {
     echo "# submimo $MODE log${1:+ ($1)}"
     echo "time: $(date -Is)"
@@ -304,7 +307,7 @@ run_mimo_once() {
     (
       [[ "$MODE" == "fix" ]] || cd "$REPO_DIR" || exit 78
       ${RO_EXEC[@]+"${RO_EXEC[@]}"} timeout -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
-    )
+    ) 2>&1 | tee "$MIMO_RAW"
   } 2>&1 | tee -a "$LOG_FILE"
 }
 
@@ -353,14 +356,13 @@ body = "".join(parts[last_id][pid] for pid in order[last_id])
 pathlib.Path(dest).write_text(body)
 PY
     # mimo --format json 把模型正文和工具结果放在 JSON 事件里。非零退出时只抄
-    # 不是 JSON 事件的行，并且跳过我们自己写的日志头。
+    # MIMO_RAW 里不是 JSON 事件的行。日志头不在那份文件里。
     if [[ "$mimo_rc" -ne 0 ]]; then
-      python3 - "$LOG_FILE" <<'PY' >&2
+      python3 - "$MIMO_RAW" <<'PY' >&2
 import json, sys
-header = ("# submimo ", "time: ", "mode: ", "agent: ", "repo: ", "task: ", "model: ")
 for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
     line = raw.rstrip("\n")
-    if not line.strip() or line.startswith(header):
+    if not line.strip():
         continue
     try:
         if isinstance(json.loads(line), dict):

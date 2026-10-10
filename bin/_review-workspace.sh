@@ -273,14 +273,21 @@ review_workspace_repo() {
   printf '%s\n' "$REVIEW_WORK_REPO"
 }
 
+# AIWORK_REVIEW_RESULT_BIN, or the helper beside this script. write_facts and
+# finish both use this; neither picks a path of its own.
+review_workspace__result_bin() {
+  printf '%s\n' "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
+}
+
 review_workspace_write_facts() { # requested-model invoked-model [billing-mode [process-state [evidence [failure-kind [verdict [degraded [reported-model]]]]]]]
   local requested="${1:-}" invoked="${2:-}" billing="${3:-subscription}"
   local process_state="${4:-}" completeness="${5:-}" failure_kind="${6:-}" verdict="${7:-}"
   local degraded="${8:-}" reported="${9:-}"
-  local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper="${AIWORK_REVIEW_RESULT_BIN:-}"
+  local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper
+  helper="$(review_workspace__result_bin)"
   local -a outcome=()
   [[ -n "$output" ]] || return 0
-  [[ -n "$helper" && -f "$helper" ]] \
+  [[ -f "$helper" ]] \
     || { review_workspace__say 'typed facts producer 缺件'; return 78; }
   [[ -z "$process_state" ]] || outcome+=(--process-state "$process_state")
   [[ -z "$completeness" ]] || outcome+=(--evidence-completeness "$completeness")
@@ -305,20 +312,23 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
 # review with or without a verdict, are decided here once. failure_kind for a
 # nonzero exit stays empty so emit classifies it from the exit code and stderr.
 # A final explore message needs at least one non-whitespace character.
-# Review reads REPORT here. A missing or empty report is UNKNOWN. A missing
-# normalizer, or normalize failing, is this tool being broken: exit 78.
+# Review reads REPORT here. A missing normalizer exits 78 whether or not the
+# report is empty. A missing or empty report is otherwise UNKNOWN. A normalize
+# error is this tool being broken: exit 78.
 review_workspace_finish() { # leg rc mode model billing reported degraded
   local leg="${1:-}" rc="${2:-0}" mode="${3:-}" model="${4:-}"
   [[ -n "$leg" ]] || { review_workspace__say 'finish 缺腿名'; exit 78; }
   local billing="${5:-subscription}" reported="${6:-}" degraded="${7:-}"
   local verdict=""
   if [[ "$mode" == review ]]; then
-    local helper="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
-    if [[ ! -s "${REPORT:-}" ]]; then
-      verdict=UNKNOWN
-    elif [[ ! -f "$helper" ]]; then
+    local helper
+    helper="$(review_workspace__result_bin)"
+    if [[ ! -f "$helper" ]]; then
       printf '%s: typed verdict normalizer missing\n' "$leg" >&2
       exit 78
+    fi
+    if [[ ! -s "${REPORT:-}" ]]; then
+      verdict=UNKNOWN
     else
       local norm_err reason
       norm_err="$(mktemp)"

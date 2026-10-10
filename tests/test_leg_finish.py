@@ -453,6 +453,92 @@ raise SystemExit(1)
         self.assertNotIn("usage limit", result.stderr)
         self.assertIsNone(json.loads(facts.read_text())["failure_kind"])
 
+    def test_extra_mimo_header_line_stays_out_of_stderr(self):
+        script = self.bin / "submimo"
+        original = script.read_text(encoding="utf-8")
+        needle = '    echo "model: $MODEL"\n    echo\n'
+        self.assertIn(needle, original)
+        script.write_text(original.replace(
+            needle, '    echo "model: $MODEL"\n    echo "source_repo: HEADER_SENTINEL"\n    echo\n', 1),
+            encoding="utf-8")
+        self._write("mimo", """#!/usr/bin/env python3
+import sys
+sys.stdout.write("provider error line\\n")
+raise SystemExit(1)
+""")
+        env = self._env()
+        log = self.root / "header.log"
+        env["AIWORK_REVIEW_REPORT_PATH"] = str(self.root / "header.report")
+        env["AIWORK_REVIEW_FACTS_PATH"] = str(self.root / "header.facts.json")
+        env["AIWORK_REVIEW_RESULT_BIN"] = str(self.bin / "_review_result.py")
+        result = subprocess.run(
+            [str(self.bin / "submimo"), "explore",
+             str(self.root / "task.md"), str(log), str(self.repo)],
+            capture_output=True, text=True, env=env, timeout=40)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("source_repo: HEADER_SENTINEL", log.read_text(encoding="utf-8"))
+        self.assertNotIn("HEADER_SENTINEL", result.stderr)
+        self.assertIn("provider error line", result.stderr)
+
+    def test_mimo_json_events_and_log_header_stay_out_of_stderr(self):
+        self._write("mimo", """#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"type": "text", "part": {
+    "id": "p", "messageID": "m", "text": "MODEL_BODY_SENTINEL"}}))
+print(json.dumps({"type": "tool_use", "part": {
+    "tool": "bash", "output": "TOOL_OUTPUT_SENTINEL"}}))
+sys.stdout.write("provider error line\\n")
+raise SystemExit(1)
+""")
+        env = self._env()
+        log = self.root / "json.log"
+        env["AIWORK_REVIEW_REPORT_PATH"] = str(self.root / "json.report")
+        env["AIWORK_REVIEW_FACTS_PATH"] = str(self.root / "json.facts.json")
+        env["AIWORK_REVIEW_RESULT_BIN"] = str(self.bin / "_review_result.py")
+        result = subprocess.run(
+            [str(self.bin / "submimo"), "explore",
+             str(self.root / "task.md"), str(log), str(self.repo)],
+            capture_output=True, text=True, env=env, timeout=40)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("MODEL_BODY_SENTINEL", result.stderr)
+        self.assertNotIn("TOOL_OUTPUT_SENTINEL", result.stderr)
+        self.assertNotIn("# submimo ", result.stderr)
+        self.assertIn("provider error line", result.stderr)
+        self.assertIn("MODEL_BODY_SENTINEL", log.read_text(encoding="utf-8"))
+
+    def test_review_missing_helper_with_empty_report_exits_78(self):
+        self._write("claude", "#!/usr/bin/env python3\nraise SystemExit(0)\n")
+        env = self._env()
+        env.pop("AIWORK_REVIEW_FACTS_PATH", None)
+        env.pop("AIWORK_REVIEW_REPORT_PATH", None)
+        env["AIWORK_REVIEW_RESULT_BIN"] = str(self.root / "missing-normalizer.py")
+        log = self.root / "missing-helper.log"
+        result = subprocess.run(
+            [str(self.bin / "subagent"), "deepseek", "review",
+             str(self.root / "task.md"), str(log), str(self.repo)],
+            capture_output=True, text=True, env=env, timeout=40)
+        self.assertEqual(result.returncode, 78, result.stderr)
+        self.assertIn("normalizer missing", result.stderr)
+        self.assertNotIn("no verdict", result.stderr)
+
+    def test_kimi_copies_provider_error_on_timeout(self):
+        self._write("kimi", """#!/usr/bin/env python3
+import sys
+sys.stderr.write("error: failed to run prompt: provider said usage limit\\n")
+raise SystemExit(124)
+""")
+        env = self._env()
+        log = self.root / "kimi-timeout.log"
+        env["AIWORK_REVIEW_REPORT_PATH"] = str(self.root / "kimi-timeout.report")
+        env["AIWORK_REVIEW_FACTS_PATH"] = str(self.root / "kimi-timeout.facts.json")
+        env["AIWORK_REVIEW_RESULT_BIN"] = str(self.bin / "_review_result.py")
+        result = subprocess.run(
+            [str(self.bin / "subkimi"), "explore",
+             str(self.root / "task.md"), str(log), str(self.repo)],
+            capture_output=True, text=True, env=env, timeout=40)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn("error: failed to run prompt: provider said usage limit", result.stderr)
+
     def test_cursor_names_cli_stream_and_decoder_when_decoder_fails(self):
         self._write("cursor-agent", "#!/usr/bin/env python3\nprint('not-json')\n")
         result = self._run("subcursor", "explore", "pass")

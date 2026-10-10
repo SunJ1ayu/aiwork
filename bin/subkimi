@@ -261,7 +261,7 @@ PY
 
 # kimi 把供应商错误打在自己的输出里(进了腿日志),不在我们的 stderr;终端产物只按我们的
 # 诊断归类(不扫模型正文)。09-09 "5-hour usage limit" 因此被记成 runtime。只抄 CLI 自己的错误行。
-if [[ $RC -ne 0 && $RC -ne 124 ]]; then
+if [[ $RC -ne 0 ]]; then
   { grep -a -E '^error: failed to run prompt:' "$LOG_FILE" || true; } | tail -n 3 >&2
 fi
 review_workspace_finish subkimi "$RC" "$MODE" "$MODEL" subscription "" ""

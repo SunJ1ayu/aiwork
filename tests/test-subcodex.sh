@@ -110,7 +110,7 @@ case "${CODEX_TEST_MODE:-pass}" in
     printf ' \t\n' > "$out" ;;
   noverdict)
     printf 'I looked around.\n' > "$out" ;;
-  quota)
+  rate_limit)
     cat "${CODEX_USAGE_FIXTURE:?}"
     exit 1 ;;
   body)
@@ -197,7 +197,7 @@ check "C3: 没有裁决行 ⇒ rc≠0,但报告原样留着" $([[ $rc -ne 0 ]] &
 facts c3 "f['verdict'] == 'UNKNOWN' and f['failure_kind'] == 'no_verdict'"
 check "C3: facts 记 UNKNOWN / no_verdict" $?
 CODEX_USAGE_FIXTURE="$ROOT/tests/fixtures/codex-usage-limit.jsonl" \
-  CODEX_TEST_MODE=quota sc c4 review "$d/task.md" "$d/c4.log" "$d/repo" >/dev/null 2>"$d/c4.err"; rc=$?
+  CODEX_TEST_MODE=rate_limit sc c4 review "$d/task.md" "$d/c4.log" "$d/repo" >/dev/null 2>"$d/c4.err"; rc=$?
 sentence="$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1],encoding="utf-8").readline())["message"])' "$ROOT/tests/fixtures/codex-usage-limit.jsonl")"
 check "C3: 额度事件原样留在事件流，手写的 usage_limit_exceeded 不在" \
   $([[ $rc -ne 0 ]] && grep -qF "$sentence" "$d/c4.stream.jsonl" && ! grep -q 'usage_limit_exceeded' "$d/c4.stream.jsonl"; echo $?)
