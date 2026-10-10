@@ -160,17 +160,10 @@ except (OSError, ValueError):
     print('')
 PY
 )"
-if [[ "$RC" == 137 ]]; then RC=124; fi
-if [[ "$RC" != 124 && ( "$RC" != 0 || "${STATUS[1]}" != 0 || "${STATUS[2]}" != 0 ) ]]; then
-  [[ "$RC" != 0 ]] || RC=1
+if [[ "${STATUS[1]}" -ne 0 || "${STATUS[2]}" -ne 0 ]]; then
+  printf 'subcursor: cli=%s stream=%s decoder=%s\n' "$RC" "${STATUS[1]}" "${STATUS[2]}" >&2
 fi
-VERDICT=""
-if [[ "$MODE" == review ]]; then
-  if [[ -s "$REPORT" ]]; then
-    VERDICT="$(python3 "$BIN_DIR/_review_result.py" normalize "$REPORT")" \
-      || die "typed verdict normalization failed (report: $REPORT)"
-  else
-    VERDICT=UNKNOWN
-  fi
+if [[ "$RC" == 0 && ( "${STATUS[1]}" != 0 || "${STATUS[2]}" != 0 ) ]]; then
+  RC=1
 fi
-review_workspace_finish subcursor "$RC" "$MODE" "$VERDICT" "$MODEL" "$BILLING" "$REPORTED" false ""
+review_workspace_finish subcursor "$RC" "$MODE" "$MODEL" "$BILLING" "$REPORTED" false

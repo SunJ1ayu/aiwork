@@ -330,18 +330,5 @@ PY
 if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
 
-VERDICT=""
-if [[ "$MODE" == "review" ]]; then
-  # 出卷闸与结果归一共用唯一 normalizer；缺 helper 只能 fail closed，
-  # 不许在这条底座路径复活一份宽松 regex。
-  _RR="${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
-  [ -f "$_RR" ] || die "typed verdict normalizer missing"
-  if [[ -s "$REPORT" ]]; then
-    VERDICT="$(python3 "$_RR" normalize "$REPORT" 2>/dev/null)" \
-      || die "typed verdict normalization failed (report: $REPORT)"
-  else
-    VERDICT=UNKNOWN
-  fi
-fi
-review_workspace_finish "${LABEL:-subagent}" "$RC" "$MODE" "$VERDICT" \
-  "$FACT_MODEL" "$BILLING_MODE" "" "" ""
+review_workspace_finish "${LABEL:-subagent}" "$RC" "$MODE" \
+  "$FACT_MODEL" "$BILLING_MODE" "" ""

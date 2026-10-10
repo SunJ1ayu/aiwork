@@ -222,15 +222,30 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
 PY
 )"
 
-VERDICT=""
-if [[ "$MODE" == review ]]; then
-  if [[ -s "$REPORT" ]]; then
-    VERDICT="$(python3 "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}" normalize "$REPORT" 2>/dev/null || echo UNKNOWN)"
-  else
-    VERDICT=UNKNOWN
+# 非零退出时只抄模型服务自己的报错：type=error 的 message、type=turn.failed 的
+# error.message，再加上 codex 自己的 stderr。不在事件流里搜词。
+if [[ "$RC" -ne 0 ]]; then
+  python3 - "$STREAM" <<'PY' >&2
+import json, sys
+for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    line = raw.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if not isinstance(event, dict):
+        continue
+    if event.get("type") == "error" and isinstance(event.get("message"), str):
+        print(event["message"])
+    elif event.get("type") == "turn.failed":
+        err = event.get("error")
+        if isinstance(err, dict) and isinstance(err.get("message"), str):
+            print(err["message"])
+PY
+  if [[ -s "$STDERR_LOG" ]]; then
+    cat "$STDERR_LOG" >&2
   fi
 fi
-FAILURE=""
-if grep -qE 'usage_limit_exceeded|hit your usage limit' "$STREAM" "$STDERR_LOG" 2>/dev/null; then FAILURE=quota; fi
-if [[ "$RC" == 137 ]]; then RC=124; fi
-review_workspace_finish subcodex "$RC" "$MODE" "$VERDICT" "$MODEL" subscription "$REPORTED" "" "$FAILURE"
+review_workspace_finish subcodex "$RC" "$MODE" "$MODEL" subscription "$REPORTED" ""

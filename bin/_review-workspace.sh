@@ -5,7 +5,7 @@
 #   review_workspace_reset_report
 #   review_workspace_prepare SOURCE_REPO LEG_NAME
 #   repo="$(review_workspace_repo)"
-#   review_workspace_finish LEG RC MODE VERDICT MODEL BILLING REPORTED DEGRADED RECOGNIZED
+#   review_workspace_finish LEG RC MODE MODEL BILLING REPORTED DEGRADED
 #   review_workspace_cleanup
 #
 # The source repository is never checked out or indexed through its own .git.
@@ -273,14 +273,21 @@ review_workspace_repo() {
   printf '%s\n' "$REVIEW_WORK_REPO"
 }
 
+# AIWORK_REVIEW_RESULT_BIN, or the helper beside this script. write_facts and
+# finish both use this; neither picks a path of its own.
+review_workspace__result_bin() {
+  printf '%s\n' "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
+}
+
 review_workspace_write_facts() { # requested-model invoked-model [billing-mode [process-state [evidence [failure-kind [verdict [degraded [reported-model]]]]]]]
   local requested="${1:-}" invoked="${2:-}" billing="${3:-subscription}"
   local process_state="${4:-}" completeness="${5:-}" failure_kind="${6:-}" verdict="${7:-}"
   local degraded="${8:-}" reported="${9:-}"
-  local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper="${AIWORK_REVIEW_RESULT_BIN:-}"
+  local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper
+  helper="$(review_workspace__result_bin)"
   local -a outcome=()
   [[ -n "$output" ]] || return 0
-  [[ -n "$helper" && -f "$helper" ]] \
+  [[ -f "$helper" ]] \
     || { review_workspace__say 'typed facts producer 缺件'; return 78; }
   [[ -z "$process_state" ]] || outcome+=(--process-state "$process_state")
   [[ -z "$completeness" ]] || outcome+=(--evidence-completeness "$completeness")
@@ -300,27 +307,55 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
 }
 
 # One finish for every leg, after the model returns. The leg passes what it
-# already observed. Exit 124, any other nonzero exit, explore with or without
-# a final message, and review with or without a verdict are decided here once.
+# already observed, including the provider's own error text on stderr.
+# 124 and 137 are timeouts. Explore with or without a final message, and
+# review with or without a verdict, are decided here once. failure_kind for a
+# nonzero exit stays empty so emit classifies it from the exit code and stderr.
 # A final explore message needs at least one non-whitespace character.
-review_workspace_finish() { # leg rc mode verdict model billing reported degraded recognized
-  local leg="${1:-}" rc="${2:-0}" mode="${3:-}" verdict="${4:-}" model="${5:-}"
+# Review reads REPORT here. A missing normalizer exits 78 whether or not the
+# report is empty. A missing or empty report is otherwise UNKNOWN. A normalize
+# error is this tool being broken: exit 78.
+review_workspace_finish() { # leg rc mode model billing reported degraded
+  local leg="${1:-}" rc="${2:-0}" mode="${3:-}" model="${4:-}"
   [[ -n "$leg" ]] || { review_workspace__say 'finish 缺腿名'; exit 78; }
-  local billing="${6:-subscription}" reported="${7:-}" degraded="${8:-}" recognized="${9:-}"
-  if [[ "$rc" == 124 ]]; then
+  local billing="${5:-subscription}" reported="${6:-}" degraded="${7:-}"
+  local verdict=""
+  if [[ "$mode" == review ]]; then
+    local helper
+    helper="$(review_workspace__result_bin)"
+    if [[ ! -f "$helper" ]]; then
+      printf '%s: typed verdict normalizer missing\n' "$leg" >&2
+      exit 78
+    fi
+    if [[ ! -s "${REPORT:-}" ]]; then
+      verdict=UNKNOWN
+    else
+      local norm_err reason
+      norm_err="$(mktemp)"
+      if ! verdict="$(python3 "$helper" normalize "$REPORT" 2>"$norm_err")"; then
+        reason="$(tr '\n' ' ' < "$norm_err" | sed 's/[[:space:]]*$//')"
+        rm -f "$norm_err"
+        if [[ -n "$reason" ]]; then
+          printf '%s: typed verdict normalization failed: %s\n' "$leg" "$reason" >&2
+        else
+          printf '%s: typed verdict normalization failed\n' "$leg" >&2
+        fi
+        exit 78
+      fi
+      rm -f "$norm_err"
+      [[ -n "$verdict" ]] || verdict=UNKNOWN
+    fi
+  fi
+  if [[ "$rc" == 124 || "$rc" == 137 ]]; then
     review_workspace_write_facts "$model" "$model" "$billing" \
       timed_out partial timeout "$verdict" "$degraded" "$reported" || exit 78
-    printf '%s\n' "timed out (log: $LOG_FILE)" >&2
+    printf '%s: timed out after %ss (log: %s)\n' "$leg" "$TIMEOUT_SECONDS" "$LOG_FILE" >&2
     exit 124
   fi
   if [[ "$rc" != 0 ]]; then
     review_workspace_write_facts "$model" "$model" "$billing" \
-      exited partial "$recognized" "$verdict" "$degraded" "$reported" || exit 78
-    if [[ -n "$recognized" ]]; then
-      printf '%s\n' "exited rc=$rc ($recognized) (log: $LOG_FILE)" >&2
-    else
-      printf '%s\n' "exited rc=$rc (log: $LOG_FILE)" >&2
-    fi
+      exited partial "" "$verdict" "$degraded" "$reported" || exit 78
+    printf '%s: exited rc=%s (log: %s)\n' "$leg" "$rc" "$LOG_FILE" >&2
     exit "$rc"
   fi
   if [[ "$mode" == explore ]]; then
@@ -331,13 +366,14 @@ review_workspace_finish() { # leg rc mode verdict model billing reported degrade
     fi
     review_workspace_write_facts "$model" "$model" "$billing" \
       exited partial "" "" "$degraded" "$reported" || exit 78
-    printf '%s\n' "explore produced no final message (log: $LOG_FILE)" >&2
+    printf '%s: explore produced no final message (log: %s)\n' "$leg" "$LOG_FILE" >&2
     exit 1
   fi
   if [[ -z "$verdict" || "$verdict" == UNKNOWN ]]; then
     review_workspace_write_facts "$model" "$model" "$billing" \
       exited partial no_verdict UNKNOWN "$degraded" "$reported" || exit 78
-    printf '%s\n' "model returned no verdict (expected 'Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'; log: $LOG_FILE)" >&2
+    printf '%s: model returned no verdict (expected '\''Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'\''; log: %s)\n' \
+      "$leg" "$LOG_FILE" >&2
     exit 1
   fi
   review_workspace_write_facts "$model" "$model" "$billing" \
