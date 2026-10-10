@@ -80,7 +80,7 @@ class ReliabilityTests(unittest.TestCase):
         pr = {'state': 'open', 'head': {'sha': self.head, 'ref': 'feature'},
               'base': {'sha': self.base, 'ref': 'main'}}
         posted = []
-        real_run = self.review.run
+        real_run = sys.modules["_leg_session"].run
         real_subprocess_run = subprocess.run
         bin_dir = BIN
         self.leg_calls = []
@@ -144,9 +144,9 @@ class ReliabilityTests(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch.dict(os.environ, clean, clear=True), \
                 patch('sys.argv', ['review-pr', '1', '--repo', 'example/repo', '--leg', leg]), \
-                patch.object(self.review, 'run', side_effect=run), \
+                patch.object(sys.modules['_leg_session'], 'run', side_effect=run), \
                 patch.object(self.review, 'pr_state', return_value=pr), \
-                patch.object(self.review, 'snapshot', return_value=(
+                patch.object(sys.modules['_leg_session'], 'snapshot', return_value=(
                     self.repo, self.base, files or ['file'], self.diff,
                     changes if changes is not None else [
                         self.review.Change('M', (files or ['file'])[0], None, 1, 0)])), \
@@ -198,7 +198,7 @@ class ReliabilityTests(unittest.TestCase):
             git('commit', '-qm', 'delete')
             head = git('rev-parse', 'HEAD').stdout.strip()
             full = git('diff', '--binary', '--no-ext-diff', '--find-renames', base, head).stdout
-            files, diff, changes = self.review.collect_review_diff(repo, base, head)
+            files, diff, changes = sys.modules['_leg_session'].collect_review_diff(repo, base, head)
         return full, files, diff, changes, count
 
 

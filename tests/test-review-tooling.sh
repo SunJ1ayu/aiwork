@@ -1649,9 +1649,11 @@ PY
   chmod +x "$b/claude" "$b/kimi" "$b/mimo"
 
   _published() {  # $1 report $2 log
-    python3 - "$BIN/review-pr" "$1" "$d/last.txt" "$2" <<'PY'
+    python3 - "$BIN/_leg_session.py" "$1" "$d/last.txt" "$2" <<'PY'
 import importlib.machinery, importlib.util, pathlib, sys
-loader = importlib.machinery.SourceFileLoader("review_pr", sys.argv[1])
+path = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(path.parent))
+loader = importlib.machinery.SourceFileLoader("_leg_session", str(path))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
