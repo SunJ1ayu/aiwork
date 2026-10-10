@@ -8,6 +8,9 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from typing import NamedTuple
+
+from _review_result import load_result, sha256_file
 
 
 READER_TIMEOUT_ENV = {
@@ -21,6 +24,14 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 
 class ReviewError(ValueError):
     pass
+
+
+class Change(NamedTuple):
+    status: str
+    path: str
+    old_path: str | None
+    added: int | None
+    removed: int | None
 
 
 def choose_leg(name: str, bin_dir: Path) -> tuple[str, str | None]:
@@ -56,9 +67,8 @@ def redact(text: str) -> str:
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None,
-        input_text: str | None = None, cwd: Path | None = None,
-        subprocess_run=subprocess.run, redact=redact) -> str:
-    process = subprocess_run(command, input=input_text, text=True, capture_output=True,
+        input_text: str | None = None, cwd: Path | None = None) -> str:
+    process = subprocess.run(command, input=input_text, text=True, capture_output=True,
                              cwd=cwd, env=env, check=False)
     if process.returncode:
         reason = process.stderr.strip() or process.stdout.strip() or f"exit {process.returncode}"
@@ -79,14 +89,94 @@ def review_report(report: Path) -> str:
     return text
 
 
-def assert_snapshot_checkout(repo: Path, expected: str, run, *, label: str) -> None:
+def assert_snapshot_checkout(repo: Path, expected: str, *, label: str) -> None:
     if run(["git", "-C", str(repo), "rev-parse", "HEAD"]).strip() != expected:
         raise ReviewError(f"snapshot HEAD differs from {label}")
     if "160000 " in run(["git", "-C", str(repo), "ls-files", "--stage"]):
         raise ReviewError("snapshot contains submodules; full view cannot be verified")
 
 
-def snapshot(token: str, pr: dict, directory: Path, *, repository: str, run, collect_review_diff):
+def _git_bytes(repo: Path, *args: str) -> bytes:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True).stdout
+
+
+def _z_fields(blob: bytes) -> list[bytes]:
+    fields = blob.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    return fields
+
+
+def _take_fields(fields: list[bytes], index: int, count: int) -> tuple[list[bytes], int]:
+    if index + count > len(fields):
+        raise ReviewError("git -z record is truncated")
+    return fields[index:index + count], index + count
+
+
+def _parse_name_status(blob: bytes) -> list[tuple[str, str, str | None]]:
+    """Status letter, path, and the old path for a rename or copy. From git -z, not a diff header."""
+    fields = _z_fields(blob)
+    rows: list[tuple[str, str, str | None]] = []
+    index = 0
+    while index < len(fields):
+        status, index = _take_fields(fields, index, 1)
+        letter = os.fsdecode(status[0])[:1]
+        if not letter:
+            raise ReviewError("git name-status -z record is empty")
+        if letter in "RC":
+            pair, index = _take_fields(fields, index, 2)
+            rows.append((letter, os.fsdecode(pair[1]), os.fsdecode(pair[0])))
+        else:
+            path, index = _take_fields(fields, index, 1)
+            rows.append((letter, os.fsdecode(path[0]), None))
+    return rows
+
+
+def _count(field: bytes) -> int | None:
+    return None if field == b"-" else int(field)
+
+
+def _parse_numstat(blob: bytes) -> list[tuple[int | None, int | None, str, str | None]]:
+    """Added, removed, path, and the old path when numstat -z emits the empty rename field."""
+    fields = _z_fields(blob)
+    rows: list[tuple[int | None, int | None, str, str | None]] = []
+    index = 0
+    while index < len(fields):
+        record, index = _take_fields(fields, index, 1)
+        added_b, removed_b, path_b = record[0].split(b"\t", 2)
+        if path_b == b"":
+            pair, index = _take_fields(fields, index, 2)
+            rows.append((_count(added_b), _count(removed_b), os.fsdecode(pair[1]), os.fsdecode(pair[0])))
+        else:
+            rows.append((_count(added_b), _count(removed_b), os.fsdecode(path_b), None))
+    return rows
+
+
+def collect_review_diff(repo: Path, merge_base: str, head: str
+                        ) -> tuple[list[str], str, list[Change]]:
+    """Changed paths, the complete diff, and one status row per path from git -z.
+
+    name-status and numstat are the same diff. A rename keeps both paths. Nothing parses a diff header.
+    """
+    spec = ["--find-renames", merge_base, head]
+    status_rows = _parse_name_status(_git_bytes(repo, "diff", "--name-status", "-z", *spec))
+    stat_rows = _parse_numstat(_git_bytes(repo, "diff", "--numstat", "-z", *spec))
+    if len(status_rows) != len(stat_rows):
+        raise ReviewError("git name-status and numstat disagree")
+    changes: list[Change] = []
+    files: list[str] = []
+    for status, stat in zip(status_rows, stat_rows):
+        letter, path, old = status
+        added, removed, stat_path, stat_old = stat
+        if path != stat_path or old != stat_old:
+            raise ReviewError("git name-status and numstat disagree")
+        changes.append(Change(letter, path, old, added, removed))
+        files.append(path)
+    diff = run(["git", "-C", str(repo), "diff", "--binary", "--no-ext-diff", *spec])
+    return files, diff, changes
+
+
+def snapshot(token: str, pr: dict, directory: Path, *, repository: str):
     repo = directory / "repo"
     repo.mkdir()
     run(["git", "init", "-q", str(repo)])
@@ -104,7 +194,7 @@ def snapshot(token: str, pr: dict, directory: Path, *, repository: str, run, col
          f"https://github.com/{repository}.git", head, base, "refs/heads/main:refs/aiwork/main"], env=env)
     run(["git", "-C", str(repo), "checkout", "-q", "--detach", head])
     # The reviewer sees a complete checkout, not a sparse or partial worktree.
-    assert_snapshot_checkout(repo, head, run, label="PR head")
+    assert_snapshot_checkout(repo, head, label="PR head")
     merge_base = run(["git", "-C", str(repo), "merge-base", base, head]).strip()
     files, diff, changes = collect_review_diff(repo, merge_base, head)
     if not files:
@@ -114,14 +204,14 @@ def snapshot(token: str, pr: dict, directory: Path, *, repository: str, run, col
     return repo, merge_base, files, diff, changes
 
 
-def current_main(source: Path, run) -> str:
+def current_main(source: Path) -> str:
     sha = run(["git", "-C", str(source), "rev-parse", "--verify", "refs/heads/main"]).strip()
     if not SHA.fullmatch(sha):
         raise ReviewError("target repository main is missing or invalid")
     return sha
 
 
-def snapshot_main(source: Path, directory: Path, main_sha: str, *, run) -> Path:
+def snapshot_main(source: Path, directory: Path, main_sha: str) -> Path:
     """One checkout of the pinned main commit. The caller gives each leg its own directory."""
     if not SHA.fullmatch(main_sha):
         raise ReviewError("target repository main is missing or invalid")
@@ -131,19 +221,19 @@ def snapshot_main(source: Path, directory: Path, main_sha: str, *, run) -> Path:
     run(["git", "-C", str(repo), "fetch", "-q", "--no-tags", str(source),
          f"{main_sha}:refs/heads/main"])
     run(["git", "-C", str(repo), "checkout", "-q", "--detach", main_sha])
-    assert_snapshot_checkout(repo, main_sha, run, label="main")
+    assert_snapshot_checkout(repo, main_sha, label="main")
     return repo
 
 
 def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, directory: Path,
                     env: dict[str, str], run_id: str, frozen_model: str | None, *,
-                    run, subprocess_run, load_result, sha256_file, bin_dir: Path,
-                    mode: str = "review", review_contract_version: int | None = None):
+                    bin_dir: Path, mode: str = "review",
+                    review_contract_version: int | None = None):
     log, facts = directory / "review.log", directory / "facts.json"
     report = directory / "report.md"
     result_file, diagnostic = directory / "result.json", directory / "leg.stderr"
     env = dict(env, AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_REPORT_PATH=str(report))
-    leg = subprocess_run([str(bin_dir / leg_name), mode, str(task), str(log), str(repo)],
+    leg = subprocess.run([str(bin_dir / leg_name), mode, str(task), str(log), str(repo)],
                          text=True, capture_output=True, env=env, check=False)
     diagnostic.write_text(leg.stderr, encoding="utf-8")
     command = [sys.executable, str(bin_dir / "_review_result.py"), "emit", "--result", str(result_file),

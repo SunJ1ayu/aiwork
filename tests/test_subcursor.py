@@ -318,7 +318,7 @@ class CursorTest(unittest.TestCase):
         spec = importlib.util.spec_from_loader(loader.name, loader)
         review = importlib.util.module_from_spec(spec)
         loader.exec_module(review)
-        prose = review.review_report(report)
+        prose = review._leg_session.review_report(report)
         self.assertEqual(prose, last)
         body = review.build_body('subcursor', 'composer-2.5', prose, {
             'verdict': 'PASS', 'head_sha': 'a' * 40, 'model': 'composer-2.5',

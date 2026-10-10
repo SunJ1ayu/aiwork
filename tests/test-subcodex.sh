@@ -321,9 +321,11 @@ if grep -q 'pending ? null' "$d/c7.stream.jsonl" 2>/dev/null \
 else
   bad "C7: 过程留在事件流里，不进报告"
 fi
-python3 - "$ROOT/bin/review-pr" "$d/report.md" "$d/last.txt" <<'PY'
+python3 - "$ROOT/bin/_leg_session.py" "$d/report.md" "$d/last.txt" <<'PY'
 import importlib.machinery, importlib.util, pathlib, sys
-loader = importlib.machinery.SourceFileLoader("review_pr", sys.argv[1])
+path = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(path.parent))
+loader = importlib.machinery.SourceFileLoader("_leg_session", str(path))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)

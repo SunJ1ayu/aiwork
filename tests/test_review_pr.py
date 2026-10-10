@@ -38,6 +38,10 @@ def load_script(name="review-pr"):
 class ReviewPrTests(unittest.TestCase):
     def setUp(self):
         self.review = load_script()
+        self.session = sys.modules["_leg_session"]
+
+    def choose(self, name):
+        return self.session.choose_leg(name, self.review.BIN)
 
     def test_body_has_one_machine_block_and_sanitizes_model_json(self):
         body = self.review.build_body(
@@ -52,28 +56,28 @@ class ReviewPrTests(unittest.TestCase):
         self.assertEqual(block["family"], "openai")
 
     def test_leg_selection_needs_an_attributable_family(self):
-        self.assertEqual(self.review.choose_leg("subcodex"), ("openai", None))
-        self.assertEqual(self.review.choose_leg("subdeepseek-agent"), ("deepseek", None))
+        self.assertEqual(self.choose("subcodex"), ("openai", None))
+        self.assertEqual(self.choose("subdeepseek-agent"), ("deepseek", None))
         for name in ("subclaude", "../subcodex"):
             with self.subTest(name=name), self.assertRaises(ValueError):
-                self.review.choose_leg(name)
+                self.choose(name)
 
     def test_cursor_family_follows_any_model_including_claude(self):
         # Which families count for which PR is the gate's call; review-pr refuses none.
         for model, family in (("grok-4.7-high", "xai"), ("gpt-5.6", "openai"),
                               ("claude-4.5-sonnet", "anthropic"), ("composer-2.5", "cursor")):
             with self.subTest(model=model), patch.dict("os.environ", {"CURSOR_MODEL": model}):
-                self.assertEqual(self.review.choose_leg("subcursor"), (family, model))
+                self.assertEqual(self.choose("subcursor"), (family, model))
         for model in ("auto", "Auto", "some-new-vendor-1"):
             with self.subTest(model=model), patch.dict("os.environ", {"CURSOR_MODEL": model}), \
                     self.assertRaisesRegex(self.review.ReviewError, "unsupported review leg"):
-                self.review.choose_leg("subcursor")
+                self.choose("subcursor")
 
     def test_cursor_model_defaults_to_the_config_file(self):
         from _aiwork_config import model as configured_model
         configured = configured_model("cursor")
         with patch.dict("os.environ", {"CURSOR_MODEL": ""}):
-            self.assertEqual(self.review.choose_leg("subcursor")[1], configured)
+            self.assertEqual(self.choose("subcursor")[1], configured)
 
     def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True,
                                  repository="SunJ1ayu/aiwork", source_failure=None, project_rules=False,
@@ -86,7 +90,7 @@ class ReviewPrTests(unittest.TestCase):
         risks = "# project main 风险\r\n业主接受的平台上限。\r\n"
         source_sha = "d" * 40
         calls.update(rules=rules, risks=risks, source_sha=source_sha)
-        real_run = self.review.run
+        real_run = self.session.run
         real_subprocess_run = subprocess.run
 
         def fake_public_read(request, **kwargs):
@@ -191,14 +195,14 @@ class ReviewPrTests(unittest.TestCase):
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
                     patch.object(self.review, "BIN", bin_dir), \
                     patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data"), AIWORK_CONFIG_DIR=str(config)), \
-                    patch.object(self.review, "run", side_effect=fake_run), \
+                    patch.object(self.session, "run", side_effect=fake_run), \
                     patch("urllib.request.urlopen", side_effect=fake_public_read), \
                     patch.object(self.review, "github", side_effect=fake_github), \
                     patch.object(self.review, "pr_state", return_value=pr) as state, \
-                    patch.object(self.review, "snapshot", return_value=(
+                    patch.object(self.session, "snapshot", return_value=(
                         repo, "c" * 40, ["src/a.py"], "diff", [])) as snapshot, \
-                    patch.object(self.review, "load_result", return_value=result), \
-                    patch.object(self.review, "review_report", return_value=report), \
+                    patch.object(self.session, "load_result", return_value=result), \
+                    patch.object(self.session, "review_report", return_value=report), \
                     patch.object(self.review.subprocess, "run", side_effect=fake_leg), \
                     redirect_stdout(stdout), redirect_stderr(stderr):
                 rc = self.review.main()
@@ -297,7 +301,7 @@ class ReviewPrTests(unittest.TestCase):
         diagnostic = 'gh-app-token: 目标仓库不在角色配置范围内'
         with patch.object(self.review.subprocess, 'run', return_value=subprocess.CompletedProcess([], 2, '', diagnostic)):
             with self.assertRaises(self.review.ReviewError) as error:
-                self.review.run(['gh-app-token', 'review'])
+                self.session.run(['gh-app-token', 'review'])
         self.assertIn(diagnostic, str(error.exception))
         fake_tokens = ['ghs' + '_' + 'first', 'ghp' + '_' + 'second', 'github' + '_pat_' + 'third']
         pem = '-----' + 'BEGIN PRIVATE KEY' + '-----\nprivate-material\n-----END PRIVATE KEY-----'
@@ -305,7 +309,7 @@ class ReviewPrTests(unittest.TestCase):
         secrets = ' '.join(fake_tokens) + f' token: {ordinary} token={other}\n' + pem
         with patch.object(self.review.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', secrets)):
             with self.assertRaises(self.review.ReviewError) as error:
-                self.review.run(['provider'])
+                self.session.run(['provider'])
         for secret in (*fake_tokens, ordinary, other, 'private-material'):
             self.assertNotIn(secret, str(error.exception))
 
@@ -385,7 +389,7 @@ class ReviewPrTests(unittest.TestCase):
         return repo, git
 
     def compose(self, repo, base, head, *, number=17):
-        files, diff, changes = self.review.collect_review_diff(repo, base, head)
+        files, diff, changes = self.session.collect_review_diff(repo, base, head)
         pr = {'head': {'sha': head, 'ref': 'feature'}, 'base': {'sha': base, 'ref': 'main'}}
         task = self.review.compose_task(
             repo, number=number, pr=pr, merge_base=base,
@@ -649,21 +653,21 @@ grep -q -F -- "$3" "$clone/$4"
             ("ssh://git@github.com/SunJ1ayu/aiwork.git", "SunJ1ayu/aiwork"),
         ]
         for url, expected in cases:
-            with self.subTest(url=url), patch.object(self.review, "run", return_value=url + "\n"):
+            with self.subTest(url=url), patch.object(self.session, "run", return_value=url + "\n"):
                 self.assertEqual(self.review.repository_from_origin(), expected)
 
     def test_unreadable_origin_requires_explicit_repo(self):
         for url in ("https://gitlab.com/a/b.git", "not a url", ""):
-            with self.subTest(url=url), patch.object(self.review, "run", return_value=url + "\n"):
+            with self.subTest(url=url), patch.object(self.session, "run", return_value=url + "\n"):
                 with self.assertRaisesRegex(self.review.ReviewError, "--repo"):
                     self.review.repository_from_origin()
-        with patch.object(self.review, "run", side_effect=self.review.ReviewError("git failed")):
+        with patch.object(self.session, "run", side_effect=self.review.ReviewError("git failed")):
             with self.assertRaisesRegex(self.review.ReviewError, "--repo"):
                 self.review.repository_from_origin()
 
     def test_missing_origin_stops_before_credentials(self):
         with patch("sys.argv", ["review-pr", "12"]), \
-                patch.object(self.review, "run", side_effect=self.review.ReviewError("git failed")) as run, \
+                patch.object(self.session, "run", side_effect=self.review.ReviewError("git failed")) as run, \
                 redirect_stderr(io.StringIO()) as err:
             rc = self.review.main()
         self.assertEqual(rc, 1)
@@ -673,7 +677,7 @@ grep -q -F -- "$3" "$clone/$4"
     def test_invalid_repository_is_rejected_before_getting_credentials(self):
         for target in ("../aiwork", "owner/repo/extra", "https://github.com/owner/repo", "owner/repo\nother", "owner/.."):
             with self.subTest(target=target), patch("sys.argv", ["review-pr", "12", "--repo", target]), \
-                    patch.object(self.review, "run") as run, redirect_stderr(io.StringIO()):
+                    patch.object(self.session, "run") as run, redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as exit:
                     self.review.main()
                 self.assertNotEqual(exit.exception.code, 0)
@@ -709,9 +713,9 @@ grep -q -F -- "$3" "$clone/$4"
             return subprocess.CompletedProcess(command, 0, b"", b"")
 
         with tempfile.TemporaryDirectory() as temporary, \
-                patch.object(self.review, "run", side_effect=fake_git), \
-                patch.object(self.review.subprocess, "run", side_effect=fake_subprocess):
-            _, base, files, *_rest = self.review.snapshot(FAKE_TOKEN, pr, Path(temporary),
+                patch.object(self.session, "run", side_effect=fake_git), \
+                patch.object(self.session.subprocess, "run", side_effect=fake_subprocess):
+            _, base, files, *_rest = self.session.snapshot(FAKE_TOKEN, pr, Path(temporary),
                                                          repository="SunJ1ayu/aiwork")
         fetch = next(command for command in commands if "fetch" in command)
         self.assertIn("https://github.com/SunJ1ayu/aiwork.git", fetch)
@@ -749,13 +753,13 @@ grep -q -F -- "$3" "$clone/$4"
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary) / "report.md"
             with self.assertRaisesRegex(self.review.ReviewError, "did not write the report file"):
-                self.review.review_report(report)
+                self.session.review_report(report)
 
     def test_report_file_replaces_undecodable_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary) / "report.md"
             report.write_bytes("Findings.\n\nConclusion: PASS\n".encode() + b"\xff")
-            text = self.review.review_report(report)
+            text = self.session.review_report(report)
             self.assertIn("Conclusion: PASS", text)
             self.assertIn("\ufffd", text)
 
@@ -764,7 +768,7 @@ grep -q -F -- "$3" "$clone/$4"
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary) / "report.md"
             report.write_text(last, encoding="utf-8")
-            self.assertEqual(self.review.review_report(report), last)
+            self.assertEqual(self.session.review_report(report), last)
             body = self.review.build_body(
                 "subkimi", "kimi-code/kimi-for-coding", last,
                 {"verdict": "PASS", "head_sha": "a" * 40, "model": "kimi-code/kimi-for-coding",
@@ -808,19 +812,19 @@ grep -q -F -- "$3" "$clone/$4"
             self.assertEqual(self.review.main_document(repo, ".aiwork/accepted-risks.md", required=False), "无")
 
     def test_failed_risk_lookup_is_not_treated_as_absence(self):
-        with patch.object(self.review, "run", side_effect=self.review.ReviewError("fetch failed")):
+        with patch.object(self.session, "run", side_effect=self.review.ReviewError("fetch failed")):
             with self.assertRaises(self.review.ReviewError):
                 self.review.main_document(Path("unused"), ".aiwork/accepted-risks.md", required=False)
 
     def test_unreadable_document_is_not_treated_as_absence(self):
-        with patch.object(self.review, "run", return_value="100644 blob " + "a" * 40 + "\tfile"), \
+        with patch.object(self.session, "run", return_value="100644 blob " + "a" * 40 + "\tfile"), \
                 patch.object(self.review.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", b"error")):
             for required in (True, False):
                 with self.subTest(required=required), self.assertRaises(self.review.ReviewError):
                     self.review.main_document(Path("unused"), "file", required=required)
 
     def test_non_regular_document_is_refused(self):
-        with patch.object(self.review, "run", return_value="120000 blob " + "a" * 40 + "\tfile"):
+        with patch.object(self.session, "run", return_value="120000 blob " + "a" * 40 + "\tfile"):
             with self.assertRaisesRegex(self.review.ReviewError, "not a regular file"):
                 self.review.main_document(Path("unused"), "file", required=False)
 

@@ -310,10 +310,11 @@ class SettingsTest(unittest.TestCase):
         review = load_script('review-pr')
         self.models['cursor'] = 'gpt-5.6'
         self.write_models()
+        session = sys.modules['_leg_session']
         with patch.dict(os.environ, CURSOR_MODEL=''):
-            self.assertEqual(review.choose_leg('subcursor'), ('openai', 'gpt-5.6'))
+            self.assertEqual(session.choose_leg('subcursor', review.BIN), ('openai', 'gpt-5.6'))
         with patch.dict(os.environ, CURSOR_MODEL='composer-2.5'):
-            self.assertEqual(review.choose_leg('subcursor'), ('cursor', 'composer-2.5'))
+            self.assertEqual(session.choose_leg('subcursor', review.BIN), ('cursor', 'composer-2.5'))
 
     def test_triage_model_and_key_come_from_disposable_settings(self):
         triage = load_script('triage')
