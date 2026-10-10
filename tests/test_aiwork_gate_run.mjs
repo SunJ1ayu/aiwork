@@ -91,6 +91,12 @@ test("R4 策略缺 App ID(或其他必填项)→ 不读 PR 的数据、不发 Ap
   assert.throws(() => validatePolicy({ ...policy, check_name: "" }), /check_name/);
   assert.throws(() => validatePolicy({ ...policy, builders: {} }), /builders/);
   assert.doesNotThrow(() => validatePolicy(policy));
+  const dropMin = { ...policy };
+  delete dropMin.high_min_families;
+  assert.throws(() => validatePolicy(dropMin), /high_min_families/);
+  for (const value of [1, 0, 1.5, "3", null]) {
+    assert.throws(() => validatePolicy({ ...policy, high_min_families: value }), /high_min_families/, String(value));
+  }
   const r = recorder();
   const api = prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"] }, 11: { head: OTHER, files: ["web/b.ts"] } });
   await assert.rejects(run(r, api, { policy: { ...policy, gate_app_id: null } }), /gate_app_id/);

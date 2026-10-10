@@ -38,6 +38,7 @@ export function validatePolicy(p) {
   if (typeof p?.reviewer_bot !== "string" || !p.reviewer_bot.endsWith("[bot]")) bad.push("reviewer_bot");
   if (typeof p?.ci?.workflow_path !== "string" || typeof p?.ci?.event !== "string") bad.push("ci");
   if (!Array.isArray(p?.judging_surface) || !Array.isArray(p?.high)) bad.push("judging_surface/high");
+  if (!Number.isInteger(p?.high_min_families) || p.high_min_families < 2) bad.push("high_min_families");
   if (typeof p?.merge_label !== "string" || !p.merge_label) bad.push("merge_label");
   // Builder 不能在名单里:不然它能自己把自己的 PR 合进去
   const requesters = p?.merge_requesters;
