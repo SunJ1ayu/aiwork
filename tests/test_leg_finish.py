@@ -189,8 +189,18 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
         return json.loads(path.read_text())
 
     def _signature(self, result, facts, log):
-        line = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else ""
-        line = line.replace(str(log), "{log}")
+        marker = str(log)
+        finish = [
+            line.replace(marker, "{log}")
+            for line in result.stderr.splitlines()
+            if line.replace(marker, "{log}").startswith((
+                "timed out (log: ",
+                "exited rc=",
+                "explore produced no final message (log: ",
+                "model returned no verdict",
+            ))
+        ]
+        line = finish[-1] if finish else ""
         return (
             facts["process_state"],
             facts["evidence_completeness"],
@@ -213,6 +223,8 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
                     result, self._facts(leg, case), self.root / f"{leg}-{case}.log")
         for case in CASES:
             rows = seen[case]
+            if len(set(rows.values())) != 1:
+                print(f"FAIL detail {case}: {rows}")
             self.assertEqual(len(set(rows.values())), 1, f"{case}: {rows}")
         timeout = seen["timeout"]["subagent"]
         self.assertEqual(timeout[:5], ("timed_out", "partial", "timeout", None, 124))
