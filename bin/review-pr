@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,6 +24,7 @@ from _leg_session import (
     READER_TIMEOUT_SECONDS,
     Change,
     ReviewError,
+    SHA,
     redact,
 )
 
@@ -35,7 +35,6 @@ ORIGIN_REPO = re.compile(
     r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
     r"([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*?)(?:\.git)?/?$"
 )
-SHA = re.compile(r"^[0-9a-f]{40}$")
 CONCLUSION_REQUIREMENT = (
     "你的最后一条消息就是发布出去的评审：要写完整的报告。"
     "结尾从下面三行里选一行，独占一行写上：\n"
