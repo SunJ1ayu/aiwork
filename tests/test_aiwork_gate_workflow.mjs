@@ -157,10 +157,10 @@ test("aiwork-review-ping：无权限，只敲门，不把事件内容拼进 shel
   assert.doesNotMatch(run, /\$\{\{/);
 });
 
-test("aiwork 自己的策略：只报不拦，不登记共用的 build 账号，罩住密钥、发布和判卷面", () => {
+test("aiwork 自己的策略：真拦截，不登记共用的 build 账号，罩住密钥、发布和判卷面", () => {
   const policy = JSON.parse(read(".aiwork/policy.json"));
   validatePolicy(policy);
-  assert.equal(policy.check_name, "aiwork-gate-shadow");
+  assert.equal(policy.check_name, "aiwork-gate");
   assert.equal(policy.builders["aiwork-build[bot]"], undefined);
   assert.equal(policy.builders.SunJ1ayuBoT, "anthropic");
   assert.equal(policy.high_min_families, 3);
