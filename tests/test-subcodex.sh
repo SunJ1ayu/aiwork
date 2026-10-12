@@ -203,6 +203,8 @@ check "C3: 额度事件原样留在事件流，手写的 usage_limit_exceeded �
   $([[ $rc -ne 0 ]] && grep -qF "$sentence" "$d/c4.stream.jsonl" && ! grep -q 'usage_limit_exceeded' "$d/c4.stream.jsonl"; echo $?)
 check "C3: 额度原话被抄到 stderr，腿自己不把 failure_kind 写成 quota" \
   $(grep -qF "$sentence" "$d/c4.err"; echo $?)
+_copies="$(grep -cF "$sentence" "$d/c4.err" || true)"
+check "C3: 同一句报错在 stderr 里只出现一次" $([[ "$_copies" == 1 ]]; echo $?)
 facts c4 "f['failure_kind'] is None"
 check "C3: facts 的 failure_kind 留空，分类留给 emit" $?
 CODEX_TEST_MODE=body sc c4b explore "$d/task.md" "$d/c4b.log" "$d/repo" >/dev/null 2>"$d/c4b.err"; rc=$?

@@ -406,6 +406,18 @@ PY
   rm -rf "$d"
 }
 
+test_write_facts_without_helper_path() {
+  echo '[RW9] write_facts returns before resolving the helper when nothing will be written'
+  local rc err
+  err="$(
+    unset BIN_DIR AIWORK_REVIEW_RESULT_BIN AIWORK_REVIEW_FACTS_PATH
+    review_workspace_write_facts requested invoked 2>&1
+  )"
+  rc=$?
+  [[ $rc -eq 0 && -z "$err" ]]
+  check 'RW9: no BIN_DIR and no facts path returns 0' $?
+}
+
 test_mutation_sensitivity() {
   echo '[RW7] oracle rejects direct-source and shared-clone mutations'
   local d direct fake rc real_mktemp
@@ -482,6 +494,7 @@ else
   test_source_race_and_cleanup_guard
   test_gitlink_fails_closed
   test_report_path_and_missing_explore_message
+  test_write_facts_without_helper_path
 fi
 test_wrapper_helper_failure
 [[ -f "$HELPER" ]] && test_mutation_sensitivity

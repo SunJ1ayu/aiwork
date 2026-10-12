@@ -8,6 +8,8 @@
 #   review_workspace_finish LEG RC MODE MODEL BILLING REPORTED DEGRADED
 #   review_workspace_cleanup
 #
+# review_workspace_finish reads the caller's TIMEOUT_SECONDS, LOG_FILE, and REPORT.
+#
 # The source repository is never checked out or indexed through its own .git.
 # Clone-owned temporary indexes preserve the source index and separately snapshot
 # the worktree/untracked view. Two complete scans must produce the same pair.
@@ -284,9 +286,11 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
   local process_state="${4:-}" completeness="${5:-}" failure_kind="${6:-}" verdict="${7:-}"
   local degraded="${8:-}" reported="${9:-}"
   local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper
-  helper="$(review_workspace__result_bin)"
   local -a outcome=()
+  # Nothing to write: return before resolving the helper. Callers that never
+  # set BIN_DIR or AIWORK_REVIEW_RESULT_BIN must not trip set -u here.
   [[ -n "$output" ]] || return 0
+  helper="$(review_workspace__result_bin)"
   [[ -f "$helper" ]] \
     || { review_workspace__say 'typed facts producer 缺件'; return 78; }
   [[ -z "$process_state" ]] || outcome+=(--process-state "$process_state")
@@ -309,8 +313,8 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
 # One finish for every leg, after the model returns. The leg passes what it
 # already observed, including the provider's own error text on stderr.
 # 124 and 137 are timeouts. Explore with or without a final message, and
-# review with or without a verdict, are decided here once. failure_kind for a
-# nonzero exit stays empty so emit classifies it from the exit code and stderr.
+# review with or without a verdict, are decided here once. 其他非零退出的
+# failure_kind 留空，让 emit 按退出码和 stderr 分类。
 # A final explore message needs at least one non-whitespace character.
 # Review reads REPORT here. A missing normalizer exits 78 whether or not the
 # report is empty. A missing or empty report is otherwise UNKNOWN. A normalize
