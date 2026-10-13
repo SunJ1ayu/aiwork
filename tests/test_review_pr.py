@@ -586,6 +586,25 @@ grep -q -F -- "$3" "$clone/$4"
             self.review.place_review_diff(ignored, 'NEW\n')
         self.assertFalse((ignored / self.review.REVIEW_DIFF_PATH).exists())
 
+    def test_review_diff_git_error_removes_the_file(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        repo = Path(temporary.name)
+        with self.assertRaises(self.review.ReviewError):
+            self.review.place_review_diff(repo, 'NEW\n')
+        self.assertFalse((repo / self.review.REVIEW_DIFF_PATH).exists())
+
+    def test_review_diff_is_refused_when_a_tracked_file_is_deleted_from_the_worktree(self):
+        repo, git = self.git_repo()
+        path = repo / self.review.REVIEW_DIFF_PATH
+        path.write_text('KEEP\n')
+        git('add', '-A')
+        git('commit', '-qm', 'tracked')
+        path.unlink()
+        with self.assertRaises(self.review.ReviewError):
+            self.review.place_review_diff(repo, 'NEW\n')
+        self.assertFalse(path.exists())
+
     def test_task_rules_are_aiwork_main_verbatim_with_commit(self):
         rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", project_rules=True)
         self.assertEqual(rc, 0, stderr)
@@ -815,8 +834,12 @@ grep -q -F -- "$3" "$clone/$4"
                 self.review.main_document(Path("unused"), ".aiwork/accepted-risks.md", required=False)
 
     def test_unreadable_document_is_not_treated_as_absence(self):
-        with patch.object(self.session, "run", return_value="100644 blob " + "a" * 40 + "\tfile"), \
-                patch.object(self.review.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", b"error")):
+        def fake_run(command, **kwargs):
+            if "show" in command:
+                raise self.review.ReviewError("git failed (rc=128): fatal")
+            return "100644 blob " + "a" * 40 + "\tfile"
+
+        with patch.object(self.session, "run", side_effect=fake_run):
             for required in (True, False):
                 with self.subTest(required=required), self.assertRaises(self.review.ReviewError):
                     self.review.main_document(Path("unused"), "file", required=required)
