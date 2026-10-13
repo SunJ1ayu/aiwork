@@ -161,7 +161,7 @@ _RW="$BIN_DIR/_review-workspace.sh"
 # shellcheck source=_review-workspace.sh
 . "$_RW"
 # Absolute log path: the agent runs with cwd = REPO_DIR.
-case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
+LOG_FILE="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$LOG_FILE")" || { echo 'subkimi: canonicalize helper 失败' >&2; exit 78; }
 review_workspace_reset_report || exit 78
 if ! review_workspace_prepare "$SOURCE_REPO" subkimi; then
   die 'review workspace 准备失败 ⇒ 模型未启动'

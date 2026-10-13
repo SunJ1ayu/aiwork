@@ -243,6 +243,20 @@ check 'C4: explore 最后一条消息只有空白时失败，句子与其他腿�
   $([[ $rc -eq 1 && "$(cat "$d/c7d.err")" == "$want" ]] && cmp -s "$d/c7d.md" "$d/blank-expect"; echo $?)
 facts c7d "f['process_state']=='exited' and f['evidence_completeness']=='partial' and f['failure_kind'] is None and f['verdict'] is None"
 check 'C4: 空白消息的 facts 与缺消息相同(exited/partial、failure_kind 留空)' $?
+mkdir -p "$d/logs"
+printf 'Conclusion: PASS\n' > "$d/logs/leg.log.report"
+[[ ! -e "$d/logs/new" ]]
+(
+  unset AIWORK_REVIEW_REPORT_PATH
+  CODEX_TEST_MODE=silent sc cstale explore "$d/task.md" "$d/logs/new/../leg.log" "$d/repo" \
+    >/dev/null 2>"$d/cstale.err"
+  printf '%s' "$?" > "$d/cstale.rc"
+)
+rc="$(cat "$d/cstale.rc")"
+check 'C4: 日志路径穿过还不存在的目录再接 ..、没有最终消息 ⇒ 失败，不沿用旧 PASS' \
+  $([[ "$rc" -ne 0 ]] && grep -q 'no final message' "$d/cstale.err"; echo $?)
+facts cstale "f['evidence_completeness']=='partial' and f['verdict'] is None"
+check 'C4: 这次 facts 是缺最终消息，不是旧报告的成功结论' $?
 sc c8 review "$d/task.md" "$d/c8.log" "$d/repo" >/dev/null 2>"$d/c8.err"; rc=$?
 check "C4: 没有自审文件也调用 codex" \
   $([[ $rc -eq 0 && -e "$d/cap/c8.argv" ]]; echo $?)

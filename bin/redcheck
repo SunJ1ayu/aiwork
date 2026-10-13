@@ -69,7 +69,8 @@ git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || die "--base 解�
 REPO_REAL="$(realpath "$REPO")"
 for p in "${IMPL[@]}"; do
   case "$p" in /*) die "--impl 要相对仓库根的路径,不是绝对路径:$p" ;; esac
-  pr="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$REPO/$p")"
+  pr="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$REPO/$p")" \
+    || die "canonicalize helper 失败:$p"
   case "$pr" in
     "$REPO_REAL"/*) ;;
     *) die "--impl 指到**仓外**了,拒跑(这个脚本会 rm -rf 它):

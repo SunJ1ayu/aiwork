@@ -631,8 +631,27 @@ d_gate_blind_spots() {
   rm -rf "$d"
 }
 
+d_refuses_when_canonicalize_helper_missing() {
+  echo "[D5] delegate-codex: canonicalize helper 缺失 ⇒ 拒发,且 codex 一次都不启动"
+  local d; d="$(mktemp -d)"; local b="$d/bin" rec="$d/rec" repo="$d/repo" tool="$d/tool"
+  make_fake_codex "$b" "$rec"; make_repo "$repo"
+  mkdir -p "$tool"
+  cp "$BIN/delegate-codex" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$tool/"
+  printf '# 任务书\n把 impl 改成打印 NEW\n' > "$d/task.md"
+  printf '攻题记录:第 3 条断言在旧实现上也绿\n' > "$d/attack.md"
+  stamp_hash "$d/attack.md" "$repo" tests/oracle.sh
+  local rc
+  env PATH="$b:$PATH" bash "$tool/delegate-codex" --no-isolate --task "$d/task.md" --repo "$repo" \
+      --attack-log "$d/attack.md" --protect tests/oracle.sh --log "$d/run.log" >"$d/out" 2>&1; rc=$?
+  check "D5: canonicalize helper 缺失 ⇒ 非零" $([[ $rc -ne 0 ]]; echo $?)
+  check "D5: canonicalize helper 缺失 ⇒ codex 零调用" $([[ "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  grep -q 'helper' "$d/out"; check "D5: 说清是 helper 失败" $?
+  rm -rf "$d"
+}
+
 echo "=== delegate-entry / redcheck oracle ==="
 d_refuses_without_evidence
+d_refuses_when_canonicalize_helper_missing
 d_injects_and_records
 d_receive_gate
 d_gate_blind_spots
