@@ -26,6 +26,8 @@ set -uo pipefail
 #   5 红了,但没红在 --must-fail 指定的地方
 #   9 **恢复失败** —— 最响的那个:工作树被留在"基线构建"的状态,必须人来收拾
 
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+
 die()  { echo "redcheck: $*" >&2; exit 2; }
 
 REPO="$PWD"; BASE=""; ORACLE=""; BUILD=""; MUSTFAIL=""; IMPL=()
@@ -67,14 +69,19 @@ git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || die "--base 解�
 REPO_REAL="$(realpath "$REPO")"
 for p in "${IMPL[@]}"; do
   case "$p" in /*) die "--impl 要相对仓库根的路径,不是绝对路径:$p" ;; esac
-  pr="$(realpath -m "$REPO/$p")"
-  case "$pr" in
-    "$REPO_REAL"/*) ;;
-    *) die "--impl 指到**仓外**了,拒跑(这个脚本会 rm -rf 它):
+  pr="$(python3 "$BIN_DIR/_paths.py" canon -- "$REPO/$p")" \
+    || die "canonicalize helper 失败:$p"
+  _impl_rc=0
+  _impl_rel="$(python3 "$BIN_DIR/_paths.py" inside -- "$REPO" "$REPO/$p")" || _impl_rc=$?
+  if [[ $_impl_rc -ne 0 && $_impl_rc -ne 1 ]]; then
+    die "canonicalize helper 失败:$p"
+  fi
+  if [[ $_impl_rc -ne 0 || -z "$_impl_rel" ]]; then
+    die "--impl 指到**仓外**了,拒跑(这个脚本会 rm -rf 它):
     给的是 $p
     解析成 $pr
-    仓库是 $REPO_REAL" ;;
-  esac
+    仓库是 $REPO_REAL"
+  fi
 done
 
 # 开工前必须干净:不替人猜哪些改动该留。脏树上做"退回再恢复"= 拿别人的活当赌注。

@@ -85,6 +85,7 @@ fi
 MODE="$1"
 TASK_FILE="$2"
 LOG_FILE="$3"
+LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'submimo: canonicalize helper 失败' >&2; exit 78; }
 REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
 TIMEOUT_SECONDS="${MIMO_CLI_TIMEOUT:-900}"
@@ -299,7 +300,7 @@ run_mimo_once() {
   fi
   {
     echo "# submimo $MODE log${1:+ ($1)}"
-    echo "time: $(date -Is)"
+    echo "time: $(date -Iseconds)"
     echo "mode: $MODE"
     echo "agent: $AGENT"
     echo "repo: $REPO_DIR"

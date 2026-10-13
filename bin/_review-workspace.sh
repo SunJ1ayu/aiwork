@@ -14,6 +14,9 @@
 # Clone-owned temporary indexes preserve the source index and separately snapshot
 # the worktree/untracked view. Two complete scans must produce the same pair.
 
+# This file is sourced. Helpers beside it live in this directory.
+REVIEW_WORKSPACE_BIN="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "${BASH_SOURCE[0]}")" || exit 1
+
 review_workspace__say() {
   printf 'review-workspace: %s\n' "$*" >&2
 }
@@ -79,6 +82,31 @@ review_workspace__scan_view() { # path-prefix
   REVIEW_SCAN_SOURCE_INDEX="$source_index"
 }
 
+# 0 when path is neither / nor inside the source repo. Containment is inside's
+# job; this only keeps the separate "not /" rule and the refusal message.
+review_workspace__outside_source() { # path
+  local path="$1" abs rc rel
+  abs="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$path")" || {
+    review_workspace__say "canonicalize helper 失败:$path"
+    return 78
+  }
+  if [[ "$abs" == / ]]; then
+    review_workspace__say "workspace 根不许落在源仓内:$abs"
+    return 78
+  fi
+  rc=0
+  rel="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$REVIEW_SOURCE_REPO" "$path")" || rc=$?
+  if [[ $rc -ne 0 && $rc -ne 1 ]]; then
+    review_workspace__say "canonicalize helper 失败:$path"
+    return 78
+  fi
+  if [[ $rc -eq 0 ]]; then
+    review_workspace__say "workspace 根不许落在源仓内:$abs"
+    return 78
+  fi
+  return 0
+}
+
 # One report path. Call before review_workspace_prepare. Sets REPORT and
 # removes the previous run's file.
 review_workspace_reset_report() {
@@ -101,8 +129,8 @@ review_workspace_prepare() { # source-repo leg-name
     || { review_workspace__say '找不到 git，建不了 review 副本'; return 78; }
   command -v mktemp >/dev/null 2>&1 \
     || { review_workspace__say '找不到 mktemp，建不了受控临时目录'; return 78; }
-  command -v realpath >/dev/null 2>&1 \
-    || { review_workspace__say '找不到 realpath，无法在写入前校验 workspace 根'; return 78; }
+  command -v python3 >/dev/null 2>&1 \
+    || { review_workspace__say '找不到 python3，无法在写入前校验 workspace 根'; return 78; }
 
   top="$(git -C "$source" rev-parse --show-toplevel 2>/dev/null)" \
     || { review_workspace__say "不是 Git 工作树:$source"; return 78; }
@@ -126,24 +154,12 @@ review_workspace_prepare() { # source-repo leg-name
   fi
 
   base="${REVIEW_WORKSPACE_BASE:-${TMPDIR:-/tmp}/aiwork-review-workspaces}"
-  base_preflight="$(realpath -m -- "$base" 2>/dev/null)" \
-    || { review_workspace__say "workspace 根预检失败:$base"; return 78; }
-  case "$base_preflight" in
-    /|"$REVIEW_SOURCE_REPO"|"$REVIEW_SOURCE_REPO"/*)
-      review_workspace__say "workspace 根不许落在源仓内:$base_preflight"
-      return 78
-      ;;
-  esac
+  review_workspace__outside_source "$base" || return 78
   mkdir -p -m 700 -- "$base" \
     || { review_workspace__say "建不了 workspace 根:$base"; return 78; }
   REVIEW_WORKSPACE_BASE_REAL="$(cd "$base" && pwd -P)" \
     || { review_workspace__say "workspace 根真路径解析失败:$base"; return 78; }
-  case "$REVIEW_WORKSPACE_BASE_REAL" in
-    /|"$REVIEW_SOURCE_REPO"|"$REVIEW_SOURCE_REPO"/*)
-      review_workspace__say "workspace 根不许落在源仓内:$REVIEW_WORKSPACE_BASE_REAL"
-      return 78
-      ;;
-  esac
+  review_workspace__outside_source "$REVIEW_WORKSPACE_BASE_REAL" || return 78
 
   safe_leg="$(review_workspace__safe_leg "$leg")"
   [[ -n "$safe_leg" ]] || safe_leg=review
@@ -278,7 +294,7 @@ review_workspace_repo() {
 # AIWORK_REVIEW_RESULT_BIN, or the helper beside this script. write_facts and
 # finish both use this; neither picks a path of its own.
 review_workspace__result_bin() {
-  printf '%s\n' "${AIWORK_REVIEW_RESULT_BIN:-$BIN_DIR/_review_result.py}"
+  printf '%s\n' "${AIWORK_REVIEW_RESULT_BIN:-$REVIEW_WORKSPACE_BIN/_review_result.py}"
 }
 
 review_workspace_write_facts() { # requested-model invoked-model [billing-mode [process-state [evidence [failure-kind [verdict [degraded [reported-model]]]]]]]
@@ -287,8 +303,7 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
   local degraded="${8:-}" reported="${9:-}"
   local output="${AIWORK_REVIEW_FACTS_PATH:-}" helper
   local -a outcome=()
-  # Nothing to write: return before resolving the helper. Callers that never
-  # set BIN_DIR or AIWORK_REVIEW_RESULT_BIN must not trip set -u here.
+  # Nothing to write: return before resolving the helper.
   [[ -n "$output" ]] || return 0
   helper="$(review_workspace__result_bin)"
   [[ -f "$helper" ]] \
