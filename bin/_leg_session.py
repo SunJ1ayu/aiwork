@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 from _review_result import load_result, sha256_file
 
@@ -67,11 +67,22 @@ def redact(text: str) -> str:
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None,
-        input_text: str | None = None, cwd: Path | None = None) -> str:
-    process = subprocess.run(command, input=input_text, text=True, capture_output=True,
-                             cwd=cwd, env=env, check=False)
+        input_text: str | None = None, cwd: Path | None = None,
+        binary: bool = False) -> str | bytes:
+    """Run a command. Failure becomes one redacted ReviewError.
+
+    binary returns stdout bytes unchanged (git -z). The failure text is still decoded
+    and redacted here; callers do not grow a second error path.
+    """
+    stdin = None if input_text is None else input_text.encode() if binary else input_text
+    process = subprocess.run(
+        command, input=stdin, text=not binary, capture_output=True,
+        cwd=cwd, env=env, check=False)
     if process.returncode:
-        reason = process.stderr.strip() or process.stdout.strip() or f"exit {process.returncode}"
+        err, out = process.stderr, process.stdout
+        if binary:
+            err, out = err.decode("utf-8", "replace"), out.decode("utf-8", "replace")
+        reason = err.strip() or out.strip() or f"exit {process.returncode}"
         # Provider and Git errors are diagnostics, never a place to echo credentials.
         reason = redact(reason)
         raise ReviewError(f"{Path(command[0]).name} failed (rc={process.returncode}): {reason[:800]}")
@@ -97,7 +108,7 @@ def assert_snapshot_checkout(repo: Path, expected: str, *, label: str) -> None:
 
 
 def _git_bytes(repo: Path, *args: str) -> bytes:
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True).stdout
+    return cast(bytes, run(["git", "-C", str(repo), *args], binary=True))
 
 
 def _z_fields(blob: bytes) -> list[bytes]:
