@@ -22,7 +22,7 @@ def data_dir() -> Path:
     configured = Path(os.environ.get('AIWORK_DATA_DIR') or Path.home() / '.local/share/aiwork').expanduser()
     try:
         path = configured.resolve()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise ConfigError(_missing_data_dir(configured)) from exc
     if not path.is_dir():
         raise ConfigError(_missing_data_dir(path))

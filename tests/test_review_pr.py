@@ -947,6 +947,54 @@ grep -q -F -- "$3" "$clone/$4"
         self.assertIn('failure artifacts kept', text)
         self.assertEqual(len(archives), 1)
 
+    def test_original_error_survives_when_data_dir_disappears_before_the_archive(self):
+        repo, git = self.git_repo()
+        (repo / 'a.txt').write_text('a\n')
+        git('add', '.')
+        git('commit', '-qm', 'add')
+        head = git('rev-parse', 'HEAD').stdout.strip()
+        real_run = self.session.run
+
+        def fake_run(command, **kwargs):
+            if Path(command[0]).name == 'gh-app-token':
+                return FAKE_TOKEN
+            return real_run(command, **kwargs)
+
+        pr = {'state': 'open', 'head': {'sha': 'a' * 40, 'ref': 'f'},
+              'base': {'sha': 'b' * 40, 'ref': 'main'}}
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            data = workspace / 'data'
+            data.mkdir()
+            bin_dir = workspace / 'bin'
+            bin_dir.mkdir()
+            (bin_dir / 'subcursor').touch()
+            config = workspace / 'settings'
+            write_settings(config)
+
+            def fail_in_collect(*_args, **_kwargs):
+                shutil.rmtree(data)
+                self.session.collect_review_diff(repo, '0' * 40, head)
+                self.fail('git diff failure should have stopped the review')
+
+            env = dict(CURSOR_MODEL='gpt-5.6', AIWORK_DATA_DIR=str(data),
+                       AIWORK_CONFIG_DIR=str(config))
+            with patch('sys.argv', ['review-pr', '12', '--repo', 'SunJ1ayu/aiwork', '--leg', 'subcursor']), \
+                    patch.dict(os.environ, env), \
+                    patch.object(self.review, 'BIN', bin_dir), \
+                    patch.object(self.session, 'run', side_effect=fake_run), \
+                    patch.object(self.review, 'pr_state', return_value=pr), \
+                    patch.object(self.session, 'snapshot', side_effect=fail_in_collect), \
+                    redirect_stdout(stdout), redirect_stderr(stderr):
+                rc = self.review.main()
+        text = stderr.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertEqual(stdout.getvalue(), '')
+        self.assertNotIn('Traceback', text)
+        self.assertIn('git failed', text)
+        self.assertIn('失败记录没能写进数据目录', text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -227,5 +227,81 @@ class LocalDataTests(unittest.TestCase):
         self.assertIn(str(missing), result.stderr)
         self.assertIn('先确认盘已经挂好', result.stderr)
 
+    def test_symlink_loop_data_dir_exits_2_without_a_traceback(self):
+        left = self.d / 'loop-a'
+        right = self.d / 'loop-b'
+        left.symlink_to(right.name)
+        right.symlink_to(left.name)
+        result = self.run_tool('aiwork-config', 'data-path',
+                               env=dict(self.env, AIWORK_DATA_DIR=str(left)))
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout.strip(), '')
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertIn(str(left), result.stderr)
+        self.assertIn('先确认盘已经挂好', result.stderr)
+
+    def test_review_legs_do_not_create_a_missing_data_dir_or_call_a_model(self):
+        repo = self.d / 'leg-repo'
+        repo.mkdir()
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(repo)], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(repo), 'config', 'user.email', 'test@example.invalid'],
+                       check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(repo), 'config', 'user.name', 'test'],
+                       check=True, capture_output=True)
+        (repo / 'a.txt').write_text('a\n')
+        subprocess.run(['git', '-C', str(repo), 'add', 'a.txt'], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(repo), 'commit', '-qm', 'init'], check=True, capture_output=True)
+        task = self.d / 'leg-task.md'
+        task.write_text('fixture\n')
+        config = self.d / 'leg-settings'
+        config.mkdir()
+        (config / 'models.env').write_text(
+            'codex=gpt-6-sol\n'
+            'cursor=grok-4.7-high\n'
+            'deepseek=deepseek-flash\n'
+            'kimi=kimi-code/kimi-for-coding\n'
+            'mimo=xiaomi/mimo-v2.6-pro\n')
+        kimi_home = self.d / 'kimi-home'
+        (kimi_home / 'hooks').mkdir(parents=True)
+        (kimi_home / 'credentials').mkdir()
+        (kimi_home / 'config.toml').write_text('model = "fixture"\n')
+        (kimi_home / 'hooks' / 'guard.mjs').write_text('process.exit(2)\n')
+        (kimi_home / 'credentials' / 'kimi-code.json').write_text('{}\n')
+        mimo_home = self.d / 'mimo-home'
+        mimo_home.mkdir()
+        fake = self.d / 'leg-fake'
+        fake.mkdir()
+        cases = (
+            ('subcodex', ('review',), {}),
+            ('subcursor', ('review',), {'CURSOR_API_KEY': 'fixture'}),
+            ('subagent', ('deepseek', 'review'), {'DEEPSEEK_API_KEY': 'fixture'}),
+            ('subkimi', ('review',), {'KIMI_REVIEW_HOME': str(kimi_home)}),
+            ('submimo', ('review',), {'MIMO_REVIEW_HOME': str(mimo_home)}),
+        )
+        binaries = ('codex', 'cursor-agent', 'claude', 'kimi', 'mimo')
+        for name, prefix, extra in cases:
+            missing = self.d / f'missing-{name}'
+            calls = self.d / f'calls-{name}'
+            for binary in binaries:
+                script = fake / binary
+                script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$0\" >> '{calls}'\nexit 0\n")
+                script.chmod(0o755)
+            env = dict(self.env)
+            env.update(AIWORK_DATA_DIR=str(missing), AIWORK_CONFIG_DIR=str(config),
+                       PATH=str(fake) + os.pathsep + env.get('PATH', ''))
+            for key in ('KIMI_REVIEW_HOME', 'MIMO_REVIEW_HOME', 'CURSOR_API_KEY',
+                        'DEEPSEEK_API_KEY', 'REVIEW_PRINT_HOME'):
+                env.pop(key, None)
+            env.update(extra)
+            log = missing / 'logs' / 'x.log'
+            result = self.run_tool(name, *prefix, str(task), str(log), str(repo), env=env)
+            with self.subTest(leg=name):
+                self.assertEqual(result.returncode, 78, result.stderr)
+                self.assertFalse(missing.exists(), result.stderr)
+                self.assertFalse(calls.exists(), result.stderr)
+                self.assertIn(str(missing), result.stderr)
+                self.assertIn('先确认盘已经挂好', result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+
 if __name__ == '__main__':
     unittest.main()

@@ -48,6 +48,7 @@ else
 fi
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcursor: missing ro-repo-exec; refusing dispatch' >&2; exit 78; }
 [[ -f "$BIN_DIR/_cursor-stream.py" ]] || die 'missing Composer stream decoder'
+"$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 . "$BIN_DIR/_review-workspace.sh" || die 'missing review workspace helper'
 review_workspace_reset_report || exit 78
 review_workspace_prepare "$SOURCE_REPO" subcursor || exit 78
