@@ -703,18 +703,16 @@ grep -q -F -- "$3" "$clone/$4"
                 return "c" * 40
             if "--binary" in command:
                 return "patch"
+            if kwargs.get("binary"):
+                if "--numstat" in command:
+                    return b"1\t0\tsrc/a.py\0"
+                if "--name-status" in command:
+                    return b"M\0src/a.py\0"
+                return b""
             return ""
 
-        def fake_subprocess(command, **kwargs):
-            if "--numstat" in command:
-                return subprocess.CompletedProcess(command, 0, b"1\t0\tsrc/a.py\0", b"")
-            if "--name-status" in command:
-                return subprocess.CompletedProcess(command, 0, b"M\0src/a.py\0", b"")
-            return subprocess.CompletedProcess(command, 0, b"", b"")
-
         with tempfile.TemporaryDirectory() as temporary, \
-                patch.object(self.session, "run", side_effect=fake_git), \
-                patch.object(self.session.subprocess, "run", side_effect=fake_subprocess):
+                patch.object(self.session, "run", side_effect=fake_git):
             _, base, files, *_rest = self.session.snapshot(FAKE_TOKEN, pr, Path(temporary),
                                                          repository="SunJ1ayu/aiwork")
         fetch = next(command for command in commands if "fetch" in command)
@@ -846,6 +844,83 @@ grep -q -F -- "$3" "$clone/$4"
         ):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 self.review.publishable_model(result | change)
+
+    def git_that_fails_with_secret(self, secret):
+        """A git on PATH whose stderr is a credential, so failure text must be redacted."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        fake = Path(directory.name) / 'git'
+        fake.write_text('#!/bin/sh\nprintf %s "$AIWORK_TEST_GIT_STDERR" >&2\nexit 1\n', encoding='utf-8')
+        fake.chmod(0o755)
+        return {
+            'PATH': f'{directory.name}{os.pathsep}{os.environ["PATH"]}',
+            'AIWORK_TEST_GIT_STDERR': f'GH_TOKEN={secret}\n',
+        }
+
+    def test_collect_review_diff_git_failure_is_a_redacted_review_error(self):
+        secret = 'ghs' + '_' + 'diffsecret'
+        repo, git = self.git_repo()
+        (repo / 'a.txt').write_text('a\n')
+        git('add', '.')
+        git('commit', '-qm', 'add')
+        head = git('rev-parse', 'HEAD').stdout.strip()
+        with patch.dict(os.environ, self.git_that_fails_with_secret(secret)):
+            with self.assertRaises(self.review.ReviewError) as caught:
+                self.session.collect_review_diff(repo, '0' * 40, head)
+        message = str(caught.exception)
+        self.assertIn('git failed', message)
+        self.assertNotIn(secret, message)
+        self.assertIn('[redacted]', message)
+
+    def test_git_diff_failure_is_archived_without_a_traceback(self):
+        secret = 'ghs' + '_' + 'diffsecret'
+        repo, git = self.git_repo()
+        (repo / 'a.txt').write_text('a\n')
+        git('add', '.')
+        git('commit', '-qm', 'add')
+        head = git('rev-parse', 'HEAD').stdout.strip()
+        real_run = self.session.run
+
+        def fake_run(command, **kwargs):
+            if Path(command[0]).name == 'gh-app-token':
+                return FAKE_TOKEN
+            return real_run(command, **kwargs)
+
+        def fail_in_collect(*_args, **_kwargs):
+            self.session.collect_review_diff(repo, '0' * 40, head)
+            self.fail('git diff failure should have stopped the review')
+
+        pr = {'state': 'open', 'head': {'sha': 'a' * 40, 'ref': 'f'},
+              'base': {'sha': 'b' * 40, 'ref': 'main'}}
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            bin_dir = workspace / 'bin'
+            bin_dir.mkdir()
+            (bin_dir / 'subcursor').touch()
+            config = workspace / 'settings'
+            write_settings(config)
+            env = self.git_that_fails_with_secret(secret)
+            env.update(CURSOR_MODEL='gpt-5.6', AIWORK_DATA_DIR=str(workspace / 'data'),
+                       AIWORK_CONFIG_DIR=str(config))
+            with patch('sys.argv', ['review-pr', '12', '--repo', 'SunJ1ayu/aiwork', '--leg', 'subcursor']), \
+                    patch.dict(os.environ, env), \
+                    patch.object(self.review, 'BIN', bin_dir), \
+                    patch.object(self.session, 'run', side_effect=fake_run), \
+                    patch.object(self.review, 'pr_state', return_value=pr), \
+                    patch.object(self.session, 'snapshot', side_effect=fail_in_collect), \
+                    redirect_stdout(stdout), redirect_stderr(stderr):
+                rc = self.review.main()
+            failures = workspace / 'data/logs/review-pr-failures'
+            archives = list(failures.iterdir()) if failures.is_dir() else []
+        text = stderr.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertEqual(stdout.getvalue(), '')
+        self.assertNotIn('Traceback', text)
+        self.assertNotIn(secret, text)
+        self.assertIn('[redacted]', text)
+        self.assertIn('failure artifacts kept', text)
+        self.assertEqual(len(archives), 1)
 
 
 if __name__ == "__main__":
