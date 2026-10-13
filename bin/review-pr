@@ -142,11 +142,9 @@ def main_document(repo: Path, path: str, *, required: bool = True) -> str:
         return "无"
     if not entry.startswith(("100644 blob ", "100755 blob ")):
         raise ReviewError(f"main:{path} is not a regular file")
-    process = subprocess.run(["git", "-C", str(repo), "show", f"refs/aiwork/main:{path}"],
-                             capture_output=True, check=False)
-    if process.returncode:
-        raise ReviewError(f"cannot read main:{path}")
-    return process.stdout.decode("utf-8")
+    raw = _leg_session.run(
+        ["git", "-C", str(repo), "show", f"refs/aiwork/main:{path}"], binary=True)
+    return raw.decode("utf-8")
 
 
 def public_github(endpoint: str) -> dict:
@@ -185,18 +183,19 @@ def place_review_diff(repo: Path, diff: str) -> str:
     target = repo / REVIEW_DIFF_PATH
     if target.exists() or target.is_symlink():
         raise ReviewError(f"{REVIEW_DIFF_PATH} already exists in the checkout; refusing to overwrite it")
-    tracked = subprocess.run(
-        ["git", "-C", str(repo), "cat-file", "-e", f"HEAD:{REVIEW_DIFF_PATH}"],
-        capture_output=True, check=False)
-    if tracked.returncode == 0:
-        raise ReviewError(f"{REVIEW_DIFF_PATH} is already tracked; refusing to overwrite it")
     target.write_bytes(diff.encode("utf-8"))
-    ignored = subprocess.run(
-        ["git", "-C", str(repo), "check-ignore", "-q", "--", REVIEW_DIFF_PATH],
-        capture_output=True, check=False)
-    if ignored.returncode == 0:
+    try:
+        listed = _leg_session.run(
+            ["git", "-C", str(repo), "ls-files", "-z", "--others", "--exclude-standard",
+             "--", REVIEW_DIFF_PATH],
+            binary=True)
+    except ReviewError:
         target.unlink()
-        raise ReviewError(f"{REVIEW_DIFF_PATH} is ignored, so the review snapshot would not include it")
+        raise
+    if listed != REVIEW_DIFF_PATH.encode() + b"\0":
+        target.unlink()
+        raise ReviewError(
+            f"{REVIEW_DIFF_PATH} is not an untracked, unignored file, so the review snapshot would not include it")
     return REVIEW_DIFF_PATH
 
 
