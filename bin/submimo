@@ -288,10 +288,15 @@ if [[ "$MODE" != "fix" ]]; then
 fi
 
 # One mimo pass. $1 = attempt label for the log header. Appends the header and
-# mimo's output to LOG_FILE. MIMO_RAW is this call's mimo output only, replaced
-# every call; the filter reads that file and never the header.
+# mimo's output to LOG_FILE. Review and explore also keep this call's mimo
+# output alone in ${LOG_FILE}.mimo (replaced every call); the filter reads that
+# file and never the header. Fix does not write that file.
 run_mimo_once() {
-  MIMO_RAW="${LOG_FILE}.mimo"
+  local -a copy=(cat)
+  if [[ "$MODE" == review || "$MODE" == explore ]]; then
+    MIMO_RAW="${LOG_FILE}.mimo"
+    copy=(tee "$MIMO_RAW")
+  fi
   {
     echo "# submimo $MODE log${1:+ ($1)}"
     echo "time: $(date -Is)"
@@ -307,7 +312,7 @@ run_mimo_once() {
     (
       [[ "$MODE" == "fix" ]] || cd "$REPO_DIR" || exit 78
       ${RO_EXEC[@]+"${RO_EXEC[@]}"} timeout -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
-    ) 2>&1 | tee "$MIMO_RAW"
+    ) 2>&1 | "${copy[@]}"
   } 2>&1 | tee -a "$LOG_FILE"
 }
 
