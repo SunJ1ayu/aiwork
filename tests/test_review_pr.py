@@ -190,6 +190,7 @@ class ReviewPrTests(unittest.TestCase):
             git("commit", "-qm", "project main")
             git("update-ref", "refs/aiwork/main", "HEAD")
             (repo / ".aiwork/accepted-risks.md").write_text("PR RISK DECOY", encoding="utf-8")
+            (workspace / "data").mkdir()
             with patch("sys.argv", ["review-pr", "12", "--repo", repository, "--leg", "subcursor"]
                        + (["--dry-run"] if dry_run else [])), \
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
@@ -924,6 +925,7 @@ grep -q -F -- "$3" "$clone/$4"
             config = workspace / 'settings'
             write_settings(config)
             env = self.git_that_fails_with_secret(secret)
+            (workspace / 'data').mkdir()
             env.update(CURSOR_MODEL='gpt-5.6', AIWORK_DATA_DIR=str(workspace / 'data'),
                        AIWORK_CONFIG_DIR=str(config))
             with patch('sys.argv', ['review-pr', '12', '--repo', 'SunJ1ayu/aiwork', '--leg', 'subcursor']), \

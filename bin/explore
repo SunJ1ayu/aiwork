@@ -19,7 +19,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _aiwork_config import data_path
+from _aiwork_config import ConfigError, data_dir, data_path
 import _leg_session
 from _leg_session import (
     READER_TIMEOUT_ENV,
@@ -152,6 +152,11 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, required=True, help="repository whose current main is snapshotted")
     parser.add_argument("--leg", action="append", required=True, dest="legs", help="leg command, repeatable")
     args = parser.parse_args()
+    try:
+        data_dir()
+    except ConfigError as exc:
+        print(f"explore: {exc}", file=sys.stderr)
+        return 1
     args.repo = args.repo.resolve()
     repo_root = repository_root(args.repo)
     if repo_root is None:

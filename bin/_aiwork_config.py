@@ -17,7 +17,21 @@ def config_dir() -> Path:
 def data_dir() -> Path:
     # Provider wrappers override XDG_* for their own isolation. Keep aiwork's
     # machine data stable across those child environments.
-    return Path(os.environ.get('AIWORK_DATA_DIR') or Path.home() / '.local/share/aiwork').expanduser().resolve()
+    # The directory itself must already exist. Creating it here would turn a
+    # missing external disk into a same-named directory on the internal disk.
+    configured = Path(os.environ.get('AIWORK_DATA_DIR') or Path.home() / '.local/share/aiwork').expanduser()
+    try:
+        path = configured.resolve()
+    except OSError as exc:
+        raise ConfigError(_missing_data_dir(configured)) from exc
+    if not path.is_dir():
+        raise ConfigError(_missing_data_dir(path))
+    return path
+
+
+def _missing_data_dir(path: Path) -> str:
+    return (f'{path}: 数据目录不存在或不是目录。'
+            '新机器第一次用时自己手动建一次;如果它在外接盘上，先确认盘已经挂好')
 
 
 def data_path(name: str = '') -> Path:

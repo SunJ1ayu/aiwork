@@ -30,7 +30,7 @@ _RHG="$BIN_DIR/_review-home-guard.sh"
 . "$_RHG"
 
 # 运行期状态走本机数据入口；仓内目录仅提供 config.toml 和 hooks/ 种子。
-REVIEW_HOME="${KIMI_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path kimi-review-home)}"
+REVIEW_HOME="${KIMI_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path kimi-review-home)}" || exit 1
 
 usage() {
   cat >&2 <<'EOF'

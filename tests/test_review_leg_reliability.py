@@ -141,6 +141,7 @@ class ReliabilityTests(unittest.TestCase):
                      DEEPSEEK_API_BASE=endpoint, CURSOR_MODEL='gpt-6-sol',
                      AIWORK_DATA_DIR=str(self.directory / 'data'))
         clean.update(env or {})
+        Path(clean['AIWORK_DATA_DIR']).mkdir(parents=True, exist_ok=True)
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch.dict(os.environ, clean, clear=True), \
                 patch('sys.argv', ['review-pr', '1', '--repo', 'example/repo', '--leg', leg]), \

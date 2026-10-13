@@ -685,7 +685,26 @@ d_slash_symlink_dossier() {
   rm -rf "$d"
 }
 
+d_refuses_when_data_dir_missing() {
+  echo "[D7] delegate-codex: 数据目录不存在 ⇒ 拒发,不创建它,codex 零调用"
+  local d; d="$(mktemp -d)"; local b="$d/bin" rec="$d/rec" repo="$d/repo" data="$d/missing-data"
+  make_fake_codex "$b" "$rec"; make_repo "$repo"
+  printf '# 任务书\n把 impl 改成打印 NEW\n' > "$d/task.md"
+  printf '攻题记录:第 3 条断言在旧实现上也绿\n' > "$d/attack.md"
+  stamp_hash "$d/attack.md" "$repo" tests/oracle.sh
+  local rc
+  # 不传 --log:默认日志在数据目录的 logs/ 下。旧实现会 mkdir -p 出那个目录。
+  env PATH="$b:$PATH" AIWORK_DATA_DIR="$data" bash "$BIN/delegate-codex" --no-isolate \
+      --task "$d/task.md" --repo "$repo" --attack-log "$d/attack.md" \
+      --protect tests/oracle.sh >"$d/out" 2>&1; rc=$?
+  check "D7: 数据目录不存在 ⇒ 非零" $([[ $rc -ne 0 ]]; echo $?)
+  check "D7: 数据目录不存在 ⇒ codex 零调用" $([[ "$(calls_of "$rec")" -eq 0 ]]; echo $?)
+  check "D7: 数据目录下面什么都没建出来" $([[ ! -e "$data" ]]; echo $?)
+  rm -rf "$d"
+}
+
 echo "=== delegate-entry / redcheck oracle ==="
+d_refuses_when_data_dir_missing
 d_refuses_without_evidence
 d_refuses_when_canonicalize_helper_missing
 d_slash_symlink_dossier
