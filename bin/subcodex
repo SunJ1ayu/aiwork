@@ -47,7 +47,7 @@ MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
 [[ "$MODE" == review || "$MODE" == explore ]] || { usage; exit 2; }
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 TASK_FILE="$(realpath "$TASK_FILE")"
-LOG_FILE="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$LOG_FILE")" || { echo 'subcodex: canonicalize helper failed' >&2; exit 78; }
+LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subcodex: canonicalize helper 失败' >&2; exit 78; }
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 

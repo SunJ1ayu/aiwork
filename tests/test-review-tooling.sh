@@ -76,7 +76,7 @@ v9_claude_shell_base() {
   # 这一组问的是**claude 壳这条底座本身**(env 注入、工具白名单、裁决 gate),
   # 它对 deepseek 仍然完全有效,断言一条不删、一条不弱。GLM 那条底座由 V28 问。
   # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_canonicalize_missing.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
@@ -310,7 +310,7 @@ v13_subkimi_leg() {
   fi
 
   # --- subkimi wrapper against a stub kimi + fixture review home
-  cp "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_canonicalize_missing.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   printf 'default_model = "x"\n' > "$rh/config.toml"
@@ -450,7 +450,7 @@ v21_agent_leg_body_is_single_source() {
 
   local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   fixture_git_repo "$d/repo"
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_canonicalize_missing.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"
   cat > "$ab/claude" <<'CAPEOF'
 #!/usr/bin/env python3
@@ -499,7 +499,7 @@ v33_submimo_review_leg_is_read_only() {
   echo "[V33] submimo 写口关掉、bash 留着,fix 不受连累"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
-  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_canonicalize_missing.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   printf '# t\n' > "$d/t.md"
   local repo="$d/repo"; mkdir -p "$repo"
@@ -852,9 +852,9 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_canonicalize_missing.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
-  cp "$BIN/_review-workspace.sh" "$BIN/_canonicalize_missing.py" "$b/" 2>/dev/null || true
+  cp "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$b/" 2>/dev/null || true
 
   # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
   # SOURCE_REPO 写必须失败。结果落仓外，副本退出即删也仍有可核对的记录。
@@ -1051,7 +1051,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_canonicalize_missing.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -1614,7 +1614,7 @@ v46_final_report_is_the_last_message() {
   fixture_git_repo "$d/repo"
   printf '# t\n' > "$d/t.md"
   cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
-    "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_canonicalize_missing.py" "$BIN/aiwork-config" \
+    "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" \
     "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/ro-repo-exec" "$b/"
   printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"

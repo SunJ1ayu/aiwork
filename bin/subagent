@@ -124,7 +124,7 @@ fi
 [[ -n "${AUTH_ENV:-}" ]] || die "供应商表里 $PROVIDER 这一格没填 AUTH_ENV（认证 header 风格）；不填的话认证头会被静默丢掉、这条腿每次 401 而日志只显示模型没回话"
 
 # 绝对日志路径:agent 以 cwd = REPO_DIR 运行
-LOG_FILE="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$LOG_FILE")" || { echo 'subagent: canonicalize helper 失败' >&2; exit 78; }
+LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subagent: canonicalize helper 失败' >&2; exit 78; }
 mkdir -p "$(dirname "$LOG_FILE")"
 
 # 能力清单按底座给:**不许宣称一个它没有的工具,也不许瞒着它有的**。

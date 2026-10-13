@@ -28,7 +28,7 @@ class LegFinish(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for name in ("aiwork-config", "_aiwork_config.py", "_review-workspace.sh",
-                     "_canonicalize_missing.py",
+                     "_paths.py",
                      "_review-home-guard.sh", "_review_result.py", "_cursor-stream.py",
                      "ro-repo-exec",
                      "subagent", "subkimi", "submimo", "subcodex", "subcursor"):

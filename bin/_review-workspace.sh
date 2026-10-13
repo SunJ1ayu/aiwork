@@ -82,6 +82,31 @@ review_workspace__scan_view() { # path-prefix
   REVIEW_SCAN_SOURCE_INDEX="$source_index"
 }
 
+# 0 when path is neither / nor inside the source repo. Containment is inside's
+# job; this only keeps the separate "not /" rule and the refusal message.
+review_workspace__outside_source() { # path
+  local path="$1" abs rc rel
+  abs="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$path")" || {
+    review_workspace__say "canonicalize helper 失败:$path"
+    return 78
+  }
+  if [[ "$abs" == / ]]; then
+    review_workspace__say "workspace 根不许落在源仓内:$abs"
+    return 78
+  fi
+  rc=0
+  rel="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$REVIEW_SOURCE_REPO" "$path")" || rc=$?
+  if [[ $rc -ne 0 && $rc -ne 1 ]]; then
+    review_workspace__say "canonicalize helper 失败:$path"
+    return 78
+  fi
+  if [[ $rc -eq 0 ]]; then
+    review_workspace__say "workspace 根不许落在源仓内:$abs"
+    return 78
+  fi
+  return 0
+}
+
 # One report path. Call before review_workspace_prepare. Sets REPORT and
 # removes the previous run's file.
 review_workspace_reset_report() {
@@ -129,24 +154,12 @@ review_workspace_prepare() { # source-repo leg-name
   fi
 
   base="${REVIEW_WORKSPACE_BASE:-${TMPDIR:-/tmp}/aiwork-review-workspaces}"
-  base_preflight="$(python3 "$REVIEW_WORKSPACE_BIN/_canonicalize_missing.py" -- "$base")" \
-    || { review_workspace__say "canonicalize helper 失败:$base"; return 78; }
-  case "$base_preflight" in
-    /|"$REVIEW_SOURCE_REPO"|"$REVIEW_SOURCE_REPO"/*)
-      review_workspace__say "workspace 根不许落在源仓内:$base_preflight"
-      return 78
-      ;;
-  esac
+  review_workspace__outside_source "$base" || return 78
   mkdir -p -m 700 -- "$base" \
     || { review_workspace__say "建不了 workspace 根:$base"; return 78; }
   REVIEW_WORKSPACE_BASE_REAL="$(cd "$base" && pwd -P)" \
     || { review_workspace__say "workspace 根真路径解析失败:$base"; return 78; }
-  case "$REVIEW_WORKSPACE_BASE_REAL" in
-    /|"$REVIEW_SOURCE_REPO"|"$REVIEW_SOURCE_REPO"/*)
-      review_workspace__say "workspace 根不许落在源仓内:$REVIEW_WORKSPACE_BASE_REAL"
-      return 78
-      ;;
-  esac
+  review_workspace__outside_source "$REVIEW_WORKSPACE_BASE_REAL" || return 78
 
   safe_leg="$(review_workspace__safe_leg "$leg")"
   [[ -n "$safe_leg" ]] || safe_leg=review

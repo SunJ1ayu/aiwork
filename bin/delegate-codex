@@ -403,20 +403,22 @@ OBS_LABEL="delegate-$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-1
 RUN_ID="delegate-${TS}-$$"
 WT=""; BRANCH=""; RUNDIR="$REPO"
 if [[ $ISOLATE -eq 1 ]]; then
-  _wtroot_abs="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$WT_ROOT")" \
+  _wt_rc=0
+  _wt_rel="$(python3 "$BIN_DIR/_paths.py" inside -- "$REPO" "$WT_ROOT")" || _wt_rc=$?
+  if [[ $_wt_rc -ne 0 && $_wt_rc -ne 1 ]]; then
+    die "canonicalize helper 失败:$WT_ROOT"
+  fi
+  [[ $_wt_rc -ne 0 || -n "$_wt_rel" ]] || die "worktree 根不能就是被派的仓本身:$WT_ROOT"
+  _wtroot_abs="$(python3 "$BIN_DIR/_paths.py" canon -- "$WT_ROOT")" \
     || die "canonicalize helper 失败:$WT_ROOT"
-  [[ "$_wtroot_abs" != "$_rp" ]] || die "worktree 根不能就是被派的仓本身:$WT_ROOT"
   # 树落在仓里(`--repo /root/aiwork` 就是这形状)⇒ **必须被 gitignore**,
   # 否则主树 `git status` 被它污染,闸①第二臂和闸③的底账跟着一起脏。
-  case "$_wtroot_abs/" in
-    "$_rp"/*)
-      _wtrel="${_wtroot_abs#$_rp/}"
-      git -C "$REPO" check-ignore -q -- "$_wtrel/" 2>/dev/null || die \
+  if [[ $_wt_rc -eq 0 ]]; then
+    git -C "$REPO" check-ignore -q -- "$_wt_rel/" 2>/dev/null || die \
 "worktree 根落在被派的仓里,却没被 gitignore:$_wtroot_abs
   这样主树 git status 会被那棵树污染(闸①第二臂、闸③底账一起失真)。
-  往 $REPO/.gitignore 里加一行 '$_wtrel/',或用 DELEGATE_WORKTREE_ROOT 指到仓外。"
-      ;;
-  esac
+  往 $REPO/.gitignore 里加一行 '$_wt_rel/',或用 DELEGATE_WORKTREE_ROOT 指到仓外。"
+  fi
   WT="$_wtroot_abs/$JOB"
   BRANCH="delegate/$JOB"
   RUNDIR="$WT"
@@ -432,24 +434,30 @@ fi
 #    当时的探针记录在 git 历史里。
 #    ⇒ 卷宗落主仓 = 腿改得到回执(闸① 自证)+ 读得到攻题记录(考卷的洞递给考生)。
 #    ⇒ **A2 那个死结没解开**:派 aiwork 自己的活,日志/攻题记录必须显式指到 /root/aiwork 之外。
-_forbid=("$_rp"); _legwhat="被派活的仓里"
+_forbid=("$REPO"); _legwhat="被派活的仓里"
 if [[ $ISOLATE -eq 1 ]]; then _forbid+=("$_wtroot_abs"); _legwhat="被派活的仓 / worktree 根里"; fi
-_in_forbidden() {  # <绝对路径> → 0 = 落在禁区里
-  local x="$1" f
-  for f in "${_forbid[@]}"; do case "$x/" in "$f"/*) return 0 ;; esac; done
+# 0 = 任一禁区根、任一视角(解析后 / 按字面)把 path 判在里面。0 和 1 以外是 helper 失败。
+_path_inside_forbidden() {
+  local x="$1" f view rel rc
+  for f in "${_forbid[@]}"; do
+    for view in resolved literal; do
+      rc=0
+      if [[ "$view" == literal ]]; then
+        rel="$(python3 "$BIN_DIR/_paths.py" inside --no-symlinks -- "$f" "$x")" || rc=$?
+      else
+        rel="$(python3 "$BIN_DIR/_paths.py" inside -- "$f" "$x")" || rc=$?
+      fi
+      if [[ $rc -eq 0 ]]; then return 0; fi
+      if [[ $rc -ne 1 ]]; then die "canonicalize helper 失败:$x"; fi
+    done
+  done
   return 1
 }
-_attack_resolved="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$ATTACK")" \
-  || die "canonicalize helper 失败:$ATTACK"
-_attack_literal="$(python3 "$BIN_DIR/_canonicalize_missing.py" --no-symlinks -- "$ATTACK")" \
-  || die "canonicalize helper 失败:$ATTACK"
-for _a in "$_attack_resolved" "$_attack_literal"; do
-  if _in_forbidden "$_a"; then
-    die "攻题记录在${_legwhat}:$_a
+if _path_inside_forbidden "$ATTACK"; then
+  die "攻题记录在${_legwhat}:$ATTACK
   执行腿**读得到**它(实测:写沙箱管不了读)= 把考卷的洞递给考生。
   挪到仓外,例如 $HOME/.local/share/aiwork/attack-logs/<name>.md;派 aiwork 自己的活时,'仓外'就是 $_rp 之外。"
-  fi
-done
+fi
 
 # ⑤b 直通参数排在工具自己给的 `-C <树>` `-s workspace-write` **后面**,last-wins ⇒
 #     `-- -C /别处` 或 `-- -s danger-full-access` 能**静默撤销隔离**,而我会以为它隔离着。
@@ -478,12 +486,8 @@ mkdir -p "$(dirname "$LOG")"
 RECEIPT="${LOG}.receipt.json"
 # 回执/日志同理(四审 subdeepseek F15 / subkimi F3):它们是闸① 的卷宗,
 # 腿能改 head/protect 就等于让闸① 自己给自己开绿灯。考生不许碰卷宗。
-_log_abs="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$LOG")" \
-  || die "canonicalize helper 失败:$LOG"
-_receipt_abs="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$RECEIPT")" \
-  || die "canonicalize helper 失败:$RECEIPT"
-for _l in "$_log_abs" "$_receipt_abs"; do
-  if _in_forbidden "$_l"; then
+for _l in "$LOG" "$RECEIPT"; do
+  if _path_inside_forbidden "$_l"; then
     die "日志/回执落在${_legwhat}:$_l
   执行腿**改得到**它(实测,见上)⇒ 闸① 变成自证。挪出去(默认在本机数据目录的 logs/ 下)。"
   fi

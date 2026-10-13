@@ -69,15 +69,19 @@ git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || die "--base 解�
 REPO_REAL="$(realpath "$REPO")"
 for p in "${IMPL[@]}"; do
   case "$p" in /*) die "--impl 要相对仓库根的路径,不是绝对路径:$p" ;; esac
-  pr="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$REPO/$p")" \
+  pr="$(python3 "$BIN_DIR/_paths.py" canon -- "$REPO/$p")" \
     || die "canonicalize helper 失败:$p"
-  case "$pr" in
-    "$REPO_REAL"/*) ;;
-    *) die "--impl 指到**仓外**了,拒跑(这个脚本会 rm -rf 它):
+  _impl_rc=0
+  _impl_rel="$(python3 "$BIN_DIR/_paths.py" inside -- "$REPO" "$REPO/$p")" || _impl_rc=$?
+  if [[ $_impl_rc -ne 0 && $_impl_rc -ne 1 ]]; then
+    die "canonicalize helper 失败:$p"
+  fi
+  if [[ $_impl_rc -ne 0 || -z "$_impl_rel" ]]; then
+    die "--impl 指到**仓外**了,拒跑(这个脚本会 rm -rf 它):
     给的是 $p
     解析成 $pr
-    仓库是 $REPO_REAL" ;;
-  esac
+    仓库是 $REPO_REAL"
+  fi
 done
 
 # 开工前必须干净:不替人猜哪些改动该留。脏树上做"退回再恢复"= 拿别人的活当赌注。
