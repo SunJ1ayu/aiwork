@@ -403,7 +403,7 @@ OBS_LABEL="delegate-$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-1
 RUN_ID="delegate-${TS}-$$"
 WT=""; BRANCH=""; RUNDIR="$REPO"
 if [[ $ISOLATE -eq 1 ]]; then
-  _wtroot_abs="$(realpath -m "$WT_ROOT")"
+  _wtroot_abs="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$WT_ROOT")"
   [[ "$_wtroot_abs" != "$_rp" ]] || die "worktree 根不能就是被派的仓本身:$WT_ROOT"
   # 树落在仓里(`--repo /root/aiwork` 就是这形状)⇒ **必须被 gitignore**,
   # 否则主树 `git status` 被它污染,闸①第二臂和闸③的底账跟着一起脏。
@@ -473,7 +473,7 @@ mkdir -p "$(dirname "$LOG")"
 RECEIPT="${LOG}.receipt.json"
 # 回执/日志同理(四审 subdeepseek F15 / subkimi F3):它们是闸① 的卷宗,
 # 腿能改 head/protect 就等于让闸① 自己给自己开绿灯。考生不许碰卷宗。
-for _l in "$(realpath -m "$LOG")" "$(realpath -m "$RECEIPT")"; do
+for _l in "$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$LOG")" "$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$RECEIPT")"; do
   if _in_forbidden "$_l"; then
     die "日志/回执落在${_legwhat}:$_l
   执行腿**改得到**它(实测,见上)⇒ 闸① 变成自证。挪出去(默认在本机数据目录的 logs/ 下)。"

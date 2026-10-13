@@ -15,6 +15,7 @@ ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
 SUITES=(
   "privacy-check|python3|$ROOT/tests/test_privacy_check.py"
   "machine-bits|python3|$ROOT/tests/test_machine_bits.py"
+  "canonicalize-missing|python3|$ROOT/tests/test_canonicalize_missing.py"
   "local-data|python3|$ROOT/tests/test_local_data.py"
   "local-settings|python3|$ROOT/tests/test_local_settings.py"
   "review-pr|python3|$ROOT/tests/test_review_pr.py"

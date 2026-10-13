@@ -299,7 +299,7 @@ run_mimo_once() {
   fi
   {
     echo "# submimo $MODE log${1:+ ($1)}"
-    echo "time: $(date -Is)"
+    echo "time: $(date -Iseconds)"
     echo "mode: $MODE"
     echo "agent: $AGENT"
     echo "repo: $REPO_DIR"

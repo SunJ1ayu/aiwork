@@ -26,6 +26,8 @@ set -uo pipefail
 #   5 红了,但没红在 --must-fail 指定的地方
 #   9 **恢复失败** —— 最响的那个:工作树被留在"基线构建"的状态,必须人来收拾
 
+BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+
 die()  { echo "redcheck: $*" >&2; exit 2; }
 
 REPO="$PWD"; BASE=""; ORACLE=""; BUILD=""; MUSTFAIL=""; IMPL=()
@@ -67,7 +69,7 @@ git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || die "--base 解�
 REPO_REAL="$(realpath "$REPO")"
 for p in "${IMPL[@]}"; do
   case "$p" in /*) die "--impl 要相对仓库根的路径,不是绝对路径:$p" ;; esac
-  pr="$(realpath -m "$REPO/$p")"
+  pr="$(python3 "$BIN_DIR/_canonicalize_missing.py" -- "$REPO/$p")"
   case "$pr" in
     "$REPO_REAL"/*) ;;
     *) die "--impl 指到**仓外**了,拒跑(这个脚本会 rm -rf 它):

@@ -92,6 +92,7 @@ review_workspace_reset_report() {
 
 review_workspace_prepare() { # source-repo leg-name
   local source="${1:-}" leg="${2:-review}" top base base_preflight safe_leg scan1 scan2
+  local _canon_bin
   local head object_format tree1 tree2 index_tree1 index_tree2 snapshot_commit marker source_index
   local source_index1 source_index2 tree_entries tree_to_check
 
@@ -126,7 +127,12 @@ review_workspace_prepare() { # source-repo leg-name
   fi
 
   base="${REVIEW_WORKSPACE_BASE:-${TMPDIR:-/tmp}/aiwork-review-workspaces}"
-  base_preflight="$(realpath -m -- "$base" 2>/dev/null)" \
+  # This file is sourced, so the helper sits next to it rather than next to $0.
+  _canon_bin="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "${BASH_SOURCE[0]}")" || {
+    review_workspace__say "workspace 根预检失败:$base"
+    return 78
+  }
+  base_preflight="$(python3 "$_canon_bin/_canonicalize_missing.py" -- "$base" 2>/dev/null)" \
     || { review_workspace__say "workspace 根预检失败:$base"; return 78; }
   case "$base_preflight" in
     /|"$REVIEW_SOURCE_REPO"|"$REVIEW_SOURCE_REPO"/*)
