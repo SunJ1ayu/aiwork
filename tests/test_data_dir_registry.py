@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / 'bin'
 CONFIG = BIN / '_aiwork_config.py'
 KINDS = ('工作产物', '运行目录', '其他')
-DATA_ROOT_JOIN = re.compile(r'\$\{?DATA_ROOT\}?/')
+DATA_ROOT_NAME = re.compile(r'\bDATA_ROOT\b')
 SHELL_DATA_PATH = re.compile(
     r'''data-path\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9._/-]+))''')
 PY_DATA_PATH = re.compile(r'''data_path\(\s*(['"])(.+?)\1''')
@@ -31,35 +31,43 @@ def registry_entries():
     return entries
 
 
-def child_uses():
-    """Literal data-directory children reached from bin/, plus $DATA_ROOT joins."""
+def python_source(path: Path, text: str) -> bool:
+    """A file is Python when its suffix is .py, or its first line is a python shebang."""
+    if path.suffix == '.py':
+        return True
+    first = text.splitlines()[0] if text.splitlines() else ''
+    return first.startswith('#!') and 'python' in first
+
+
+def child_uses(directory: Path):
+    """Literal data-directory children reached from directory, plus DATA_ROOT identifiers."""
     uses = []
-    joins = []
-    for path in sorted(BIN.iterdir()):
+    identifiers = []
+    for path in sorted(directory.iterdir()):
         if not path.is_file():
             continue
         text = path.read_text(encoding='utf-8')
-        rel = path.relative_to(ROOT).as_posix()
+        rel = path.relative_to(directory).as_posix()
         for lineno, line in enumerate(text.splitlines(), 1):
-            if DATA_ROOT_JOIN.search(line):
-                joins.append(f'{rel}:{lineno}')
+            if DATA_ROOT_NAME.search(line):
+                identifiers.append(f'{rel}:{lineno}')
             for match in SHELL_DATA_PATH.finditer(line):
                 raw = next(group for group in match.groups() if group)
                 if raw[0] in '>|;&':
                     continue
                 uses.append((rel, lineno, raw.split('/', 1)[0]))
-        if path.suffix == '.py':
+        if python_source(path, text):
             for match in PY_DATA_PATH.finditer(text):
                 raw = match.group(2)
                 line = text[:match.start()].count('\n') + 1
                 uses.append((rel, line, raw.split('/', 1)[0]))
-    return uses, joins
+    return uses, identifiers
 
 
 class DataDirRegistryTest(unittest.TestCase):
     def test_bin_reaches_data_children_only_through_registered_data_path(self):
-        uses, joins = child_uses()
-        self.assertEqual(joins, [], '数据目录子路径不许再用 $DATA_ROOT/ 拼接')
+        uses, identifiers = child_uses(BIN)
+        self.assertEqual(identifiers, [], 'bin/ 里不许出现 DATA_ROOT')
         names = {entry['name'] for entry in registry_entries()}
         unknown = [
             f'{rel}:{lineno}:{name}'
@@ -108,6 +116,15 @@ class DataDirRegistryTest(unittest.TestCase):
                 else:
                     os.environ['AIWORK_DATA_DIR'] = old
         self.assertEqual(got, data / 'not-a-registered-name')
+
+    def test_unsuffixed_python_shebang_is_scanned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tool = root / 'tool'
+            tool.write_text('#!/usr/bin/env python3\nvalue = data_path("not-registered")\n')
+            uses, identifiers = child_uses(root)
+        self.assertEqual(identifiers, [])
+        self.assertIn(('tool', 2, 'not-registered'), uses)
 
 
 if __name__ == '__main__':

@@ -39,7 +39,7 @@
 ## 本机设置与数据
 
 本机设置位于 `~/.config/aiwork/`，包含 `models.env`、GitHub App 角色配置及私钥。
-本机运行数据在 <数据目录>（见 README「本机设置」），包含 tasks、logs、worktrees、运行期 home 和 archive。
+本机运行数据在 <数据目录>（见 README「本机设置」），里面有哪些东西见 aiwork 仓库 bin/_aiwork_config.py 的登记表。
 统一入口是 `bin/aiwork-config`；凭证、配置备份、会话及原始日志留在本机。
 
 可用通道包括 Codex、Cursor、DeepSeek、Kimi、MiMo。每个通道都能写代码也能评审；同一个 PR 的评审要换一家，由关卡判断。默认模型读取本机设置。
