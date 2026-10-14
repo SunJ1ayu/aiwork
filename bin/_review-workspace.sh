@@ -291,6 +291,27 @@ review_workspace_repo() {
   printf '%s\n' "$REVIEW_WORK_REPO"
 }
 
+# Runtime state shares the snapshot's lifetime; caller-owned overrides bypass it.
+review_workspace_home() { # name
+  local name="${1:-}" home
+  [[ -n "${REVIEW_WORKSPACE_DIR:-}" && -d "$REVIEW_WORKSPACE_DIR" \
+      && -f "$REVIEW_WORKSPACE_DIR/.aiwork-review-workspace" ]] || {
+    review_workspace__say 'review workspace 尚未准备好，不能建运行目录'
+    return 78
+  }
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$name" != repo ]] || {
+    review_workspace__say "无效运行目录名:$name"
+    return 78
+  }
+  home="$REVIEW_WORKSPACE_DIR/$name"
+  [[ ! -e "$home" && ! -L "$home" ]] || {
+    review_workspace__say "运行目录已存在:$home"
+    return 78
+  }
+  mkdir -m 700 -- "$home" || return 78
+  printf '%s\n' "$home"
+}
+
 # AIWORK_REVIEW_RESULT_BIN, or the helper beside this script. write_facts and
 # finish both use this; neither picks a path of its own.
 review_workspace__result_bin() {

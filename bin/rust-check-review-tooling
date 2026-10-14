@@ -28,6 +28,7 @@ SUITES=(
   "subcursor|python3|$ROOT/tests/test_subcursor.py"
   "leg-quick-fixes|python3|$ROOT/tests/test_leg_quick_fixes.py"
   "leg-finish|python3|$ROOT/tests/test_leg_finish.py"
+  "review-homes|python3|$ROOT/tests/test_review_homes.py"
   "review-tooling|bash|$ROOT/tests/test-review-tooling.sh"
   "subcodex|bash|$ROOT/tests/test-subcodex.sh"
   "no-egress|bash|$ROOT/tests/test-no-egress.sh"
