@@ -21,22 +21,19 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 - The current wiki-ingest skill lives in the OpenClaw workspace at
   `/root/.openclaw/workspace/skills/wiki-ingest`; the older aiwork copy was
   removed.
-- Local working files — task briefs, my-review files, reference notes, logs,
-  tool homes — stay in the machine data directory outside this checkout. This repository is
+- Local working files stay in the machine data directory outside this checkout.
+  里面有哪些东西见 `bin/_aiwork_config.py` 的登记表。This repository is
   public: never commit private content.
 
 ## Layout
 
 - `bin/` review commands and delegation tools (below)
-- Machine data directory `tasks/` holds local task/brief files sent to reviewers (main-agent-authored)
-- Machine data directory `logs/` holds reviewer output, `.err` sidecars and arbitration records
+- 本机数据目录(不在这个仓库里):里面有哪些东西见 `bin/_aiwork_config.py` 的登记表
 - `gate/` shared merge gate. A project connects by the steps in [gate/README.md](gate/README.md)
 - `templates/` starter task files (`review-task.md`, `fix-task.md`) and the two gate workflow templates
 - `tests/` regression oracles for this tooling itself
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
-- Machine data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
 - `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use the data directory
-- `out/`, `refs/`, `.mimocode/`, `etc/` and other local data live outside the checkout
 
 ## Review commands
 
@@ -141,16 +138,13 @@ mimo                      # or: mimo providers login / list
 `AIWORK_DATA_DIR` 可覆盖该入口（例如离线测试使用临时目录）。供应商隔离运行时会改写
 `XDG_*`，因此 aiwork 数据入口不随供应商的 XDG 设置变化。查询路径本身不创建目录。
 数据目录要先存在，aiwork 不会自动创建它。数据目录要放在外接盘里面的一个子目录，不要直接用盘的挂载点(盘没挂上时，挂载点往往还是一个空目录，检查会误判通过)。
+数据目录里应该有哪些东西，以 `bin/_aiwork_config.py` 里的登记表为准。
 
-`tasks/`、`logs/`（包括失败日志）、`worktrees/`、`mimo-home/` 以及各评审命令的运行期 home
-都使用该数据入口；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
+这些子目录都通过该数据入口定位，有哪些见登记表；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。
 
 `kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。
 运行期配置和 hooks 只从种子同步这两类文件；凭证、缓存、会话、日志、索引和遥测留在数据目录，
 不会从种子目录整份复制。运行目录缺少凭证会明确拒绝运行。
 
-`out/`、`refs/`、`.mimocode/`、`etc/` 的备份属于仓外本机数据。
-归档发现旧位置仍有本轮注册的树时拒绝继续，
-明确给出旧树和新根；`--keep-trees` 或既有专用路径覆盖仍可显式保留旧树。
 普通缓存 `__pycache__`、`.pytest_cache`、`.mutation-state` 保持现状。
