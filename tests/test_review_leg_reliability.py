@@ -155,6 +155,7 @@ class ReliabilityTests(unittest.TestCase):
                 patch.object(self.review, 'main_document', return_value='无'), \
                 patch.object(self.review, 'github', side_effect=github), \
                 patch.object(self.review, 'BIN', bin_dir), \
+                patch.object(self.review, 'aiwork_main_commit', return_value='d' * 40), \
                 patch.object(self.review, 'require_latest_aiwork_main'), \
                 patch.object(self.review.subprocess, 'run', side_effect=invoke), \
                 redirect_stdout(stdout), redirect_stderr(stderr):

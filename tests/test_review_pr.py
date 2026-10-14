@@ -377,6 +377,7 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn('bin/review-pr', readme)
         self.assertIn('需要联网、需要读取本机模型凭证', readme)
         self.assertIn('必须在沙箱外运行', readme)
+        self.assertIn('跑之前的前提见 `workflow/CLAUDE.md`', readme)
 
     def git_repo(self):
         temporary = tempfile.TemporaryDirectory()
@@ -688,6 +689,7 @@ grep -q -F -- "$3" "$clone/$4"
 
     def test_missing_origin_stops_before_credentials(self):
         with patch("sys.argv", ["review-pr", "12"]), \
+                patch.object(self.review, "aiwork_main_commit", return_value="d" * 40), \
                 patch.object(self.review, "require_latest_aiwork_main"), \
                 patch.object(self.session, "run", side_effect=self.review.ReviewError("git failed")) as run, \
                 redirect_stderr(io.StringIO()) as err:
@@ -933,6 +935,7 @@ grep -q -F -- "$3" "$clone/$4"
             with patch('sys.argv', ['review-pr', '12', '--repo', 'SunJ1ayu/aiwork', '--leg', 'subcursor']), \
                     patch.dict(os.environ, env), \
                     patch.object(self.review, 'BIN', bin_dir), \
+                    patch.object(self.review, 'aiwork_main_commit', return_value='d' * 40), \
                     patch.object(self.review, 'require_latest_aiwork_main'), \
                     patch.object(self.session, 'run', side_effect=fake_run), \
                     patch.object(self.review, 'pr_state', return_value=pr), \
@@ -986,6 +989,7 @@ grep -q -F -- "$3" "$clone/$4"
             with patch('sys.argv', ['review-pr', '12', '--repo', 'SunJ1ayu/aiwork', '--leg', 'subcursor']), \
                     patch.dict(os.environ, env), \
                     patch.object(self.review, 'BIN', bin_dir), \
+                    patch.object(self.review, 'aiwork_main_commit', return_value='d' * 40), \
                     patch.object(self.review, 'require_latest_aiwork_main'), \
                     patch.object(self.session, 'run', side_effect=fake_run), \
                     patch.object(self.review, 'pr_state', return_value=pr), \
@@ -1012,21 +1016,69 @@ grep -q -F -- "$3" "$clone/$4"
                     self.assertEqual(calls["github_writes"], ["repos/Example/other/pulls/12/reviews"])
                     self.assertEqual(calls["head_after"], tool_head)
                 else:
-                    self.assertNotEqual(rc, 0)
-                    self.assertEqual(stdout, "")
-                    self.assertIn("review-pr 只能从最新 main 的 aiwork 检出跑", stderr)
+                    self.assert_checkout_refused(
+                        rc, calls, stdout, stderr, tool_head, reviewed_sha)
+                    if case == "dirty":
+                        self.assertIn("有未提交的改动", stderr)
+                        self.assertNotIn("HEAD 不是 aiwork 的最新 main", stderr)
+                    else:
+                        self.assertIn("HEAD 不是 aiwork 的最新 main", stderr)
+                        self.assertIn(f"当前提交 {tool_head}", stderr)
+                        self.assertIn(f"main 的提交 {main_sha}", stderr)
+                        self.assertNotIn("有未提交的改动", stderr)
+
+    def test_authoritative_main_and_inherited_git_env_cannot_retarget_the_check(self):
+        refused = {}
+        for case in ("fork", "git_env", "worktree", "hidden_untracked", "unreadable"):
+            with self.subTest(case=case):
+                rc, calls, stdout, stderr, tool_head, main_sha, reviewed_sha = (
+                    self.run_from_tool_checkout(case))
+                self.assert_checkout_refused(
+                    rc, calls, stdout, stderr, tool_head, reviewed_sha)
+                refused[case] = stderr
+                if case in ("fork", "git_env"):
+                    self.assertIn("HEAD 不是 aiwork 的最新 main", stderr)
                     self.assertIn(f"当前提交 {tool_head}", stderr)
                     self.assertIn(f"main 的提交 {main_sha}", stderr)
-                    self.assertNotIn(reviewed_sha, stderr)
-                    self.assertEqual(calls["leg_runs"], 0)
-                    self.assertEqual(calls["github_writes"], [])
-                    self.assertEqual(calls["head_after"], tool_head)
-                    self.assertTrue(calls["tree_unchanged"])
+                elif case == "worktree":
+                    self.assertIn("git 认出的仓库根目录不是 review-pr 所在的检出", stderr)
+                elif case == "hidden_untracked":
+                    self.assertIn("有未提交的改动", stderr)
+                else:
+                    self.assertIn("读不到 aiwork 的 main", stderr)
+        reasons = (
+            "有未提交的改动",
+            "HEAD 不是 aiwork 的最新 main",
+            "读不到 aiwork 的 main",
+        )
+        shown = (
+            refused["hidden_untracked"],
+            refused["fork"],
+            refused["unreadable"],
+        )
+        for reason, stderr in zip(reasons, shown):
+            self.assertIn(reason, stderr)
+            for other in reasons:
+                if other != reason:
+                    self.assertNotIn(other, stderr)
+
+    def assert_checkout_refused(self, rc, calls, stdout, stderr, tool_head, reviewed_sha):
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(stdout, "")
+        self.assertIn("review-pr 只能从最新 main 的 aiwork 检出跑", stderr)
+        self.assertNotIn(reviewed_sha, stderr)
+        self.assertEqual(calls["leg_runs"], 0)
+        self.assertEqual(calls["github_writes"], [])
+        self.assertEqual(calls["token_calls"], 0)
+        self.assertEqual(calls["head_after"], tool_head)
+        self.assertTrue(calls["tree_unchanged"])
 
     def run_from_tool_checkout(self, case):
-        calls = {"github_writes": [], "leg_runs": 0}
+        calls = {"github_writes": [], "leg_runs": 0, "token_calls": 0}
         real_subprocess_run = subprocess.run
         real_run = self.session.run
+        authority = {"sha": "e" * 40}
+        extra_env = {}
 
         def git(repo, *args, check=True):
             return real_subprocess_run(
@@ -1034,8 +1086,10 @@ grep -q -F -- "$3" "$clone/$4"
                 check=check, capture_output=True, text=True)
 
         def fake_public_read(request, **kwargs):
+            if case == "unreadable":
+                raise OSError("authoritative main is offline")
             url = request.full_url
-            source_sha = "d" * 40
+            source_sha = authority["sha"]
             if url == "https://api.github.com/repos/SunJ1ayu/aiwork/commits/main":
                 value = {"sha": source_sha}
             elif url == f"https://api.github.com/repos/SunJ1ayu/aiwork/contents/REVIEW-RULES.md?ref={source_sha}":
@@ -1053,6 +1107,7 @@ grep -q -F -- "$3" "$clone/$4"
 
         def fake_run(command, **kwargs):
             if command[0].endswith("gh-app-token"):
+                calls["token_calls"] += 1
                 return FAKE_TOKEN
             if command[0] == "git":
                 return real_run(command, **kwargs)
@@ -1084,8 +1139,34 @@ grep -q -F -- "$3" "$clone/$4"
                 (tool / "bin" / "subcodex").write_text(
                     (tool / "bin" / "subcodex").read_text(encoding="utf-8") + "\n# dirty\n",
                     encoding="utf-8")
+            elif case == "hidden_untracked":
+                git(tool, "config", "status.showUntrackedFiles", "no")
+                (tool / "sneak").write_text("untracked\n", encoding="utf-8")
+            elif case == "worktree":
+                other = root / "other"
+                shutil.copytree(tool, other, ignore=shutil.ignore_patterns(".git"))
+                git(tool, "config", "core.worktree", str(other))
+            elif case == "git_env":
+                decoy = root / "decoy"
+                decoy.mkdir()
+                git(decoy, "init", "-q", "-b", "main")
+                (decoy / "clean.txt").write_text("clean\n", encoding="utf-8")
+                git(decoy, "add", "clean.txt")
+                git(decoy, "commit", "-qm", "decoy")
+                decoy_bare = root / "decoy.git"
+                real_subprocess_run(["git", "init", "--bare", "-q", str(decoy_bare)], check=True)
+                git(decoy, "remote", "add", "origin", str(decoy_bare))
+                git(decoy, "push", "-q", "origin", "main")
+                extra_env["GIT_DIR"] = str(decoy / ".git")
+                extra_env["GIT_WORK_TREE"] = str(decoy)
+                authority["sha"] = git(decoy, "rev-parse", "HEAD").stdout.strip()
             tool_head = git(tool, "rev-parse", "HEAD").stdout.strip()
-            main_sha = git(bare, "rev-parse", "main").stdout.strip()
+            origin_main = git(bare, "rev-parse", "main").stdout.strip()
+            if case == "fork":
+                authority["sha"] = "e" * 40
+            elif case != "git_env":
+                authority["sha"] = origin_main
+            main_sha = authority["sha"]
             marker = (tool / "bin" / "subcodex").read_bytes()
             reviewed = root / "reviewed"
             reviewed.mkdir()
@@ -1136,7 +1217,7 @@ grep -q -F -- "$3" "$clone/$4"
             try:
                 with patch("sys.argv", ["review-pr", "12", "--repo", "Example/other", "--leg", "subcursor"]), \
                         patch.dict(os.environ, {"CURSOR_MODEL": "gpt-5.6", "AIWORK_DATA_DIR": str(data),
-                                                "AIWORK_CONFIG_DIR": str(config)}), \
+                                                "AIWORK_CONFIG_DIR": str(config), **extra_env}), \
                         patch.object(self.session, "run", side_effect=fake_run), \
                         patch("urllib.request.urlopen", side_effect=fake_public_read), \
                         patch.object(tool_review, "github", side_effect=fake_github), \
