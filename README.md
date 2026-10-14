@@ -21,22 +21,19 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 - The current wiki-ingest skill lives in the OpenClaw workspace at
   `/root/.openclaw/workspace/skills/wiki-ingest`; the older aiwork copy was
   removed.
-- Local working files — task briefs, my-review files, reference notes, logs,
-  tool homes — stay in the machine data directory outside this checkout. This repository is
+- Local working files stay in the machine data directory outside this checkout.
+  里面有哪些东西见 `bin/_aiwork_config.py` 的登记表。This repository is
   public: never commit private content.
 
 ## Layout
 
 - `bin/` review commands and delegation tools (below)
-- Machine data directory `tasks/` holds local task/brief files sent to reviewers (main-agent-authored)
-- Machine data directory `logs/` holds reviewer output, `.err` sidecars and arbitration records
+- 本机数据目录(不在这个仓库里):里面有哪些东西见 `bin/_aiwork_config.py` 的登记表
 - `gate/` shared merge gate. A project connects by the steps in [gate/README.md](gate/README.md)
 - `templates/` starter task files (`review-task.md`, `fix-task.md`) and the two gate workflow templates
 - `tests/` regression oracles for this tooling itself
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
-- Machine data directory `worktrees/` holds per-job isolated checkouts created by `delegate-codex`
 - `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use the data directory
-- `out/`, `refs/`, `.mimocode/`, `etc/` and other local data live outside the checkout
 
 ## Review commands
 
