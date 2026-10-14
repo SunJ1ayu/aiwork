@@ -44,13 +44,13 @@ def data_path(name: str = '') -> Path:
 DATA_ENTRIES = (
     {
         'name': 'logs',
-        'purpose': '任务、评审和委托留下的日志，包括失败记录。',
+        'purpose': '任务和评审留下的日志，包括失败记录。',
         'kind': '工作产物',
         'credentials': False,
     },
     {
         'name': 'worktrees',
-        'purpose': 'delegate-codex 为每个任务建的独立检出。',
+        'purpose': '执行方开 PR 时建的独立工作树。',
         'kind': '运行目录',
         'credentials': False,
     },
@@ -73,20 +73,8 @@ DATA_ENTRIES = (
         'credentials': False,
     },
     {
-        'name': 'mimo-home',
-        'purpose': 'submimo-iso 给每个 agent 的隔离 home，会从本机拷入凭证。',
-        'kind': '运行目录',
-        'credentials': True,
-    },
-    {
         'name': 'tasks',
-        'purpose': '交给评审和委托的任务书。',
-        'kind': '工作产物',
-        'credentials': False,
-    },
-    {
-        'name': 'attack-logs',
-        'purpose': '委托前对判据的攻题记录。',
+        'purpose': '交给评审的任务书。',
         'kind': '工作产物',
         'credentials': False,
     },

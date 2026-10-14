@@ -31,25 +31,6 @@ class LocalDataTests(unittest.TestCase):
         return subprocess.run([str(self.tool / 'bin' / name), *args],
                               env=env or self.env, capture_output=True, text=True, timeout=20)
 
-    def test_submimo_iso_seeds_credentials_from_home(self):
-        canonical = self.home / '.local/share/mimocode'
-        canonical.mkdir(parents=True)
-        credential = ' '.join(('fixture', 'credential'))
-        (canonical / 'auth.json').write_text(credential)
-        stub = self.tool / 'bin/submimo'
-        stub.write_text('#!/bin/bash\ncp "$XDG_DATA_HOME/mimocode/auth.json" "$3"\n')
-        project = self.d / 'project'
-        project.mkdir()
-        subprocess.run(['git', 'init', '-q', str(project)], check=True, capture_output=True)
-        task = self.d / 'task.md'
-        task.write_text('fixture task')
-        log = self.d / 'review.log'
-        result = self.run_tool('submimo-iso', 'fixture', 'review', str(task), str(project), str(log))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(log.read_text() == credential, 'credentials did not come from HOME')
-        self.assertTrue((self.data / 'mimo-home/fixture/data/mimocode/auth.json').read_text()
-                        == credential, 'isolated home was not seeded from HOME')
-
     def assert_data_dir_refused(self, result, path):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual(result.stdout.strip(), '')
@@ -113,7 +94,7 @@ class LocalDataTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), str(mounted / 'logs'))
         self.assertFalse((mounted / 'logs').exists())
 
-        for name in ('out', '.mimocode', 'etc', 'attack-logs', 'tasks', 'worktrees'):
+        for name in ('out', '.mimocode', 'etc', 'scratch', 'tasks', 'worktrees'):
             result = self.run_tool('aiwork-config', 'data-path', name)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), str(self.data / name))

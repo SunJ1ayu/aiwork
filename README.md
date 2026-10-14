@@ -27,10 +27,10 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 
 ## Layout
 
-- `bin/` review commands and delegation tools (below)
+- `bin/` review commands (below)
 - 本机数据目录(不在这个仓库里):里面有哪些东西见 `bin/_aiwork_config.py` 的登记表
 - `gate/` shared merge gate. A project connects by the steps in [gate/README.md](gate/README.md)
-- `templates/` starter task files (`review-task.md`, `fix-task.md`) and the two gate workflow templates
+- `templates/` starter task file (`review-task.md`) and the two gate workflow templates
 - `tests/` regression oracles for this tooling itself
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use the data directory
@@ -42,38 +42,15 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 
 - `bin/subdeepseek-agent` — DeepSeek，经 Claude Code headless 读仓库。模型来自 `~/.config/aiwork/models.env` 的 deepseek 行。
 - `bin/subkimi` — Kimi，kimi-code CLI。模型来自 kimi 行。
-- `bin/submimo` — MiMo，官方 `mimo` CLI。`review` 在可丢弃副本里读和跑检查；`fix` 做有界的小改动。模型来自 mimo 行。
+- `bin/submimo <review|explore>` — MiMo，官方 `mimo` CLI。在可丢弃副本里读和跑检查。模型来自 mimo 行。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。源仓经 `ro-repo-exec` 只读，副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
-- `bin/submimo-iso` — 两路同时用 submimo 时的隔离入口。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。
   失败时打印脱敏后的 stderr 末 40 行，诊断留在数据目录 `logs/review-pr-failures/<run-id>/`，不含仓库检出和凭证助手。只保留最新 20 份失败档案。
   任务在 diff 之后再次要求结论。完整 diff（含删除）放得下就内联。超过 `READER_INLINE_DIFF_BYTES`（200KB）时，任务只列每个文件的状态和行数，完整 diff 在快照文件 `aiwork-review.diff`。
   这条命令默认给评审命令 2400 秒；已有的超时环境变量可以覆盖。只有缺结论或输出被截断时重试一次，并在终端和发布的评审里写明。每次失败的尝试都留下，包括重试成功的那次；其他失败不重新启动评审命令。
 
 所有评审命令：`<tool> review TASK LOG REPO`。输出是主 agent 要核对的证据。
-
-## Delegation entry + judging guards
-
-- `bin/delegate-codex` — the ONE entry for handing implementation work to the
-  codex (GPT) leg, and the mechanical half of receiving gate ①. It refuses to
-  dispatch (codex never starts) unless: an attack-log exists outside the repo,
-  a `--protect` judging list is given, and the attack-log carries the CURRENT
-  `oracle-sha256:` of that judging surface (`--print-oracle-hash` emits the line).
-  **Each job runs in its own git worktree by default** (`--no-isolate` opts out):
-  data path `worktrees/<task>-<ts>` on branch `delegate/<same>`, created from the HEAD at
-  dispatch. `--receive <receipt>` runs gate ① against that tree (plus a check for
-  uncommitted judging changes in the MAIN tree, which the leg can still reach),
-  records the machine-computed write set into the receipt, and PRINTS the
-  integrate / symlink-check / `worktree remove` commands — it never merges or
-  deletes anything itself.
-  Isolation buys attribution, not confinement: `-s workspace-write` resolves its
-  writable root upward to the main repo (a worktree's `.git` is a file), so case
-  files (attack log, log, receipt) must stay outside `repo ∪ worktrees-root`.
-- `bin/redcheck` — revert-the-implementation red check: puts the impl back to a
-  baseline, rebuilds, reruns the oracle, and REQUIRES red (`--must-fail` pins
-  where the red must land). Restores unconditionally and proves the tree is clean.
-  The rule entry is [REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md).
 
 ## Tests (run for tooling changes)
 
@@ -106,11 +83,9 @@ bash bin/rust-check-review-tooling --coverage-only   # 只查没登记进总跑�
 
 The runner is list-driven (`SUITES`) and hard-reds when a `tests/test-*` file is
 NOT in that list — a judging suite nobody runs rots silently. Individual suites
-still run standalone (`bash tests/test-delegate-isolate.sh`); each one execs
+still run standalone (`bash tests/test-subcodex.sh`); each one execs
 itself into a network namespace first, because **a judging process must have no
 egress** (2026-08-10: an oracle called a paid model and burned the quota).
-
-The oracle is owned by the main agent; employees must never edit it.
 
 ## MiMo agent CLI setup
 
@@ -123,10 +98,9 @@ mimo                      # or: mimo providers login / list
 
 仓库只保存工作流；本机设置统一放在 `~/.config/aiwork/`（目录权限 700）：
 
-- `models.env`：Codex、Cursor、DeepSeek、Kimi、MiMo 和 triage 的模型选择，每条一行。可参考 `templates/models.env.example`。
-- `typesafe.env`：triage 使用的 `TYPESAFE_API_KEY`，保留文件权限 600。
+- `models.env`：Codex、Cursor、DeepSeek、Kimi、MiMo 的模型选择，每条一行。可参考 `templates/models.env.example`。
 - `deepseek.env`：DeepSeek 使用的 `DEEPSEEK_API_KEY`，保留文件权限 600。
-- `models.env`、`typesafe.env`、`deepseek.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
+- `models.env`、`deepseek.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
 - `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。

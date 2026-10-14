@@ -62,7 +62,6 @@ function judgingFramework() {
   for (const path of [
     "tests/_no-egress.sh",
     "tests/_no_egress.py",
-    "tests/_oracle_hash.sh",
     "tests/_test_settings.py",
   ]) {
     assert.ok(framework.includes(path), `量具:框架里有 ${path}`);

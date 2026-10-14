@@ -123,10 +123,14 @@ check "W4: 正式评审在 PR 上使用沙箱外 review-pr" $?
 grep -q '不改考卷让自己及格' "$SOURCE/CLAUDE.md" \
   && grep -q '不信执行腿的自述' "$SOURCE/CLAUDE.md"
 check "W4: 保留判据核实与收货方法" $?
-grep -q -- '--receive' "$SOURCE/skills/delegate/SKILL.md" \
+grep -q 'PR 任务单' "$SOURCE/skills/delegate/SKILL.md" \
+  && grep -q '派 PR 任务的任务单格式' "$SOURCE/skills/delegate/SKILL.md" \
+  && ! grep -q -- '--receive' "$SOURCE/skills/delegate/SKILL.md" \
+  && ! grep -q 'delegate-codex' "$SOURCE/skills/delegate/SKILL.md" \
+  && ! grep -q 'redcheck' "$SOURCE/skills/delegate/SKILL.md" \
   && ! grep -q -- '--no-track' "$SOURCE/skills/delegate/SKILL.md" \
   && ! grep -q -- '--track' "$SOURCE/skills/delegate/SKILL.md"
-check "W4: 委托保留隔离收货，不再挂 track" $?
+check "W4: 任务单只留 PR 任务单格式，不再写旧委托入口" $?
 grep -q '~/.config/aiwork/' "$SOURCE/CLAUDE.md" \
   && grep -q 'README「本机设置」' "$SOURCE/CLAUDE.md" \
   && grep -q '里面有哪些东西见 aiwork 仓库 bin/_aiwork_config.py 的登记表' "$SOURCE/CLAUDE.md" \
@@ -145,14 +149,21 @@ for gone in bin/track bin/track-guard bin/track-record bin/track-commit-msg \
             tests/test_track_preflight.py tests/test-ledger.sh tests/test-runlog.sh \
             tests/test_review_delivery.py tests/mutation-review-delivery.sh \
             tests/test-panel-round-discipline.sh tests/test-delegate-observation.sh \
-            tests/test-worktree-sweep.sh tests/test-evidence-lifetime.sh; do
+            tests/test-worktree-sweep.sh tests/test-evidence-lifetime.sh \
+            bin/delegate-codex bin/redcheck bin/submimo-iso bin/triage \
+            triage templates/fix-task.md tests/test-delegate-entry.sh \
+            tests/test-delegate-isolate.sh tests/test-submimo-fix-oracle.sh \
+            tests/_oracle_hash.sh; do
   [[ ! -e "$ROOT/$gone" ]]
   check "W5: 已删除 $gone" $?
 done
 ! grep -q 'track-guard|bash' "$ROOT/bin/rust-check-review-tooling" \
   && ! grep -q 'track-record|bash' "$ROOT/bin/rust-check-review-tooling" \
-  && ! grep -q 'runlog|bash' "$ROOT/bin/rust-check-review-tooling"
-check "W5: 总跑不再登记 track / runlog 套件" $?
+  && ! grep -q 'runlog|bash' "$ROOT/bin/rust-check-review-tooling" \
+  && ! grep -q 'fix-oracle|bash' "$ROOT/bin/rust-check-review-tooling" \
+  && ! grep -q 'delegate-entry|bash' "$ROOT/bin/rust-check-review-tooling" \
+  && ! grep -q 'delegate-isolate|bash' "$ROOT/bin/rust-check-review-tooling"
+check "W5: 总跑不再登记 track / runlog / 旧委托套件" $?
 # 历史段只留一句指向，不复述过滤、归档仓库或提交个数。
 hist="$(awk '/^## History/{flag=1;next} /^## /{flag=0} flag' "$ROOT/README.md")"
 [[ "$(printf '%s\n' "$hist" | grep -cve '^[[:space:]]*$')" -eq 1 ]]

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 本仓(/root/aiwork)的**总跑入口**:一条命令跑完全部离线判据套件,并给一行汇总。
 # Exit 0 = 全绿,非零 = 有东西烂了(外部漂移、环境升级、我自己改坏了)——
-# 目的是在真跑一次 review-pr / 真派一次活之前就把静默腐烂抓出来。
+# 目的是在真跑一次 review-pr 之前就把静默腐烂抓出来。
 # 绿了也打一行心跳,这样 cron 死了本身也看得见(P0-2「静默过期」的教训)。
 # 只跑桩/离线套件,不做真供应商探活(不烧额度)。
 #
@@ -30,9 +30,6 @@ SUITES=(
   "leg-finish|python3|$ROOT/tests/test_leg_finish.py"
   "review-tooling|bash|$ROOT/tests/test-review-tooling.sh"
   "subcodex|bash|$ROOT/tests/test-subcodex.sh"
-  "fix-oracle|bash|$ROOT/tests/test-submimo-fix-oracle.sh"
-  "delegate-entry|bash|$ROOT/tests/test-delegate-entry.sh"
-  "delegate-isolate|bash|$ROOT/tests/test-delegate-isolate.sh"
   "no-egress|bash|$ROOT/tests/test-no-egress.sh"
   "review-workspace|bash|$ROOT/tests/test-review-workspace.sh"
   "workflow-docs|bash|$ROOT/tests/test-workflow-docs.sh"
