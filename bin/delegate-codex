@@ -53,8 +53,8 @@ set -uo pipefail
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 CODEX="${CODEX:-codex}"
-DATA_ROOT="$("$BIN_DIR/aiwork-config" data-path)" || exit 2
-WT_ROOT="${DELEGATE_WORKTREE_ROOT:-$DATA_ROOT/worktrees}"
+"$BIN_DIR/aiwork-config" data-path >/dev/null || exit 2
+WT_ROOT="${DELEGATE_WORKTREE_ROOT:-$("$BIN_DIR/aiwork-config" data-path worktrees)}" || exit 2
 
 die()  { echo "delegate-codex: $*" >&2; exit 2; }
 usage() { sed -n '/^# 用法:/,/^#         --receive/p' "$0" | sed 's/^# \?//' >&2; }
@@ -481,7 +481,9 @@ grep -Fq "$HASH_LINE" "$ATTACK" || die "攻题记录对不上当前这版判卷,
     $HASH_LINE
   (拿现成的:delegate-codex --print-oracle-hash --repo $REPO ${PROTECT[*]/#/--protect })"
 
-LOG="${LOG:-$DATA_ROOT/logs/delegate-${NAME}-${TS}.log}"
+if [[ -z "${LOG:-}" ]]; then
+  LOG="$("$BIN_DIR/aiwork-config" data-path "logs/delegate-${NAME}-${TS}.log")" || exit 2
+fi
 mkdir -p "$(dirname "$LOG")"
 RECEIPT="${LOG}.receipt.json"
 # 回执/日志同理(四审 subdeepseek F15 / subkimi F3):它们是闸① 的卷宗,
