@@ -1155,7 +1155,7 @@ v38_leg_runtime_home_outside_repo() {
   #    subkimi 的种子同步(bin/subkimi:100-110)去写**业主真实的**运行期 home ——
   #    判据每跑一次就把他的 config/hooks 重置一次。假 HOME 一样问得出"默认 home
   #    在不在仓外",而那正是本条要查的东西。2026-08-25 panel 抓到,V45 红过。
-  local home_default fh38="$d/fh38"; mkdir -p "$fh38"
+  local home_default fh38="$d/fh38"; mkdir -p "$fh38/.local/share/aiwork"
   home_default="$(env -u AIWORK_DATA_DIR HOME="$fh38" REVIEW_PRINT_HOME=1 bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/x.log" "$repo" 2>/dev/null | tail -1)"
   [[ -n "$home_default" ]] && case "$home_default" in "$repo"/*|"$repo") false ;; *) true ;; esac
   check "V38: subkimi 的默认运行期 home 在**被评审的仓外面**(解析出来的是:${home_default:-没打印})" $?

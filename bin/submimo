@@ -164,7 +164,9 @@ command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: m
 #
 # ⚠️ `fix` 模式**不走这里**:那是执行腿,写代码是它的本职,继续用内置 `build` 档。
 REVIEW_AGENT="aiwork-review"
-MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path mimo-review-home)}" || exit 1
+# 覆盖变量只决定运行目录放哪，不能跳过数据目录存在性检查。
+"$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
+MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path mimo-review-home)}" || exit 78
 # 运行期 home 不许在被评审的仓里(共享闸)。**只管 review**:`fix` 是执行腿,
 # 仓对它本来就是可写的,这道闸拦它没有意义 —— "加一道防线顺手拆掉另一道"是本仓的老账。
 if [[ "$MODE" != "fix" ]]; then
