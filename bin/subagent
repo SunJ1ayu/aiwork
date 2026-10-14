@@ -44,9 +44,8 @@ Environment (PREFIX = DEEPSEEK):
   <PREFIX>_MODEL          model id
   <PREFIX>_TIMEOUT        seconds before timeout (default 900)
   <PREFIX>_MAX_TURNS      agent turn cap (default 200)
-  <PREFIX>_API_KEY        overrides the key read from the auth file
+  <PREFIX>_API_KEY        overrides DEEPSEEK_API_KEY from deepseek.env
   <PREFIX>_ANTHROPIC_URL  Anthropic-compatible base URL
-  <PREFIX>_AUTH_FILE      auth file, {"key":"..."}; default ~/.config/deepseek/auth.json
 EOF
 }
 
@@ -76,7 +75,8 @@ case "$PROVIDER" in
     BILLING_MODE="api"
     DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
     DEFAULT_BASE_URL="https://api.deepseek.com/anthropic"
-    DEFAULT_AUTH_FILE="$HOME/.config/deepseek/auth.json"
+    SETTINGS_FILE="deepseek.env"
+    SETTINGS_VAR="DEEPSEEK_API_KEY"
     # 轮次预算**凭测量**:08-03 实测「只看一个文件」的琐碎评审就用掉 56 轮
     # (deepseek-v4-flash 的做法是大量小步 Read/Bash,单位工作的轮次消耗远高于强模型)。
     # 它 07-21 撞过 40、08-03 撞过 80 —— 两次的修法都是翻倍,那是修数字。
@@ -99,7 +99,6 @@ v="${PREFIX}_TIMEOUT";        TIMEOUT_SECONDS="${!v:-900}"
 v="${PREFIX}_MAX_TURNS";      MAX_TURNS="${!v:-$DEFAULT_MAX_TURNS}"
 v="${PREFIX}_API_KEY";        API_KEY="${!v:-}"
 v="${PREFIX}_ANTHROPIC_URL";  BASE_URL="${!v:-$DEFAULT_BASE_URL}"
-v="${PREFIX}_AUTH_FILE";      AUTH_FILE="${!v:-$DEFAULT_AUTH_FILE}"
 
 if [[ "$MODE" == "fix" ]]; then
   die "fix is not supported on this command. Change code in your own worktree."
@@ -111,9 +110,7 @@ fi
 command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
 
 if [[ -z "$API_KEY" ]]; then
-  [[ -f "$AUTH_FILE" ]] || die "auth file not found: $AUTH_FILE (set ${PREFIX}_API_KEY or create it as {\"key\":\"...\"})"
-  API_KEY="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['key'])" "$AUTH_FILE")" \
-    || die "could not read 'key' from $AUTH_FILE"
+  API_KEY="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" "$SETTINGS_VAR")" || exit $?
 fi
 [[ -n "$API_KEY" ]] || die "empty ${PREFIX}_API_KEY"
 # 供应商表必须填 AUTH_ENV(认证 header 风格)。**这条守卫非有不可**:

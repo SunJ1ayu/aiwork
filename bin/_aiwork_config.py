@@ -97,6 +97,32 @@ def setting_path(name: str) -> Path:
     return config_dir() / name
 
 
+_ASSIGNMENT = re.compile(r'^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$')
+
+
+def setting_value(filename: str, variable: str) -> str:
+    """Read one assignment from a settings file. Lines are data, never sourced."""
+    path = setting_path(filename)
+    try:
+        content = path.read_text(encoding='utf-8')
+    except OSError as exc:
+        raise ConfigError(f'{path}: cannot read {variable}') from exc
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        match = _ASSIGNMENT.fullmatch(line)
+        if match is None or match.group(1) != variable:
+            continue
+        value = match.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if value == '':
+            raise ConfigError(f'{path}: empty {variable}')
+        return value
+    raise ConfigError(f'{path}: missing {variable}')
+
+
 def model(leg: str, override: str | None = None) -> str:
     path = setting_path('models.env')
     try:

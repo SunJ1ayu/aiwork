@@ -229,18 +229,28 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   argvhas "$d/a1.json" "--setting-sources project"; check "agent: user settings not loaded" $?
   argvhas "$d/a1.json" "--max-turns";       check "agent: turn cap present" $?
 
-  # auth-file fallback
-  printf '{"key":"%s"}' "$FIXTURE_DS_AUTH_KEY" > "$d/auth.json"
-  env -u DEEPSEEK_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" DEEPSEEK_AUTH_FILE="$d/auth.json" \
+  # settings-file fallback: the key comes from deepseek.env in a temp settings dir.
+  cfg="$d/settings"
+  mkdir -p "$cfg"
+  cp "$AIWORK_CONFIG_DIR/models.env" "$cfg/models.env"
+  printf 'export DEEPSEEK_API_KEY="%s"\n' "$FIXTURE_DS_AUTH_KEY" > "$cfg/deepseek.env"
+  env -u DEEPSEEK_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" AIWORK_CONFIG_DIR="$cfg" \
     bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2.log" "$d/repo" >/dev/null 2>&1; rc=$?
-  check "agent auth-file fallback exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  check "agent settings-file key exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18:env-key 那条路已经换成 x-api-key,**这条 auth-file 路当时被漏掉了**
   # —— 是判据自己在这儿红了一次才发现的。所以这里不止把变量名跟着改,还补上
   # "Bearer 那格必须是空的":只改名字的话,两条路各走各的 header 又会看不出来。
   [[ "$(agentget "$d/a2.json" ANTHROPIC_AUTH_TOKEN)" == "$FIXTURE_DS_AUTH_KEY" ]]
-  check "agent: key loaded from auth file" $?
+  check "agent: key loaded from deepseek.env" $?
   [[ -z "$(agentget "$d/a2.json" ANTHROPIC_API_KEY)" ]]
-  check "agent: auth-file 这条路的 header 风格也必须对(两条路各走各的会看不出来)" $?
+  check "agent: settings-file 这条路的 header 风格也必须对(两条路各走各的会看不出来)" $?
+
+  env PATH="$b:$PATH" CAPTURE="$d/a2b.json" AIWORK_CONFIG_DIR="$cfg" \
+    DEEPSEEK_API_KEY="$FIXTURE_DS_ENV_KEY" \
+    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2b.log" "$d/repo" >/dev/null 2>&1; rc=$?
+  check "agent: env override over deepseek.env exits 0" $([[ $rc -eq 0 ]]; echo $?)
+  [[ "$(agentget "$d/a2b.json" ANTHROPIC_AUTH_TOKEN)" == "$FIXTURE_DS_ENV_KEY" ]]
+  check "agent: DEEPSEEK_API_KEY overrides deepseek.env" $?
 
   # verdict gate: no Conclusion -> non-zero, log still written
   env PATH="$b:$PATH" CAPTURE="$d/a3.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
@@ -426,8 +436,11 @@ FAKE
   chmod +x "$fake/claude"
   printf '# t\n' > "$d/t.md"
   fixture_git_repo "$d/repo"
-  printf '{"key":"%s"}\n' "$FIXTURE_CHAT_KEY" > "$d/auth.json"
-  PATH="$fake:$PATH" DEEPSEEK_AUTH_FILE="$d/auth.json" \
+  cfg="$d/settings"
+  mkdir -p "$cfg"
+  cp "$AIWORK_CONFIG_DIR/models.env" "$cfg/models.env"
+  printf 'export DEEPSEEK_API_KEY="%s"\n' "$FIXTURE_CHAT_KEY" > "$cfg/deepseek.env"
+  PATH="$fake:$PATH" AIWORK_CONFIG_DIR="$cfg" \
     "$BIN/subdeepseek-agent" review "$d/t.md" "$d/a.log" "$d/repo" >/dev/null 2>"$d/a.err"
 
   if grep -q '^{"type":' "$d/a.log" 2>/dev/null; then

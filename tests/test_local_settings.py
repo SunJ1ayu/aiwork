@@ -316,10 +316,69 @@ class SettingsTest(unittest.TestCase):
         with patch.dict(os.environ, CURSOR_MODEL='composer-2.5'):
             self.assertEqual(session.choose_leg('subcursor', review.BIN), ('cursor', 'composer-2.5'))
 
+    def test_setting_value_reads_plain_export_and_quoted_assignments(self):
+        from _aiwork_config import setting_value
+        secret = 'fixture-setting-value'
+        shapes = (
+            f'DEEPSEEK_API_KEY={secret}\n',
+            f'export DEEPSEEK_API_KEY={secret}\n',
+            f'export DEEPSEEK_API_KEY="{secret}"\n',
+            f"export TYPESAFE_API_KEY='{secret}'\n",
+        )
+        variables = ('DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY', 'TYPESAFE_API_KEY')
+        filenames = ('deepseek.env', 'deepseek.env', 'deepseek.env', 'typesafe.env')
+        for filename, variable, text in zip(filenames, variables, shapes):
+            with self.subTest(text=text):
+                (self.config / filename).write_text(text)
+                self.assertEqual(setting_value(filename, variable), secret)
+                result = self.invoke_config('value', filename, variable)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, secret + '\n')
+                self.assertNotIn(secret, result.stderr)
+
+    def test_setting_value_does_not_source_the_file(self):
+        from _aiwork_config import setting_value
+        sentinel = self.d / 'sourced'
+        (self.config / 'deepseek.env').write_text(f'DEEPSEEK_API_KEY=$(touch {sentinel})\n')
+        self.assertEqual(setting_value('deepseek.env', 'DEEPSEEK_API_KEY'), f'$(touch {sentinel})')
+        self.assertFalse(sentinel.exists())
+
+    def test_setting_value_errors_name_the_file_and_variable_without_the_value(self):
+        from _aiwork_config import ConfigError, setting_value
+        secret = 'fixture-do-not-leak'
+        path = self.config / 'deepseek.env'
+        cases = {
+            'missing-file': None,
+            'missing-line': f'OTHER={secret}\n',
+            'empty': f'export DEEPSEEK_API_KEY=\nOTHER={secret}\n',
+            'empty-quotes': f"DEEPSEEK_API_KEY=''\nOTHER={secret}\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                if path.exists():
+                    path.unlink()
+                if text is not None:
+                    path.write_text(text)
+                with self.assertRaises(ConfigError) as caught:
+                    setting_value('deepseek.env', 'DEEPSEEK_API_KEY')
+                message = str(caught.exception)
+                self.assertIn(str(path), message)
+                self.assertIn('DEEPSEEK_API_KEY', message)
+                self.assertNotIn(secret, message)
+                result = self.invoke_config('value', 'deepseek.env', 'DEEPSEEK_API_KEY')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn(str(path), result.stderr)
+                self.assertIn('DEEPSEEK_API_KEY', result.stderr)
+                self.assertNotIn(secret, result.stderr)
+
+    def test_path_names_deepseek_env(self):
+        result = self.invoke_config('path', 'deepseek.env')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(self.config / 'deepseek.env'))
+
     def test_triage_model_and_key_come_from_disposable_settings(self):
         triage = load_script('triage')
-        # Fail before load_key if an old implementation ignores the test directory.
-        self.assertEqual(triage.ENV_FILE, self.config / 'typesafe.env')
         (self.config / 'typesafe.env').write_text('export TYPESAFE_API_KEY="test-only-key"\n')
         with patch.object(triage, 'ask', return_value={'model': 'jev-fixture', 'answers': {}}) as ask, \
              patch('sys.argv', ['triage', '-', '--json']), patch('sys.stdin', io.StringIO('a bounded change')), \
