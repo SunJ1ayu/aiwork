@@ -58,6 +58,35 @@ def repository_name(value: str) -> str:
     return value
 
 
+def drop_inherited_git_env() -> None:
+    """Drop git settings inherited from the caller. This process sets its own."""
+    for key in list(os.environ):
+        if key.startswith("GIT_"):
+            os.environ.pop(key, None)
+
+
+def require_latest_aiwork_main(main_sha: str) -> None:
+    """Refuse unless the checkout containing this script is clean and at main_sha.
+
+    main_sha is the aiwork main commit already read for this run. The checkout
+    is BIN's parent. It is not the repository named by --repo, and it is not cwd.
+    """
+    sentence = "review-pr 只能从最新 main 的 aiwork 检出跑"
+    checkout = BIN.parent
+    top = _leg_session.run(["git", "-C", str(BIN), "rev-parse", "--show-toplevel"]).strip()
+    if Path(top).resolve() != checkout.resolve():
+        raise ReviewError(f"{sentence}\ngit 认出的仓库根目录不是 review-pr 所在的检出")
+    status = _leg_session.run(
+        ["git", "-C", str(BIN), "status", "--porcelain", "--untracked-files=all"])
+    if status.strip():
+        raise ReviewError(f"{sentence}\n有未提交的改动")
+    head = _leg_session.run(["git", "-C", str(BIN), "rev-parse", "HEAD"]).strip()
+    if head != main_sha:
+        raise ReviewError(
+            f"{sentence}\nHEAD 不是 aiwork 的最新 main\n"
+            f"当前提交 {head}\nmain 的提交 {main_sha}")
+
+
 def repository_from_origin() -> str:
     """owner/name from this checkout's origin. Pass --repo when that cannot be read."""
     try:
@@ -168,11 +197,21 @@ def public_github(endpoint: str) -> dict:
     return value
 
 
-def aiwork_main_rules() -> tuple[str, str]:
-    repository, path = REVIEW_RULES_SOURCE
-    commit = public_github(f"repos/{repository}/commits/main").get("sha")
+def aiwork_main_commit() -> str:
+    """The one commit this run treats as aiwork main. Rules are read at this commit."""
+    repository, _path = REVIEW_RULES_SOURCE
+    unread = "review-pr 只能从最新 main 的 aiwork 检出跑\n读不到 aiwork 的 main"
+    try:
+        commit = public_github(f"repos/{repository}/commits/main").get("sha")
+    except ReviewError as exc:
+        raise ReviewError(unread) from exc
     if not isinstance(commit, str) or not SHA.fullmatch(commit):
-        raise ReviewError("aiwork main review rules commit is missing or invalid")
+        raise ReviewError(unread)
+    return commit
+
+
+def aiwork_main_rules(commit: str) -> tuple[str, str]:
+    repository, path = REVIEW_RULES_SOURCE
     document = public_github(f"repos/{repository}/contents/{path}?ref={commit}")
     content = document.get("content")
     if (document.get("type") != "file" or document.get("encoding") != "base64"
@@ -317,7 +356,10 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     try:
+        drop_inherited_git_env()
         data_dir()
+        main_sha = aiwork_main_commit()
+        require_latest_aiwork_main(main_sha)
         if args.pr < 1:
             raise ReviewError("PR number must be positive")
         family, frozen_model = _leg_session.choose_leg(args.leg, BIN)
@@ -332,7 +374,7 @@ def main() -> int:
             try:
                 repo, merge_base, files, diff, changes = _leg_session.snapshot(
                     token, pr, directory, repository=repository)
-                rules_sha, review_rules = aiwork_main_rules()
+                rules_sha, review_rules = aiwork_main_rules(main_sha)
                 risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
                 task = directory / "task.md"
 
