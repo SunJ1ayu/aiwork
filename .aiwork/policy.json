@@ -1,7 +1,7 @@
 {
   "_说明": [
     "aiwork 自己的关卡策略。关卡代码在 gate/，本文件在调用方检出里，由 workflow 用 AIWORK_POLICY_PATH 传入。",
-    "check_name 为 aiwork-gate：真拦截。必过检查在 main 的规则集里设，见 gate/README.md「从 shadow 转为真拦截」。",
+    "check_name 怎么从 shadow 转为真拦截，见 gate/README.md「从 shadow 转为真拦截」。",
     "builders 只登记单一模型账号。多家模型共用的 aiwork-build[bot] 不登记，作者记成未知，要业主批准。",
     "判卷面和 high 怎么从仓库推出来，见 tests/test_aiwork_gate_workflow.mjs。"
   ],

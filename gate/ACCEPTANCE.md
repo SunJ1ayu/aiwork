@@ -27,14 +27,12 @@ aiwork 的共用关卡（gate/）在只报不拦期间的验收结果。判据�
 
 ## 影子样本
 
-转真拦截前，关卡在下面这些真实 PR 上的结论和业主的判断一致。从 #27 起算：#26 改了关卡的判定规则，之前的不算。没有见过过时的「放行」。
+验收(S0–S14)之后，下面 5 个真实 PR 上，关卡的结论都和业主的判断一致，没见过过时的放行。#38、#40 前几轮关卡没有放行，业主也没有批准。
 
-| PR | 关卡在合并时的结论 | 业主的判断 |
-|---|---|---|
-| #27 | 放行 | 批准并合并 |
-| #28 | 放行 | 批准并合并 |
-| #29 | 放行 | 批准并合并 |
-| #30 | 放行 | 批准，贴 `aiwork:merge` 由关卡合并 |
-| #31 | 放行 | 批准，贴 `aiwork:merge` 由关卡合并（批准随合并 main 挪到新提交，见「发现」） |
-| #32 | 放行 | 批准，贴 `aiwork:merge` 由关卡合并 |
-| #33 | 放行 | 批准，贴 `aiwork:merge` 由关卡合并 |
+| PR | 合并时的 head | 关卡结论 | 业主的判断 | 检查 |
+|---|---|---|---|---|
+| #35 | 405e472 | 放行 | 批准，贴 aiwork:merge,关卡合并 | https://github.com/SunJ1ayu/aiwork/runs/115088294097 |
+| #36 | 4c681ff | 放行 | 批准，贴 aiwork:merge,关卡合并(落后于 main 后合并了 main、重审一次，批准随之挪到新提交) | https://github.com/SunJ1ayu/aiwork/runs/115092332435 |
+| #37 | 35c15cc | 放行 | 批准，贴 aiwork:merge,关卡合并 | https://github.com/SunJ1ayu/aiwork/runs/115111857228 |
+| #38 | 77756d6 | 放行(第 3 轮) | 批准，贴 aiwork:merge,关卡合并 | https://github.com/SunJ1ayu/aiwork/runs/115318171822 |
+| #40 | 19cdacc | 放行(第 2 轮) | 批准，贴 aiwork:merge,关卡合并 | https://github.com/SunJ1ayu/aiwork/runs/115622166690 |
