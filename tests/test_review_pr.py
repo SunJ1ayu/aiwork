@@ -195,6 +195,7 @@ class ReviewPrTests(unittest.TestCase):
                        + (["--dry-run"] if dry_run else [])), \
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
                     patch.object(self.review, "BIN", bin_dir), \
+                    patch.object(self.review, "require_latest_aiwork_main"), \
                     patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data"), AIWORK_CONFIG_DIR=str(config)), \
                     patch.object(self.session, "run", side_effect=fake_run), \
                     patch("urllib.request.urlopen", side_effect=fake_public_read), \
@@ -687,6 +688,7 @@ grep -q -F -- "$3" "$clone/$4"
 
     def test_missing_origin_stops_before_credentials(self):
         with patch("sys.argv", ["review-pr", "12"]), \
+                patch.object(self.review, "require_latest_aiwork_main"), \
                 patch.object(self.session, "run", side_effect=self.review.ReviewError("git failed")) as run, \
                 redirect_stderr(io.StringIO()) as err:
             rc = self.review.main()
@@ -931,6 +933,7 @@ grep -q -F -- "$3" "$clone/$4"
             with patch('sys.argv', ['review-pr', '12', '--repo', 'SunJ1ayu/aiwork', '--leg', 'subcursor']), \
                     patch.dict(os.environ, env), \
                     patch.object(self.review, 'BIN', bin_dir), \
+                    patch.object(self.review, 'require_latest_aiwork_main'), \
                     patch.object(self.session, 'run', side_effect=fake_run), \
                     patch.object(self.review, 'pr_state', return_value=pr), \
                     patch.object(self.session, 'snapshot', side_effect=fail_in_collect), \
@@ -983,6 +986,7 @@ grep -q -F -- "$3" "$clone/$4"
             with patch('sys.argv', ['review-pr', '12', '--repo', 'SunJ1ayu/aiwork', '--leg', 'subcursor']), \
                     patch.dict(os.environ, env), \
                     patch.object(self.review, 'BIN', bin_dir), \
+                    patch.object(self.review, 'require_latest_aiwork_main'), \
                     patch.object(self.session, 'run', side_effect=fake_run), \
                     patch.object(self.review, 'pr_state', return_value=pr), \
                     patch.object(self.session, 'snapshot', side_effect=fail_in_collect), \
@@ -994,6 +998,166 @@ grep -q -F -- "$3" "$clone/$4"
         self.assertNotIn('Traceback', text)
         self.assertIn('git failed', text)
         self.assertIn('失败记录没能写进数据目录', text)
+
+    def test_review_pr_refuses_unless_its_own_checkout_is_clean_latest_main(self):
+        # The tool checkout is the tree that contains this review-pr file.
+        # The reviewed repository is a different checkout, and it is the cwd.
+        for case in ("dirty", "behind", "outside", "current"):
+            with self.subTest(case=case):
+                rc, calls, stdout, stderr, tool_head, main_sha, reviewed_sha = self.run_from_tool_checkout(case)
+                if case == "current":
+                    self.assertEqual(rc, 0, stderr)
+                    self.assertNotIn("只能从最新 main 的 aiwork 检出跑", stderr)
+                    self.assertGreaterEqual(calls["leg_runs"], 1)
+                    self.assertEqual(calls["github_writes"], ["repos/Example/other/pulls/12/reviews"])
+                    self.assertEqual(calls["head_after"], tool_head)
+                else:
+                    self.assertNotEqual(rc, 0)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("review-pr 只能从最新 main 的 aiwork 检出跑", stderr)
+                    self.assertIn(f"当前提交 {tool_head}", stderr)
+                    self.assertIn(f"main 的提交 {main_sha}", stderr)
+                    self.assertNotIn(reviewed_sha, stderr)
+                    self.assertEqual(calls["leg_runs"], 0)
+                    self.assertEqual(calls["github_writes"], [])
+                    self.assertEqual(calls["head_after"], tool_head)
+                    self.assertTrue(calls["tree_unchanged"])
+
+    def run_from_tool_checkout(self, case):
+        calls = {"github_writes": [], "leg_runs": 0}
+        real_subprocess_run = subprocess.run
+        real_run = self.session.run
+
+        def git(repo, *args, check=True):
+            return real_subprocess_run(
+                ["git", "-C", str(repo), "-c", "user.email=test@example.com", "-c", "user.name=Test", *args],
+                check=check, capture_output=True, text=True)
+
+        def fake_public_read(request, **kwargs):
+            url = request.full_url
+            source_sha = "d" * 40
+            if url == "https://api.github.com/repos/SunJ1ayu/aiwork/commits/main":
+                value = {"sha": source_sha}
+            elif url == f"https://api.github.com/repos/SunJ1ayu/aiwork/contents/REVIEW-RULES.md?ref={source_sha}":
+                raw = b"rules\n"
+                value = {"type": "file", "encoding": "base64", "size": len(raw),
+                         "content": base64.encodebytes(raw).decode("ascii")}
+            else:
+                self.fail(f"unexpected public source read: {url}")
+            return io.BytesIO(json.dumps(value).encode("utf-8"))
+
+        def fake_github(token, endpoint, payload=None):
+            if payload is not None:
+                calls["github_writes"].append(endpoint)
+            return {"html_url": "https://github.com/Example/other/pull/12#pullrequestreview-1"}
+
+        def fake_run(command, **kwargs):
+            if command[0].endswith("gh-app-token"):
+                return FAKE_TOKEN
+            if command[0] == "git":
+                return real_run(command, **kwargs)
+            return ""
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = root / "tool"
+            tool.mkdir()
+            shutil.copytree(ROOT / "bin", tool / "bin", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            shutil.copy2(ROOT / ".gitignore", tool / ".gitignore")
+            git(tool, "init", "-q", "-b", "main")
+            git(tool, "add", "bin", ".gitignore")
+            git(tool, "commit", "-qm", "tool")
+            bare = root / "origin.git"
+            real_subprocess_run(["git", "init", "--bare", "-q", str(bare)], check=True)
+            git(tool, "remote", "add", "origin", str(bare))
+            git(tool, "push", "-q", "origin", "main")
+            if case == "behind":
+                git(tool, "commit", "--allow-empty", "-qm", "later")
+                git(tool, "push", "-q", "origin", "main")
+                git(tool, "reset", "--hard", "HEAD~1")
+            elif case == "outside":
+                git(tool, "checkout", "-q", "-b", "side")
+                git(tool, "commit", "--allow-empty", "-qm", "side")
+            elif case == "dirty":
+                (tool / "bin" / "subcodex").write_text(
+                    (tool / "bin" / "subcodex").read_text(encoding="utf-8") + "\n# dirty\n",
+                    encoding="utf-8")
+            tool_head = git(tool, "rev-parse", "HEAD").stdout.strip()
+            main_sha = git(bare, "rev-parse", "main").stdout.strip()
+            marker = (tool / "bin" / "subcodex").read_bytes()
+            reviewed = root / "reviewed"
+            reviewed.mkdir()
+            git(reviewed, "init", "-q", "-b", "main")
+            (reviewed / "other.txt").write_text("other\n", encoding="utf-8")
+            git(reviewed, "add", "other.txt")
+            git(reviewed, "commit", "-qm", "reviewed")
+            reviewed_sha = git(reviewed, "rev-parse", "HEAD").stdout.strip()
+            self.assertNotEqual(reviewed_sha, tool_head)
+            project = root / "project"
+            project.mkdir()
+            git(project, "init", "-q")
+            (project / ".aiwork").mkdir()
+            (project / ".aiwork" / "accepted-risks.md").write_text("risks\n", encoding="utf-8")
+            (project / "file").write_text("x\n", encoding="utf-8")
+            git(project, "add", ".")
+            git(project, "commit", "-qm", "project")
+            git(project, "update-ref", "refs/aiwork/main", "HEAD")
+            config = root / "settings"
+            write_settings(config)
+            data = root / "data"
+            data.mkdir()
+            loader = importlib.machinery.SourceFileLoader(
+                "review_pr_tool_checkout", str(tool / "bin" / "review-pr"))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            tool_review = importlib.util.module_from_spec(spec)
+            loader.exec_module(tool_review)
+            bin_dir = tool / "bin"
+
+            def fake_leg(command, **kwargs):
+                if Path(command[0]).name != "subcursor":
+                    return real_subprocess_run(command, **kwargs)
+                calls["leg_runs"] += 1
+                Path(command[3]).write_text("# fake review log\n\nConclusion: PASS\n", encoding="utf-8")
+                Path(kwargs["env"]["AIWORK_REVIEW_FACTS_PATH"]).write_text('{"fixture":true}\n', encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            result = {
+                "process": {"state": "exited", "exit_code": 0},
+                "verdict": "PASS", "failure_kind": "none", "degraded": False,
+                "evidence": {"completeness": "complete"},
+                "view": {"delivery_state": "complete"},
+                "model": {"requested": "gpt-5.6", "invoked": "gpt-5.6", "reported": None},
+            }
+            pr = {"state": "open", "head": {"sha": "a" * 40, "ref": "f"},
+                  "base": {"sha": "b" * 40, "ref": "main"}}
+            os.chdir(reviewed)
+            try:
+                with patch("sys.argv", ["review-pr", "12", "--repo", "Example/other", "--leg", "subcursor"]), \
+                        patch.dict(os.environ, {"CURSOR_MODEL": "gpt-5.6", "AIWORK_DATA_DIR": str(data),
+                                                "AIWORK_CONFIG_DIR": str(config)}), \
+                        patch.object(self.session, "run", side_effect=fake_run), \
+                        patch("urllib.request.urlopen", side_effect=fake_public_read), \
+                        patch.object(tool_review, "github", side_effect=fake_github), \
+                        patch.object(tool_review, "pr_state", return_value=pr), \
+                        patch.object(self.session, "snapshot", return_value=(
+                            project, "c" * 40, ["src/a.py"], "diff", [])), \
+                        patch.object(self.session, "load_result", return_value=result), \
+                        patch.object(self.session, "review_report", return_value="Finding\nConclusion: PASS"), \
+                        patch.object(tool_review.subprocess, "run", side_effect=fake_leg), \
+                        redirect_stdout(stdout), redirect_stderr(stderr):
+                    rc = tool_review.main()
+            finally:
+                os.chdir(previous)
+                sys.path[:] = [item for item in sys.path if not str(item).startswith(str(root))]
+                for name, module in list(sys.modules.items()):
+                    file = getattr(module, "__file__", None)
+                    if file and str(file).startswith(str(root)):
+                        del sys.modules[name]
+            calls["head_after"] = git(tool, "rev-parse", "HEAD").stdout.strip()
+            calls["tree_unchanged"] = (tool / "bin" / "subcodex").read_bytes() == marker
+        return rc, calls, stdout.getvalue(), stderr.getvalue(), tool_head, main_sha, reviewed_sha
 
 
 if __name__ == "__main__":

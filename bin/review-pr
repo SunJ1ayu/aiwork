@@ -58,6 +58,40 @@ def repository_name(value: str) -> str:
     return value
 
 
+def require_latest_aiwork_main() -> None:
+    """Refuse unless this file's aiwork checkout is clean and its just-fetched main.
+
+    The checkout is the git tree that contains this script. It is not the
+    repository named by --repo, and it is not the caller's cwd.
+    """
+    script_dir = Path(__file__).resolve().parent
+    sentence = "review-pr 只能从最新 main 的 aiwork 检出跑"
+
+    def git_out(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(script_dir), *args],
+            capture_output=True, text=True, check=False,
+            env=dict(os.environ, GIT_TERMINAL_PROMPT="0"),
+        )
+
+    def refuse(head: str, main: str) -> None:
+        raise ReviewError(f"{sentence}\n当前提交 {head}\nmain 的提交 {main}")
+
+    top = git_out(["rev-parse", "--show-toplevel"])
+    head_proc = git_out(["rev-parse", "HEAD"])
+    head = head_proc.stdout.strip()
+    if top.returncode != 0 or head_proc.returncode != 0 or not SHA.fullmatch(head):
+        refuse("未知", "未知")
+    fetched = git_out(["fetch", "origin", "main"])
+    main_proc = git_out(["rev-parse", "FETCH_HEAD"])
+    main = main_proc.stdout.strip()
+    if fetched.returncode != 0 or main_proc.returncode != 0 or not SHA.fullmatch(main):
+        refuse(head, "未知")
+    status = git_out(["status", "--porcelain"])
+    if status.returncode != 0 or status.stdout.strip() or head != main:
+        refuse(head, main)
+
+
 def repository_from_origin() -> str:
     """owner/name from this checkout's origin. Pass --repo when that cannot be read."""
     try:
@@ -318,6 +352,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         data_dir()
+        require_latest_aiwork_main()
         if args.pr < 1:
             raise ReviewError("PR number must be positive")
         family, frozen_model = _leg_session.choose_leg(args.leg, BIN)

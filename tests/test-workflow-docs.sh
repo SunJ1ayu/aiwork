@@ -120,6 +120,9 @@ grep -q '另一家族' "$SOURCE/CLAUDE.md" \
   && grep -q 'review-pr.*沙箱外' "$SOURCE/CLAUDE.md" \
   && grep -q 'review-pr' "$SOURCE/CLAUDE.md"
 check "W4: 正式评审在 PR 上使用沙箱外 review-pr" $?
+grep -q 'review-pr` 从共享检出跑，跑之前先把共享检出更新到最新 main' "$SOURCE/CLAUDE.md" \
+  && grep -q '合并后用 `sync-workflow-docs` 同步部署出去的工作流文档' "$SOURCE/CLAUDE.md"
+check "W4: review-pr 从更新过的共享检出跑，合并后同步工作流文档" $?
 grep -q '不改考卷让自己及格' "$SOURCE/CLAUDE.md" \
   && grep -q '不信执行腿的自述' "$SOURCE/CLAUDE.md"
 check "W4: 保留判据核实与收货方法" $?
