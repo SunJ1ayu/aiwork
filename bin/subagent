@@ -110,7 +110,9 @@ fi
 command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
 
 if [[ -z "$API_KEY" ]]; then
-  API_KEY="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" "$SETTINGS_VAR")" || exit $?
+  if ! API_KEY="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" "$SETTINGS_VAR")"; then
+    die "auth: 凭证读不到"
+  fi
 fi
 [[ -n "$API_KEY" ]] || die "empty ${PREFIX}_API_KEY"
 # 供应商表必须填 AUTH_ENV(认证 header 风格)。**这条守卫非有不可**:
