@@ -17,6 +17,7 @@ SUITES=(
   "machine-bits|python3|$ROOT/tests/test_machine_bits.py"
   "canonicalize-missing|python3|$ROOT/tests/test_canonicalize_missing.py"
   "local-data|python3|$ROOT/tests/test_local_data.py"
+  "data-dir-mention|python3|$ROOT/tests/test_data_dir_mention.py"
   "local-settings|python3|$ROOT/tests/test_local_settings.py"
   "review-pr|python3|$ROOT/tests/test_review_pr.py"
   "explore|python3|$ROOT/tests/test_explore.py"

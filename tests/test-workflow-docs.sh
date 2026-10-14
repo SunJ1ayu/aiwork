@@ -128,8 +128,8 @@ grep -q -- '--receive' "$SOURCE/skills/delegate/SKILL.md" \
   && ! grep -q -- '--track' "$SOURCE/skills/delegate/SKILL.md"
 check "W4: 委托保留隔离收货，不再挂 track" $?
 grep -q '~/.config/aiwork/' "$SOURCE/CLAUDE.md" \
-  && grep -q '~/.local/share/aiwork/' "$SOURCE/CLAUDE.md"
-check "W4: 设置与运行数据的本机目录明确" $?
+  && grep -q 'README「本机设置」' "$SOURCE/CLAUDE.md"
+check "W4: 设置目录写明，运行数据指向 README「本机设置」" $?
 grep -q 'aiwork-config data-path worktrees' "$SOURCE/CLAUDE.md" \
   && grep -q '不在共享检出' "$SOURCE/CLAUDE.md" \
   && grep -q 'PR 合并后删掉这个工作树' "$SOURCE/CLAUDE.md"

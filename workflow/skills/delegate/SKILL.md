@@ -84,6 +84,6 @@ redcheck --base BASE --impl IMPLEMENTATION --oracle 'TEST_COMMAND' --must-fail M
 
 `redcheck` 暂退实现到基线、运行检查并恢复，帮助确认判据能抓住目标行为。
 先看失败是不是目标问题，再读恢复状态；测试本身可能错，需要用具体证据核实。
-任务、自审、原始日志及回执留在 `~/.local/share/aiwork/`；配置与模型选择在 `~/.config/aiwork/`。
+任务、自审、原始日志及回执留在 <数据目录>（见 README「本机设置」）；配置与模型选择在 `~/.config/aiwork/`。
 
 收货后实现仍通过机器人 PR 提交，正式评审使用沙箱外的 `review-pr`。

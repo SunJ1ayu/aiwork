@@ -456,7 +456,7 @@ _path_inside_forbidden() {
 if _path_inside_forbidden "$ATTACK"; then
   die "攻题记录在${_legwhat}:$ATTACK
   执行腿**读得到**它(实测:写沙箱管不了读)= 把考卷的洞递给考生。
-  挪到仓外,例如 $HOME/.local/share/aiwork/attack-logs/<name>.md;派 aiwork 自己的活时,'仓外'就是 $_rp 之外。"
+  挪到仓外,例如 <数据目录>/attack-logs/<name>.md(<数据目录> 用 aiwork-config data-path 查);派 aiwork 自己的活时,'仓外'就是 $_rp 之外。"
 fi
 
 # ⑤b 直通参数排在工具自己给的 `-C <树>` `-s workspace-write` **后面**,last-wins ⇒
