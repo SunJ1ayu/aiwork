@@ -24,3 +24,15 @@ aiwork 的共用关卡（gate/）在只报不拦期间的验收结果。判据�
 - PR #31：业主 07:27:54（UTC）在 `83dcdb2` 上批准；07:41:27 推了合并 main 的 `33eae5b` 之后，GitHub 返回的这条批准的 `commit_id` 变成了 `33eae5b`。关卡按 `commit_id` 认定「当前 head 上的批准」，所以把它算成了新提交上的批准。评审机器人的 PASS 没有被挪。
 - S14（PR #33）：业主 08:27:54（UTC）在 `a00c524` 上批准；08:32:37 推了改内容的 `7c10a55` 之后，这条批准仍挂在 `a00c524` 上，关卡判「G7 需要业主在当前 head 上批准：还没有」：[检查](https://github.com/SunJ1ayu/aiwork/runs/114728805386)。改了内容的推送不会挪批准。
 - 业主接受上面第一条，见 `.aiwork/accepted-risks.md` 第 2 条。
+
+## 影子样本
+
+验收(S0–S14)之后，下面 5 个真实 PR 上，关卡的结论都和业主的判断一致，没见过过时的放行。#38、#40 前几轮关卡没有放行，业主也没有批准。
+
+| PR | 合并时的 head | 关卡结论 | 业主的判断 | 检查 |
+|---|---|---|---|---|
+| #35 | 405e472 | 放行 | 批准，贴 aiwork:merge,关卡合并 | https://github.com/SunJ1ayu/aiwork/runs/115088294097 |
+| #36 | 4c681ff | 放行 | 批准，贴 aiwork:merge,关卡合并(落后于 main 后合并了 main、重审一次，批准随之挪到新提交) | https://github.com/SunJ1ayu/aiwork/runs/115092332435 |
+| #37 | 35c15cc | 放行 | 批准，贴 aiwork:merge,关卡合并 | https://github.com/SunJ1ayu/aiwork/runs/115111857228 |
+| #38 | 77756d6 | 放行(第 3 轮) | 批准，贴 aiwork:merge,关卡合并 | https://github.com/SunJ1ayu/aiwork/runs/115318171822 |
+| #40 | 19cdacc | 放行(第 2 轮) | 批准，贴 aiwork:merge,关卡合并 | https://github.com/SunJ1ayu/aiwork/runs/115622166690 |
