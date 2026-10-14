@@ -26,7 +26,7 @@ explore BRIEF --repo DIR --leg subdeepseek-agent --leg submimo
 
 失败时先看命令打出的那一行原因：`timeout` 是到点，`auth` 是凭证，`quota` / `rate_limit` 是额度或窗口，`runtime` 后面带该腿 stderr 的末尾。没有报告文件时，原因是腿没有交出最后一条消息。只有空白也算没交出。
 
-- `subdeepseek-agent explore TASK LOG REPO` — Claude Code headless。凭证 `~/.config/deepseek/auth.json`。超时 `DEEPSEEK_TIMEOUT`。
+- `subdeepseek-agent explore TASK LOG REPO` — Claude Code headless。凭证 `~/.config/aiwork/deepseek.env` 的 `DEEPSEEK_API_KEY`。超时 `DEEPSEEK_TIMEOUT`。
 - `subkimi explore TASK LOG REPO` — `kimi -p`。凭证 `<数据目录>/kimi-review-home/credentials/kimi-code.json`（<数据目录> 见 README「本机设置」）。超时 `KIMI_TIMEOUT`。
 - `submimo explore TASK LOG REPO` — `mimo run`。凭证 `~/.local/share/mimocode/auth.json`。超时 `MIMO_CLI_TIMEOUT`。
 - `subcursor explore TASK LOG REPO` — `cursor-agent`。凭证 `~/.config/cursor/auth.json`。超时 `CURSOR_TIMEOUT`。

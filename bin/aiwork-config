@@ -3,7 +3,9 @@
 import argparse
 import sys
 
-from _aiwork_config import ConfigError, app_key, apps_dir, data_path, model, model_family, setting_path
+from _aiwork_config import (
+    ConfigError, app_key, apps_dir, data_path, model, model_family, setting_path, setting_value,
+)
 
 
 def main():
@@ -12,8 +14,12 @@ def main():
     models = commands.add_parser('model')
     models.add_argument('leg')
     models.add_argument('override', nargs='?')
+    names = ('models.env', 'typesafe.env', 'deepseek.env', 'apps', 'private-terms')
     paths = commands.add_parser('path')
-    paths.add_argument('name', choices=('models.env', 'typesafe.env', 'apps', 'private-terms'))
+    paths.add_argument('name', choices=names)
+    values = commands.add_parser('value')
+    values.add_argument('name', choices=names)
+    values.add_argument('variable')
     data = commands.add_parser('data-path')
     data.add_argument('name', nargs='?', default='')
     keys = commands.add_parser('app-key')
@@ -31,6 +37,8 @@ def main():
             value = app_key(args.configured)
         elif args.command == 'family':
             value = model_family(args.adapter, args.model)
+        elif args.command == 'value':
+            value = setting_value(args.name, args.variable)
         else:
             value = apps_dir() if args.name == 'apps' else setting_path(args.name)
     except ConfigError as exc:

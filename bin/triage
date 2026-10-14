@@ -29,13 +29,12 @@ key 放 ~/.config/aiwork/typesafe.env(0600,`export TYPESAFE_API_KEY=...`)。
 模型放同目录的 models.env;AIWORK_CONFIG_DIR 可覆盖本机设置目录。
 问题措辞和阈值全在 triage/questions.json（相对工具仓库根目录） —— 改那里,别改这里。
 """
-import json, os, re, sys, urllib.error, urllib.request
+import json, os, sys, urllib.error, urllib.request
 from pathlib import Path
 
-from _aiwork_config import ConfigError, model as configured_model, setting_path
+from _aiwork_config import ConfigError, model as configured_model, setting_value
 
 QUESTIONS_FILE = Path(__file__).resolve().parent.parent / 'triage/questions.json'
-ENV_FILE = setting_path('typesafe.env')
 API = "https://api.typesafe.ai/v1/systemone"
 DISCLAIMER = "⚠️  以上是建议不是裁决,而且它只看见你喂的这段话、看不见仓库。拍板的是主 agent。"
 
@@ -54,13 +53,10 @@ def refuse_if_judging():
 
 
 def load_key():
-    if not ENV_FILE.exists():
-        die(f"没有 {ENV_FILE};里面要有一行 export TYPESAFE_API_KEY=...")
-    m = re.search(r"TYPESAFE_API_KEY=['\"]?([^'\"\n]+)", ENV_FILE.read_text())
-    key = (m.group(1).strip() if m else "")
-    if not key:
-        die(f"{ENV_FILE} 里没读出 TYPESAFE_API_KEY")
-    return key
+    try:
+        return setting_value('typesafe.env', 'TYPESAFE_API_KEY')
+    except ConfigError as exc:
+        die(str(exc))
 
 
 def read_state(args):

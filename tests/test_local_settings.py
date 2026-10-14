@@ -316,10 +316,161 @@ class SettingsTest(unittest.TestCase):
         with patch.dict(os.environ, CURSOR_MODEL='composer-2.5'):
             self.assertEqual(session.choose_leg('subcursor', review.BIN), ('cursor', 'composer-2.5'))
 
+    def test_setting_value_reads_plain_export_and_quoted_assignments(self):
+        from _aiwork_config import setting_value
+        secret = 'fixture-setting-value'
+        shapes = (
+            f'DEEPSEEK_API_KEY={secret}\n',
+            f'export DEEPSEEK_API_KEY={secret}\n',
+            f'export DEEPSEEK_API_KEY="{secret}"\n',
+            f"export TYPESAFE_API_KEY='{secret}'\n",
+        )
+        variables = ('DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY', 'TYPESAFE_API_KEY')
+        filenames = ('deepseek.env', 'deepseek.env', 'deepseek.env', 'typesafe.env')
+        for filename, variable, text in zip(filenames, variables, shapes):
+            with self.subTest(text=text):
+                (self.config / filename).write_text(text)
+                self.assertEqual(setting_value(filename, variable), secret)
+                result = self.invoke_config('value', filename, variable)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, secret + '\n')
+                self.assertNotIn(secret, result.stderr)
+
+    def test_setting_value_does_not_source_the_file(self):
+        from _aiwork_config import ConfigError, setting_value
+        sentinel = self.d / 'sourced'
+        path = self.config / 'deepseek.env'
+        path.write_text(f'DEEPSEEK_API_KEY=$(touch {sentinel})\n')
+        with self.assertRaises(ConfigError) as caught:
+            setting_value('deepseek.env', 'DEEPSEEK_API_KEY')
+        self.assertIn(f'{path}:1', str(caught.exception))
+        self.assertNotIn(str(sentinel), str(caught.exception))
+        self.assertFalse(sentinel.exists())
+
+    def test_setting_value_errors_name_the_file_and_variable_without_the_value(self):
+        from _aiwork_config import ConfigError, setting_value
+        secret = 'fixture-do-not-leak'
+        path = self.config / 'deepseek.env'
+        cases = {
+            'missing-file': None,
+            'missing-line': f'OTHER={secret}\n',
+            'empty': f'export DEEPSEEK_API_KEY=\nOTHER={secret}\n',
+            'empty-quotes': f"DEEPSEEK_API_KEY=''\nOTHER={secret}\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                if path.exists():
+                    path.unlink()
+                if text is not None:
+                    path.write_text(text)
+                with self.assertRaises(ConfigError) as caught:
+                    setting_value('deepseek.env', 'DEEPSEEK_API_KEY')
+                message = str(caught.exception)
+                self.assertIn(str(path), message)
+                self.assertIn('DEEPSEEK_API_KEY', message)
+                self.assertNotIn(secret, message)
+                result = self.invoke_config('value', 'deepseek.env', 'DEEPSEEK_API_KEY')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn(str(path), result.stderr)
+                self.assertIn('DEEPSEEK_API_KEY', result.stderr)
+                self.assertNotIn(secret, result.stderr)
+
+    def test_inexact_setting_lines_name_the_path_and_line_without_the_value(self):
+        from _aiwork_config import ConfigError, model, setting_value
+        secret = 'fixture-exact-secret'
+        path = self.config / 'typesafe.env'
+        cases = {
+            'trailing-comment': (f'export TYPESAFE_API_KEY="{secret}" # note\n', 1),
+            'whitespace': (f'TYPESAFE_API_KEY={secret} tail\n', 1),
+            'duplicate': (f'TYPESAFE_API_KEY={secret}\nTYPESAFE_API_KEY=other-exact\n', 2),
+            'empty': ('TYPESAFE_API_KEY=\n', 1),
+            'empty-then-value': (f'TYPESAFE_API_KEY=\nTYPESAFE_API_KEY={secret}\n', 1),
+        }
+        for name, (text, line) in cases.items():
+            with self.subTest(case=name):
+                path.write_text(text)
+                with self.assertRaises(ConfigError) as caught:
+                    setting_value('typesafe.env', 'TYPESAFE_API_KEY')
+                message = str(caught.exception)
+                self.assertIn(f'{path}:{line}', message)
+                self.assertNotIn(secret, message)
+                self.assertNotIn('other-exact', message)
+                result = self.invoke_config('value', 'typesafe.env', 'TYPESAFE_API_KEY')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn(f'{path}:{line}', result.stderr)
+                self.assertNotIn(secret, result.stderr)
+        models = self.config / 'models.env'
+        models.write_text(f'codex="{secret}" # note\n')
+        with self.assertRaises(ConfigError) as caught:
+            model('codex')
+        self.assertIn(f'{models}:1', str(caught.exception))
+        self.assertNotIn(secret, str(caught.exception))
+
+    def test_setting_file_that_is_not_utf8_names_the_path_and_line(self):
+        from _aiwork_config import ConfigError, setting_value
+        secret = 'fixture-exact-secret'
+        path = self.config / 'deepseek.env'
+        path.write_bytes(f'DEEPSEEK_API_KEY={secret}\n'.encode('utf-8') + bytes((0xff,)))
+        with self.assertRaises(ConfigError) as caught:
+            setting_value('deepseek.env', 'DEEPSEEK_API_KEY')
+        message = str(caught.exception)
+        self.assertIn(f'{path}:2', message)
+        self.assertNotIn(secret, message)
+        result = self.invoke_config('value', 'deepseek.env', 'DEEPSEEK_API_KEY')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertIn(f'{path}:2', result.stderr)
+        self.assertNotIn(secret, result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+
+    def test_value_only_accepts_path_names(self):
+        result = self.invoke_config('value', 'other.env', 'DEEPSEEK_API_KEY')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('invalid choice', result.stderr)
+
+    def test_unreadable_deepseek_credential_is_classified_as_auth(self):
+        repo, task = self.repo_fixture()
+        fake = self.d / 'fake-bin'
+        fake.mkdir()
+        claude = fake / 'claude'
+        claude.write_text('#!/bin/sh\nexit 1\n')
+        claude.chmod(0o755)
+        env = dict(self.env, PATH=str(fake) + os.pathsep + self.env['PATH'])
+        env.pop('DEEPSEEK_API_KEY', None)
+        log = self.d / 'deepseek.log'
+        result = subprocess.run(
+            [str(ROOT / 'bin' / 'subdeepseek-agent'), 'review', str(task), str(log), str(repo)],
+            env=env, capture_output=True, text=True, timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('aiwork-config:', result.stderr)
+        self.assertIn(str(self.config / 'deepseek.env'), result.stderr)
+        self.assertRegex(result.stderr, r'\bauth\b')
+        self.assertIn('凭证读不到', result.stderr)
+        diagnostic = self.d / 'deepseek.err'
+        diagnostic.write_text(result.stderr)
+        evidence = self.d / 'deepseek-evidence.log'
+        evidence.write_text('partial output\n')
+        emitted = self.d / 'deepseek.result.json'
+        classified = subprocess.run(
+            [sys.executable, str(ROOT / 'bin' / '_review_result.py'), 'emit',
+             '--result', str(emitted), '--run-id', 'missing-key', '--name', 'subdeepseek-agent',
+             '--family', 'deepseek', '--adapter', 'subdeepseek-agent', '--exit-code', '1',
+             '--task-sha256', 'sha256:' + '0' * 64, '--log', str(evidence),
+             '--diagnostic', str(diagnostic)],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(classified.returncode, 0, classified.stderr)
+        self.assertEqual(json.loads(emitted.read_text())['failure_kind'], 'auth')
+
+    def test_path_names_deepseek_env(self):
+        result = self.invoke_config('path', 'deepseek.env')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(self.config / 'deepseek.env'))
+
     def test_triage_model_and_key_come_from_disposable_settings(self):
         triage = load_script('triage')
-        # Fail before load_key if an old implementation ignores the test directory.
-        self.assertEqual(triage.ENV_FILE, self.config / 'typesafe.env')
         (self.config / 'typesafe.env').write_text('export TYPESAFE_API_KEY="test-only-key"\n')
         with patch.object(triage, 'ask', return_value={'model': 'jev-fixture', 'answers': {}}) as ask, \
              patch('sys.argv', ['triage', '-', '--json']), patch('sys.stdin', io.StringIO('a bounded change')), \

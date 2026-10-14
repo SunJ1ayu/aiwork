@@ -125,6 +125,8 @@ mimo                      # or: mimo providers login / list
 
 - `models.env`：Codex、Cursor、DeepSeek、Kimi、MiMo 和 triage 的模型选择，每条一行。可参考 `templates/models.env.example`。
 - `typesafe.env`：triage 使用的 `TYPESAFE_API_KEY`，保留文件权限 600。
+- `deepseek.env`：DeepSeek 使用的 `DEEPSEEK_API_KEY`，保留文件权限 600。
+- `models.env`、`typesafe.env`、`deepseek.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
 - `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。

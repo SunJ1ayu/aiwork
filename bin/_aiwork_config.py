@@ -97,23 +97,83 @@ def setting_path(name: str) -> Path:
     return config_dir() / name
 
 
+_LINE = re.compile(r'(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)\Z')
+_TOKEN = re.compile(r'''[^"'#\s]+''')
+
+
+def _exact_value(token: str) -> str | None:
+    """Return the value, '' when it is empty, or None when the token is not exact."""
+    if token == '':
+        return ''
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {'"', "'"}:
+        inner = token[1:-1]
+        if inner == '':
+            return ''
+        return inner if _TOKEN.fullmatch(inner) else None
+    return token if _TOKEN.fullmatch(token) else None
+
+
+def _assignments(filename: str) -> tuple[Path, list[tuple[int, str, str]]]:
+    """Every non-comment line is one exact assignment. Nothing is stripped or sourced."""
+    path = setting_path(filename)
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ConfigError(f'{path}: cannot read') from exc
+    try:
+        text = raw.decode('utf-8')
+    except UnicodeDecodeError as exc:
+        line = raw[:exc.start].count(b'\n') + 1
+        raise ConfigError(f'{path}:{line}: file is not UTF-8') from exc
+    rows: list[tuple[int, str, str]] = []
+    seen: dict[str, int] = {}
+    for number, raw_line in enumerate(text.splitlines(), 1):
+        line = raw_line.lstrip(' \t')
+        if not line or line.startswith('#'):
+            continue
+        match = _LINE.fullmatch(line)
+        if match is None:
+            raise ConfigError(f'{path}:{number}: invalid setting')
+        name, token = match.group(1), match.group(2)
+        value = _exact_value(token)
+        if value is None:
+            raise ConfigError(f'{path}:{number}: invalid setting')
+        if value == '':
+            raise ConfigError(f'{path}:{number}: empty {name}')
+        if name in seen:
+            raise ConfigError(f'{path}:{number}: duplicate {name}')
+        seen[name] = number
+        rows.append((number, name, value))
+    return path, rows
+
+
+def setting_value(filename: str, variable: str) -> str:
+    """Read one assignment from a settings file. Lines are data, never sourced."""
+    path = setting_path(filename)
+    try:
+        _, rows = _assignments(filename)
+    except ConfigError as exc:
+        if str(exc) == f'{path}: cannot read':
+            raise ConfigError(f'{path}: cannot read {variable}') from exc
+        raise
+    for _, name, value in rows:
+        if name == variable:
+            return value
+    raise ConfigError(f'{path}: missing {variable}')
+
+
 def model(leg: str, override: str | None = None) -> str:
     path = setting_path('models.env')
     try:
-        content = path.read_text(encoding='utf-8')
-    except OSError as exc:
-        raise ConfigError(f'{path}: cannot read model settings for leg {leg}') from exc
+        _, rows_list = _assignments('models.env')
+    except ConfigError as exc:
+        if str(exc) == f'{path}: cannot read':
+            raise ConfigError(f'{path}: cannot read model settings for leg {leg}') from exc
+        raise
     rows = {}
-    for number, line in enumerate(content.splitlines(), 1):
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        name, separator, value = line.partition('=')
-        name, value = name.strip(), value.strip()
-        if not separator or not re.fullmatch(r'[a-z][a-z0-9_]*', name):
+    for number, name, value in rows_list:
+        if not re.fullmatch(r'[a-z][a-z0-9_]*', name):
             raise ConfigError(f'{path}:{number}: invalid setting for leg {leg}')
-        if name in rows:
-            raise ConfigError(f'{path}:{number}: duplicate model for leg {name}')
         rows[name] = value
     if not rows.get(leg):
         raise ConfigError(f'{path}: missing model for leg {leg}')
