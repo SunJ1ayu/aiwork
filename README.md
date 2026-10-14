@@ -140,6 +140,7 @@ mimo                      # or: mimo providers login / list
 本机数据由 `bin/aiwork-config data-path [相对路径]` 统一定位，默认 `~/.local/share/aiwork/`；
 `AIWORK_DATA_DIR` 可覆盖该入口（例如离线测试使用临时目录）。供应商隔离运行时会改写
 `XDG_*`，因此 aiwork 数据入口不随供应商的 XDG 设置变化。查询路径本身不创建目录。
+数据目录要先存在，aiwork 不会自动创建它。数据目录要放在外接盘里面的一个子目录，不要直接用盘的挂载点(盘没挂上时，挂载点往往还是一个空目录，检查会误判通过)。
 
 `tasks/`、`logs/`（包括失败日志）、`worktrees/`、`mimo-home/` 以及各评审命令的运行期 home
 都使用该数据入口；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,12 +18,13 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
 from _review_result import leg_identity
-from _aiwork_config import data_path
+from _aiwork_config import ConfigError, data_dir, data_path
 from _leg_session import (
     READER_TIMEOUT_ENV,
     READER_TIMEOUT_SECONDS,
     Change,
     ReviewError,
+    SHA,
     redact,
 )
 
@@ -35,7 +35,6 @@ ORIGIN_REPO = re.compile(
     r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
     r"([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*?)(?:\.git)?/?$"
 )
-SHA = re.compile(r"^[0-9a-f]{40}$")
 CONCLUSION_REQUIREMENT = (
     "你的最后一条消息就是发布出去的评审：要写完整的报告。"
     "结尾从下面三行里选一行，独占一行写上：\n"
@@ -72,22 +71,28 @@ def repository_from_origin() -> str:
 
 
 def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = True) -> None:
-    destination = data_path("logs/review-pr-failures") / run_id
+    destination = None
     try:
-        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        destination.parent.chmod(0o700)
-        shutil.copytree(directory, destination, symlinks=True,
-                        ignore=shutil.ignore_patterns("repo", "askpass"))
-        os.utime(destination, None)
-        archives = sorted((path for path in destination.parent.iterdir()
-                           if path.is_dir() and not path.is_symlink()),
-                          key=lambda path: path.stat().st_mtime_ns, reverse=True)
-        for expired in archives[20:]:
-            shutil.rmtree(expired)
-        print(f"review-pr: failure artifacts kept in {destination}", file=sys.stderr)
-    except OSError as exc:
-        print(f"review-pr: could not preserve failure artifacts: {redact(str(exc))}", file=sys.stderr)
-        destination = None
+        root = data_path("logs/review-pr-failures")
+    except ConfigError:
+        print("review-pr: 失败记录没能写进数据目录", file=sys.stderr)
+    else:
+        destination = root / run_id
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            destination.parent.chmod(0o700)
+            shutil.copytree(directory, destination, symlinks=True,
+                            ignore=shutil.ignore_patterns("repo", "askpass"))
+            os.utime(destination, None)
+            archives = sorted((path for path in destination.parent.iterdir()
+                               if path.is_dir() and not path.is_symlink()),
+                              key=lambda path: path.stat().st_mtime_ns, reverse=True)
+            for expired in archives[20:]:
+                shutil.rmtree(expired)
+            print(f"review-pr: failure artifacts kept in {destination}", file=sys.stderr)
+        except OSError as exc:
+            print(f"review-pr: could not preserve failure artifacts: {redact(str(exc))}", file=sys.stderr)
+            destination = None
     diagnostic = directory / "leg.stderr"
     if include_diagnostic and diagnostic.is_file():
         text = diagnostic.read_text(encoding="utf-8", errors="replace")
@@ -143,11 +148,9 @@ def main_document(repo: Path, path: str, *, required: bool = True) -> str:
         return "无"
     if not entry.startswith(("100644 blob ", "100755 blob ")):
         raise ReviewError(f"main:{path} is not a regular file")
-    process = subprocess.run(["git", "-C", str(repo), "show", f"refs/aiwork/main:{path}"],
-                             capture_output=True, check=False)
-    if process.returncode:
-        raise ReviewError(f"cannot read main:{path}")
-    return process.stdout.decode("utf-8")
+    raw = _leg_session.run(
+        ["git", "-C", str(repo), "show", f"refs/aiwork/main:{path}"], binary=True)
+    return raw.decode("utf-8")
 
 
 def public_github(endpoint: str) -> dict:
@@ -186,18 +189,19 @@ def place_review_diff(repo: Path, diff: str) -> str:
     target = repo / REVIEW_DIFF_PATH
     if target.exists() or target.is_symlink():
         raise ReviewError(f"{REVIEW_DIFF_PATH} already exists in the checkout; refusing to overwrite it")
-    tracked = subprocess.run(
-        ["git", "-C", str(repo), "cat-file", "-e", f"HEAD:{REVIEW_DIFF_PATH}"],
-        capture_output=True, check=False)
-    if tracked.returncode == 0:
-        raise ReviewError(f"{REVIEW_DIFF_PATH} is already tracked; refusing to overwrite it")
     target.write_bytes(diff.encode("utf-8"))
-    ignored = subprocess.run(
-        ["git", "-C", str(repo), "check-ignore", "-q", "--", REVIEW_DIFF_PATH],
-        capture_output=True, check=False)
-    if ignored.returncode == 0:
+    try:
+        listed = _leg_session.run(
+            ["git", "-C", str(repo), "ls-files", "-z", "--others", "--exclude-standard",
+             "--", REVIEW_DIFF_PATH],
+            binary=True)
+    except ReviewError:
         target.unlink()
-        raise ReviewError(f"{REVIEW_DIFF_PATH} is ignored, so the review snapshot would not include it")
+        raise
+    if listed != REVIEW_DIFF_PATH.encode() + b"\0":
+        target.unlink()
+        raise ReviewError(
+            f"{REVIEW_DIFF_PATH} is not an untracked, unignored file, so the review snapshot would not include it")
     return REVIEW_DIFF_PATH
 
 
@@ -313,6 +317,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     try:
+        data_dir()
         if args.pr < 1:
             raise ReviewError("PR number must be positive")
         family, frozen_model = _leg_session.choose_leg(args.leg, BIN)

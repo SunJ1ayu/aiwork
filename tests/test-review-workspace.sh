@@ -242,10 +242,11 @@ test_wrapper_helper_failure() {
   echo '[RW6] no wrapper invokes a model when workspace preparation fails'
   local d b repo rc mimo_rc deepseek_rc kimi_rc
   d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
-  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
+  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
      "$BIN/subkimi" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
-review_workspace_prepare() { return 78; }
+review_workspace_reset_report() { return 0; }
+review_workspace_prepare() { printf '%s\n' "$2" >> "${PREPARE_MARK:?}"; return 78; }
 review_workspace_repo() { return 78; }
 review_workspace_cleanup() { return 0; }
 HELPER_STUB
@@ -276,30 +277,37 @@ MODEL_STUB
   chmod +x "$b/ro-repo-exec" "$b/mimo" "$b/claude" "$b/kimi" "$b/node"
   printf '# review\n' > "$d/task.md"
 
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
+  : > "$d/prepare-mark"
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" PREPARE_MARK="$d/prepare-mark" \
     MIMO_REVIEW_HOME="$d/mimo-home" \
     bash "$b/submimo" review "$d/task.md" "$d/out.log" "$repo" >/dev/null 2>&1
   mimo_rc=$?
   [[ $mimo_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: submimo helper failure is nonzero with zero model calls' $?
+  grep -qx submimo "$d/prepare-mark"
+  check 'RW6: submimo reached the stub review_workspace_prepare' $?
 
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" PREPARE_MARK="$d/prepare-mark" \
     DEEPSEEK_API_KEY=test \
     bash "$b/subdeepseek-agent" review "$d/task.md" "$d/deepseek.log" "$repo" >/dev/null 2>&1
   deepseek_rc=$?
   [[ $deepseek_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: Claude-base helper failure is nonzero with zero model calls' $?
+  grep -qx subdeepseek-agent "$d/prepare-mark"
+  check 'RW6: Claude-base reached the stub review_workspace_prepare' $?
 
   mkdir -p "$d/kimi-home/hooks" "$d/kimi-home/credentials"
   printf '[hooks]\n' > "$d/kimi-home/config.toml"
   printf 'guard\n' > "$d/kimi-home/hooks/guard.mjs"
   printf '{}\n' > "$d/kimi-home/credentials/kimi-code.json"
-  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" \
+  env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" PREPARE_MARK="$d/prepare-mark" \
     KIMI_REVIEW_HOME="$d/kimi-home" \
     bash "$b/subkimi" review "$d/task.md" "$d/kimi.log" "$repo" >/dev/null 2>&1
   kimi_rc=$?
   [[ $kimi_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: Kimi helper failure is nonzero with zero model calls' $?
+  grep -qx subkimi "$d/prepare-mark"
+  check 'RW6: Kimi reached the stub review_workspace_prepare' $?
   rm -rf "$d"
 }
 
@@ -406,6 +414,18 @@ PY
   rm -rf "$d"
 }
 
+test_write_facts_without_helper_path() {
+  echo '[RW9] write_facts returns before resolving the helper when nothing will be written'
+  local rc err
+  err="$(
+    unset BIN_DIR AIWORK_REVIEW_RESULT_BIN AIWORK_REVIEW_FACTS_PATH
+    review_workspace_write_facts requested invoked 2>&1
+  )"
+  rc=$?
+  [[ $rc -eq 0 && -z "$err" ]]
+  check 'RW9: no BIN_DIR and no facts path returns 0' $?
+}
+
 test_mutation_sensitivity() {
   echo '[RW7] oracle rejects direct-source and shared-clone mutations'
   local d direct fake rc real_mktemp
@@ -414,6 +434,7 @@ test_mutation_sensitivity() {
   # Mutation 1: preparation appears successful but reports SOURCE as the model
   # repo. RW2 must reject it because the "work" write is blocked together with
   # the source write.
+  cp "$BIN/_paths.py" "$d/_paths.py"
   sed '/^  REVIEW_SNAPSHOT_TREE="\$tree1"$/a\  REVIEW_WORK_REPO="$REVIEW_SOURCE_REPO"' \
     "$HELPER" > "$direct"
   TEST_REVIEW_WORKSPACE_CASE=write-boundary TEST_REVIEW_WORKSPACE_HELPER="$direct" \
@@ -482,6 +503,7 @@ else
   test_source_race_and_cleanup_guard
   test_gitlink_fails_closed
   test_report_path_and_missing_explore_message
+  test_write_facts_without_helper_path
 fi
 test_wrapper_helper_failure
 [[ -f "$HELPER" ]] && test_mutation_sensitivity

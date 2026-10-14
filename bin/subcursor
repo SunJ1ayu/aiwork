@@ -29,7 +29,7 @@ MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
 [[ "$MODE" == review || "$MODE" == explore ]] || { usage >&2; exit 2; }
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 TASK_FILE="$(realpath "$TASK_FILE")"
-LOG_FILE="$(realpath -m "$LOG_FILE")"
+LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subcursor: canonicalize helper 失败' >&2; exit 78; }
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 MODEL="$("$BIN_DIR/aiwork-config" model cursor "${CURSOR_MODEL:-}")" || exit 1
@@ -48,6 +48,7 @@ else
 fi
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcursor: missing ro-repo-exec; refusing dispatch' >&2; exit 78; }
 [[ -f "$BIN_DIR/_cursor-stream.py" ]] || die 'missing Composer stream decoder'
+"$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 . "$BIN_DIR/_review-workspace.sh" || die 'missing review workspace helper'
 review_workspace_reset_report || exit 78
 review_workspace_prepare "$SOURCE_REPO" subcursor || exit 78

@@ -94,6 +94,7 @@ class ExploreTests(unittest.TestCase):
         stub.chmod(0o755)
         self.explore = load_script("explore")
         self.data = self.root / "data"
+        self.data.mkdir()
         self.obs = self.root / "obs"
         self.barrier = self.root / "barrier"
         self.repo = self.root / "source"
@@ -238,6 +239,21 @@ class ExploreTests(unittest.TestCase):
         head, names = self._view("subcodex")
         self.assertEqual(head, self.main_sha)
         self.assertEqual(names, ["nested", "on-main.txt"])
+
+    def test_missing_data_dir_stops_before_a_leg_and_creates_nothing(self):
+        missing = self.root / "missing-data"
+        self.env["AIWORK_DATA_DIR"] = str(missing)
+        self._link("subcodex")
+        self.env["EXPLORE_PEERS"] = "subcodex"
+        rc, stdout, stderr = self._run(["subcodex"])
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(stdout.strip(), "")
+        self.assertFalse(missing.exists(), stderr)
+        self.assertIn(str(missing), stderr)
+        self.assertIn("先确认盘已经挂好", stderr)
+        self.assertNotIn("Traceback", stderr)
+        self.assertFalse((self.obs / "subcodex.view").exists())
+        self.assertFalse((self.barrier / "subcodex.started").exists())
 
     def test_path_outside_a_git_repository_is_a_usage_error(self):
         outside = self.root / "notes"

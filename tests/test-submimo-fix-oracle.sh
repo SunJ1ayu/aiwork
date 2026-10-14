@@ -99,6 +99,7 @@ r=$(newrepo redforever); run_fix "$r" "$r/log" >/dev/null 2>&1
 r=$(newrepo redforever); run_fix "$r" "$r/log" --no-oracle >/dev/null 2>&1
 chk "G6b --no-oracle single shot exits 0" $?
 [[ "$(cat "$r/.attempts")" == 1 ]]; chk "G6b --no-oracle one attempt only" $?
+[[ ! -e "$r/log.mimo" ]]; chk "G6b fix mode does not write a .mimo file" $?
 
 # G7 mimo exits non-zero but fix is good -> oracle still evaluated, exit 0
 # (regression for CONFIRMED-1: set -e + pipefail must not abort before the oracle)

@@ -47,7 +47,7 @@ MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
 [[ "$MODE" == review || "$MODE" == explore ]] || { usage; exit 2; }
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 TASK_FILE="$(realpath "$TASK_FILE")"
-LOG_FILE="$(realpath -m "$LOG_FILE")"
+LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subcodex: canonicalize helper 失败' >&2; exit 78; }
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 
@@ -65,9 +65,10 @@ TIMEOUT_SECONDS="${SUBCODEX_TIMEOUT:-1500}"
 CODEX="${CODEX_BIN:-codex}"
 command -v "$CODEX" >/dev/null 2>&1 || die "codex CLI not found ($CODEX)"
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcodex: missing ro-repo-exec; refusing to review in a writable repo (fail closed)' >&2; exit 78; }
-[[ -f "$BIN_DIR/_review_result.py" || -n "${AIWORK_REVIEW_RESULT_BIN:-}" ]] || die 'missing _review_result.py'
+"$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 
 . "$BIN_DIR/_review-workspace.sh" || die 'missing _review-workspace.sh'
+[[ -f "$(review_workspace__result_bin)" ]] || die 'missing _review_result.py'
 review_workspace_reset_report || exit 78
 review_workspace_prepare "$SOURCE_REPO" subcodex || exit 78
 cleanup() {
@@ -223,10 +224,19 @@ PY
 )"
 
 # 非零退出时只抄模型服务自己的报错：type=error 的 message、type=turn.failed 的
-# error.message，再加上 codex 自己的 stderr。不在事件流里搜词。
+# error.message，再加上 codex 自己的 stderr。两处往往是同一句，相同的只抄一次。
+# 不在事件流里搜词。
 if [[ "$RC" -ne 0 ]]; then
   python3 - "$STREAM" <<'PY' >&2
 import json, sys
+seen = set()
+
+def emit(text):
+    if text in seen:
+        return
+    seen.add(text)
+    print(text)
+
 for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
     line = raw.strip()
     if not line.startswith("{"):
@@ -238,11 +248,11 @@ for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
     if not isinstance(event, dict):
         continue
     if event.get("type") == "error" and isinstance(event.get("message"), str):
-        print(event["message"])
+        emit(event["message"])
     elif event.get("type") == "turn.failed":
         err = event.get("error")
         if isinstance(err, dict) and isinstance(err.get("message"), str):
-            print(err["message"])
+            emit(err["message"])
 PY
   if [[ -s "$STDERR_LOG" ]]; then
     cat "$STDERR_LOG" >&2

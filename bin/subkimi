@@ -30,7 +30,9 @@ _RHG="$BIN_DIR/_review-home-guard.sh"
 . "$_RHG"
 
 # 运行期状态走本机数据入口；仓内目录仅提供 config.toml 和 hooks/ 种子。
-REVIEW_HOME="${KIMI_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path kimi-review-home)}"
+# 覆盖变量只决定运行目录放哪，不能跳过数据目录存在性检查。
+"$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
+REVIEW_HOME="${KIMI_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path kimi-review-home)}" || exit 78
 
 usage() {
   cat >&2 <<'EOF'
@@ -161,7 +163,7 @@ _RW="$BIN_DIR/_review-workspace.sh"
 # shellcheck source=_review-workspace.sh
 . "$_RW"
 # Absolute log path: the agent runs with cwd = REPO_DIR.
-case "$LOG_FILE" in /*) ;; *) LOG_FILE="$PWD/$LOG_FILE" ;; esac
+LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subkimi: canonicalize helper 失败' >&2; exit 78; }
 review_workspace_reset_report || exit 78
 if ! review_workspace_prepare "$SOURCE_REPO" subkimi; then
   die 'review workspace 准备失败 ⇒ 模型未启动'

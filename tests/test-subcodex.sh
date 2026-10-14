@@ -27,7 +27,7 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 echo "=== subcodex oracle ==="
 d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/bin" "$d/fake" "$d/ws" "$d/cap"
-for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec _review-workspace.sh _review_result.py _review-home-guard.sh; do
+for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec _review-workspace.sh _paths.py _review_result.py _review-home-guard.sh; do
   [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$d/bin/"
 done
 check "C0: bin/subcodex 与本机设置读取入口都在" \
@@ -203,6 +203,8 @@ check "C3: 额度事件原样留在事件流，手写的 usage_limit_exceeded �
   $([[ $rc -ne 0 ]] && grep -qF "$sentence" "$d/c4.stream.jsonl" && ! grep -q 'usage_limit_exceeded' "$d/c4.stream.jsonl"; echo $?)
 check "C3: 额度原话被抄到 stderr，腿自己不把 failure_kind 写成 quota" \
   $(grep -qF "$sentence" "$d/c4.err"; echo $?)
+_copies="$(grep -cF "$sentence" "$d/c4.err" || true)"
+check "C3: 同一句报错在 stderr 里只出现一次" $([[ "$_copies" == 1 ]]; echo $?)
 facts c4 "f['failure_kind'] is None"
 check "C3: facts 的 failure_kind 留空，分类留给 emit" $?
 CODEX_TEST_MODE=body sc c4b explore "$d/task.md" "$d/c4b.log" "$d/repo" >/dev/null 2>"$d/c4b.err"; rc=$?
@@ -241,6 +243,20 @@ check 'C4: explore 最后一条消息只有空白时失败，句子与其他腿�
   $([[ $rc -eq 1 && "$(cat "$d/c7d.err")" == "$want" ]] && cmp -s "$d/c7d.md" "$d/blank-expect"; echo $?)
 facts c7d "f['process_state']=='exited' and f['evidence_completeness']=='partial' and f['failure_kind'] is None and f['verdict'] is None"
 check 'C4: 空白消息的 facts 与缺消息相同(exited/partial、failure_kind 留空)' $?
+mkdir -p "$d/logs"
+printf 'Conclusion: PASS\n' > "$d/logs/leg.log.report"
+[[ ! -e "$d/logs/new" ]]
+(
+  unset AIWORK_REVIEW_REPORT_PATH
+  CODEX_TEST_MODE=silent sc cstale explore "$d/task.md" "$d/logs/new/../leg.log" "$d/repo" \
+    >/dev/null 2>"$d/cstale.err"
+  printf '%s' "$?" > "$d/cstale.rc"
+)
+rc="$(cat "$d/cstale.rc")"
+check 'C4: 日志路径穿过还不存在的目录再接 ..、没有最终消息 ⇒ 失败，不沿用旧 PASS' \
+  $([[ "$rc" -ne 0 ]] && grep -q 'no final message' "$d/cstale.err"; echo $?)
+facts cstale "f['evidence_completeness']=='partial' and f['verdict'] is None"
+check 'C4: 这次 facts 是缺最终消息，不是旧报告的成功结论' $?
 sc c8 review "$d/task.md" "$d/c8.log" "$d/repo" >/dev/null 2>"$d/c8.err"; rc=$?
 check "C4: 没有自审文件也调用 codex" \
   $([[ $rc -eq 0 && -e "$d/cap/c8.argv" ]]; echo $?)
