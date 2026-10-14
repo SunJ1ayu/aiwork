@@ -509,7 +509,7 @@ v24_coverage_report() {
 }
 
 v33_submimo_review_leg_is_read_only() {
-  echo "[V33] submimo 写口关掉、bash 留着,fix 不受连累"
+  echo "[V33] submimo 写口关掉、bash 留着,fix 被拒绝"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
@@ -571,21 +571,14 @@ print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
     bad "V33: explore 模式不许再用内置 plan 档"
   fi
 
-  # ── ③ **反面对照(业主拦下的那条)**:fix 是执行腿,写代码是本职。
-  #    只读锁不许连坐到它身上 —— 那等于把执行腿打死。
+  # ── ③ fix 不是这条命令的模式。传 fix 必须拒绝，并且一次都不调起 mimo。
   rm -f "$d/c_fix"
-  # `--no-oracle` 是必须的:submimo fix 在既没 --oracle 也没 --no-oracle 时**拒绝运行**
-  # (它自己的闸,防的是"忘了给判据就裸跑一发")。第一版我没给,腿压根没起来,
-  # 于是这条对照断言红了 —— 红得对,但红的原因不是我要测的那个。
   env PATH="$b:$PATH" CAPTURE="$d/c_fix" MIMO_REVIEW_HOME="$mhome" \
-    bash "$b/submimo" fix "$d/t.md" "$d/f.log" "$repo" --no-oracle >/dev/null 2>&1
-  if [[ -f "$d/c_fix" ]]; then
-    local ag3; ag3="$(agent_of "$d/c_fix")"
-    [[ "$ag3" == "build" ]]
-    check "V33: 对照 —— fix 仍用 build 档(执行腿要写代码,不许被顺手锁死)" $?
-  else
-    bad "V33: 对照 —— fix 仍用 build 档(执行腿要写代码,不许被顺手锁死)"
-  fi
+    bash "$b/submimo" fix "$d/t.md" "$d/f.log" "$repo" >"$d/fix.out" 2>"$d/fix.err"
+  local fix_rc=$?
+  [[ "$fix_rc" -ne 0 ]] && grep -q 'fix is not supported on this command. Change code in your own worktree.' "$d/fix.err" \
+    && [[ ! -f "$d/c_fix" ]]
+  check "V33: fix 被拒绝，mimo 一次都不启动" $?
 
   # 上面 explore 会按旧语义把 Bash 收回只读 git；O4 问的是 review 能力。
   # 再跑一次 review，让下面检查 review 最终写下的配置。
@@ -858,7 +851,7 @@ v36_wrappers_actually_use_readonly_repo() {
     local t
     for t in "subdeepseek-agent 副本可写/原仓只读" \
              "submimo review 副本可写/原仓只读" \
-             "subkimi 副本可写/原仓只读" "submimo fix 仍然直接写原仓" \
+             "subkimi 副本可写/原仓只读" "submimo fix 拒绝运行且不写原仓" \
              "腿在只读下仍然正常出结论(防线没把腿弄死)"; do
       bad "V36: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
     done
@@ -1009,17 +1002,15 @@ assert p['process_state'] == 'exited' and p['verdict'] == 'PASS'
 PY
   check "V36: subkimi 交出实际模型、完整 snapshot 与裁决 facts" $?
 
-  # ── ④ **对照组:fix 一个字都不许被连累**。submimo fix 是执行腿,写代码是它的本职;
-  #    "加一道防线顺手拆掉另一道"是本仓记过的账(V33 里有同款对照)。
+  # ── ④ fix 不是这条命令的模式：拒绝运行，原仓一个字节都不写，mimo 一次都不启动。
   rm -f "$d/o4" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" \
     MIMO_REVIEW_HOME="$d/mimo-home-v36d" \
-    bash "$b/submimo" fix --no-oracle "$d/t.md" "$repo/logs/l4.log" "$repo" >/dev/null 2>&1
-  grep -q '^work=WROTE$' "$d/o4" 2>/dev/null \
-    && grep -q '^source=WROTE$' "$d/o4" 2>/dev/null \
-    && [[ "$(sed -n 's/^repo=//p' "$d/o4")" == "$repo" ]]; local r4=$?
-  local seen4; seen4="$(cat "$d/o4" 2>/dev/null || echo 没跑)"
-  check "V36: submimo fix 仍直接写原仓:$seen4" $r4
+    bash "$b/submimo" fix "$d/t.md" "$repo/logs/l4.log" "$repo" >"$d/fix.out" 2>"$d/fix.err"
+  local fix_rc=$?
+  [[ "$fix_rc" -ne 0 ]] && grep -q 'fix is not supported on this command. Change code in your own worktree.' "$d/fix.err" \
+    && [[ ! -e "$d/o4" && ! -e "$repo/PWNED_IN_SOURCE" && ! -e "$repo/PWNED_IN_WORKSPACE" ]]
+  check "V36: submimo fix 拒绝运行且不写原仓" $?
   rm -f "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
 
   rm -rf "$d"

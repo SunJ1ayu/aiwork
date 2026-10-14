@@ -16,9 +16,9 @@ usage() {
 Usage:
   submimo review  TASK_FILE LOG_FILE [REPO_DIR]
   submimo explore TASK_FILE LOG_FILE [REPO_DIR]
-  submimo fix     TASK_FILE LOG_FILE [REPO_DIR]
 
-Runs official MiMoCode CLI as a bounded executor.
+Runs official MiMoCode CLI as a review or explore leg.
+No fix mode. Change code in your own worktree.
 
 Modes:
   review   Isolated review. Uses a writable disposable snapshot while the
@@ -27,18 +27,6 @@ Modes:
            `plan` agent: 2026-08-19 实测它自称 Disallows all edit tools,
            实际 bash/write/edit/task 全开 + 权限 `*` allow。
   explore  Read the repository and return the model's last message.
-  fix      Small scoped code changes. Uses MiMoCode build agent.
-
-Fix-only options (goal-based bounded loop; oracle is DEFAULT-ON):
-  --oracle CMD    after each fix, run CMD in REPO_DIR; green (rc=0) -> exit 0,
-                  red -> retry, capped at 2 attempts then non-zero back to you.
-                  Each attempt's git diff is archived into LOG_FILE.
-  --no-oracle     opt out and run a raw single shot. fix REFUSES to run with
-                  neither --oracle nor --no-oracle, so forgetting the check stops
-                  you instead of silently doing the unverified thing.
-  --protect PATH  (repeatable) hash-check PATH every attempt; any change is a
-                  HARD failure (exit 3) even if the oracle is green — stops the
-                  weak model from passing by editing the judge/oracle files.
 
 Environment:
   MIMO_CLI_MODEL     optional, provider/model passed to `mimo run -m`
@@ -48,7 +36,6 @@ Environment:
 Examples:
   <数据目录> 用 aiwork-config data-path 查。
   submimo review <数据目录>/tasks/001-review.md <数据目录>/logs/001-review.log /path/to/repo
-  submimo fix    <数据目录>/tasks/002-fix.md    <数据目录>/logs/002-fix.log    /path/to/repo
 EOF
 }
 
@@ -62,54 +49,29 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-# Separate flags from positionals. --oracle / --protect are fix-only extras for
-# the bounded goal-based retry loop; everything else stays positional as before.
-ORACLE_CMD=""
-NO_ORACLE=0
-PROTECT=()
-POS=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --oracle)     ORACLE_CMD="${2:-}"; [[ -n "$ORACLE_CMD" ]] || die "--oracle needs a command"; shift 2 ;;
-    --no-oracle)  NO_ORACLE=1; shift ;;
-    --protect)    PROTECT+=("${2:-}"); [[ -n "${PROTECT[-1]}" ]] || die "--protect needs a path"; shift 2 ;;
-    *)            POS+=("$1"); shift ;;
-  esac
-done
-set -- "${POS[@]}"
-
 if [[ $# -lt 3 || $# -gt 4 ]]; then
   usage
   exit 2
 fi
 
 MODE="$1"
+if [[ "$MODE" == "fix" ]]; then
+  die "fix is not supported on this command. Change code in your own worktree."
+fi
+[[ "$MODE" == "review" || "$MODE" == "explore" ]] || { usage; exit 2; }
 TASK_FILE="$2"
 LOG_FILE="$3"
 LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'submimo: canonicalize helper 失败' >&2; exit 78; }
 REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
 TIMEOUT_SECONDS="${MIMO_CLI_TIMEOUT:-900}"
-if [[ -n "$ORACLE_CMD" || ${#PROTECT[@]} -gt 0 ]]; then
-  [[ "$MODE" == "fix" ]] || die "--oracle/--protect are only valid in fix mode"
-fi
-
-# fix is DEFAULT-ON for the oracle: refuse a raw single-shot unless the caller
-# either gives an --oracle (the verifiable loop) or explicitly opts out with
-# --no-oracle. This flips "remember to pass --oracle" into "forgetting stops you",
-# and forces the question 'what objectively judges this fix?' every time.
-if [[ "$MODE" == "fix" && -z "$ORACLE_CMD" && $NO_ORACLE -eq 0 ]]; then
-  die "fix needs an objective check: pass --oracle CMD (bounded verify+retry loop, judge files via --protect), or --no-oracle to consciously run a raw single shot"
-fi
 
 # review/explore 的保护单位永远是 Git 顶层；调用方即使传进子目录，也不能只把
-# 那个子目录挂只读而把同仓其他路径留成写口。fix 保持调用方原语义。
-if [[ "$MODE" != "fix" ]]; then
-  _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
-    || die "review/explore needs a Git worktree with HEAD: $SOURCE_REPO"
-  SOURCE_REPO="$(cd "$_SOURCE_TOP" && pwd -P)" || die "cannot resolve source repo: $_SOURCE_TOP"
-  REPO_DIR="$SOURCE_REPO"
-fi
+# 那个子目录挂只读而把同仓其他路径留成写口。
+_SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
+  || die "review/explore needs a Git worktree with HEAD: $SOURCE_REPO"
+SOURCE_REPO="$(cd "$_SOURCE_TOP" && pwd -P)" || die "cannot resolve source repo: $_SOURCE_TOP"
+REPO_DIR="$SOURCE_REPO"
 
 # 模型读本机设置;MIMO_CLI_MODEL 单次覆盖。
 MODEL="$("$BIN_DIR/aiwork-config" model mimo "${MIMO_CLI_MODEL:-}")" || exit 1
@@ -136,12 +98,9 @@ fi
 # 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。仓外的日志目录会被
 # ro-repo-exec 跳过并说明(仓外本来就可写)。
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
-#
-# ⚠️ **`fix` 一个字都不动**:它是执行腿,写代码就是它的本职。
-# "加一道防线顺手拆掉另一道"是本仓记过的账(V33 里有同款对照组盯着这件事)。
 RO_EXEC=()
-[[ "$MODE" == "fix" ]] || [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf 'submimo: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$BIN_DIR" >&2; exit 78; }
-[[ "$MODE" == "fix" ]] || RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf 'submimo: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$BIN_DIR" >&2; exit 78; }
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 
 command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: mimo"
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
@@ -162,19 +121,15 @@ command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: m
 # 隔离用 **XDG_CONFIG_HOME 而不是 HOME**:实测 mimo 的 data 路径(含 auth.json 凭证)
 # 只跟 HOME 走,换 HOME 会把凭证一起换掉、腿当场没法认证;换 XDG_CONFIG_HOME
 # 只挪配置,凭证不动。
-#
-# ⚠️ `fix` 模式**不走这里**:那是执行腿,写代码是它的本职,继续用内置 `build` 档。
 REVIEW_AGENT="aiwork-review"
 # 覆盖变量只决定运行目录放哪，不能跳过数据目录存在性检查。
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path mimo-review-home)}" || exit 78
-# 运行期 home 不许在被评审的仓里(共享闸)。**只管 review**:`fix` 是执行腿,
-# 仓对它本来就是可写的,这道闸拦它没有意义 —— "加一道防线顺手拆掉另一道"是本仓的老账。
-if [[ "$MODE" != "fix" ]]; then
-  review_home_guard mimo "$MIMO_CFG_HOME" "$REPO_DIR" MIMO_REVIEW_HOME || exit 1
-  # 配置**每次重写**:它就是那把锁,不许留隔夜残留(判据查的也是它)。
-  umask 077
-  mkdir -p "$MIMO_CFG_HOME/mimocode"
+# 运行期 home 不许在被评审的仓里(共享闸)。
+review_home_guard mimo "$MIMO_CFG_HOME" "$REPO_DIR" MIMO_REVIEW_HOME || exit 1
+# 配置**每次重写**:它就是那把锁,不许留隔夜残留(判据查的也是它)。
+umask 077
+mkdir -p "$MIMO_CFG_HOME/mimocode"
   python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$REVIEW_AGENT" "$MODE" <<'PYCFG'
 import json, os, sys
 cfgpath, agent, mode = sys.argv[1:4]
@@ -211,8 +166,7 @@ with open(tmpath, "w") as fh:
     json.dump(cfg, fh, indent=2)
 os.replace(tmpath, cfgpath)
 PYCFG
-  chmod 600 "$MIMO_CFG_HOME/mimocode/mimocode.json"
-fi
+chmod 600 "$MIMO_CFG_HOME/mimocode/mimocode.json"
 
 case "$MODE" in
   review)
@@ -223,10 +177,6 @@ case "$MODE" in
     AGENT="$REVIEW_AGENT"
     MESSAGE='Read the attached task file and the repository with read, glob, and grep. Answer in your final message. Do not modify, create, or delete files, do not push, install dependencies, access production systems, or spawn other agents.'
     ;;
-  fix)
-    AGENT="build"
-    MESSAGE='Read the attached task file first. Implement only the explicitly requested small scoped change. You may edit files only when the task file clearly allows it, and only within the listed scope. Do not push, do not delete files, do not install dependencies, do not access production systems, do not perform broad refactors, and do not change unrelated behavior. If the task is ambiguous or the allowed files are not specified, stop and output NEEDS_MORE_INFO. At the end, print: changed files, summary, verification run, and remaining risks.'
-    ;;
   *)
     usage
     exit 2
@@ -235,25 +185,23 @@ esac
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# review 和 explore 都在可写副本里读仓库，调用方给的原仓只读挂载。fix 仍直接写原仓。
+# review 和 explore 都在可写副本里读仓库，调用方给的原仓只读挂载。
 REVIEW_WORKSPACE_ACTIVE=0
 CLEANUP_TASK=""
-if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
-  _RW="$BIN_DIR/_review-workspace.sh"
-  [ -f "$_RW" ] || { echo "submimo: 找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)" >&2; exit 78; }
-  # shellcheck source=_review-workspace.sh
-  . "$_RW"
-  review_workspace_reset_report || exit 78
-  if ! review_workspace_prepare "$SOURCE_REPO" submimo; then
-    echo "submimo: review workspace 准备失败 ⇒ 模型未启动" >&2
-    exit 78
-  fi
-  REVIEW_WORKSPACE_ACTIVE=1
-  SOURCE_REPO="$REVIEW_SOURCE_REPO"
-  RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
-  REPO_DIR="$(review_workspace_repo)" || exit 78
-  review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
+_RW="$BIN_DIR/_review-workspace.sh"
+[ -f "$_RW" ] || { echo "submimo: 找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)" >&2; exit 78; }
+# shellcheck source=_review-workspace.sh
+. "$_RW"
+review_workspace_reset_report || exit 78
+if ! review_workspace_prepare "$SOURCE_REPO" submimo; then
+  echo "submimo: review workspace 准备失败 ⇒ 模型未启动" >&2
+  exit 78
 fi
+REVIEW_WORKSPACE_ACTIVE=1
+SOURCE_REPO="$REVIEW_SOURCE_REPO"
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+REPO_DIR="$(review_workspace_repo)" || exit 78
+review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
 _submimo_cleanup() {
   local rc=$?
@@ -281,29 +229,19 @@ case "$TASK_REAL" in
     ;;
 esac
 
-MIMO_FORMAT=default
-[[ "$MODE" == review || "$MODE" == explore ]] && MIMO_FORMAT=json
-CMD=(mimo run --agent "$AGENT" --dir "$REPO_DIR" --format "$MIMO_FORMAT" -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
+CMD=(mimo run --agent "$AGENT" --dir "$REPO_DIR" --format json -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
 if [[ -n "$MIMO_MODEL_CFG" ]]; then
   CMD=(env "MIMOCODE_CONFIG_CONTENT=$MIMO_MODEL_CFG" "${CMD[@]}")
 fi
-# 只读模式下把配置指向隔离目录(fix 用真配置,它是执行腿)
-if [[ "$MODE" != "fix" ]]; then
-  CMD=(env "XDG_CONFIG_HOME=$MIMO_CFG_HOME" "${CMD[@]}")
-fi
+CMD=(env "XDG_CONFIG_HOME=$MIMO_CFG_HOME" "${CMD[@]}")
 
-# One mimo pass. $1 = attempt label for the log header. Appends the header and
-# mimo's output to LOG_FILE. Review and explore also keep this call's mimo
-# output alone in ${LOG_FILE}.mimo (replaced every call); the filter reads that
-# file and never the header. Fix does not write that file.
+# One mimo pass. Appends the header and mimo's output to LOG_FILE, and keeps
+# this call's mimo output alone in ${LOG_FILE}.mimo (replaced every call); the
+# filter reads that file and never the header.
 run_mimo_once() {
-  local -a copy=(cat)
-  if [[ "$MODE" == review || "$MODE" == explore ]]; then
-    MIMO_RAW="${LOG_FILE}.mimo"
-    copy=(tee "$MIMO_RAW")
-  fi
+  MIMO_RAW="${LOG_FILE}.mimo"
   {
-    echo "# submimo $MODE log${1:+ ($1)}"
+    echo "# submimo $MODE log"
     echo "time: $(date -Iseconds)"
     echo "mode: $MODE"
     echo "agent: $AGENT"
@@ -315,24 +253,15 @@ run_mimo_once() {
     # </dev/null:mimo 是交互优先 CLI,stdin 若是"开着但无数据"的管道会等输入 →
     # 挂死或启动后静默退出(2026-07-02 实测复现+对照确认);显式关死 stdin 免疫之。
     (
-      [[ "$MODE" == "fix" ]] || cd "$REPO_DIR" || exit 78
+      cd "$REPO_DIR" || exit 78
       ${RO_EXEC[@]+"${RO_EXEC[@]}"} timeout -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
-    ) 2>&1 | "${copy[@]}"
+    ) 2>&1 | tee "$MIMO_RAW"
   } 2>&1 | tee -a "$LOG_FILE"
 }
 
-# sha256 of a protected path (empty string if absent), for tamper detection.
-protect_hash() {
-  local p="$1"; [[ "$p" != /* ]] && p="$REPO_DIR/$p"
-  [[ -f "$p" ]] && sha256sum "$p" | cut -d' ' -f1 || echo ""
-}
-
-# Simple single-shot (review/explore/fix without oracle) — behavior unchanged.
-if [[ -z "$ORACLE_CMD" ]]; then
-  : > "$LOG_FILE"
-  mimo_rc=0; run_mimo_once || mimo_rc=$?
-  if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
-    python3 - "$LOG_FILE" "$REPORT" <<'PY'
+: > "$LOG_FILE"
+mimo_rc=0; run_mimo_once || mimo_rc=$?
+python3 - "$LOG_FILE" "$REPORT" <<'PY'
 import json, pathlib, sys
 log, dest = sys.argv[1:]
 # `mimo run --format json` emits step_start / text / tool_use / step_finish.
@@ -365,10 +294,10 @@ if last_id is None or last_id not in parts:
 body = "".join(parts[last_id][pid] for pid in order[last_id])
 pathlib.Path(dest).write_text(body)
 PY
-    # mimo --format json 把模型正文和工具结果放在 JSON 事件里。非零退出时只抄
-    # MIMO_RAW 里不是 JSON 事件的行。日志头不在那份文件里。
-    if [[ "$mimo_rc" -ne 0 ]]; then
-      python3 - "$MIMO_RAW" <<'PY' >&2
+# mimo --format json 把模型正文和工具结果放在 JSON 事件里。非零退出时只抄
+# MIMO_RAW 里不是 JSON 事件的行。日志头不在那份文件里。
+if [[ "$mimo_rc" -ne 0 ]]; then
+  python3 - "$MIMO_RAW" <<'PY' >&2
 import json, sys
 for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
     line = raw.rstrip("\n")
@@ -381,54 +310,6 @@ for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
         pass
     print(line)
 PY
-    fi
-    review_workspace_finish submimo "$mimo_rc" "$MODE" "$MODEL" subscription "" ""
-  fi
-  exit "$mimo_rc"
 fi
-
-# --- Goal-based bounded loop (fix --oracle) ---------------------------------
-# The oracle is the judge and is owned by the main agent; a weak model's likeliest
-# cheat is editing the judge, so --protect files are hash-checked every attempt
-# and a change is a HARD failure regardless of oracle color (AGENTS.md safety rule).
-: > "$LOG_FILE"
-declare -A BASE
-for p in "${PROTECT[@]}"; do BASE["$p"]="$(protect_hash "$p")"; done
-
-MAX_ATTEMPTS=2   # AGENTS.md: cap retries at ~2, then hand back to the main agent
-final_rc=1
-for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
-  echo "submimo fix: attempt $attempt/$MAX_ATTEMPTS" >&2
-  # Capture mimo's rc instead of letting it abort the loop (set -e + pipefail):
-  # a weak model that times out / crashes still leaves a partial edit, and the
-  # protect-check + oracle + retry MUST run on it - aborting here would skip the
-  # judge-tamper check and the retry a transient timeout deserves.
-  mimo_rc=0; run_mimo_once "attempt $attempt" || mimo_rc=$?
-  [[ $mimo_rc -ne 0 ]] && echo "submimo fix: mimo exited $mimo_rc on attempt $attempt (continuing to protect+oracle checks)" | tee -a "$LOG_FILE" >&2
-
-  {
-    echo; echo "## attempt $attempt — git diff --stat"
-    git -C "$REPO_DIR" diff --stat 2>&1 || true
-    echo; echo "## attempt $attempt — git diff (capped 200k)"
-    git -C "$REPO_DIR" diff 2>&1 | head -c 200000 || true
-  } >> "$LOG_FILE"
-
-  for p in "${PROTECT[@]}"; do
-    if [[ "$(protect_hash "$p")" != "${BASE[$p]}" ]]; then
-      echo "submimo fix: FATAL — protected file changed: $p (mimo may have edited the judge; refusing)" | tee -a "$LOG_FILE" >&2
-      exit 3
-    fi
-  done
-
-  if ( cd "$REPO_DIR" && eval "$ORACLE_CMD" ) >>"$LOG_FILE" 2>&1; then
-    echo "submimo fix: oracle GREEN on attempt $attempt" | tee -a "$LOG_FILE" >&2
-    final_rc=0
-    break
-  fi
-  echo "submimo fix: oracle RED on attempt $attempt" | tee -a "$LOG_FILE" >&2
-done
-
-if [[ $final_rc -ne 0 ]]; then
-  echo "submimo fix: oracle still RED after $MAX_ATTEMPTS attempts — handing back to main agent" | tee -a "$LOG_FILE" >&2
-fi
-exit "$final_rc"
+review_workspace_finish submimo "$mimo_rc" "$MODE" "$MODEL" subscription "" ""
+exit "$mimo_rc"

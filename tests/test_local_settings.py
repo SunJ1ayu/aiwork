@@ -5,10 +5,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
 
-import contextlib
 import importlib.machinery
 import importlib.util
-import io
 import json
 import re
 from pathlib import Path
@@ -39,8 +37,7 @@ class SettingsTest(unittest.TestCase):
         self.config.mkdir()
         self.models = {'codex': 'gpt-fixture', 'cursor': 'composer-2.5',
                        'deepseek': 'deepseek-fixture',
-                       'kimi': 'kimi-code/k3', 'mimo': 'xiaomi/mimo-v2.5-pro',
-                       'triage': 'jev-fixture'}
+                       'kimi': 'kimi-code/k3', 'mimo': 'xiaomi/mimo-v2.5-pro'}
         self.write_models()
         self.env = dict(os.environ, AIWORK_CONFIG_DIR=str(self.config), HOME=str(self.d / 'home'))
         self.environment = patch.dict(os.environ, self.env, clear=True)
@@ -118,7 +115,7 @@ class SettingsTest(unittest.TestCase):
     def repo_fixture(self):
         repo = self.d / 'repo'
         repo.mkdir()
-        (repo / 'oracle.txt').write_text('oracle sentinel\n')
+        (repo / 'sentinel.txt').write_text('sentinel\n')
         for args in [('init', '-q', '-b', 'main'), ('config', 'user.name', 'test'),
                      ('config', 'user.email', 'test@example.invalid'), ('add', '.'),
                      ('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'fixture')]:
@@ -168,7 +165,7 @@ class SettingsTest(unittest.TestCase):
         actual = {p.name for p in (ROOT / 'bin').iterdir()
                   if p.is_file() and p.read_bytes().startswith(b'#!/usr/bin/env bash')
                   and re.search(r'/aiwork-config" model ', p.read_text())}
-        self.assertEqual(actual, set(callers) | {'delegate-codex'})
+        self.assertEqual(actual, set(callers))
         (self.config / 'models.env').unlink()
         for name, prefix in callers.items():
             link = installed / name
@@ -182,40 +179,26 @@ class SettingsTest(unittest.TestCase):
                 self.assertIn(str(self.config / 'models.env'), result.stderr)
                 self.assertNotIn('No such file or directory', result.stderr)
 
-    def test_codex_and_delegate_dry_runs_read_local_settings_and_keep_overrides(self):
+    def test_codex_dry_run_reads_local_settings_and_keeps_overrides(self):
         repo, task = self.repo_fixture()
         env = dict(self.env)
-        attack = self.d / 'attack.md'
-        hashed = subprocess.run([str(ROOT / 'bin/delegate-codex'), '--print-oracle-hash',
-                                 '--repo', str(repo), '--protect', 'oracle.txt'],
-                                env=env, capture_output=True, text=True)
-        self.assertEqual(hashed.returncode, 0, hashed.stderr)
-        attack.write_text('Dry-run checks local model selection and preserves overrides.\n' + hashed.stdout)
-        delegate = [str(ROOT / 'bin/delegate-codex'), '--dry-run', '--no-isolate',
-                    '--task', str(task), '--repo', str(repo), '--protect', 'oracle.txt',
-                    '--attack-log', str(attack), '--log', str(self.d / 'delegate.log')]
         codex = [str(ROOT / 'bin/subcodex'), '--dry-run', 'review', str(task),
                  str(self.d / 'codex.log'), str(repo)]
         for selected in ('gpt-fixture', 'gpt-fixture-next'):
             self.models['codex'] = selected
             self.write_models()
-            for command in (delegate, codex):
-                result = subprocess.run(command, env=env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn('model=' + selected, result.stdout)
-        result = subprocess.run(delegate + ['--model', 'gpt-override'], env=env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('model=gpt-override', result.stdout)
+            result = subprocess.run(codex, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('model=' + selected, result.stdout)
         result = subprocess.run(codex, env=dict(env, SUBCODEX_MODEL='gpt-override'), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('model=gpt-override', result.stdout)
 
-        for command in (delegate, codex):
-            link = self.d / Path(command[0]).name
-            link.symlink_to(command[0])
-            result = subprocess.run([str(link), *command[1:]], env=env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('model=gpt-fixture-next', result.stdout)
+        link = self.d / 'subcodex'
+        link.symlink_to(codex[0])
+        result = subprocess.run([str(link), *codex[1:]], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('model=gpt-fixture-next', result.stdout)
 
     def test_app_keys_keep_absolute_paths_and_resolve_relative_paths_under_apps(self):
         for override in (None, str(self.d / 'other-apps')):
@@ -323,10 +306,10 @@ class SettingsTest(unittest.TestCase):
             f'DEEPSEEK_API_KEY={secret}\n',
             f'export DEEPSEEK_API_KEY={secret}\n',
             f'export DEEPSEEK_API_KEY="{secret}"\n',
-            f"export TYPESAFE_API_KEY='{secret}'\n",
+            f"export DEEPSEEK_API_KEY='{secret}'\n",
         )
-        variables = ('DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY', 'TYPESAFE_API_KEY')
-        filenames = ('deepseek.env', 'deepseek.env', 'deepseek.env', 'typesafe.env')
+        variables = ('DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY')
+        filenames = ('deepseek.env', 'deepseek.env', 'deepseek.env', 'deepseek.env')
         for filename, variable, text in zip(filenames, variables, shapes):
             with self.subTest(text=text):
                 (self.config / filename).write_text(text)
@@ -379,24 +362,24 @@ class SettingsTest(unittest.TestCase):
     def test_inexact_setting_lines_name_the_path_and_line_without_the_value(self):
         from _aiwork_config import ConfigError, model, setting_value
         secret = 'fixture-exact-secret'
-        path = self.config / 'typesafe.env'
+        path = self.config / 'deepseek.env'
         cases = {
-            'trailing-comment': (f'export TYPESAFE_API_KEY="{secret}" # note\n', 1),
-            'whitespace': (f'TYPESAFE_API_KEY={secret} tail\n', 1),
-            'duplicate': (f'TYPESAFE_API_KEY={secret}\nTYPESAFE_API_KEY=other-exact\n', 2),
-            'empty': ('TYPESAFE_API_KEY=\n', 1),
-            'empty-then-value': (f'TYPESAFE_API_KEY=\nTYPESAFE_API_KEY={secret}\n', 1),
+            'trailing-comment': (f'export DEEPSEEK_API_KEY="{secret}" # note\n', 1),
+            'whitespace': (f'DEEPSEEK_API_KEY={secret} tail\n', 1),
+            'duplicate': (f'DEEPSEEK_API_KEY={secret}\nDEEPSEEK_API_KEY=other-exact\n', 2),
+            'empty': ('DEEPSEEK_API_KEY=\n', 1),
+            'empty-then-value': (f'DEEPSEEK_API_KEY=\nDEEPSEEK_API_KEY={secret}\n', 1),
         }
         for name, (text, line) in cases.items():
             with self.subTest(case=name):
                 path.write_text(text)
                 with self.assertRaises(ConfigError) as caught:
-                    setting_value('typesafe.env', 'TYPESAFE_API_KEY')
+                    setting_value('deepseek.env', 'DEEPSEEK_API_KEY')
                 message = str(caught.exception)
                 self.assertIn(f'{path}:{line}', message)
                 self.assertNotIn(secret, message)
                 self.assertNotIn('other-exact', message)
-                result = self.invoke_config('value', 'typesafe.env', 'TYPESAFE_API_KEY')
+                result = self.invoke_config('value', 'deepseek.env', 'DEEPSEEK_API_KEY')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, '')
                 self.assertIn(f'{path}:{line}', result.stderr)
@@ -468,15 +451,6 @@ class SettingsTest(unittest.TestCase):
         result = self.invoke_config('path', 'deepseek.env')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), str(self.config / 'deepseek.env'))
-
-    def test_triage_model_and_key_come_from_disposable_settings(self):
-        triage = load_script('triage')
-        (self.config / 'typesafe.env').write_text('export TYPESAFE_API_KEY="test-only-key"\n')
-        with patch.object(triage, 'ask', return_value={'model': 'jev-fixture', 'answers': {}}) as ask, \
-             patch('sys.argv', ['triage', '-', '--json']), patch('sys.stdin', io.StringIO('a bounded change')), \
-             contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(triage.main(), 0)
-        self.assertEqual(ask.call_args.args[0:2], ('test-only-key', 'jev-fixture'))
 
     def test_token_helper_defaults_to_config_apps_and_preserves_apps_override(self):
         import test_app_token_scope

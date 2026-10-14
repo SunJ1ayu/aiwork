@@ -14,7 +14,7 @@ def main():
     models = commands.add_parser('model')
     models.add_argument('leg')
     models.add_argument('override', nargs='?')
-    names = ('models.env', 'typesafe.env', 'deepseek.env', 'apps', 'private-terms')
+    names = ('models.env', 'deepseek.env', 'apps', 'private-terms')
     paths = commands.add_parser('path')
     paths.add_argument('name', choices=names)
     values = commands.add_parser('value')

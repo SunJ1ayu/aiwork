@@ -22,7 +22,7 @@ Usage: subcodex [--dry-run] <review|explore> TASK_FILE LOG_FILE [REPO_DIR]
 GPT review leg on the codex CLI. codex reads and tests a disposable snapshot;
 the source repo stays physically read-only. review requires a standalone
 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO` line; explore requires a non-empty answer.
-No fix mode (use delegate-codex for implementation work).
+No fix mode. Change code in your own worktree.
 
 Environment:
   SUBCODEX_MODEL    exact gpt-<model-id> (default: ~/.config/aiwork/models.env)

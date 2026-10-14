@@ -11,8 +11,7 @@ import tempfile
 MODELS = {'codex': 'gpt-6-sol', 'cursor': 'grok-4.7-high',
           'deepseek': 'deepseek-flash', 'gemini': 'gemini-3.8-flash-high',
           'glm': 'glm-5.3-flash', 'grok': 'grok-4.6',
-          'kimi': 'kimi-code/kimi-for-coding', 'mimo': 'xiaomi/mimo-v2.6-pro',
-          'triage': 'jev-latest'}
+          'kimi': 'kimi-code/kimi-for-coding', 'mimo': 'xiaomi/mimo-v2.6-pro'}
 
 
 def review_environment_keys():
