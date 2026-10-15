@@ -20,12 +20,10 @@ BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sy
 # 「用了 N / 上限 M 轮」——**下次调上限凭这个测量,不凭翻倍**。
 
 
+# 历史记录（该未使用的依赖已移除，运行目录改由 review_workspace_home 创建）：
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
 # 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
-_RHG="$BIN_DIR/_review-home-guard.sh"
-[ -f "$_RHG" ] || { echo "subagent: 找不到 _review-home-guard.sh —— 闸缺件,拒跑(fail closed)" >&2; exit 1; }
-. "$_RHG"
 
 
 usage() {
@@ -198,6 +196,9 @@ _subagent_cleanup() {
   exit "$rc"
 }
 trap _subagent_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+RUNTIME_HOME="$(review_workspace_home claude-home)" || exit 78
 
 STREAM_FILE="${LOG_FILE%.log}.stream.jsonl"
 ERR_FILE="$(mktemp)"
@@ -249,12 +250,14 @@ fi
   cd "$REPO_DIR"
   printf '%s\n' "$PROMPT" | env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
     "$AUTH_ENV=$API_KEY" \
+    CLAUDE_CONFIG_DIR="$RUNTIME_HOME" \
     ANTHROPIC_BASE_URL="$BASE_URL" \
     ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
     "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" claude -p \
       --model sonnet \
+      --no-session-persistence \
       --setting-sources project \
       --max-turns "$MAX_TURNS" \
       --output-format stream-json --verbose \

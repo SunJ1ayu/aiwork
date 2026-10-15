@@ -8,7 +8,9 @@ import _no_egress  # noqa: E402,F401
 import json
 from pathlib import Path
 import shutil
+import signal
 import subprocess
+import time
 import unittest
 
 import test_leg_finish as finish
@@ -23,11 +25,24 @@ STUBS = {'subcodex': 'codex', 'subcursor': 'cursor-agent',
 CAPTURE = '''
 import json
 from pathlib import Path
-runtime = os.environ.get('KIMI_CODE_HOME') if Path(sys.argv[0]).name == 'kimi' else (
-    os.environ.get('XDG_CONFIG_HOME') if Path(sys.argv[0]).name == 'mimo' else (
-    os.environ['HOME'] if Path(sys.argv[0]).name == 'cursor-agent' else None))
-record = {'workspace': os.environ['REVIEW_WORKSPACE_DIR'], 'runtime': runtime}
-if runtime:
+cli = Path(sys.argv[0]).name
+record = {'workspace': os.environ['REVIEW_WORKSPACE_DIR'], 'cli': cli}
+if cli == 'kimi':
+    runtime = os.environ['KIMI_CODE_HOME']
+elif cli == 'mimo':
+    runtime = os.environ['XDG_CONFIG_HOME']
+elif cli == 'cursor-agent':
+    runtime = os.environ['HOME']
+elif cli == 'claude':
+    runtime = os.environ['CLAUDE_CONFIG_DIR']
+    record['session_persistence_disabled'] = '--no-session-persistence' in sys.argv[1:]
+elif cli == 'codex':
+    record['ephemeral'] = '--ephemeral' in sys.argv[1:]
+    runtime = None
+else:
+    raise AssertionError('unknown CLI runtime contract: ' + cli)
+record['runtime'] = runtime
+if cli != 'codex':
     home = Path(runtime)
     record['mode'] = home.stat().st_mode & 0o777
     if Path(sys.argv[0]).name == 'kimi':
@@ -39,7 +54,10 @@ if runtime:
         record['seed_leftover'] = (home / 'hooks/leftover.mjs').exists()
     (home / 'sessions').mkdir(exist_ok=True)
     (home / 'sessions/fixture').write_text('runtime state')
-Path(os.environ['HOME_CAPTURE']).write_text(json.dumps(record))
+capture = Path(os.environ['HOME_CAPTURE'])
+temporary = capture.with_suffix('.tmp')
+temporary.write_text(json.dumps(record))
+temporary.replace(capture)
 '''
 
 
@@ -93,6 +111,60 @@ class ReviewHomes(unittest.TestCase):
         self.assertEqual((self.data / 'existing-output').read_text(), 'keep')
         self.assertEqual(list((self.d / 'workspaces').iterdir()), [])
 
+    def test_claude_uses_disposable_config_instead_of_caller_state(self):
+        caller = self.d / 'caller-claude'
+        caller.mkdir()
+        (caller / 'keep').write_text('caller state')
+        for leg in ('subagent', 'subdeepseek-agent'):
+            with self.subTest(leg=leg):
+                result = self.run_leg(leg, CLAUDE_CONFIG_DIR=str(caller))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(Path(self.env['HOME_CAPTURE']).read_text())
+                self.assertEqual(Path(record['runtime']).parent, Path(record['workspace']))
+                self.assertTrue(record['session_persistence_disabled'])
+                self.assertEqual(list(caller.iterdir()), [caller / 'keep'])
+                self.assertEqual((caller / 'keep').read_text(), 'caller state')
+                self.assert_clean()
+
+    def test_unknown_cli_runtime_contract_is_rejected(self):
+        self.fixture._write('unknown-cli', '#!/usr/bin/env python3\nimport os, sys\n' + CAPTURE)
+        result = subprocess.run([str(self.fixture.bin / 'unknown-cli')],
+                                env=dict(self.env, REVIEW_WORKSPACE_DIR=str(self.d)),
+                                capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unknown CLI', result.stderr)
+        self.assertFalse(Path(self.env['HOME_CAPTURE']).exists())
+
+    def test_claude_signal_exit_cleans_runtime(self):
+        stub = self.fixture.bin / 'claude'
+        stub.write_text(stub.read_text().replace('case = os.environ["FINISH_CASE"]',
+                                               'time.sleep(1)\ncase = os.environ["FINISH_CASE"]'))
+        capture = Path(self.env['HOME_CAPTURE'])
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=sig):
+                capture.unlink(missing_ok=True)
+                process = subprocess.Popen(
+                    [str(self.fixture.bin / 'subdeepseek-agent'), 'review',
+                     str(self.d / 'task.md'), str(self.d / 'signal.log'), str(self.fixture.repo)],
+                    env=dict(self.env, FINISH_CASE='pass', DEEPSEEK_TIMEOUT='10'),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    start_new_session=True)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not capture.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(capture.exists(), 'Claude stub never started')
+                    record = json.loads(capture.read_text())
+                    process.send_signal(sig)
+                    _stdout, stderr = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 128 + sig, stderr)
+                    self.assertFalse(Path(record['runtime']).exists())
+                    self.assert_clean()
+                finally:
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.communicate()
+
     def test_every_discovered_leg_cleans_success_failure_and_timeout(self):
         legs = sorted(p.name for p in (ROOT / 'bin').glob('sub*') if p.is_file())
         self.assertTrue(legs)
@@ -106,7 +178,10 @@ class ReviewHomes(unittest.TestCase):
                     record = json.loads(capture.read_text())
                     workspace = Path(record['workspace'])
                     self.assertFalse(workspace.exists())
-                    if record['runtime']:
+                    if record['cli'] == 'codex':
+                        self.assertTrue(record['ephemeral'])
+                        self.assertIsNone(record['runtime'])
+                    else:
                         self.assertEqual(Path(record['runtime']).parent, workspace)
                         self.assertEqual(record['mode'], 0o700)
                     self.assert_clean()
