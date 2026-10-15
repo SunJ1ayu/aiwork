@@ -22,6 +22,7 @@ from unittest.mock import patch
 import io
 
 from _test_settings import write_settings
+from _test_retention import extreme_mtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -147,14 +148,81 @@ class ExploreTests(unittest.TestCase):
     def _run(self, legs):
         return self._run_at(legs, str(self.repo), None)
 
-    def test_startup_prunes_before_repository_validation(self):
+    def test_invalid_repository_does_not_prune(self):
         expired = self.data / 'tasks/old.md'
         expired.parent.mkdir()
         expired.write_text('old')
         os.utime(expired, (1, 1))
         rc, _stdout, _stderr = self._run_at(['subcodex'], str(self.root / 'missing'), None)
         self.assertEqual(rc, 2)
+        self.assertTrue(expired.exists())
+
+    def test_other_fatal_checks_do_not_prune(self):
+        expired = self.data / 'logs/old.log'
+        expired.parent.mkdir()
+        for case in ('duplicate_legs', 'missing_brief', 'main'):
+            with self.subTest(case=case):
+                expired.write_text('old')
+                os.utime(expired, (1, 1))
+                brief = self.brief
+                if case == 'missing_brief':
+                    self.brief = self.root / 'absent.md'
+                try:
+                    with patch.object(self.explore._leg_session, 'current_main',
+                                      side_effect=self.explore.ReviewError('main rejected')):
+                        legs = ['subcodex', 'subcodex'] if case == 'duplicate_legs' else ['subcodex']
+                        rc, _stdout, _stderr = self._run(legs)
+                    self.assertNotEqual(rc, 0)
+                    self.assertTrue(expired.exists())
+                finally:
+                    self.brief = brief
+
+    def test_expired_task_is_read_before_pruning_and_reaches_leg(self):
+        text = self.brief.read_text()
+        self.brief = self.data / 'tasks/reused.md'
+        self.brief.parent.mkdir()
+        self.brief.write_text(text)
+        os.utime(self.brief, (1, 1))
+        self._link('subcodex')
+        self.env['EXPLORE_PEERS'] = 'subcodex'
+        rc, stdout, stderr = self._run(['subcodex'])
+        self.assertEqual(rc, 0, stderr)
+        self.assertIn(text, (self.obs / 'subcodex.task').read_text())
+        self.assertFalse(self.brief.exists())
+        self.assertTrue(Path(stdout.strip()).is_file())
+
+    def test_unselectable_leg_still_prunes_and_runs_selected_leg(self):
+        expired = self.data / 'logs/old.log'
+        expired.parent.mkdir()
+        expired.write_text('old')
+        os.utime(expired, (1, 1))
+        self._link('subcodex')
+        self.env['EXPLORE_PEERS'] = 'subcodex'
+        choose = self.explore._leg_session.choose_leg
+
+        def checked(*args):
+            self.assertTrue(expired.exists())
+            return choose(*args)
+
+        with patch.object(self.explore._leg_session, 'choose_leg', side_effect=checked):
+            rc, stdout, stderr = self._run(['not-a-leg', 'subcodex'])
+        self.assertEqual(rc, 1, stderr)
+        self.assertIn('not-a-leg', stderr)
         self.assertFalse(expired.exists())
+        self.assertTrue(Path(stdout.strip()).is_file())
+        self.assertEqual(self._saved().joinpath('subcodex.md').read_text(), FIXTURE_LAST)
+
+    def test_extreme_mtime_does_not_stop_explore(self):
+        expired = self.data / 'logs/extreme.log'
+        expired.parent.mkdir()
+        expired.write_text('fixture')
+        self._link('subcodex')
+        self.env['EXPLORE_PEERS'] = 'subcodex'
+        with extreme_mtime(expired):
+            rc, stdout, stderr = self._run(['subcodex'])
+        self.assertEqual(rc, 0, stderr)
+        self.assertFalse(expired.exists())
+        self.assertTrue(Path(stdout.strip()).is_file())
 
     def test_prune_failure_warns_but_explore_completes(self):
         bad = self.data / 'logs/denied.log'
@@ -164,13 +232,26 @@ class ExploreTests(unittest.TestCase):
         self._link('subcodex')
         self.env['EXPLORE_PEERS'] = 'subcodex'
         real_unlink = os.unlink
+        attempts = []
 
         def denied(path, *args, **kwargs):
             if path == bad.name:
+                attempts.append(True)
                 raise PermissionError(errno.EACCES, 'simulated denied')
             return real_unlink(path, *args, **kwargs)
 
-        with patch('os.unlink', side_effect=denied):
+        def checked_main(*args):
+            self.assertEqual(attempts, [])
+            return self.main_sha
+
+        run_one = self.explore.run_one
+        def dispatched(*args, **kwargs):
+            self.assertTrue(attempts)
+            return run_one(*args, **kwargs)
+
+        with patch('os.unlink', side_effect=denied), \
+                patch.object(self.explore._leg_session, 'current_main', side_effect=checked_main), \
+                patch.object(self.explore, 'run_one', side_effect=dispatched):
             rc, stdout, stderr = self._run(['subcodex'])
         self.assertEqual(rc, 0, stderr)
         self.assertTrue(Path(stdout.strip()).is_file())

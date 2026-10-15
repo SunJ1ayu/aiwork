@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'bin'))
 import _aiwork_config as config
 from test_review_pr import load_script
+from _test_retention import extreme_mtime
 
 
 class DataRetentionTests(unittest.TestCase):
@@ -89,15 +90,32 @@ class DataRetentionTests(unittest.TestCase):
         self.assertTrue((logs / 'fresh-link').is_symlink())
         self.assertEqual(marker.read_text(), 'outside')
 
-    def test_registered_container_symlink_is_not_traversed(self):
+    def test_registered_container_symlink_warns_without_touching_target(self):
         outside = self.root / 'outside'
         outside.mkdir()
         marker = outside / 'keep'
         marker.write_text('outside')
         self.old(marker)
         (self.data / 'logs').symlink_to(outside, target_is_directory=True)
-        self.assertEqual(config.prune_data(), [])
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(config.prune_data(), [])
+        self.assertIn(str(self.data / 'logs'), stderr.getvalue())
+        self.assertTrue((self.data / 'logs').is_symlink())
         self.assertEqual(marker.read_text(), 'outside')
+
+    def test_registered_file_warns_but_missing_entry_is_silent(self):
+        entry = self.file('logs')
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(config.prune_data(), [])
+        self.assertIn(str(entry), stderr.getvalue())
+        self.assertTrue(entry.is_file())
+        entry.unlink()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(config.prune_data(), [])
+        self.assertEqual(stderr.getvalue(), '')
 
     def test_concurrent_deletion_is_not_an_error(self):
         first = self.file('logs/old-tree/first')
@@ -150,7 +168,7 @@ class DataRetentionTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]['path'], str(path.parent))
         self.assertEqual(records[0]['size_bytes'], 3)
-        self.assertEqual(records[0]['last_modified'], '1970-01-01T00:00:01+00:00')
+        self.assertEqual(records[0]['last_modified'], 1)
         self.assertEqual(path.read_text(), 'abc')
         self.assertTrue(fresh.exists())
 
@@ -179,6 +197,85 @@ class DataRetentionTests(unittest.TestCase):
         self.assertEqual(real.returncode, 0, real.stderr)
         self.assertEqual(json.loads(real.stdout), json.loads(dry.stdout))
         self.assertFalse(old.exists())
+
+    def test_out_of_range_mtime_remains_numeric_and_does_not_interrupt_pruning(self):
+        path = self.file('logs/extreme.log')
+        stderr = io.StringIO()
+        with extreme_mtime(path) as timestamp, redirect_stderr(stderr):
+            listed = config.prune_data(dry_run=True)
+            removed = config.prune_data()
+        self.assertEqual(listed[0]['last_modified'], timestamp)
+        self.assertEqual(removed, listed)
+        self.assertFalse(path.exists())
+        self.assertEqual(stderr.getvalue(), '')
+
+    def test_cli_non_utf8_filename_is_ascii_json(self):
+        logs = self.data / 'logs'
+        logs.mkdir()
+        raw = os.fsencode(logs) + b'/invalid-\xff.log'
+        try:
+            fd = os.open(raw, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except (OSError, UnicodeError) as exc:
+            self.skipTest(f'filesystem cannot create the non-UTF-8 filename: {exc}')
+        os.close(fd)
+        os.utime(raw, (1, 1))
+        command = [str(ROOT / 'bin/aiwork-config'), 'prune-data', '--dry-run']
+        result = subprocess.run(command, capture_output=True, timeout=10,
+                                env=dict(os.environ, PYTHONIOENCODING='utf-8:strict'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = json.loads(result.stdout.decode('ascii'))
+        self.assertEqual(rows[0]['path'], os.fsdecode(raw))
+        self.assertTrue(os.path.exists(raw))
+
+    def test_warning_is_shared_by_all_three_entry_points(self):
+        entry = self.file('logs')
+        direct = io.StringIO()
+        with redirect_stderr(direct):
+            config.prune_data()
+        warning = direct.getvalue()
+        self.assertTrue(warning.startswith('data cleanup: '), warning)
+        self.assertIn(str(entry), warning)
+        review = load_script()
+        review_stderr = io.StringIO()
+        with patch('sys.argv', ['review-pr', '1', '--repo', 'example/repository']), \
+                patch.object(review, 'aiwork_main_commit', return_value='a' * 40), \
+                patch.object(review, 'require_latest_aiwork_main'), \
+                patch.object(review._leg_session, 'choose_leg', return_value=('openai', None)), \
+                patch.object(review._leg_session, 'run', side_effect=review.ReviewError('credential stop')), \
+                redirect_stderr(review_stderr):
+            self.assertEqual(review.main(), 1)
+        self.assertEqual(review_stderr.getvalue().splitlines()[0], warning.strip())
+        cli = subprocess.run([str(ROOT / 'bin/aiwork-config'), 'prune-data', '--dry-run'],
+                             capture_output=True, text=True, timeout=10)
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        self.assertEqual(cli.stderr, warning)
+        self.assertEqual(json.loads(cli.stdout), [])
+        explore = load_script('explore')
+        brief = self.root / 'brief.md'
+        brief.write_text('A fixture brief.')
+        explore_stderr = io.StringIO()
+        with patch('sys.argv', ['explore', str(brief), '--repo', str(self.root), '--leg', 'subcodex']), \
+                patch.object(explore, 'repository_root', return_value=self.root), \
+                patch.object(explore._leg_session, 'current_main', return_value='a' * 40), \
+                patch.object(explore._leg_session, 'choose_leg', return_value=('openai', None)), \
+                patch.object(explore, 'allocate_out_dir', side_effect=RuntimeError('allocation boundary')), \
+                redirect_stderr(explore_stderr), self.assertRaisesRegex(RuntimeError, 'allocation boundary'):
+            explore.main()
+        self.assertEqual(explore_stderr.getvalue(), warning)
+
+    def test_readme_documents_unix_seconds(self):
+        text = (ROOT / 'README.md').read_text()
+        self.assertIn('Unix 秒', text)
+        self.assertIn('last_modified', text)
+
+    def test_readme_references_units_and_describes_legacy_container_age(self):
+        text = (ROOT / 'README.md').read_text()
+        with self.subTest(rule='unit definition only in registry'):
+            self.assertNotIn('每次运行的产物要独立成为登记项下第一层的一个单位', text)
+            self.assertIn('`bin/_aiwork_config.py`', text)
+        with self.subTest(rule='legacy archive is one unit'):
+            self.assertNotIn('留在原地自然过期', text)
+            self.assertIn('整目录过期', text)
 
     def archive(self, run_id, old=False):
         source = self.root / f'source-{run_id}'

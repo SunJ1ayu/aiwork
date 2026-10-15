@@ -55,12 +55,12 @@ def child_uses(directory: Path):
                 raw = next(group for group in match.groups() if group)
                 if raw[0] in '>|;&':
                     continue
-                uses.append((rel, lineno, raw.split('/', 1)[0]))
+                uses.append((rel, lineno, raw))
         if python_source(path, text):
             for match in PY_DATA_PATH.finditer(text):
                 raw = match.group(2)
                 line = text[:match.start()].count('\n') + 1
-                uses.append((rel, line, raw.split('/', 1)[0]))
+                uses.append((rel, line, raw))
     return uses, identifiers
 
 
@@ -127,6 +127,16 @@ class DataDirRegistryTest(unittest.TestCase):
             uses, identifiers = child_uses(root)
         self.assertEqual(identifiers, [])
         self.assertIn(('tool', 2, 'not-registered'), uses)
+
+    def test_nested_literal_is_reported_in_full_and_rejected_by_registry(self):
+        names = {entry['name'] for entry in registry_entries()}
+        nested = registry_entries()[0]['name'] + '/nested'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'tool').write_text(f'#!/usr/bin/env python3\nvalue = data_path({nested!r})\n')
+            uses, _ = child_uses(root)
+        self.assertEqual(uses, [('tool', 2, nested)])
+        self.assertEqual([name for _, _, name in uses if name not in names], [nested])
 
 
 if __name__ == '__main__':

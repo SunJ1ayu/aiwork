@@ -154,7 +154,6 @@ def main() -> int:
     args = parser.parse_args()
     try:
         data_dir()
-        prune_data()
     except ConfigError as exc:
         print(f"explore: {exc}", file=sys.stderr)
         return 1
@@ -185,6 +184,11 @@ def main() -> int:
             failures.append(LegFailure(name, str(exc)))
             continue
         jobs.append((name, family, frozen))
+    try:
+        prune_data()
+    except ConfigError as exc:
+        print(f"explore: {exc}", file=sys.stderr)
+        return 1
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = allocate_out_dir(args.brief, stamp)
     saved: dict[str, Path] = {}
