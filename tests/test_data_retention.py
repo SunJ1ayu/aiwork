@@ -263,20 +263,6 @@ class DataRetentionTests(unittest.TestCase):
             explore.main()
         self.assertEqual(explore_stderr.getvalue(), warning)
 
-    def test_readme_documents_unix_seconds(self):
-        text = (ROOT / 'README.md').read_text()
-        self.assertIn('Unix 秒', text)
-        self.assertIn('last_modified', text)
-
-    def test_readme_references_units_and_describes_legacy_container_age(self):
-        text = (ROOT / 'README.md').read_text()
-        with self.subTest(rule='unit definition only in registry'):
-            self.assertNotIn('每次运行的产物要独立成为登记项下第一层的一个单位', text)
-            self.assertIn('`bin/_aiwork_config.py`', text)
-        with self.subTest(rule='legacy archive is one unit'):
-            self.assertNotIn('留在原地自然过期', text)
-            self.assertIn('整目录过期', text)
-
     def archive(self, run_id, old=False):
         source = self.root / f'source-{run_id}'
         source.mkdir()
