@@ -122,15 +122,23 @@ class ReviewPrTests(unittest.TestCase):
                 path.write_text('old')
                 os.utime(path, (1, 1))
 
-            def network_stop():
+            reached = []
+
+            def credential_stop(command, **kwargs):
+                self.assertTrue(command[0].endswith('gh-app-token'))
                 self.assertTrue(all(path.exists() for path in files))
-                raise self.review.ReviewError('offline stop')
+                reached.append(True)
+                raise self.review.ReviewError('credential boundary')
 
             with patch.dict(os.environ, AIWORK_DATA_DIR=temporary), \
-                    patch('sys.argv', ['review-pr', '49', '--dry-run']), \
-                    patch.object(self.review, 'aiwork_main_commit', side_effect=network_stop), \
+                    patch('sys.argv', ['review-pr', '49', '--repo', 'example/repository', '--dry-run']), \
+                    patch.object(self.review, 'aiwork_main_commit', return_value='a' * 40), \
+                    patch.object(self.review, 'require_latest_aiwork_main'), \
+                    patch.object(self.session, 'choose_leg', return_value=('openai', None)), \
+                    patch.object(self.session, 'run', side_effect=credential_stop), \
                     redirect_stderr(io.StringIO()):
                 self.assertEqual(self.review.main(), 1)
+            self.assertEqual(reached, [True])
             self.assertTrue(all(path.exists() for path in files))
 
     def test_body_has_one_machine_block_and_sanitizes_model_json(self):

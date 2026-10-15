@@ -184,6 +184,7 @@ def main() -> int:
             failures.append(LegFailure(name, str(exc)))
             continue
         jobs.append((name, family, frozen))
+    # Leg errors are recorded per leg; even with no jobs, this run continues to output allocation.
     try:
         prune_data()
     except ConfigError as exc:

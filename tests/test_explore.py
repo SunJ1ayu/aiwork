@@ -212,6 +212,19 @@ class ExploreTests(unittest.TestCase):
         self.assertTrue(Path(stdout.strip()).is_file())
         self.assertEqual(self._saved().joinpath('subcodex.md').read_text(), FIXTURE_LAST)
 
+    def test_all_unselectable_legs_still_prune(self):
+        text = self.brief.read_text()
+        self.brief = self.data / 'tasks/reused.md'
+        self.brief.parent.mkdir()
+        self.brief.write_text(text)
+        os.utime(self.brief, (1, 1))
+        rc, stdout, stderr = self._run(['not-a-leg'])
+        self.assertEqual(rc, 1, stderr)
+        self.assertIn('not-a-leg', stderr)
+        self.assertFalse(self.brief.exists())
+        self.assertEqual(stdout, '')
+        self.assertTrue((self.data / 'explore').is_dir())
+
     def test_extreme_mtime_does_not_stop_explore(self):
         expired = self.data / 'logs/extreme.log'
         expired.parent.mkdir()
