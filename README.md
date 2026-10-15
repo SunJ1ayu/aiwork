@@ -7,8 +7,7 @@ Multi-model implementation and PR review tooling.
 任务的操作步骤见 [workflow/CLAUDE.md](workflow/CLAUDE.md)；工具用法在 `workflow/skills/`。
 `~/CLAUDE.md` 和 `~/.claude/skills/delegate` 是由 `bin/sync-workflow-docs` 管理的部署副本。
 
-GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；原始日志、配置、会话及本机资料
-留在机器的数据目录。
+GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；本机资料的存放位置见[「本机设置」](#本机设置)。
 
 ## History
 
@@ -118,6 +117,8 @@ mimo                      # or: mimo providers login / list
 
 这些子目录都通过该数据入口定位，有哪些见登记表；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。
+
+## 评审运行目录
 
 `kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。
 每次只渲染配置和 guard；credentials 链接到 Kimi CLI 自己的凭证目录。缺少 `kimi-code.json` 时拒跑并提示先用 kimi 登录。

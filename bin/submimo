@@ -31,6 +31,9 @@ Environment:
   MIMO_CLI_MODEL     optional, provider/model passed to `mimo run -m`
                      default: ~/.config/aiwork/models.env
   MIMO_CLI_TIMEOUT   optional, seconds before timeout, default 900
+  MIMO_REVIEW_HOME   optional, caller-owned home; default is a disposable workspace home
+                     (override: no seed rendering or cleanup; checked by _review-home-guard.sh;
+                      MiMo still rewrites the isolated review config)
 
 Examples:
   <数据目录> 用 aiwork-config data-path 查。
@@ -121,7 +124,7 @@ command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: m
 # 只跟 HOME 走,换 HOME 会把凭证一起换掉、腿当场没法认证;换 XDG_CONFIG_HOME
 # 只挪配置,凭证不动。
 REVIEW_AGENT="aiwork-review"
-# 覆盖变量只决定运行目录放哪，不能跳过数据目录存在性检查。
+# MIMO_REVIEW_HOME 的用法见上方 Environment；覆盖时仍检查数据目录存在。
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 
 case "$MODE" in

@@ -29,7 +29,7 @@ _RHG="$BIN_DIR/_review-home-guard.sh"
 . "$_RHG"
 
 # 仓内目录仅提供 config.toml 和 hooks/ 种子；运行状态随 review workspace 清理。
-# 覆盖变量只决定运行目录放哪，不能跳过数据目录存在性检查。
+# KIMI_REVIEW_HOME 的用法见下方 Environment；覆盖时仍检查数据目录存在。
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 
 usage() {

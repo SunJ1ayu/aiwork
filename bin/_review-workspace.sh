@@ -5,6 +5,7 @@
 #   review_workspace_reset_report
 #   review_workspace_prepare SOURCE_REPO LEG_NAME
 #   repo="$(review_workspace_repo)"
+#   home="$(review_workspace_home NAME)"
 #   review_workspace_finish LEG RC MODE MODEL BILLING REPORTED DEGRADED
 #   review_workspace_cleanup
 #
