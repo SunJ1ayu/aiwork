@@ -130,6 +130,7 @@ mimo                      # or: mimo providers login / list
 - 运行目录在 `review_workspace_prepare` 之后调用 `_review-workspace.sh` 的 `review_workspace_home <名字>` 创建（权限 700），由现有 workspace 清理一起删除。
 - 登录凭证只用各家 CLI 自己的位置，不复制凭证。
 - CLI 自己的会话记录能关就关。
+- 每家 CLI 都必须在 `tests/test_review_homes.py` 里有明确的运行状态检查，没有就测试失败。
 - 数据目录里不放凭证或凭证链接，只留工作产物。
 
 `tests/test_review_homes.py` 从 `bin/sub*` 自动发现评审腿，用 CLI 桩检查正常、失败和超时后的清理；新腿缺桩或跑不通会失败。
