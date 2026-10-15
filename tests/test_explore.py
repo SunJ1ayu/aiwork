@@ -9,6 +9,7 @@ import _no_egress  # noqa: E402,F401
 import importlib.machinery
 import importlib.util
 import json
+import errno
 from datetime import datetime, timezone
 from pathlib import Path
 import shutil
@@ -145,6 +146,37 @@ class ExploreTests(unittest.TestCase):
 
     def _run(self, legs):
         return self._run_at(legs, str(self.repo), None)
+
+    def test_startup_prunes_before_repository_validation(self):
+        expired = self.data / 'tasks/old.md'
+        expired.parent.mkdir()
+        expired.write_text('old')
+        os.utime(expired, (1, 1))
+        rc, _stdout, _stderr = self._run_at(['subcodex'], str(self.root / 'missing'), None)
+        self.assertEqual(rc, 2)
+        self.assertFalse(expired.exists())
+
+    def test_prune_failure_warns_but_explore_completes(self):
+        bad = self.data / 'logs/denied.log'
+        bad.parent.mkdir()
+        bad.write_text('old')
+        os.utime(bad, (1, 1))
+        self._link('subcodex')
+        self.env['EXPLORE_PEERS'] = 'subcodex'
+        real_unlink = os.unlink
+
+        def denied(path, *args, **kwargs):
+            if path == bad.name:
+                raise PermissionError(errno.EACCES, 'simulated denied')
+            return real_unlink(path, *args, **kwargs)
+
+        with patch('os.unlink', side_effect=denied):
+            rc, stdout, stderr = self._run(['subcodex'])
+        self.assertEqual(rc, 0, stderr)
+        self.assertTrue(Path(stdout.strip()).is_file())
+        self.assertTrue(bad.exists())
+        self.assertIn(str(bad), stderr)
+        self.assertIn('simulated denied', stderr)
 
     def _run_at(self, legs, repo_arg, cwd):
         stdout, stderr = io.StringIO(), io.StringIO()

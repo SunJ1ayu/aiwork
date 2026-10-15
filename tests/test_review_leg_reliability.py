@@ -326,7 +326,7 @@ class FailureArchiveTests(unittest.TestCase):
         self.directory = Path(self.tmp.name)
         self.source = self.directory / 'source'
         self.source.mkdir(mode=0o700)
-        self.archives = self.directory / 'data/logs/review-pr-failures'
+        self.archives = self.directory / 'data/review-failures'
         self.addCleanup(patch.stopall)
         patch.object(self.review, 'data_path', return_value=self.archives).start()
 
@@ -347,7 +347,7 @@ class FailureArchiveTests(unittest.TestCase):
         self.assertTrue((self.source / 'repo/checkout.txt').exists())
         self.assertTrue((self.source / 'askpass').exists())
 
-    def test_failure_archives_keep_only_newest_twenty_by_archive_time(self):
+    def test_failure_archives_have_no_separate_count_limit(self):
         self.archives.mkdir(parents=True)
         previous = []
         for index in range(24):
@@ -361,8 +361,8 @@ class FailureArchiveTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             self.review.report_failure(self.source, 'new-failure')
         remaining = {p.name for p in self.archives.iterdir()}
-        self.assertEqual(remaining, {'new-failure', *(p.name for p in previous[5:])})
-        self.assertEqual(len(remaining), 20)
+        self.assertEqual(remaining, {'new-failure', *(p.name for p in previous)})
+        self.assertEqual(len(remaining), len(previous) + 1)
         self.assertEqual((self.archives / 'new-failure/review.log').read_text(), 'latest failure')
 
 

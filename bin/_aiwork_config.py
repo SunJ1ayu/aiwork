@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 import os
+from contextlib import closing, contextmanager
+from datetime import datetime, timezone
+import errno
 from pathlib import Path
 import re
+import stat
+import sys
+import time
 
 
 class ConfigError(ValueError):
@@ -41,28 +47,218 @@ def data_path(name: str = '') -> Path:
 
 # 数据目录里应该有哪些东西。只在这里登记。
 # kind 只取 工作产物 / 运行目录 / 其他。数据目录不放凭证。
+# 每次运行的产物各占登记项下第一层的一个单位，只由创建它的那次运行写入；不共用多次运行的容器。
 DATA_ENTRIES = (
     {
         'name': 'logs',
-        'purpose': '任务和评审留下的日志，包括失败记录。',
+        'purpose': '任务和评审留下的日志。',
         'kind': '工作产物',
+        'keep_days': 60,
+    },
+    {
+        'name': 'review-failures',
+        'purpose': '每次评审失败的独立诊断档案。',
+        'kind': '工作产物',
+        'keep_days': 60,
     },
     {
         'name': 'worktrees',
         'purpose': '执行方开 PR 时保留改动的独立工作树。',
         'kind': '工作产物',
+        'keep_days': None,  # 按 workflow/CLAUDE.md 的工作树流程清理，不按天数。
     },
     {
         'name': 'explore',
         'purpose': '发散时每条腿的最后一条消息。',
         'kind': '工作产物',
+        'keep_days': 60,
     },
     {
         'name': 'tasks',
         'purpose': '交给评审的任务书。',
         'kind': '工作产物',
+        'keep_days': 60,
     },
 )
+
+
+@contextmanager
+def _data_directory(name, parent_fd=None):
+    """Pin a directory without traversing a symlink, including during deletion."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except OSError as exc:
+        if exc.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+            raise
+        yield None
+        return
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _data_identity(info, device, expected=None):
+    identity = (info.st_dev, info.st_ino)
+    if info.st_dev != device:
+        raise OSError(errno.EXDEV, 'different filesystem')
+    if expected is not None and identity != expected:
+        raise OSError(errno.ESTALE, 'item changed during cleanup')
+    return identity
+
+
+@contextmanager
+def _reopen_data_directory(anchor_fd, components):
+    """Reopen single components, rejecting links and closing each previous fd."""
+    if not components:
+        yield anchor_fd
+        return
+    device = os.fstat(anchor_fd).st_dev
+    fd = os.dup(anchor_fd)
+    try:
+        for name, expected in components:
+            next_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+            _data_identity(os.fstat(fd), device, expected)
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _walk_data_item(parent_fd, name, expected_identity=None):
+    """Postorder traversal anchored at one unit, with a constant fd budget."""
+    device = os.fstat(parent_fd).st_dev
+    try:
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        identity = _data_identity(info, device, expected_identity)
+        if not stat.S_ISDIR(info.st_mode):
+            yield parent_fd, name, info
+            return
+        with _reopen_data_directory(parent_fd, ((name, identity),)) as unit_fd:
+            stack = [((), True, False)]
+            while stack:
+                components, directory, visited = stack.pop()
+                try:
+                    if directory and not visited:
+                        with _reopen_data_directory(unit_fd, components) as fd:
+                            pending = []
+                            with os.scandir(fd) as children:
+                                for child in children:
+                                    try:
+                                        info = os.stat(child.name, dir_fd=fd, follow_symlinks=False)
+                                    except FileNotFoundError:
+                                        continue
+                                    child_identity = _data_identity(info, device)
+                                    pending.append((components + ((child.name, child_identity),),
+                                                    stat.S_ISDIR(info.st_mode), False))
+                        stack.append((components, True, True))
+                        stack.extend(pending)
+                        continue
+                    anchor = unit_fd if components else parent_fd
+                    child, expected = components[-1] if components else (name, identity)
+                    with _reopen_data_directory(anchor, components[:-1]) as parent:
+                        info = os.stat(child, dir_fd=parent, follow_symlinks=False)
+                        _data_identity(info, device, expected)
+                        yield parent, child, info
+                except FileNotFoundError:
+                    pass  # Another cleaner already removed it.
+    except FileNotFoundError:
+        pass
+
+
+def _data_item_stats(parent_fd, name):
+    """Logical bytes, newest file/link time, empty-tree fallback, and identity."""
+    size, newest_file, newest_directory, identity = 0, None, 0, None
+    with closing(_walk_data_item(parent_fd, name)) as items:
+        for parent, child, info in items:
+            if parent == parent_fd and child == name:
+                identity = (info.st_dev, info.st_ino)
+            if stat.S_ISDIR(info.st_mode):
+                newest_directory = max(newest_directory, info.st_mtime)
+            else:
+                size += info.st_size
+                newest_file = info.st_mtime if newest_file is None else max(newest_file, info.st_mtime)
+    return (size, newest_file, newest_directory, identity) if identity is not None else None
+
+
+def _remove_data_item(parent_fd, name, expected_identity=None):
+    removed = False
+    with closing(_walk_data_item(parent_fd, name, expected_identity)) as items:
+        for parent, child, info in items:
+            try:
+                if stat.S_ISDIR(info.st_mode):
+                    os.rmdir(child, dir_fd=parent)
+                else:
+                    os.unlink(child, dir_fd=parent)
+                if parent == parent_fd and child == name:
+                    removed = True
+            except FileNotFoundError:
+                pass
+    return removed
+
+
+def _prune_warning(path, exc):
+    print(f'aiwork-config: skipping cleanup of {path}: {exc.strerror or str(exc)}', file=sys.stderr)
+
+
+def prune_data(*, dry_run: bool = False) -> list[dict]:
+    """Prune expired first-level artifacts using DATA_ENTRIES, or list them only.
+
+    Directories age by their newest contained file/link. Empty trees use their
+    newest directory time. Sizes are logical file/link bytes; contents are never read.
+    """
+    root = data_dir()
+    now = time.time()
+    records = []
+    try:
+        with _data_directory(root) as root_fd:
+            if root_fd is None:
+                raise ConfigError(_missing_data_dir(root))
+            for entry in DATA_ENTRIES:
+                if entry['keep_days'] is None:
+                    continue
+                name = entry['name']
+                if not name or '/' in name or name in ('.', '..'):
+                    raise ConfigError('invalid data registry child name')
+                cutoff = now - entry['keep_days'] * 24 * 60 * 60
+                try:
+                    with _data_directory(name, root_fd) as entry_fd:
+                        if entry_fd is None:
+                            continue
+                        if os.fstat(entry_fd).st_dev != os.fstat(root_fd).st_dev:
+                            raise OSError(errno.EXDEV, 'different filesystem')
+                        with os.scandir(entry_fd) as children:
+                            names = sorted(child.name for child in children)
+                        for child in names:
+                            path = root / name / child
+                            try:
+                                measured = _data_item_stats(entry_fd, child)
+                                if measured is None:
+                                    continue
+                                size, file_time, directory_time, identity = measured
+                                modified = file_time if file_time is not None else directory_time
+                                if modified >= cutoff:
+                                    continue
+                                if not dry_run:
+                                    checked = _data_item_stats(entry_fd, child)
+                                    if checked is None:
+                                        continue
+                                    if checked[3] != identity:
+                                        raise OSError(errno.ESTALE, 'item changed during cleanup')
+                                    size, file_time, directory_time, _identity = checked
+                                    modified = file_time if file_time is not None else directory_time
+                                    if modified >= cutoff or not _remove_data_item(entry_fd, child, identity):
+                                        continue
+                                records.append({'path': str(path), 'size_bytes': size,
+                                                'last_modified': datetime.fromtimestamp(modified, timezone.utc).isoformat()})
+                            except OSError as exc:
+                                _prune_warning(path, exc)
+                except OSError as exc:
+                    _prune_warning(root / name, exc)
+    except OSError as exc:
+        _prune_warning(root, exc)
+    return records
 
 
 def setting_path(name: str) -> Path:

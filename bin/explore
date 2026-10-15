@@ -19,7 +19,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _aiwork_config import ConfigError, data_dir, data_path
+from _aiwork_config import ConfigError, data_dir, data_path, prune_data
 import _leg_session
 from _leg_session import (
     READER_TIMEOUT_ENV,
@@ -154,6 +154,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         data_dir()
+        prune_data()
     except ConfigError as exc:
         print(f"explore: {exc}", file=sys.stderr)
         return 1
