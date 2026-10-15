@@ -32,8 +32,9 @@ check(){ # check "desc" COND_RC   (0 => pass)
 
 # 判卷工具自己不许碰留下的评审命令所用的本机凭证和运行期 home。
 OWNER_CRED_DIR="/root/.kimi-code/credentials"
-OWNER_KIMI_HOME="$("$BIN/aiwork-config" data-path kimi-review-home)"
-OWNER_MIMO_CFG="$("$BIN/aiwork-config" data-path mimo-review-home)/mimocode/mimocode.json"
+# Legacy homes are read-only fingerprint targets until the separate migration.
+OWNER_KIMI_HOME="$("$BIN/aiwork-config" data-path)/kimi-review-home"
+OWNER_MIMO_CFG="$("$BIN/aiwork-config" data-path)/mimo-review-home/mimocode/mimocode.json"
 _fp1() {   # 单个路径的指纹;**先判 -L**:符号链接要当链接看,不能被 -f/-d 吞掉
   local p="$1" n; n="$(basename "$p")"
   if   [[ -L "$p" ]]; then printf '%s=link->%s;' "$n" "$(readlink "$p" 2>/dev/null)"
@@ -1153,26 +1154,21 @@ v38_leg_runtime_home_outside_repo() {
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
   printf '# t\n' > "$d/t.md"
 
+  # 历史记录：以下为已移除的默认路径查询断言的事故说明。
   # ── ① 默认 home 必须在仓外。**查工件不查自述**:让 wrapper 自己把它解析出来打印,
   #    而不是我在这儿 grep 一个字符串。
   # ⚠️ 必须隔离 HOME:不设 KIMI_REVIEW_HOME 是**故意的**(要问出默认值),但那会让
   #    subkimi 的种子同步(bin/subkimi:100-110)去写**业主真实的**运行期 home ——
   #    判据每跑一次就把他的 config/hooks 重置一次。假 HOME 一样问得出"默认 home
   #    在不在仓外",而那正是本条要查的东西。2026-08-25 panel 抓到,V45 红过。
-  local home_default fh38="$d/fh38"; mkdir -p "$fh38/.local/share/aiwork"
-  home_default="$(env -u AIWORK_DATA_DIR HOME="$fh38" REVIEW_PRINT_HOME=1 bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/x.log" "$repo" 2>/dev/null | tail -1)"
-  [[ -n "$home_default" ]] && case "$home_default" in "$repo"/*|"$repo") false ;; *) true ;; esac
-  check "V38: subkimi 的默认运行期 home 在**被评审的仓外面**(解析出来的是:${home_default:-没打印})" $?
   # ⚠️ **"问一句默认值"不许有副作用**。假 HOME 让运行期 home 不存在 ⇒ subkimi 的
   #    首次同步(bin/subkimi:102-104)会把**整份活种子**(101MB,含那条指向业主真凭证
   #    的符号链接)抄进夹具 —— 我 2026-08-25 修写穿 bug 时亲手引入的:V40① 那边刚
   #    改成不产生通道,这里又把通道造了一遍。三条腿里两条独立指出,探针实测 100MB。
   #    这两条断言盯的就是它,别只盯体积:**链接本身才是那个通道**。
-  local fh38_sz; fh38_sz="$(du -sm "$fh38" 2>/dev/null | cut -f1)"
-  [[ ! -e "$fh38/.local/share/aiwork/kimi-review-home/credentials" ]]
-  check "V38: 问一句默认 home **不许**把种子里的 credentials 链接抄进夹具(通道)" $?
-  [[ "${fh38_sz:-999}" -lt 5 ]]
-  check "V38: 问一句默认 home **不许**整份抄种子(夹具实测 ${fh38_sz:-?}MB,要 <5MB)" $?
+
+  # Default-home lifecycle and seed isolation now run through the CLI stubs
+  # in test_review_homes.py, without a query-only path that bypasses review.
 
   # ── ② home 落在仓内 ⇒ 响亮拒跑,而且说得出原因(不许让底座去撞 EROFS)
   #

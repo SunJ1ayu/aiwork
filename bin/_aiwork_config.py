@@ -40,43 +40,27 @@ def data_path(name: str = '') -> Path:
 
 
 # 数据目录里应该有哪些东西。只在这里登记。
-# kind 只取 工作产物 / 运行目录 / 其他。credentials 表示这个目录里可能放凭证。
+# kind 只取 工作产物 / 运行目录 / 其他。数据目录不放凭证。
 DATA_ENTRIES = (
     {
         'name': 'logs',
         'purpose': '任务和评审留下的日志，包括失败记录。',
         'kind': '工作产物',
-        'credentials': False,
     },
     {
         'name': 'worktrees',
-        'purpose': '执行方开 PR 时建的独立工作树。',
-        'kind': '运行目录',
-        'credentials': False,
+        'purpose': '执行方开 PR 时保留改动的独立工作树。',
+        'kind': '工作产物',
     },
     {
         'name': 'explore',
         'purpose': '发散时每条腿的最后一条消息。',
         'kind': '工作产物',
-        'credentials': False,
-    },
-    {
-        'name': 'kimi-review-home',
-        'purpose': 'Kimi 评审的运行期 home，含从种子同步的配置和本机凭证。',
-        'kind': '运行目录',
-        'credentials': True,
-    },
-    {
-        'name': 'mimo-review-home',
-        'purpose': 'MiMo 评审的运行期配置目录。',
-        'kind': '运行目录',
-        'credentials': False,
     },
     {
         'name': 'tasks',
         'purpose': '交给评审的任务书。',
         'kind': '工作产物',
-        'credentials': False,
     },
 )
 

@@ -62,9 +62,9 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 REPO_DIR="$(review_workspace_repo)"
-RUNTIME_HOME="$REVIEW_WORKSPACE_DIR/cursor-home"
-EMPTY_WORKSPACE="$REVIEW_WORKSPACE_DIR/cursor-workspace"
-mkdir -m 700 -p "$RUNTIME_HOME/.config/cursor" "$RUNTIME_HOME/.cursor" "$EMPTY_WORKSPACE"
+RUNTIME_HOME="$(review_workspace_home cursor-home)" || exit 78
+EMPTY_WORKSPACE="$(review_workspace_home cursor-workspace)" || exit 78
+mkdir -m 700 -p "$RUNTIME_HOME/.config/cursor" "$RUNTIME_HOME/.cursor"
 # Read-only tools cannot run git diff. Supply the exact snapshot delta as a
 # readable file, including untracked files, without modifying the snapshot.
 DIFF_BASE="$REVIEW_SNAPSHOT_HEAD"

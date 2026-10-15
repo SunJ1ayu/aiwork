@@ -39,8 +39,8 @@
 ## 本机设置与数据
 
 本机设置位于 `~/.config/aiwork/`，包含 `models.env`、GitHub App 角色配置及私钥。
-本机运行数据在 <数据目录>（见 README「本机设置」），里面有哪些东西见 aiwork 仓库 bin/_aiwork_config.py 的登记表。
-统一入口是 `bin/aiwork-config`；凭证、配置备份、会话及原始日志留在本机。
+本机数据目录入口见 README「本机设置」，里面有哪些东西见 aiwork 仓库 bin/_aiwork_config.py 的登记表。
+统一入口是 `bin/aiwork-config`；评审运行目录见 README「评审运行目录」。
 
 可用通道包括 Codex、Cursor、DeepSeek、Kimi、MiMo。每个通道都能写代码也能评审；同一个 PR 的评审要换一家，由关卡判断。默认模型读取本机设置。
 正式评审入口是 `review-pr`。要多家评审就并行跑几次 `review-pr`。

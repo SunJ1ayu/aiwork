@@ -80,7 +80,7 @@ class DataDirRegistryTest(unittest.TestCase):
         entries = registry_entries()
         seen = []
         for entry in entries:
-            self.assertEqual(set(entry), {'name', 'purpose', 'kind', 'credentials'})
+            self.assertEqual(set(entry), {'name', 'purpose', 'kind'})
             name = entry['name']
             self.assertIsInstance(name, str)
             self.assertTrue(name)
@@ -88,7 +88,6 @@ class DataDirRegistryTest(unittest.TestCase):
             self.assertIsInstance(entry['purpose'], str)
             self.assertTrue(entry['purpose'].strip())
             self.assertIn(entry['kind'], KINDS)
-            self.assertIsInstance(entry['credentials'], bool)
             seen.append(name)
         self.assertEqual(len(seen), len(set(seen)))
         tree = ast.parse(CONFIG.read_text(encoding='utf-8'))

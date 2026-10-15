@@ -3,7 +3,6 @@ set -euo pipefail
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
-
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
 # 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
@@ -32,6 +31,9 @@ Environment:
   MIMO_CLI_MODEL     optional, provider/model passed to `mimo run -m`
                      default: ~/.config/aiwork/models.env
   MIMO_CLI_TIMEOUT   optional, seconds before timeout, default 900
+  MIMO_REVIEW_HOME   optional, caller-owned home; default is a disposable workspace home
+                     (override: no seed rendering or cleanup; checked by _review-home-guard.sh;
+                      MiMo still rewrites the isolated review config)
 
 Examples:
   <数据目录> 用 aiwork-config data-path 查。
@@ -122,51 +124,8 @@ command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: m
 # 只跟 HOME 走,换 HOME 会把凭证一起换掉、腿当场没法认证;换 XDG_CONFIG_HOME
 # 只挪配置,凭证不动。
 REVIEW_AGENT="aiwork-review"
-# 覆盖变量只决定运行目录放哪，不能跳过数据目录存在性检查。
+# MIMO_REVIEW_HOME 的用法见上方 Environment；覆盖时仍检查数据目录存在。
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
-MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$("$BIN_DIR/aiwork-config" data-path mimo-review-home)}" || exit 78
-# 运行期 home 不许在被评审的仓里(共享闸)。
-review_home_guard mimo "$MIMO_CFG_HOME" "$REPO_DIR" MIMO_REVIEW_HOME || exit 1
-# 配置**每次重写**:它就是那把锁,不许留隔夜残留(判据查的也是它)。
-umask 077
-mkdir -p "$MIMO_CFG_HOME/mimocode"
-  python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$REVIEW_AGENT" "$MODE" <<'PYCFG'
-import json, os, sys
-cfgpath, agent, mode = sys.argv[1:4]
-# 默认拒绝的姿态:除了 read/glob/grep/bash,能关的全关。
-# 名字是 `mimo debug agent` 解析出来的全集 —— 关不掉的会在判据里露出来。
-tools = {"write": False, "edit": False, "patch": False, "task": False,
-         "webfetch": False, "websearch": False, "skill": False,
-         "actor": False, "workflow": False, "memory": False,
-         "change_directory": False, "history": False, "plan_exit": False,
-         "question": False, "todowrite": False, "todoread": False, "invalid": False,
-         "bash": True, "read": True, "glob": True, "grep": True}
-# Bash 跑在每腿独立的可写副本里，允许项目自己的 tests/lint/build；原仓由
-# 外层 ro-repo-exec 保护。Write/Edit/Task 等 agent 写口仍保持关闭。
-if mode == "review":
-    bash_perm = "allow"
-else:
-    # explore reads the repo. Bash stays limited to read-only git; read/glob/grep
-    # are the file tools. The task states what the answer must contain.
-    bash_perm = {"*": "deny", "git diff*": "allow", "git log*": "allow",
-                 "git status*": "allow", "git show*": "allow"}
-perm = {"write": "deny", "edit": "deny", "patch": "deny", "task": "deny",
-        "webfetch": "deny", "external_directory": "deny", "bash": bash_perm}
-cfg = {"agent": {agent: {"description": "aiwork isolated review leg",
-                         "mode": "primary", "tools": tools, "permission": perm}}}
-# **原子落盘**(2026-08-19,第三轮四审 subkimi 抓到):直接 `open(cfgpath,"w")`
-# 是 truncate 之后逐步写 —— 两个 agent 并发跑 review 时共享同一份配置
-# (MIMO_REVIEW_HOME 没设时都落在 <数据目录>/mimo-review-home,
-#  <数据目录> 用 aiwork-config data-path 查),
-# 另一边可能读到半截 JSON。窗口小,但**失败形态没验过**:mimo 解析不了这份配置
-# 会不会回退到内置 plan 档(写口全开的那个,本单整单就是在推翻它)—— 不去猜它,
-# 直接把窗口关掉。tmp 由上面的 umask 077 保证也是 600,replace 是 POSIX 原子改名。
-tmpath = cfgpath + ".tmp." + str(os.getpid())
-with open(tmpath, "w") as fh:
-    json.dump(cfg, fh, indent=2)
-os.replace(tmpath, cfgpath)
-PYCFG
-chmod 600 "$MIMO_CFG_HOME/mimocode/mimocode.json"
 
 case "$MODE" in
   review)
@@ -198,11 +157,6 @@ if ! review_workspace_prepare "$SOURCE_REPO" submimo; then
   exit 78
 fi
 REVIEW_WORKSPACE_ACTIVE=1
-SOURCE_REPO="$REVIEW_SOURCE_REPO"
-RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
-REPO_DIR="$(review_workspace_repo)" || exit 78
-review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
-
 _submimo_cleanup() {
   local rc=$?
   [[ -n "${CLEANUP_TASK:-}" ]] && rm -f -- "$CLEANUP_TASK"
@@ -214,6 +168,56 @@ _submimo_cleanup() {
   exit "$rc"
 }
 trap _submimo_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+SOURCE_REPO="$REVIEW_SOURCE_REPO"
+RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+REPO_DIR="$(review_workspace_repo)" || exit 78
+MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$(review_workspace_home mimo-home)}" || exit 78
+# 运行期 home 不许在被评审的仓里(共享闸)。
+review_home_guard mimo "$MIMO_CFG_HOME" "$SOURCE_REPO" MIMO_REVIEW_HOME || exit 1
+# 配置**每次重写**:它就是那把锁,不许留隔夜残留(判据查的也是它)。
+umask 077
+mkdir -p "$MIMO_CFG_HOME/mimocode"
+  python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$REVIEW_AGENT" "$MODE" <<'PYCFG'
+import json, os, sys
+cfgpath, agent, mode = sys.argv[1:4]
+# 默认拒绝的姿态:除了 read/glob/grep/bash,能关的全关。
+# 名字是 `mimo debug agent` 解析出来的全集 —— 关不掉的会在判据里露出来。
+tools = {"write": False, "edit": False, "patch": False, "task": False,
+         "webfetch": False, "websearch": False, "skill": False,
+         "actor": False, "workflow": False, "memory": False,
+         "change_directory": False, "history": False, "plan_exit": False,
+         "question": False, "todowrite": False, "todoread": False, "invalid": False,
+         "bash": True, "read": True, "glob": True, "grep": True}
+# Bash 跑在每腿独立的可写副本里，允许项目自己的 tests/lint/build；原仓由
+# 外层 ro-repo-exec 保护。Write/Edit/Task 等 agent 写口仍保持关闭。
+if mode == "review":
+    bash_perm = "allow"
+else:
+    # explore reads the repo. Bash stays limited to read-only git; read/glob/grep
+    # are the file tools. The task states what the answer must contain.
+    bash_perm = {"*": "deny", "git diff*": "allow", "git log*": "allow",
+                 "git status*": "allow", "git show*": "allow"}
+perm = {"write": "deny", "edit": "deny", "patch": "deny", "task": "deny",
+        "webfetch": "deny", "external_directory": "deny", "bash": bash_perm}
+cfg = {"agent": {agent: {"description": "aiwork isolated review leg",
+                         "mode": "primary", "tools": tools, "permission": perm}}}
+# **原子落盘**(2026-08-19,第三轮四审 subkimi 抓到):直接 `open(cfgpath,"w")`
+# 是 truncate 之后逐步写 —— 两个 agent 并发跑 review 时共享同一份配置
+# (当时 MIMO_REVIEW_HOME 没设时都落在 <数据目录>/mimo-review-home,
+#  <数据目录> 用 aiwork-config data-path 查),
+# 另一边可能读到半截 JSON。窗口小,但**失败形态没验过**:mimo 解析不了这份配置
+# 会不会回退到内置 plan 档(写口全开的那个,本单整单就是在推翻它)—— 不去猜它,
+# 直接把窗口关掉。tmp 由上面的 umask 077 保证也是 600,replace 是 POSIX 原子改名。
+tmpath = cfgpath + ".tmp." + str(os.getpid())
+with open(tmpath, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+os.replace(tmpath, cfgpath)
+PYCFG
+chmod 600 "$MIMO_CFG_HOME/mimocode/mimocode.json"
+
+review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
 # task 文件若在 repo 外,复制一份进 repo 再跑:mimocode 沙箱只放行 --dir 内的路径,
 # headless 下越界读=权限自动拒(历史 review 失败的头号死因)。--file 附件之外,模型

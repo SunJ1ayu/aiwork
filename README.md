@@ -7,8 +7,7 @@ Multi-model implementation and PR review tooling.
 任务的操作步骤见 [workflow/CLAUDE.md](workflow/CLAUDE.md)；工具用法在 `workflow/skills/`。
 `~/CLAUDE.md` 和 `~/.claude/skills/delegate` 是由 `bin/sync-workflow-docs` 管理的部署副本。
 
-GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；原始日志、配置、会话及本机资料
-留在机器的数据目录。
+GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；本机资料的存放位置见[「本机设置」](#本机设置)。
 
 ## History
 
@@ -33,7 +32,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 - `templates/` starter task file (`review-task.md`) and the two gate workflow templates
 - `tests/` regression oracles for this tooling itself
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
-- `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use the data directory
+- `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use disposable review workspaces
 
 ## Review commands
 
@@ -119,8 +118,20 @@ mimo                      # or: mimo providers login / list
 这些子目录都通过该数据入口定位，有哪些见登记表；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。
 
+## 评审运行目录
+
 `kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。
-运行期配置和 hooks 只从种子同步这两类文件；凭证、缓存、会话、日志、索引和遥测留在数据目录，
-不会从种子目录整份复制。运行目录缺少凭证会明确拒绝运行。
+每次只渲染配置和 guard；credentials 链接到 Kimi CLI 自己的凭证目录。缺少 `kimi-code.json` 时拒跑并提示先用 kimi 登录。
+`submimo` 的临时 `XDG_CONFIG_HOME` 与评审副本一起删除，凭证仍由 MiMo 自己管理。
+`KIMI_REVIEW_HOME`、`MIMO_REVIEW_HOME` 指定的目录由调用方管理：不渲染种子、不删除，仍经过 `review_home_guard`；MiMo 照旧重写隔离评审配置。
+
+### 加新评审腿的规矩
+
+- 运行目录在 `review_workspace_prepare` 之后调用 `_review-workspace.sh` 的 `review_workspace_home <名字>` 创建（权限 700），由现有 workspace 清理一起删除。
+- 登录凭证只用各家 CLI 自己的位置，不复制凭证。
+- CLI 自己的会话记录能关就关。
+- 数据目录里不放凭证或凭证链接，只留工作产物。
+
+`tests/test_review_homes.py` 从 `bin/sub*` 自动发现评审腿，用 CLI 桩检查正常、失败和超时后的清理；新腿缺桩或跑不通会失败。
 
 普通缓存 `__pycache__`、`.pytest_cache`、`.mutation-state` 保持现状。
