@@ -146,6 +146,15 @@ class ExploreTests(unittest.TestCase):
     def _run(self, legs):
         return self._run_at(legs, str(self.repo), None)
 
+    def test_startup_prunes_before_repository_validation(self):
+        expired = self.data / 'tasks/old.md'
+        expired.parent.mkdir()
+        expired.write_text('old')
+        os.utime(expired, (1, 1))
+        rc, _stdout, _stderr = self._run_at(['subcodex'], str(self.root / 'missing'), None)
+        self.assertEqual(rc, 2)
+        self.assertFalse(expired.exists())
+
     def _run_at(self, legs, repo_arg, cwd):
         stdout, stderr = io.StringIO(), io.StringIO()
         argv = ["explore", str(self.brief), "--repo", repo_arg]

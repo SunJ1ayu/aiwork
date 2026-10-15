@@ -80,7 +80,12 @@ class DataDirRegistryTest(unittest.TestCase):
         entries = registry_entries()
         seen = []
         for entry in entries:
-            self.assertEqual(set(entry), {'name', 'purpose', 'kind'})
+            self.assertEqual(set(entry), {'name', 'purpose', 'kind', 'keep_days'})
+            if entry['name'] == 'worktrees':
+                self.assertIsNone(entry['keep_days'])
+            else:
+                self.assertIs(type(entry['keep_days']), int)
+                self.assertGreater(entry['keep_days'], 0)
             name = entry['name']
             self.assertIsInstance(name, str)
             self.assertTrue(name)

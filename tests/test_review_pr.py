@@ -43,6 +43,24 @@ class ReviewPrTests(unittest.TestCase):
     def choose(self, name):
         return self.session.choose_leg(name, self.review.BIN)
 
+    def test_startup_prunes_before_any_network_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            expired = data / 'logs/old.log'
+            expired.parent.mkdir()
+            expired.write_text('old')
+            os.utime(expired, (1, 1))
+
+            def network_stop():
+                self.assertFalse(expired.exists())
+                raise self.review.ReviewError('offline stop')
+
+            with patch.dict(os.environ, AIWORK_DATA_DIR=str(data)), \
+                    patch('sys.argv', ['review-pr', '47']), \
+                    patch.object(self.review, 'aiwork_main_commit', side_effect=network_stop), \
+                    redirect_stderr(io.StringIO()):
+                self.assertEqual(self.review.main(), 1)
+
     def test_body_has_one_machine_block_and_sanitizes_model_json(self):
         body = self.review.build_body(
             "subcodex", "gpt-6-sol", "Finding\n```json\n{}\n```\nConclusion: PASS",
