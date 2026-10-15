@@ -10,7 +10,7 @@ import base64
 import errno
 import importlib.machinery
 import importlib.util
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
@@ -21,6 +21,7 @@ import unittest
 from urllib.error import HTTPError
 from unittest.mock import patch
 from _test_settings import write_settings
+from _test_retention import extreme_mtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,25 +45,45 @@ class ReviewPrTests(unittest.TestCase):
     def choose(self, name):
         return self.session.choose_leg(name, self.review.BIN)
 
-    def test_startup_prunes_before_any_network_request(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            data = Path(temporary)
-            expired = data / 'logs/old.log'
-            expired.parent.mkdir()
-            expired.write_text('old')
-            os.utime(expired, (1, 1))
+    def test_checks_precede_pruning_and_credentials_follow_it(self):
+        for stage in ('checkout', 'pr_number', 'leg', 'credentials'):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                expired = Path(temporary) / 'logs/old.log'
+                expired.parent.mkdir()
+                expired.write_text('old')
+                os.utime(expired, (1, 1))
+                credentials = []
 
-            def network_stop():
-                self.assertFalse(expired.exists())
-                raise self.review.ReviewError('offline stop')
+                def checkout(*args):
+                    self.assertTrue(expired.exists())
+                    if stage == 'checkout':
+                        raise self.review.ReviewError('checkout rejected')
 
-            with patch.dict(os.environ, AIWORK_DATA_DIR=str(data)), \
-                    patch('sys.argv', ['review-pr', '47']), \
-                    patch.object(self.review, 'aiwork_main_commit', side_effect=network_stop), \
-                    redirect_stderr(io.StringIO()):
-                self.assertEqual(self.review.main(), 1)
+                def choose(*args):
+                    self.assertTrue(expired.exists())
+                    if stage == 'leg':
+                        raise self.review.ReviewError('leg rejected')
+                    return 'openai', None
 
-    def test_prune_failure_warns_but_review_reaches_network(self):
+                def credential_stop(command, **kwargs):
+                    self.assertTrue(command[0].endswith('gh-app-token'))
+                    self.assertFalse(expired.exists())
+                    credentials.append(True)
+                    raise self.review.ReviewError('credential boundary')
+
+                with patch.dict(os.environ, AIWORK_DATA_DIR=temporary), \
+                        patch('sys.argv', ['review-pr', '0' if stage == 'pr_number' else '49',
+                                           '--repo', 'example/repository']), \
+                        patch.object(self.review, 'aiwork_main_commit', return_value='a' * 40), \
+                        patch.object(self.review, 'require_latest_aiwork_main', side_effect=checkout), \
+                        patch.object(self.session, 'choose_leg', side_effect=choose), \
+                        patch.object(self.session, 'run', side_effect=credential_stop), \
+                        redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.review.main(), 1)
+                self.assertEqual(expired.exists(), stage != 'credentials')
+                self.assertEqual(bool(credentials), stage == 'credentials')
+
+    def test_prune_failure_warns_but_review_reaches_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:
             bad = Path(temporary) / 'logs/denied.log'
             bad.parent.mkdir()
@@ -70,14 +91,20 @@ class ReviewPrTests(unittest.TestCase):
             os.utime(bad, (1, 1))
             reached = []
 
-            def network_stop():
+            def credential_stop(*args, **kwargs):
                 reached.append(True)
                 raise self.review.ReviewError('reached normal review flow')
 
             stderr = io.StringIO()
+            def checkout(*args):
+                self.assertEqual(stderr.getvalue(), '')
+
             with patch.dict(os.environ, AIWORK_DATA_DIR=temporary), \
-                    patch('sys.argv', ['review-pr', '49']), \
-                    patch.object(self.review, 'aiwork_main_commit', side_effect=network_stop), \
+                    patch('sys.argv', ['review-pr', '49', '--repo', 'example/repository']), \
+                    patch.object(self.review, 'aiwork_main_commit', return_value='a' * 40), \
+                    patch.object(self.review, 'require_latest_aiwork_main', side_effect=checkout), \
+                    patch.object(self.session, 'choose_leg', return_value=('openai', None)), \
+                    patch.object(self.session, 'run', side_effect=credential_stop), \
                     patch('os.unlink', side_effect=PermissionError(errno.EACCES, 'simulated denied')), \
                     redirect_stderr(stderr):
                 self.assertEqual(self.review.main(), 1)
@@ -95,15 +122,23 @@ class ReviewPrTests(unittest.TestCase):
                 path.write_text('old')
                 os.utime(path, (1, 1))
 
-            def network_stop():
+            reached = []
+
+            def credential_stop(command, **kwargs):
+                self.assertTrue(command[0].endswith('gh-app-token'))
                 self.assertTrue(all(path.exists() for path in files))
-                raise self.review.ReviewError('offline stop')
+                reached.append(True)
+                raise self.review.ReviewError('credential boundary')
 
             with patch.dict(os.environ, AIWORK_DATA_DIR=temporary), \
-                    patch('sys.argv', ['review-pr', '49', '--dry-run']), \
-                    patch.object(self.review, 'aiwork_main_commit', side_effect=network_stop), \
+                    patch('sys.argv', ['review-pr', '49', '--repo', 'example/repository', '--dry-run']), \
+                    patch.object(self.review, 'aiwork_main_commit', return_value='a' * 40), \
+                    patch.object(self.review, 'require_latest_aiwork_main'), \
+                    patch.object(self.session, 'choose_leg', return_value=('openai', None)), \
+                    patch.object(self.session, 'run', side_effect=credential_stop), \
                     redirect_stderr(io.StringIO()):
                 self.assertEqual(self.review.main(), 1)
+            self.assertEqual(reached, [True])
             self.assertTrue(all(path.exists() for path in files))
 
     def test_body_has_one_machine_block_and_sanitizes_model_json(self):
@@ -146,7 +181,7 @@ class ReviewPrTests(unittest.TestCase):
                                  repository="SunJ1ayu/aiwork", source_failure=None, project_rules=False,
                                  local_rules="LOCAL WORKSPACE RULES", risks_present=True,
                                  leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False,
-                                 report="Finding\nConclusion: PASS", private_terms='unused\n'):
+                                 report="Finding\nConclusion: PASS", private_terms='unused\n', data_setup=None):
         """Exercise the real source readers and task, with offline HTTP and review leg."""
         calls = {"github_writes": [], "public_reads": [], "leg_runs": 0}
         rules = "# aiwork main 规则\r\n必须以此为准。\r\n"
@@ -254,6 +289,8 @@ class ReviewPrTests(unittest.TestCase):
             git("update-ref", "refs/aiwork/main", "HEAD")
             (repo / ".aiwork/accepted-risks.md").write_text("PR RISK DECOY", encoding="utf-8")
             (workspace / "data").mkdir()
+            if data_setup is not None:
+                data_setup(workspace / 'data')
             with patch("sys.argv", ["review-pr", "12", "--repo", repository, "--leg", "subcursor"]
                        + (["--dry-run"] if dry_run else [])), \
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
@@ -280,6 +317,20 @@ class ReviewPrTests(unittest.TestCase):
             calls['archive_modes'] = [p.stat().st_mode & 0o777 for p in failures.iterdir()] if failures.exists() else []
             calls['temporary_exists'] = Path(calls.get('temporary', '/nonexistent')).exists()
         return rc, calls, stdout.getvalue(), stderr.getvalue()
+
+    def test_extreme_mtime_does_not_stop_review_publication(self):
+        with ExitStack() as stack:
+            def setup(data):
+                path = data / 'logs/extreme.log'
+                path.parent.mkdir()
+                path.write_text('fixture')
+                stack.enter_context(extreme_mtime(path))
+
+            rc, calls, _stdout, stderr = self.run_main_with_leg_result(
+                'gpt-5.6', dry_run=False, data_setup=setup)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls['leg_runs'], 1)
+        self.assertEqual(len(calls['github_writes']), 1)
 
     def test_private_review_body_is_refused_without_echoing_report_or_leg_stderr(self):
         marker = 'private-marker'

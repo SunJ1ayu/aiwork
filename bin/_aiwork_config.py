@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 from contextlib import closing, contextmanager
-from datetime import datetime, timezone
 import errno
 from pathlib import Path
 import re
@@ -87,9 +86,7 @@ def _data_directory(name, parent_fd=None):
     """Pin a directory without traversing a symlink, including during deletion."""
     try:
         fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
-    except OSError as exc:
-        if exc.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
-            raise
+    except FileNotFoundError:
         yield None
         return
     try:
@@ -199,7 +196,7 @@ def _remove_data_item(parent_fd, name, expected_identity=None):
 
 
 def _prune_warning(path, exc):
-    print(f'aiwork-config: skipping cleanup of {path}: {exc.strerror or str(exc)}', file=sys.stderr)
+    print(f'data cleanup: skipping {path}: {exc.strerror or str(exc)}', file=sys.stderr)
 
 
 def prune_data(*, dry_run: bool = False) -> list[dict]:
@@ -251,7 +248,7 @@ def prune_data(*, dry_run: bool = False) -> list[dict]:
                                     if modified >= cutoff or not _remove_data_item(entry_fd, child, identity):
                                         continue
                                 records.append({'path': str(path), 'size_bytes': size,
-                                                'last_modified': datetime.fromtimestamp(modified, timezone.utc).isoformat()})
+                                                'last_modified': modified})
                             except OSError as exc:
                                 _prune_warning(path, exc)
                 except OSError as exc:
