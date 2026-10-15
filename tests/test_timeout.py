@@ -137,12 +137,14 @@ class Timeout(unittest.TestCase):
             "aiwork-timeout: timed out after 1s; terminating process group"])
 
     def test_outer_deadline_bounds_nested_long_grace_and_closes_output(self):
+        limit, grace = 2, 0.3
         started = time.monotonic()
-        with self.tree(limit="1", grace="0.3", nested=True) as (process, members):
-            process.wait(timeout=3)
+        with self.tree(limit=str(limit), grace=str(grace), nested=True) as (process, members):
+            process.wait(timeout=limit + grace + 2)
             _stdout, stderr = process.communicate(timeout=1)
             self.assertEqual(process.returncode, 124, stderr)
-            self.assertLess(time.monotonic() - started, 2.3, stderr)
+            # One second covers interpreter startup; the inner grace is 30s.
+            self.assertLess(time.monotonic() - started, limit + grace + 1, stderr)
             self.assert_stopped(members)
 
     def test_killed_supervisor_does_not_leave_its_group_or_output_open(self):
@@ -234,6 +236,15 @@ class Timeout(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "task input\n")
         self.assertEqual(result.stderr, "diagnostic\n")
+
+    def test_command_starts_with_default_sigpipe(self):
+        # A producer behind a closed pipe must die quietly, as under exec.
+        result = subprocess.run(
+            [str(TOOL), "5", "bash", "-c",
+             'yes | head -n 1 >/dev/null; exit "${PIPESTATUS[0]}"'],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 128 + signal.SIGPIPE, result.stderr)
+        self.assertEqual(result.stderr, "")
 
 
 if __name__ == "__main__":

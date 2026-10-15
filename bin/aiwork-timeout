@@ -64,6 +64,11 @@ def exec_command(identity, ready, command):
     if accepted != b"1":
         print("aiwork-timeout: watchdog did not accept command; refusing exec", file=sys.stderr)
         return 125
+    # Python ignores these at startup and exec keeps ignored signals; restore
+    # the dispositions Popen(restore_signals=True) would give the command.
+    for name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_DFL)
     try:
         os.execvpe(command[0], command, os.environ)
     except OSError as exc:
