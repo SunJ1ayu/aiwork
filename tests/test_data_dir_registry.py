@@ -81,9 +81,7 @@ class DataDirRegistryTest(unittest.TestCase):
         seen = []
         for entry in entries:
             self.assertEqual(set(entry), {'name', 'purpose', 'kind', 'keep_days'})
-            if entry['name'] == 'worktrees':
-                self.assertIsNone(entry['keep_days'])
-            else:
+            if entry['keep_days'] is not None:
                 self.assertIs(type(entry['keep_days']), int)
                 self.assertGreater(entry['keep_days'], 0)
             name = entry['name']

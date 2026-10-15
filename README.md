@@ -45,7 +45,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。源仓经 `ro-repo-exec` 只读，副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。
-  失败时打印脱敏后的 stderr 末 40 行，诊断留在数据目录 `logs/review-pr-failures/<run-id>/`，不含仓库检出和凭证助手。保留规矩见 `bin/_aiwork_config.py` 的 `DATA_ENTRIES`。
+  失败时打印脱敏后的 stderr 末 40 行，诊断留在数据目录 `review-failures/<run-id>/`，不含仓库检出和凭证助手。保留规矩见 `bin/_aiwork_config.py` 的 `DATA_ENTRIES`。旧的 `logs/review-pr-failures/` 不再写入，留在原地自然过期。
   任务在 diff 之后再次要求结论。完整 diff（含删除）放得下就内联。超过 `READER_INLINE_DIFF_BYTES`（200KB）时，任务只列每个文件的状态和行数，完整 diff 在快照文件 `aiwork-review.diff`。
   这条命令默认给评审命令 2400 秒；已有的超时环境变量可以覆盖。只有缺结论或输出被截断时重试一次，并在终端和发布的评审里写明。每次失败的尝试都留下，包括重试成功的那次；其他失败不重新启动评审命令。
 
@@ -114,7 +114,7 @@ mimo                      # or: mimo providers login / list
 `XDG_*`，因此 aiwork 数据入口不随供应商的 XDG 设置变化。查询路径本身不创建目录。
 数据目录要先存在，aiwork 不会自动创建它。数据目录要放在外接盘里面的一个子目录，不要直接用盘的挂载点(盘没挂上时，挂载点往往还是一个空目录，检查会误判通过)。
 数据目录里应该有哪些东西，以 `bin/_aiwork_config.py` 里的登记表为准。
-保留规矩同样只在该登记表的 `keep_days` 定义。`review-pr` 和 `explore` 启动时自动清理；也可手动运行 `bin/aiwork-config prune-data`，加 `--dry-run` 只列出候选路径、逻辑字节数和最后改动时间，不删除。
+保留规矩同样只在该登记表的 `keep_days` 定义。每次运行的产物要独立成为登记项下第一层的一个单位，只由创建它的那次运行写入，不往共用的容器目录里塞。`review-pr`（除 `--dry-run`）和 `explore` 启动时自动清理；清理某项失败时在 stderr 报出路径和原因，跳过后继续。也可手动运行 `bin/aiwork-config prune-data`，加 `--dry-run` 只列出候选路径、逻辑字节数和最后改动时间，不删除。
 
 这些子目录都通过该数据入口定位，有哪些见登记表；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。

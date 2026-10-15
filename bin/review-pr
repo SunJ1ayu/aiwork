@@ -102,7 +102,7 @@ def repository_from_origin() -> str:
 def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = True) -> None:
     destination = None
     try:
-        root = data_path("logs/review-pr-failures")
+        root = data_path("review-failures")
     except ConfigError:
         print("review-pr: 失败记录没能写进数据目录", file=sys.stderr)
     else:
@@ -112,7 +112,6 @@ def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = T
             destination.parent.chmod(0o700)
             shutil.copytree(directory, destination, symlinks=True,
                             ignore=shutil.ignore_patterns("repo", "askpass"))
-            os.utime(destination, None)
             print(f"review-pr: failure artifacts kept in {destination}", file=sys.stderr)
         except OSError as exc:
             print(f"review-pr: could not preserve failure artifacts: {redact(str(exc))}", file=sys.stderr)
@@ -353,7 +352,8 @@ def main() -> int:
     try:
         drop_inherited_git_env()
         data_dir()
-        prune_data()
+        if not args.dry_run:
+            prune_data()
         main_sha = aiwork_main_commit()
         require_latest_aiwork_main(main_sha)
         if args.pr < 1:

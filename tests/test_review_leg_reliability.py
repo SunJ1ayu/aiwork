@@ -326,7 +326,7 @@ class FailureArchiveTests(unittest.TestCase):
         self.directory = Path(self.tmp.name)
         self.source = self.directory / 'source'
         self.source.mkdir(mode=0o700)
-        self.archives = self.directory / 'data/logs/review-pr-failures'
+        self.archives = self.directory / 'data/review-failures'
         self.addCleanup(patch.stopall)
         patch.object(self.review, 'data_path', return_value=self.archives).start()
 

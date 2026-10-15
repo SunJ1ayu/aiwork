@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
 
 import base64
+import errno
 import importlib.machinery
 import importlib.util
 from contextlib import redirect_stderr, redirect_stdout
@@ -60,6 +61,50 @@ class ReviewPrTests(unittest.TestCase):
                     patch.object(self.review, 'aiwork_main_commit', side_effect=network_stop), \
                     redirect_stderr(io.StringIO()):
                 self.assertEqual(self.review.main(), 1)
+
+    def test_prune_failure_warns_but_review_reaches_network(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bad = Path(temporary) / 'logs/denied.log'
+            bad.parent.mkdir()
+            bad.write_text('old')
+            os.utime(bad, (1, 1))
+            reached = []
+
+            def network_stop():
+                reached.append(True)
+                raise self.review.ReviewError('reached normal review flow')
+
+            stderr = io.StringIO()
+            with patch.dict(os.environ, AIWORK_DATA_DIR=temporary), \
+                    patch('sys.argv', ['review-pr', '49']), \
+                    patch.object(self.review, 'aiwork_main_commit', side_effect=network_stop), \
+                    patch('os.unlink', side_effect=PermissionError(errno.EACCES, 'simulated denied')), \
+                    redirect_stderr(stderr):
+                self.assertEqual(self.review.main(), 1)
+            self.assertEqual(reached, [True])
+            self.assertTrue(bad.exists())
+            self.assertIn(str(bad), stderr.getvalue())
+            self.assertIn('simulated denied', stderr.getvalue())
+
+    def test_dry_run_does_not_delete_expired_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            files = [Path(temporary) / name for name in (
+                'logs/old.log', 'tasks/old.md', 'review-failures/run/review.log')]
+            for path in files:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('old')
+                os.utime(path, (1, 1))
+
+            def network_stop():
+                self.assertTrue(all(path.exists() for path in files))
+                raise self.review.ReviewError('offline stop')
+
+            with patch.dict(os.environ, AIWORK_DATA_DIR=temporary), \
+                    patch('sys.argv', ['review-pr', '49', '--dry-run']), \
+                    patch.object(self.review, 'aiwork_main_commit', side_effect=network_stop), \
+                    redirect_stderr(io.StringIO()):
+                self.assertEqual(self.review.main(), 1)
+            self.assertTrue(all(path.exists() for path in files))
 
     def test_body_has_one_machine_block_and_sanitizes_model_json(self):
         body = self.review.build_body(
@@ -228,7 +273,7 @@ class ReviewPrTests(unittest.TestCase):
                 rc = self.review.main()
                 calls["pr_state"] = state.call_args_list
                 calls["snapshot"] = snapshot.call_args
-            failures = workspace / 'data/logs/review-pr-failures'
+            failures = workspace / 'data/review-failures'
             calls['archives'] = {str(p): {str(f.relative_to(p)): f.read_bytes()
                                          for f in p.rglob('*') if f.is_file()}
                                  for p in failures.iterdir()} if failures.exists() else {}
@@ -960,7 +1005,7 @@ grep -q -F -- "$3" "$clone/$4"
                     patch.object(self.session, 'snapshot', side_effect=fail_in_collect), \
                     redirect_stdout(stdout), redirect_stderr(stderr):
                 rc = self.review.main()
-            failures = workspace / 'data/logs/review-pr-failures'
+            failures = workspace / 'data/review-failures'
             archives = list(failures.iterdir()) if failures.is_dir() else []
         text = stderr.getvalue()
         self.assertEqual(rc, 1)

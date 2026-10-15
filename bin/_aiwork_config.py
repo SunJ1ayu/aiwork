@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import errno
 from pathlib import Path
 import re
 import stat
+import sys
 import time
 
 
@@ -46,10 +47,17 @@ def data_path(name: str = '') -> Path:
 
 # 数据目录里应该有哪些东西。只在这里登记。
 # kind 只取 工作产物 / 运行目录 / 其他。数据目录不放凭证。
+# 每次运行的产物各占登记项下第一层的一个单位，只由创建它的那次运行写入；不共用多次运行的容器。
 DATA_ENTRIES = (
     {
         'name': 'logs',
-        'purpose': '任务和评审留下的日志，包括失败记录。',
+        'purpose': '任务和评审留下的日志。',
+        'kind': '工作产物',
+        'keep_days': 60,
+    },
+    {
+        'name': 'review-failures',
+        'purpose': '每次评审失败的独立诊断档案。',
         'kind': '工作产物',
         'keep_days': 60,
     },
@@ -90,55 +98,77 @@ def _data_directory(name, parent_fd=None):
         os.close(fd)
 
 
+def _walk_data_item(parent_fd, name, expected_identity=None):
+    """Yield a pinned, same-filesystem tree in postorder, without recursion."""
+    device = os.fstat(parent_fd).st_dev
+    stack = [(parent_fd, name, expected_identity, None)]
+    opened = set()
+    try:
+        while stack:
+            parent, child, expected, directory_fd = stack.pop()
+            try:
+                info = os.stat(child, dir_fd=parent, follow_symlinks=False)
+                identity = (info.st_dev, info.st_ino)
+                if info.st_dev != device:
+                    raise OSError(errno.EXDEV, f'different filesystem at {child}')
+                if expected is not None and identity != expected:
+                    raise OSError(errno.ESTALE, 'item changed during cleanup')
+                if directory_fd is not None or not stat.S_ISDIR(info.st_mode):
+                    yield parent, child, info
+                else:
+                    fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                    opened.add(fd)
+                    pinned = os.fstat(fd)
+                    if (pinned.st_dev, pinned.st_ino) != identity:
+                        raise OSError(errno.ESTALE, 'item changed during cleanup')
+                    with os.scandir(fd) as children:
+                        names = [entry.name for entry in children]
+                    stack.append((parent, child, identity, fd))
+                    stack.extend((fd, entry, None, None) for entry in names)
+            except FileNotFoundError:
+                pass  # Another cleaner already removed it.
+            finally:
+                if directory_fd is not None:
+                    os.close(directory_fd)
+                    opened.remove(directory_fd)
+    finally:
+        for fd in opened:
+            os.close(fd)
+
+
 def _data_item_stats(parent_fd, name):
     """Logical bytes, newest file/link time, empty-tree fallback, and identity."""
-    try:
-        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        identity = (info.st_dev, info.st_ino)
-        if not stat.S_ISDIR(info.st_mode):
-            return info.st_size, info.st_mtime, 0, identity
-        with _data_directory(name, parent_fd) as fd:
-            if fd is None or (os.fstat(fd).st_dev, os.fstat(fd).st_ino) != identity:
-                return None
-            size, newest_file, newest_directory = 0, None, info.st_mtime
-            with os.scandir(fd) as children:
-                for child in children:
-                    measured = _data_item_stats(fd, child.name)
-                    if measured is None:
-                        continue
-                    child_size, file_time, directory_time, _identity = measured
-                    size += child_size
-                    if file_time is not None:
-                        newest_file = file_time if newest_file is None else max(newest_file, file_time)
-                    newest_directory = max(newest_directory, directory_time)
-            return size, newest_file, newest_directory, identity
-    except FileNotFoundError:
-        return None
+    size, newest_file, newest_directory, identity = 0, None, 0, None
+    with closing(_walk_data_item(parent_fd, name)) as items:
+        for parent, child, info in items:
+            if parent == parent_fd and child == name:
+                identity = (info.st_dev, info.st_ino)
+            if stat.S_ISDIR(info.st_mode):
+                newest_directory = max(newest_directory, info.st_mtime)
+            else:
+                size += info.st_size
+                newest_file = info.st_mtime if newest_file is None else max(newest_file, info.st_mtime)
+    return (size, newest_file, newest_directory, identity) if identity is not None else None
 
 
 def _remove_data_item(parent_fd, name, expected_identity=None):
-    try:
-        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        identity = (info.st_dev, info.st_ino)
-        if expected_identity is not None and identity != expected_identity:
-            return False
-        if stat.S_ISDIR(info.st_mode):
-            with _data_directory(name, parent_fd) as fd:
-                if fd is None or (os.fstat(fd).st_dev, os.fstat(fd).st_ino) != identity:
-                    return False
-                with os.scandir(fd) as children:
-                    names = [child.name for child in children]
-                for child in names:
-                    _remove_data_item(fd, child)
-                current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-                if (current.st_dev, current.st_ino) != identity:
-                    return False
-                os.rmdir(name, dir_fd=parent_fd)
-        else:
-            os.unlink(name, dir_fd=parent_fd)
-        return True
-    except FileNotFoundError:
-        return False
+    removed = False
+    with closing(_walk_data_item(parent_fd, name, expected_identity)) as items:
+        for parent, child, info in items:
+            try:
+                if stat.S_ISDIR(info.st_mode):
+                    os.rmdir(child, dir_fd=parent)
+                else:
+                    os.unlink(child, dir_fd=parent)
+                if parent == parent_fd and child == name:
+                    removed = True
+            except FileNotFoundError:
+                pass
+    return removed
+
+
+def _prune_warning(path, exc):
+    print(f'aiwork-config: skipping cleanup of {path}: {exc.strerror or str(exc)}', file=sys.stderr)
 
 
 def prune_data(*, dry_run: bool = False) -> list[dict]:
@@ -161,31 +191,42 @@ def prune_data(*, dry_run: bool = False) -> list[dict]:
                 if not name or '/' in name or name in ('.', '..'):
                     raise ConfigError('invalid data registry child name')
                 cutoff = now - entry['keep_days'] * 24 * 60 * 60
-                with _data_directory(name, root_fd) as entry_fd:
-                    if entry_fd is None:
-                        continue
-                    with os.scandir(entry_fd) as children:
-                        names = sorted(child.name for child in children)
-                    for child in names:
-                        measured = _data_item_stats(entry_fd, child)
-                        if measured is None:
+                try:
+                    with _data_directory(name, root_fd) as entry_fd:
+                        if entry_fd is None:
                             continue
-                        size, file_time, directory_time, identity = measured
-                        modified = file_time if file_time is not None else directory_time
-                        if modified >= cutoff:
-                            continue
-                        if not dry_run:
-                            checked = _data_item_stats(entry_fd, child)
-                            if checked is None or checked[3] != identity:
-                                continue
-                            size, file_time, directory_time, _identity = checked
-                            modified = file_time if file_time is not None else directory_time
-                            if modified >= cutoff or not _remove_data_item(entry_fd, child, identity):
-                                continue
-                        records.append({'path': str(root / name / child), 'size_bytes': size,
-                                        'last_modified': datetime.fromtimestamp(modified, timezone.utc).isoformat()})
+                        if os.fstat(entry_fd).st_dev != os.fstat(root_fd).st_dev:
+                            raise OSError(errno.EXDEV, 'different filesystem')
+                        with os.scandir(entry_fd) as children:
+                            names = sorted(child.name for child in children)
+                        for child in names:
+                            path = root / name / child
+                            try:
+                                measured = _data_item_stats(entry_fd, child)
+                                if measured is None:
+                                    continue
+                                size, file_time, directory_time, identity = measured
+                                modified = file_time if file_time is not None else directory_time
+                                if modified >= cutoff:
+                                    continue
+                                if not dry_run:
+                                    checked = _data_item_stats(entry_fd, child)
+                                    if checked is None:
+                                        continue
+                                    if checked[3] != identity:
+                                        raise OSError(errno.ESTALE, 'item changed during cleanup')
+                                    size, file_time, directory_time, _identity = checked
+                                    modified = file_time if file_time is not None else directory_time
+                                    if modified >= cutoff or not _remove_data_item(entry_fd, child, identity):
+                                        continue
+                                records.append({'path': str(path), 'size_bytes': size,
+                                                'last_modified': datetime.fromtimestamp(modified, timezone.utc).isoformat()})
+                            except OSError as exc:
+                                _prune_warning(path, exc)
+                except OSError as exc:
+                    _prune_warning(root / name, exc)
     except OSError as exc:
-        raise ConfigError(f'{root}: data cleanup failed: {exc.strerror}') from exc
+        _prune_warning(root, exc)
     return records
 
 
