@@ -351,8 +351,7 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
 # already observed, including the provider's own error text on stderr.
 # Only 124 is a timeout; 137 remains an ordinary nonzero exit. Explore with or
 # without a final message, and review with or without a verdict, are decided
-# here once. 其他非零退出的
-# failure_kind 留空，让 emit 按退出码和 stderr 分类。
+# here once. 其他非零退出的 failure_kind 留空，让 emit 按退出码和 stderr 分类。
 # A final explore message needs at least one non-whitespace character.
 # Review reads REPORT here. A missing normalizer exits 78 whether or not the
 # report is empty. A missing or empty report is otherwise UNKNOWN. A normalize
