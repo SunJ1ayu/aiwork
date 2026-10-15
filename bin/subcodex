@@ -178,7 +178,7 @@ review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
 (
   cd "$REPO_DIR" || exit 78
-  "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- timeout -k 10 "$TIMEOUT_SECONDS" "$CODEX" exec \
+  "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- "$BIN_DIR/aiwork-timeout" -k 10 "$TIMEOUT_SECONDS" "$CODEX" exec \
     -C "$REPO_DIR" -m "$MODEL" --json -o "$LAST_MSG" \
     --ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check \
     "${CODEX_CFG[@]}" \

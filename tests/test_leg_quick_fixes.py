@@ -49,6 +49,7 @@ class LegCase(unittest.TestCase):
             if helper.is_file():
                 shutil.copy2(helper, self.bin / helper.name)
         shutil.copy2(BIN / "aiwork-config", self.bin / "aiwork-config")
+        shutil.copy2(BIN / "aiwork-timeout", self.bin / "aiwork-timeout")
         self.repo = self.d / "repo"
         self.repo.mkdir()
         for args in (("init", "-q"), ("config", "user.email", "t@t"), ("config", "user.name", "t")):

@@ -242,7 +242,7 @@ test_wrapper_helper_failure() {
   echo '[RW6] no wrapper invokes a model when workspace preparation fails'
   local d b repo rc mimo_rc deepseek_rc kimi_rc
   d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
-  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
+  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
      "$BIN/subkimi" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
 review_workspace_reset_report() { return 0; }

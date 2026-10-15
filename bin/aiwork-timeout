@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Run COMMAND in its own process group, with a deadline and bounded cleanup.
+
+Usage: aiwork-timeout [-k GRACE_SECONDS] SECONDS COMMAND [ARG ...]
+Durations are nonnegative seconds; SECONDS=0 disables the deadline.
+After the deadline, send TERM, then KILL after the grace period (default 10s).
+Timeouts return 124; external INT/TERM return 130/143 after group cleanup.
+Otherwise preserve the command's status (128 + signal for a signal death).
+Descendants that leave this process group themselves, e.g. via setsid(),
+cannot be managed by this tool.
+"""
+
+import argparse
+import math
+import os
+import signal
+import subprocess
+import sys
+import time
+
+
+def seconds(value):
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("seconds must be a finite nonnegative number")
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError("seconds must be a finite nonnegative number")
+    return number
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-k", dest="grace", type=seconds, default=10,
+                        metavar="GRACE_SECONDS")
+    parser.add_argument("seconds", type=seconds)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if not args.command:
+        parser.error("a command is required")
+
+    process = None
+    interrupted = None
+
+    def send(signum):
+        if process is None:
+            return
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+
+    def interrupt(signum, _frame):
+        nonlocal interrupted
+        if interrupted is None:
+            interrupted = signum
+        send(signum)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, interrupt)
+
+    started = time.monotonic()
+    try:
+        process = subprocess.Popen(args.command, start_new_session=True)
+    except OSError as exc:
+        print("aiwork-timeout: %s" % exc, file=sys.stderr)
+        return 127 if isinstance(exc, FileNotFoundError) else 126
+
+    deadline = started + args.seconds if args.seconds else math.inf
+    timed_out = False
+    while interrupted is None:
+        if process.poll() is not None:
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            print("aiwork-timeout: timed out after %gs; terminating process group"
+                  % args.seconds, file=sys.stderr, flush=True)
+            break
+        time.sleep(0.02)
+
+    # Even a successful group leader may leave workers behind. Reap the leader
+    # while checking the group, so its own zombie does not consume the grace.
+    send(interrupted or signal.SIGTERM)
+    grace_deadline = time.monotonic() + args.grace
+    while True:
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            break
+        if time.monotonic() >= grace_deadline:
+            send(signal.SIGKILL)
+            break
+        time.sleep(0.02)
+    status = process.wait()
+    if interrupted is not None:
+        return 128 + interrupted
+    if timed_out:
+        return 124
+    return status if status >= 0 else 128 - status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

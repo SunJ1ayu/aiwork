@@ -258,7 +258,7 @@ run_mimo_once() {
     # 挂死或启动后静默退出(2026-07-02 实测复现+对照确认);显式关死 stdin 免疫之。
     (
       cd "$REPO_DIR" || exit 78
-      ${RO_EXEC[@]+"${RO_EXEC[@]}"} timeout -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
+      ${RO_EXEC[@]+"${RO_EXEC[@]}"} "$BIN_DIR/aiwork-timeout" -k 30 "$TIMEOUT_SECONDS" "${CMD[@]}" < /dev/null
     ) 2>&1 | tee "$MIMO_RAW"
   } 2>&1 | tee -a "$LOG_FILE"
 }

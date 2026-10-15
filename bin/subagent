@@ -255,7 +255,7 @@ fi
     ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
-    "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" claude -p \
+    "${RO_EXEC[@]}" "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" claude -p \
       --model sonnet \
       --no-session-persistence \
       --setting-sources project \

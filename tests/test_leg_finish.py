@@ -27,7 +27,7 @@ class LegFinish(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="leg-finish-"))
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("aiwork-config", "_aiwork_config.py", "_review-workspace.sh",
+        for name in ("aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
                      "_paths.py",
                      "_review-home-guard.sh", "_review_result.py", "_cursor-stream.py",
                      "ro-repo-exec",
@@ -288,8 +288,8 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             "exited", "partial", None, "UNKNOWN", 1, "exited rc=1 (log: {log})"))
         killed = seen["killed"]["subagent"]
         self.assertEqual(killed[:6], (
-            "timed_out", "partial", "timeout", None, 124,
-            "timed out after 1s (log: {log})"))
+            "exited", "partial", None, None, 137,
+            "exited rc=137 (log: {log})"))
 
     def test_subagent_explore_quota_is_not_hardcoded_runtime(self):
         env = self._env()

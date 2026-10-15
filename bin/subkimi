@@ -239,7 +239,7 @@ STREAM="${LOG_FILE}.stream.jsonl"
   cd "$REPO_DIR"
   KIMI_CODE_HOME="$REVIEW_HOME" \
   KIMI_CODE_NO_AUTO_UPDATE=1 \
-    "${RO_EXEC[@]}" timeout "$TIMEOUT_SECONDS" kimi --output-format stream-json -m "$MODEL" -p "$PROMPT"
+    "${RO_EXEC[@]}" "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" kimi --output-format stream-json -m "$MODEL" -p "$PROMPT"
 ) > "$STREAM" 2>>"$LOG_FILE" || RC=$?
 if [[ -s "$STREAM" ]]; then cat "$STREAM" >> "$LOG_FILE"; fi
 python3 - "$STREAM" "$REPORT" <<'PY'

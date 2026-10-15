@@ -349,8 +349,9 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
 
 # One finish for every leg, after the model returns. The leg passes what it
 # already observed, including the provider's own error text on stderr.
-# 124 and 137 are timeouts. Explore with or without a final message, and
-# review with or without a verdict, are decided here once. 其他非零退出的
+# Only 124 is a timeout; 137 remains an ordinary nonzero exit. Explore with or
+# without a final message, and review with or without a verdict, are decided
+# here once. 其他非零退出的
 # failure_kind 留空，让 emit 按退出码和 stderr 分类。
 # A final explore message needs at least one non-whitespace character.
 # Review reads REPORT here. A missing normalizer exits 78 whether or not the
@@ -387,7 +388,7 @@ review_workspace_finish() { # leg rc mode model billing reported degraded
       [[ -n "$verdict" ]] || verdict=UNKNOWN
     fi
   fi
-  if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+  if [[ "$rc" == 124 ]]; then
     review_workspace_write_facts "$model" "$model" "$billing" \
       timed_out partial timeout "$verdict" "$degraded" "$reported" || exit 78
     printf '%s: timed out after %ss (log: %s)\n' "$leg" "$TIMEOUT_SECONDS" "$LOG_FILE" >&2

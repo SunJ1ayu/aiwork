@@ -124,7 +124,7 @@ class CursorTest(unittest.TestCase):
         self.d = Path(self.tmp.name)
         self.config = write_settings(self.d / 'settings')
         self.bin = self.d/'bin'; self.bin.mkdir()
-        for name in ('subcursor','aiwork-config', '_aiwork_config.py','_cursor-stream.py','_review-workspace.sh',
+        for name in ('subcursor','aiwork-config', '_aiwork_config.py','_cursor-stream.py','_review-workspace.sh', 'aiwork-timeout',
                      '_paths.py', '_review_result.py', 'ro-repo-exec'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         set_model(self.config, 'cursor', ('composer-2.5\n').strip())
