@@ -98,42 +98,73 @@ def _data_directory(name, parent_fd=None):
         os.close(fd)
 
 
-def _walk_data_item(parent_fd, name, expected_identity=None):
-    """Yield a pinned, same-filesystem tree in postorder, without recursion."""
-    device = os.fstat(parent_fd).st_dev
-    stack = [(parent_fd, name, expected_identity, None)]
-    opened = set()
+def _data_identity(info, device, expected=None):
+    identity = (info.st_dev, info.st_ino)
+    if info.st_dev != device:
+        raise OSError(errno.EXDEV, 'different filesystem')
+    if expected is not None and identity != expected:
+        raise OSError(errno.ESTALE, 'item changed during cleanup')
+    return identity
+
+
+@contextmanager
+def _reopen_data_directory(anchor_fd, components):
+    """Reopen single components, rejecting links and closing each previous fd."""
+    if not components:
+        yield anchor_fd
+        return
+    device = os.fstat(anchor_fd).st_dev
+    fd = os.dup(anchor_fd)
     try:
-        while stack:
-            parent, child, expected, directory_fd = stack.pop()
-            try:
-                info = os.stat(child, dir_fd=parent, follow_symlinks=False)
-                identity = (info.st_dev, info.st_ino)
-                if info.st_dev != device:
-                    raise OSError(errno.EXDEV, f'different filesystem at {child}')
-                if expected is not None and identity != expected:
-                    raise OSError(errno.ESTALE, 'item changed during cleanup')
-                if directory_fd is not None or not stat.S_ISDIR(info.st_mode):
-                    yield parent, child, info
-                else:
-                    fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
-                    opened.add(fd)
-                    pinned = os.fstat(fd)
-                    if (pinned.st_dev, pinned.st_ino) != identity:
-                        raise OSError(errno.ESTALE, 'item changed during cleanup')
-                    with os.scandir(fd) as children:
-                        names = [entry.name for entry in children]
-                    stack.append((parent, child, identity, fd))
-                    stack.extend((fd, entry, None, None) for entry in names)
-            except FileNotFoundError:
-                pass  # Another cleaner already removed it.
-            finally:
-                if directory_fd is not None:
-                    os.close(directory_fd)
-                    opened.remove(directory_fd)
-    finally:
-        for fd in opened:
+        for name, expected in components:
+            next_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
+            fd = next_fd
+            _data_identity(os.fstat(fd), device, expected)
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _walk_data_item(parent_fd, name, expected_identity=None):
+    """Postorder traversal anchored at one unit, with a constant fd budget."""
+    device = os.fstat(parent_fd).st_dev
+    try:
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        identity = _data_identity(info, device, expected_identity)
+        if not stat.S_ISDIR(info.st_mode):
+            yield parent_fd, name, info
+            return
+        with _reopen_data_directory(parent_fd, ((name, identity),)) as unit_fd:
+            stack = [((), True, False)]
+            while stack:
+                components, directory, visited = stack.pop()
+                try:
+                    if directory and not visited:
+                        with _reopen_data_directory(unit_fd, components) as fd:
+                            pending = []
+                            with os.scandir(fd) as children:
+                                for child in children:
+                                    try:
+                                        info = os.stat(child.name, dir_fd=fd, follow_symlinks=False)
+                                    except FileNotFoundError:
+                                        continue
+                                    child_identity = _data_identity(info, device)
+                                    pending.append((components + ((child.name, child_identity),),
+                                                    stat.S_ISDIR(info.st_mode), False))
+                        stack.append((components, True, True))
+                        stack.extend(pending)
+                        continue
+                    anchor = unit_fd if components else parent_fd
+                    child, expected = components[-1] if components else (name, identity)
+                    with _reopen_data_directory(anchor, components[:-1]) as parent:
+                        info = os.stat(child, dir_fd=parent, follow_symlinks=False)
+                        _data_identity(info, device, expected)
+                        yield parent, child, info
+                except FileNotFoundError:
+                    pass  # Another cleaner already removed it.
+    except FileNotFoundError:
+        pass
 
 
 def _data_item_stats(parent_fd, name):

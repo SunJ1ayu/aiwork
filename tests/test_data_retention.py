@@ -294,10 +294,16 @@ class DataRetentionTests(unittest.TestCase):
                     mount = parent
 
     def test_deep_tree_is_measured_and_deleted_without_python_recursion(self):
+        self.assert_deep_tree_pruned(sys.getrecursionlimit() + 100, 64)
+
+    def test_three_hundred_levels_with_sixty_four_fds(self):
+        self.assert_deep_tree_pruned(300, 64)
+
+    def assert_deep_tree_pruned(self, depth, fd_limit):
         unit = self.data / 'logs/deep'
         unit.mkdir(parents=True)
         directories = [unit]
-        for _ in range(sys.getrecursionlimit() + 100):
+        for _ in range(depth):
             child = directories[-1] / 'd'
             child.mkdir()
             directories.append(child)
@@ -305,9 +311,21 @@ class DataRetentionTests(unittest.TestCase):
         marker.write_text('old')
         self.old(marker)
         try:
-            listed = config.prune_data(dry_run=True)
-            self.assertEqual([row['path'] for row in listed], [str(unit)])
-            config.prune_data()
+            # Limit only the child, independently of the test runner's limit.
+            child = subprocess.run([
+                sys.executable, '-c', '''
+import json, resource, sys
+sys.path.insert(0, sys.argv[1])
+from _aiwork_config import prune_data
+_, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (int(sys.argv[2]), hard))
+print(json.dumps({'listed': prune_data(dry_run=True), 'removed': prune_data()}))
+''', str(ROOT / 'bin'), str(fd_limit)], capture_output=True, text=True, timeout=120)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            self.assertEqual(child.stderr, '')
+            result = json.loads(child.stdout)
+            self.assertEqual([row['path'] for row in result['listed']], [str(unit)])
+            self.assertEqual(result['removed'], result['listed'])
             self.assertFalse(unit.exists())
         finally:
             marker.unlink(missing_ok=True)
