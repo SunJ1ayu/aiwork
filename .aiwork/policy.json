@@ -27,6 +27,7 @@
     "CLAUDE.md",
     "workflow/**",
     "bin/rust-check-review-tooling",
+    "bin/aiwork-timeout",
     "bin/_review_result.py",
     "tests/_*",
     "tests/test_aiwork_gate*.mjs",

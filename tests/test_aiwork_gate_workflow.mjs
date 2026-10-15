@@ -12,7 +12,8 @@ const read = (path) => readFileSync(new URL(path, ROOT), "utf8");
 const exists = (path) => existsSync(new URL(path, ROOT));
 const policy = () => JSON.parse(read(".aiwork/policy.json"));
 
-// 判卷框架不靠解析 source/exec/import。约定只有一条：框架文件放在 tests/_*。
+// 判卷框架包括 CI 点名的总跑入口和 tests/_*，及它们字面引用的 bin/ 工具；
+// 不靠解析 source/exec/import。
 // tests/ 里其余文件只能是总跑登记的套件、套件用 node --test 点名要跑的判据、fixtures/、mutation-*.sh。
 function tracked(prefix) {
   return execFileSync("git", ["ls-files", "-z", "--", prefix], { cwd: new URL(".", ROOT) })
@@ -21,9 +22,14 @@ function tracked(prefix) {
     .filter(Boolean);
 }
 
-function ciSuites() {
+function ciRunners() {
   const runners = [...new Set([...read(".github/workflows/ci.yml").matchAll(/\b(bin\/[A-Za-z0-9_.-]+)/g)].map((m) => m[1]))].filter(exists);
   assert.deepEqual(runners, ["bin/rust-check-review-tooling"]);
+  return runners;
+}
+
+function ciSuites() {
+  const runners = ciRunners();
   const suites = [...read(runners[0]).matchAll(/\$ROOT\/(tests\/[^"|\s]+)/g)].map((m) => m[1]);
   assert.ok(suites.length >= 2 && suites.every(exists), "总跑清单里要有真实套件");
   return suites;
@@ -75,7 +81,7 @@ function binCalledByFramework(framework) {
   for (const file of framework) {
     const code = read(file).replace(/#.*$/gm, "");
     for (const match of code.matchAll(/\bbin\/[A-Za-z0-9_.-]+/g)) {
-      if (exists(match[0])) found.add(match[0]);
+      if (exists(match[0]) && statSync(new URL(match[0], ROOT)).isFile()) found.add(match[0]);
     }
   }
   return [...found].sort();
@@ -208,10 +214,11 @@ test("关卡自己的测试在判卷面", () => {
   assert.equal(matchAny(current.judging_surface, "tests/test_review_pr.py"), false, "普通测试文件不算判卷面");
 });
 
-test("判卷框架按 tests/_* 约定，并且都在判卷面", () => {
+test("判卷框架及 CI 总跑入口调用的工具都在判卷面", () => {
   const current = policy();
   const framework = judgingFramework();
-  const required = [...framework, ...binCalledByFramework(framework)];
+  const roots = [...framework, ...ciRunners()];
+  const required = [...roots, ...binCalledByFramework(roots)];
   const missing = required.filter((path) => !matchAny(current.judging_surface, path));
   assert.deepEqual(missing, [], `这些框架文件改了不用业主批准:${missing.join("、")}`);
   assert.equal(matchAny(current.judging_surface, "tests/_future_harness.sh"), true, "tests/_* 是一条 glob，新框架文件也要罩住");

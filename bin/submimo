@@ -102,6 +102,7 @@ fi
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
 RO_EXEC=()
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf 'submimo: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$BIN_DIR" >&2; exit 78; }
+[[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf 'submimo: 少了 %s/aiwork-timeout ⇒ 拒绝派发\n' "$BIN_DIR" >&2; exit 78; }
 RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 
 command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: mimo"

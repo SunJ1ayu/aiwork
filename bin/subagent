@@ -235,6 +235,7 @@ RC=0
 # fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
 #
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s/ro-repo-exec ⇒ 拒绝在可写的仓里跑评审腿(fail-closed)\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
+[[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s/aiwork-timeout ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR" >&2; exit 78; }
 RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 
 # 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,

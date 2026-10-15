@@ -8,6 +8,7 @@ import _no_egress  # noqa: E402,F401
 
 import signal
 import select
+import shutil
 import subprocess
 import tempfile
 import time
@@ -60,15 +61,18 @@ class Timeout(unittest.TestCase):
         self.assertEqual(result.stderr, "")
 
     @contextmanager
-    def tree(self, limit="2", mode="wait", grace="0.2"):
+    def tree(self, limit="2", mode="wait", grace="0.2", nested=False):
         with tempfile.TemporaryDirectory(prefix="aiwork-timeout-test-") as folder:
             root = Path(folder)
             (root / "tree.py").write_text(TREE)
             command = [sys.executable, str(TOOL)]
             if grace is not None:
                 command += ["-k", grace]
+            job = [sys.executable, "-c", TREE, folder, "leader", mode]
+            if nested:
+                job = [sys.executable, str(TOOL), "-k", "30", "0"] + job
             process = subprocess.Popen(
-                command + [limit, sys.executable, "-c", TREE, folder, "leader", mode],
+                command + [limit] + job,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 start_new_session=True)
             members = []
@@ -89,7 +93,6 @@ class Timeout(unittest.TestCase):
                 # Independent cleanup also runs when an assertion detects a leak.
                 if process.poll() is None:
                     process.kill()
-                process.communicate(timeout=5)
                 for path in (root / "leader", root / "child", root / "grandchild"):
                     if path.exists() and path.read_text().strip():
                         _, group = map(int, path.read_text().split())
@@ -97,6 +100,7 @@ class Timeout(unittest.TestCase):
                             os.killpg(group, signal.SIGKILL)
                         except ProcessLookupError:
                             pass
+                process.communicate(timeout=5)
 
     def assert_stopped(self, members):
         # Orphans can briefly be zombies pending reaping by the system's init;
@@ -131,6 +135,66 @@ class Timeout(unittest.TestCase):
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertEqual(result.stderr.splitlines(), [
             "aiwork-timeout: timed out after 1s; terminating process group"])
+
+    def test_outer_deadline_bounds_nested_long_grace_and_closes_output(self):
+        started = time.monotonic()
+        with self.tree(limit="1", grace="0.3", nested=True) as (process, members):
+            process.wait(timeout=3)
+            _stdout, stderr = process.communicate(timeout=1)
+            self.assertEqual(process.returncode, 124, stderr)
+            self.assertLess(time.monotonic() - started, 2.3, stderr)
+            self.assert_stopped(members)
+
+    def test_killed_supervisor_does_not_leave_its_group_or_output_open(self):
+        with self.tree(limit="30", grace="30") as (process, members):
+            started = time.monotonic()
+            process.kill()
+            process.wait(timeout=2)
+            self.assertEqual(process.returncode, -signal.SIGKILL)
+            process.communicate(timeout=1)
+            self.assertLess(time.monotonic() - started, 2)
+            self.assert_stopped(members)
+
+    def test_zero_limit_disables_deadline(self):
+        started = time.monotonic()
+        result = subprocess.run(
+            [str(TOOL), "0", sys.executable, "-c", "import time; time.sleep(0.2); exit(23)"],
+            capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertGreaterEqual(time.monotonic() - started, 0.2)
+
+    def test_invalid_arguments_return_two(self):
+        for args in ([], ["1"], ["invalid"], ["-1"], ["nan"], ["inf"],
+                     ["-k", "-1", "1"], ["-k", "nan", "1"], ["--unknown"]):
+            with self.subTest(args=args):
+                result = subprocess.run([str(TOOL)] + args, capture_output=True,
+                                        text=True, timeout=5)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("usage:", result.stderr)
+
+    def test_missing_and_nonexecutable_commands_return_127_and_126(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "command"
+            for exists, expected in ((False, 127), (True, 126)):
+                if exists:
+                    path.write_text("#!/bin/sh\nexit 0\n")
+                    path.chmod(0o600)
+                result = subprocess.run([str(TOOL), "1", str(path)],
+                                        capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertIn("aiwork-timeout:", result.stderr)
+
+    def test_total_runner_refuses_missing_timeout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bindir = Path(folder) / "bin"
+            bindir.mkdir()
+            runner = bindir / "rust-check-review-tooling"
+            shutil.copy2(TOOL.parent / runner.name, runner)
+            result = subprocess.run(["bash", str(runner)], capture_output=True,
+                                    text=True, timeout=5)
+            self.assertEqual(result.returncode, 78, result.stderr)
+            self.assertIn("aiwork-timeout", result.stderr)
 
     def test_external_int_and_term_clean_tree_and_override_child_success(self):
         for signum in (signal.SIGINT, signal.SIGTERM):
