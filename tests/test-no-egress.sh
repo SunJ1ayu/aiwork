@@ -33,7 +33,7 @@ OS="$(uname -s)"
 # fd 9(一对匿名 socket,没有路径、没有端口)把命令交给它跑,stdin/stdout/stderr 原样递过去,
 # 拿回退出码 —— 和 Linux 上 nsenter 干的是同一件事。
 #   · 只有判据主进程用得到:第一次「认领」拿到的令牌只放在判据 shell 的非导出变量里,
-#     别的请求没令牌一律拒;它替判据起的命令拿不到 fd 9,判据直接起的探针也关掉 fd 9(N8)。
+#     别的请求没令牌一律拒;它替判据起的命令拿不到 fd 9,判据直接起的探针也关掉 fd 9(N6、N8)。
 #   · 判据一结束(包括被杀),它收掉正在替判据跑的那条命令就退出,不留在后台。
 #   · 守卫最后一步缺测试设置时会经 _test_settings.py 重跑一次,那次会关掉继承来的 fd、
 #     通道就断了,所以测试设置由它先备好。
@@ -78,7 +78,7 @@ def handle(req, fds):
             return reply({"error": "已经被认领过"})
         state["claimed"] = True
         return reply({"token": token})
-    if not (state["claimed"] and secrets.compare_digest(str(req.get("token", "")), token)):
+    if not (state["claimed"] and secrets.compare_digest(str(req.get("token", "")).encode(), token.encode())):
         return reply({"error": "请求没带对令牌"})
     if len(fds) != 3:
         return reply({"error": "请求没带 stdin/stdout/stderr"})
@@ -110,7 +110,10 @@ def serve():
         try:
             if req is None:
                 return
-            handle(req, fds)
+            try:
+                handle(req, fds)
+            except Exception as e:  # 请求不成形也只回一句错,不让代跑线程死掉
+                reply({"error": "请求不成形:%s" % type(e).__name__})
         finally:
             for f in fds:
                 os.close(f)
@@ -282,7 +285,7 @@ fi
 
 # ---------------------------------------------------------------- C0
 c0_this_machine_has_egress_at_all() {
-  echo "[C0] 反空转:宿主命名空间里本来就连得出去"
+  echo "[C0] 反空转:守卫外本来就连得出去"
   write_probe "$D/probe_raw.sh" no
   local out; out="$(in_host bash "$D/probe_raw.sh" 2>&1)"
   grep -q "EGRESS_OPEN" <<<"$out"
@@ -427,7 +430,7 @@ n6_idempotent_no_exec_loop() {
   echo "[N6] 已经隔离了就别再自举(否则 exec 死循环 / 整份判据挂住)"
   write_probe "$D/probe_again.sh" yes
   local out rc
-  # 9<&-:判据直接起的探针不许拿到 macOS 上的代跑通道(N8)。
+  # 9<&-:判据直接起的探针不许拿到 macOS 上的代跑通道(下面最后一条查)。
   out="$("$TESTS/../bin/aiwork-timeout" 25 bash "$D/probe_again.sh" 9<&- 2>&1)"; rc=$?
   [[ $rc -ne 124 ]]
   check "N6: 在已隔离的进程里再引一次守卫,不挂死" $?
