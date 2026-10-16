@@ -360,7 +360,7 @@ n3_every_suite_carries_the_guard() {
     b="$(basename "$f")"
     [[ "$b" == "test-no-egress.sh" ]] && continue   # 本判据的行为由 N4 直接考
     runner=bash; [[ "$f" == *.py ]] && runner=python3
-    out="$(in_host "${NO_ISOLATION[@]}" timeout 20 "$runner" "$f" 2>&1)"; rc=$?
+    out="$(in_host "${NO_ISOLATION[@]}" "$TESTS/../bin/aiwork-timeout" 20 "$runner" "$f" 2>&1)"; rc=$?
     # 非零、且不是超时(超时说明它压根没理守卫、跑起来了)、且一条用例都没跑
     # 不只问"拒跑了",还要问"**是不是被这道闸**拒的" —— 因为别的原因早死也会非零,
     # 那样 N3c 会为了错误的理由变绿(08-10 四审 subkimi 与我自审 F3 同时点到)。
@@ -428,7 +428,7 @@ n6_idempotent_no_exec_loop() {
   write_probe "$D/probe_again.sh" yes
   local out rc
   # 9<&-:判据直接起的探针不许拿到 macOS 上的代跑通道(N8)。
-  out="$(timeout 25 bash "$D/probe_again.sh" 9<&- 2>&1)"; rc=$?
+  out="$("$TESTS/../bin/aiwork-timeout" 25 bash "$D/probe_again.sh" 9<&- 2>&1)"; rc=$?
   [[ $rc -ne 124 ]]
   check "N6: 在已隔离的进程里再引一次守卫,不挂死" $?
   grep -q "EGRESS_BLOCKED" <<<"$out"
