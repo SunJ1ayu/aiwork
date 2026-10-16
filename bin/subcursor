@@ -47,6 +47,7 @@ else
   [[ -s "$AUTH_FILE" ]] || die "no session credentials: $AUTH_FILE (run cursor-agent login)"
 fi
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcursor: missing ro-repo-exec; refusing dispatch' >&2; exit 78; }
+[[ -x "$BIN_DIR/aiwork-timeout" ]] || { echo 'subcursor: missing aiwork-timeout; refusing dispatch' >&2; exit 78; }
 [[ -f "$BIN_DIR/_cursor-stream.py" ]] || die 'missing Composer stream decoder'
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 . "$BIN_DIR/_review-workspace.sh" || die 'missing review workspace helper'
@@ -140,7 +141,7 @@ run_cursor() (
     CURSOR_CONFIG_DIR="$RUNTIME_HOME/.cursor" CURSOR_DATA_DIR="$RUNTIME_HOME/.cursor" \
     ${AUTH_ENV[@]+"${AUTH_ENV[@]}"} \
     "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- \
-    timeout -k 10 "$TIMEOUT_SECONDS" \
+    "$BIN_DIR/aiwork-timeout" -k 10 "$TIMEOUT_SECONDS" \
       unshare --pid --fork --kill-child --mount-proc "$CURSOR_BIN" "$@"
 )
 set +e

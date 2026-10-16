@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Run COMMAND in a new session and process group, with bounded cleanup.
+
+Usage: aiwork-timeout [-k GRACE_SECONDS] SECONDS COMMAND [ARG ...]
+Durations are nonnegative seconds; SECONDS=0 disables the deadline.
+After the deadline, send TERM, then KILL after the grace period (default 10s).
+Timeouts return 124; external INT/TERM return 130/143 after group cleanup.
+Otherwise preserve the command's status (128 + signal for a signal death).
+An independent watchdog kills the command's group if this supervisor dies,
+including SIGKILL. Nested supervisors therefore share the outer cleanup bound.
+Descendants that leave this process group themselves, e.g. via setsid(),
+cannot be managed by this tool.
+"""
+
+import argparse
+import math
+import os
+import select
+import signal
+import subprocess
+import sys
+import time
+
+
+def kill_group(pgid, signum):
+    try:
+        os.killpg(pgid, signum)
+    except ProcessLookupError:
+        pass
+
+
+def watchdog(alive, identity, ready):
+    """Outside both the caller's and command's sessions; owns no output pipes."""
+    pgid = None
+    try:
+        with os.fdopen(identity, "rb") as channel:
+            line = channel.readline()
+        if not line:
+            return 0  # Supervisor died before spawning a command.
+        pgid = int(line)
+        readable, _, _ = select.select([alive], [], [], 0)
+        if not readable:
+            os.write(ready, b"1")
+        os.close(ready)
+        os.read(alive, 1)  # Only the supervisor owns the write end: EOF = death.
+    except (OSError, ValueError):
+        return 125
+    finally:
+        if pgid is not None:
+            kill_group(pgid, signal.SIGKILL)
+    return 0
+
+
+def exec_command(identity, ready, command):
+    # Report from the command's own process, not the supervisor: a KILL between
+    # spawn and registration cannot leave an unregistered running command.
+    try:
+        os.write(identity, (str(os.getpgrp()) + "\n").encode("ascii"))
+        os.close(identity)
+        accepted = os.read(ready, 1)
+        os.close(ready)
+    except OSError:
+        accepted = b""
+    if accepted != b"1":
+        print("aiwork-timeout: watchdog did not accept command; refusing exec", file=sys.stderr)
+        return 125
+    # Python ignores these at startup and exec keeps ignored signals; restore
+    # the dispositions Popen(restore_signals=True) would give the command.
+    for name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_DFL)
+    try:
+        os.execvpe(command[0], command, os.environ)
+    except OSError as exc:
+        print("aiwork-timeout: %s" % exc, file=sys.stderr)
+        return 127 if isinstance(exc, FileNotFoundError) else 126
+
+
+def seconds(value):
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("seconds must be a finite nonnegative number")
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError("seconds must be a finite nonnegative number")
+    return number
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-k", dest="grace", type=seconds, default=10,
+                        metavar="GRACE_SECONDS")
+    parser.add_argument("seconds", type=seconds)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if not args.command:
+        parser.error("a command is required")
+
+    process = None
+    interrupted = None
+
+    def send(signum):
+        if process is None:
+            return
+        kill_group(process.pid, signum)
+
+    def interrupt(signum, _frame):
+        nonlocal interrupted
+        if interrupted is None:
+            interrupted = signum
+        send(signum)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, interrupt)
+
+    started = time.monotonic()
+    alive_r, alive_w = os.pipe()
+    identity_r, identity_w = os.pipe()
+    ready_r, ready_w = os.pipe()
+    # Private helpers use only stdlib, without user site/startup customizations.
+    helper = [sys.executable, "-I", "-S", os.path.realpath(__file__)]
+    guard = None
+    try:
+        guard = subprocess.Popen(
+            helper + ["--_watchdog", str(alive_r), str(identity_r), str(ready_w)],
+            start_new_session=True, pass_fds=(alive_r, identity_r, ready_w),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(
+            helper + ["--_exec", str(identity_w), str(ready_r)] + args.command,
+            start_new_session=True, pass_fds=(identity_w, ready_r))
+    except OSError as exc:
+        print("aiwork-timeout: %s" % exc, file=sys.stderr)
+        return 127 if isinstance(exc, FileNotFoundError) else 126
+    finally:
+        for fd in (alive_r, identity_r, identity_w, ready_r, ready_w):
+            os.close(fd)
+        if process is None:
+            os.close(alive_w)
+            if guard is not None:
+                guard.wait()
+
+    deadline = started + args.seconds if args.seconds else math.inf
+    timed_out = False
+    guard_failed = False
+    while interrupted is None:
+        if process.poll() is not None:
+            break
+        if guard.poll() is not None:
+            guard_failed = True
+            send(signal.SIGKILL)
+            print("aiwork-timeout: watchdog exited early; stopping command", file=sys.stderr)
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            print("aiwork-timeout: timed out after %gs; terminating process group"
+                  % args.seconds, file=sys.stderr, flush=True)
+            break
+        time.sleep(0.02)
+
+    # Even a successful group leader may leave workers behind. Reap the leader
+    # while checking the group, so its own zombie does not consume the grace.
+    send(interrupted or signal.SIGTERM)
+    grace_deadline = time.monotonic() + args.grace
+    while True:
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            break
+        if time.monotonic() >= grace_deadline:
+            send(signal.SIGKILL)
+            break
+        time.sleep(0.02)
+    status = process.wait()
+    os.close(alive_w)
+    guard.wait()
+    if interrupted is not None:
+        return 128 + interrupted
+    if timed_out:
+        return 124
+    if guard_failed:
+        return 125
+    return status if status >= 0 else 128 - status
+
+
+if __name__ == "__main__":
+    try:
+        if sys.argv[1:2] == ["--_watchdog"] and len(sys.argv) == 5:
+            sys.exit(watchdog(*map(int, sys.argv[2:])))
+        if sys.argv[1:2] == ["--_exec"] and len(sys.argv) >= 5:
+            sys.exit(exec_command(int(sys.argv[2]), int(sys.argv[3]), sys.argv[4:]))
+    except ValueError:
+        sys.exit(2)
+    sys.exit(main())
