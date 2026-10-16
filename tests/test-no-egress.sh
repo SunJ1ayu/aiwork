@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 判据:判卷面的「**跑判据的进程不许有外网出口**」不变量。
+# 判据:验证守卫的分平台保证范围,见 `_no_egress.py` 文件头「Mac 上出网的路」。
 # 2026-08-10 建,track no-egress-judging。主 agent 拥有,执行腿不许改。
 #
 # 为什么有这份判据(08-10 事故):OpenClaw cron「评审工具链-每周防锈」每周一 08:00 跑
@@ -10,16 +10,15 @@
 # 08-08 那天本该暴露,但当时额度已空、全被 403 挡下 —— **失败得太安静,把 bug 藏了两天**。
 #
 # 这份判据要问的不是"V23/V24 补没补假 CLI"(那是靠人记得,下一份考卷照样漏),
-# 而是那条唯一的不变量:**判据进程连不出去**。
+# 而是实际连接行为是否符合守卫声明的保证范围。
 #
 # ⚠️ 这份判据自己必须**有网**才问得出东西:一个什么都不做的空守卫,在一台本来就
 #    断网的机器上也能"通过"。所以 C0 是反空转控制组,它红了整份判据都不算数。
 #    正因如此,本文件是**唯一**允许回到守卫外的判据(N3b 机械锁死):Linux 用 `nsenter`
 #    回宿主命名空间;macOS 的沙箱进去就出不来,改由引守卫之前起的沙箱外代跑进程替它跑。
 #
-# **本文件是指定的分平台处**(和两份守卫一起),只许在三处分:
-#   ① 怎么回到守卫外(in_host);② 怎么模拟「隔离做不到」(NO_ISOLATION);③ DNS 那条断言。
-#   ③ 现在不用分:macOS 的规则禁掉了系统解析器的 unix socket,DNS 两边都查不到。
+# **本文件是指定的分平台处**(和两份守卫一起)。平台差异集中在宿主代跑(in_host)、
+# 模拟「隔离做不到」(NO_ISOLATION)、Mac 的本机中转行为测试。DNS 两边都查不到,断言相同。
 #
 # Run:  bash /root/aiwork/tests/test-no-egress.sh
 set -uo pipefail
@@ -275,7 +274,8 @@ __noeg_suites() {  # 要覆盖的判据套件 = tests/ 下的命名约定 ∪ **
   } | sort -u
 }
 
-D="$(mktemp -d)"
+# BSD mktemp without a template ignores TMPDIR; keep this oracle inside its private root.
+D="$(mktemp -d "${TMPDIR:-/tmp}/ng.XXXXXXXX")"
 trap 'rm -rf "$D"' EXIT
 
 if [[ "$OS" == Darwin ]]; then
@@ -651,7 +651,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 server = Server(('127.0.0.1', 0), Proxy)
 server.requests = []
 threading.Thread(target=server.serve_forever, daemon=True).start()
-# System proxy changes can also wake unrelated host services; count this probe's target only.
+# Count this probe's CONNECT target independently of other host traffic.
 def request_count():
     return server.requests.count('model.invalid:443')
 
