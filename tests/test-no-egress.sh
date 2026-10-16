@@ -431,6 +431,7 @@ n6_idempotent_no_exec_loop() {
   write_probe "$D/probe_again.sh" yes
   local out rc
   # 9<&-:判据直接起的探针不许拿到 macOS 上的代跑通道(下面最后一条查)。
+  # aiwork-timeout 起命令时自己也会关掉继承来的 fd;这里再显式关一次,不靠它的实现。
   out="$("$TESTS/../bin/aiwork-timeout" 25 bash "$D/probe_again.sh" 9<&- 2>&1)"; rc=$?
   [[ $rc -ne 124 ]]
   check "N6: 在已隔离的进程里再引一次守卫,不挂死" $?
