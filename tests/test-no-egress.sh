@@ -476,6 +476,78 @@ n8_host_channel_stays_with_the_oracle() {
   check "N8: 没有令牌的子进程用不了这条通道(rc=$rc)" $?
 }
 
+# ---------------------------------------------------------------- N10
+n10_host_runner_itself() {
+  echo "[N10] 沙箱外代跑进程自己:坏请求不让它停摆;判据被 kill -9 后它起过的进程全收掉"
+  # 代跑进程是平台无关的 python,这里两边都单独起一个,配一个替身判据来考。
+  local w="$D/runner" out i p alive runner
+  mkdir -p "$w"
+  printf '%s\n' "$NOEG_HOST_CLIENT_PY" > "$w/client.py"
+
+  cat > "$w/bad.sh" <<'BAD'
+#!/usr/bin/env bash
+python3 -I - <<'PY'
+import json, os, socket, struct
+chan = socket.socket(fileno=os.dup(9))
+chan.settimeout(10)
+chan.sendall(struct.pack("!I", 4) + b"null")
+def take(n):
+    buf = b""
+    while len(buf) < n:
+        chunk = chan.recv(n - len(buf))
+        if not chunk:
+            raise EOFError
+        buf += chunk
+    return buf
+try:
+    ans = json.loads(take(struct.unpack("!I", take(4))[0]))
+    print("BAD_REQUEST_ANSWERED" if "error" in ans else "BAD_REQUEST_ODD")
+except (OSError, EOFError) as e:
+    print("BAD_REQUEST_UNANSWERED", type(e).__name__)
+PY
+tok="$(python3 -I "$1/client.py" 9 hello)"
+__NOEG_HOST_TOKEN="$tok" python3 -I "$1/client.py" 9 run /usr/bin/true
+echo "RUN_AFTER_BAD_REQUEST rc=$?"
+BAD
+  out="$("$TESTS/../bin/aiwork-timeout" 40 python3 -I -c "$NOEG_HOST_PY" "$TESTS" 9 bash "$w/bad.sh" "$w" 9<&- 2>&1)"
+  grep -q "BAD_REQUEST_ANSWERED" <<<"$out"
+  check "N10: 收到不成形的请求,回一句错" $?
+  grep -q "RUN_AFTER_BAD_REQUEST rc=0" <<<"$out"
+  check "N10: 回完错接着服务(后面的请求照常跑完)" $?
+
+  cat > "$w/victim.sh" <<'VICTIM'
+#!/usr/bin/env bash
+echo $$ > "$1/oracle.pid"
+tok="$(python3 -I "$1/client.py" 9 hello)" || exit 70
+__NOEG_HOST_TOKEN="$tok" python3 -I "$1/client.py" 9 run \
+  bash -c 'sleep 300 & echo $! >> "$0/kids"; echo $$ >> "$0/kids"; wait' "$1"
+VICTIM
+  python3 -I -c "$NOEG_HOST_PY" "$TESTS" 9 bash "$w/victim.sh" "$w" 9<&- >/dev/null 2>&1 &
+  runner=$!
+  for i in $(seq 1 150); do
+    [[ -f "$w/kids" && $(wc -l < "$w/kids") -ge 2 && -s "$w/oracle.pid" ]] && break
+    sleep 0.1
+  done
+  kill -9 "$(cat "$w/oracle.pid" 2>/dev/null)" 2>/dev/null
+  for i in $(seq 1 200); do kill -0 "$runner" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$runner" 2>/dev/null; then
+    kill -9 "$runner" 2>/dev/null
+    bad "N10: 判据被 kill -9 后,代跑进程 20 秒内退出"
+  else
+    ok "N10: 判据被 kill -9 后,代跑进程 20 秒内退出"
+  fi
+  wait "$runner" 2>/dev/null
+  for i in $(seq 1 150); do
+    alive=""
+    for p in $(cat "$w/kids" 2>/dev/null); do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
+    [[ -z "$alive" ]] && break
+    sleep 0.1
+  done
+  for p in $alive; do kill -9 "$p" 2>/dev/null; done
+  [[ $(wc -l < "$w/kids" 2>/dev/null || echo 0) -ge 2 && -z "$alive" ]]
+  check "N10: 代跑的命令和它起的子进程都在 15 秒内没了(还活着的:${alive:-无})" $?
+}
+
 # ---------------------------------------------------------------- N9
 n9_platform_checks_stay_in_the_designated_files() {
   echo "[N9] 平台判断只许出现在指定的分平台处(两份守卫和本判据)"
@@ -504,5 +576,6 @@ n6_idempotent_no_exec_loop
 n7_transparent
 n8_host_channel_stays_with_the_oracle
 n9_platform_checks_stay_in_the_designated_files
+n10_host_runner_itself
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
