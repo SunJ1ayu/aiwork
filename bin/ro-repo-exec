@@ -57,7 +57,7 @@ REPO="$(cd "$REPO" && pwd -P)" || die "仓根解析不了:$REPO"
 
 # --rw 的路径逐个检查:不存在就拒跑(而不是"挂不上就算了" —— 那正是静默降级)
 _rw_list=""
-for p in ${RW+"${RW[@]}"}; do
+for p in ${RW[@]+"${RW[@]}"}; do
   [[ -d "$p" ]] || die "--rw 指的目录不存在:$p(要写的地方得先存在,否则腿写日志时才炸)"
   p="$(cd "$p" && pwd -P)"
   case "$p" in

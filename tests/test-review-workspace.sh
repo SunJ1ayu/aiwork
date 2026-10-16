@@ -426,6 +426,40 @@ test_write_facts_without_helper_path() {
   check 'RW9: no BIN_DIR and no facts path returns 0' $?
 }
 
+test_write_facts_with_and_without_outcome() {
+  echo '[RW10] facts supports both absent and populated optional fields'
+  local d rc
+  d="$(mktemp -d)"
+  (
+    AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py"
+    REVIEW_SNAPSHOT_OBJECT_FORMAT="$(git -C "$BIN/.." rev-parse --show-object-format)"
+    REVIEW_SNAPSHOT_HEAD="$(git -C "$BIN/.." rev-parse HEAD)"
+    REVIEW_SNAPSHOT_TREE="$(git -C "$BIN/.." rev-parse 'HEAD^{tree}')"
+    REVIEW_SNAPSHOT_INDEX_TREE="$REVIEW_SNAPSHOT_TREE"
+    AIWORK_REVIEW_FACTS_PATH="$d/none.json"
+    review_workspace_write_facts requested-model invoked-model || exit $?
+    AIWORK_REVIEW_FACTS_PATH="$d/full.json"
+    review_workspace_write_facts requested-model invoked-model subscription \
+      timed_out partial timeout UNKNOWN true reported-model
+  )
+  rc=$?
+  check 'RW10: both facts calls complete without an empty argv element' "$rc"
+  python3 - "$d" <<'PYCODE'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+empty = json.loads((root / 'none.json').read_text())
+full = json.loads((root / 'full.json').read_text())
+fields = ('process_state', 'evidence_completeness', 'failure_kind', 'verdict', 'degraded')
+assert all(empty[key] is None for key in fields)
+assert empty['model'] == {'requested': 'requested-model', 'invoked': 'invoked-model', 'reported': None}
+assert tuple(full[key] for key in fields) == ('timed_out', 'partial', 'timeout', 'UNKNOWN', True)
+assert full['model'] == {'requested': 'requested-model', 'invoked': 'invoked-model', 'reported': 'reported-model'}
+assert empty['source'] == full['source'] and empty['view'] == full['view']
+PYCODE
+  check 'RW10: omitted fields stay null and populated fields retain their values' $?
+  rm -rf "$d"
+}
+
 test_mutation_sensitivity() {
   echo '[RW7] oracle rejects direct-source and shared-clone mutations'
   local d direct fake rc real_mktemp
@@ -504,6 +538,7 @@ else
   test_gitlink_fails_closed
   test_report_path_and_missing_explore_message
   test_write_facts_without_helper_path
+  test_write_facts_with_and_without_outcome
 fi
 test_wrapper_helper_failure
 [[ -f "$HELPER" ]] && test_mutation_sensitivity

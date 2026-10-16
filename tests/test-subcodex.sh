@@ -150,6 +150,14 @@ except Exception as exc:
 PY
 }
 
+echo "[C0] 空参数列表保持用法错误,不在参数归一化时崩溃"
+out="$(sc c0-empty 2>&1)"; rc=$?
+[[ $rc -eq 2 && "$out" == *'Usage: subcodex'* ]]
+check "C0: 无参数返回 2 并显示用法" $?
+out="$(sc c0-dry-only --dry-run 2>&1)"; rc=$?
+[[ $rc -eq 2 && "$out" == *'Usage: subcodex'* ]]
+check "C0: 只有 --dry-run 时也返回 2 并显示用法" $?
+
 echo "[C1] review:参数面、只读源仓、可写副本、裁决与 facts"
 sc c1 review "$d/task.md" "$d/c1.log" "$d/repo" >/dev/null 2>"$d/c1.err"; rc=$?
 check "C1: 正常 review rc=0" $([[ $rc -eq 0 ]]; echo $?)

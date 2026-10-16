@@ -344,7 +344,7 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
     --head-oid "$REVIEW_SNAPSHOT_HEAD" --index-tree-oid "$REVIEW_SNAPSHOT_INDEX_TREE" \
     --worktree-tree-oid "$REVIEW_SNAPSHOT_TREE" \
     --view-delivery-state complete --view-mode full_snapshot --billing-mode "$billing" \
-    "${outcome[@]}"
+    ${outcome[@]+"${outcome[@]}"}
 }
 
 # One finish for every leg, after the model returns. The leg passes what it
