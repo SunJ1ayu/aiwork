@@ -27,7 +27,7 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 echo "=== subcodex oracle ==="
 d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/bin" "$d/fake" "$d/ws" "$d/cap"
-for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec _review-workspace.sh _paths.py _review_result.py _review-home-guard.sh; do
+for f in subcodex aiwork-config _aiwork_config.py ro-repo-exec aiwork-timeout _review-workspace.sh _paths.py _review_result.py _review-home-guard.sh; do
   [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$d/bin/"
 done
 check "C0: bin/subcodex 与本机设置读取入口都在" \
