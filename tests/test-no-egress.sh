@@ -34,9 +34,10 @@ OS="$(uname -s)"
 # 拿回退出码 —— 和 Linux 上 nsenter 干的是同一件事。
 #   · 只有判据主进程用得到:第一次「认领」拿到的令牌只放在判据 shell 的非导出变量里,
 #     别的请求没令牌一律拒;它替判据起的命令拿不到 fd 9,判据直接起的探针也关掉 fd 9(N6、N8)。
-#   · 它起的每条命令都经 bin/aiwork-timeout 放进自己的进程组:命令跑完,组里甩下的子孙一并收掉;
-#     判据一结束(包括被 kill -9),它停掉正在跑的那条,整组收掉再退出;它自己被 kill -9 时,
-#     aiwork-timeout 的看门进程照样收组。光收直接起的那个进程,孙进程会留在沙箱外(N10)。
+#   · 它起的每条命令都经 bin/aiwork-timeout 放进自己的进程组,带一个有限的上限(默认 600 秒,
+#     请求可以要得更短):命令跑完,组里甩下的子孙一并收掉;判据一结束(包括被 kill -9),它停掉
+#     正在跑的那条、整组收掉再退出,之后不再起新命令;它自己被 kill -9 时没人替它收,命令最晚
+#     到上限被 aiwork-timeout 整组收掉。光收直接起的那个进程,孙进程会留在沙箱外(N10)。
 #   · 只有对方真的关了连接才停止服务;请求不成形就回一句错,接着服务(N10)。
 #   · 守卫最后一步缺测试设置时会经 _test_settings.py 重跑一次,那次会关掉继承来的 fd、
 #     通道就断了,所以测试设置由它先备好。
@@ -44,6 +45,7 @@ read -r -d '' NOEG_HOST_PY <<'PY' || true
 import json, os, secrets, signal, socket, struct, subprocess, sys, threading
 tests, fd, shell, script, args = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5:]
 limiter = os.path.join(tests, os.pardir, "bin", "aiwork-timeout")
+LIMIT = 600  # 秒;判据里最长的代跑命令是 N3c 的单个套件,它自己还套着 20 秒
 sys.path.insert(0, tests)
 import _test_settings
 _test_settings.ensure_settings()
@@ -56,7 +58,7 @@ oracle = subprocess.Popen([shell, script] + args, pass_fds=(fd,),
 os.close(fd)
 token = secrets.token_hex(16)
 lock = threading.Lock()
-state = {"claimed": False, "running": None}
+state = {"claimed": False, "running": None, "closing": False}
 
 
 def read_exact(n, buf=b""):
@@ -86,13 +88,19 @@ def handle(req, fds):
         return reply({"error": "请求没带对令牌"})
     if len(fds) != 3:
         return reply({"error": "请求没带 stdin/stdout/stderr"})
-    try:
-        proc = subprocess.Popen([limiter, "0"] + list(req["argv"]),
-                                stdin=fds[0], stdout=fds[1], stderr=fds[2],
-                                env=req["env"], cwd=req["cwd"])
-    except OSError as e:
-        return reply({"error": "起不来:%s" % e})
+    limit = req.get("limit")
+    if isinstance(limit, bool) or not isinstance(limit, (int, float)) or not 0 < limit <= LIMIT:
+        limit = LIMIT
+    # 起命令和登记在同一把锁里:判据结束时的清理要么看得到它,要么它根本不会起。
     with lock:
+        if state["closing"]:
+            return reply({"error": "判据已经结束"})
+        try:
+            proc = subprocess.Popen([limiter, "%g" % limit] + list(req["argv"]),
+                                    stdin=fds[0], stdout=fds[1], stderr=fds[2],
+                                    env=req["env"], cwd=req["cwd"])
+        except OSError as e:
+            return reply({"error": "起不来:%s" % e})
         state["running"] = proc
     rc = proc.wait()
     with lock:
@@ -139,6 +147,7 @@ for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
     signal.signal(signum, forward)
 rc = oracle.wait()
 with lock:
+    state["closing"] = True
     proc = state["running"]
 if proc is not None and proc.poll() is None:
     proc.terminate()

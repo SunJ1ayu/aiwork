@@ -33,7 +33,7 @@
 # `test-no-egress.sh`;别的套件不分平台。两个平台守的是同一句不变量,只是手段不同:
 #   Linux:独立网络命名空间(`unshare -n`),"已隔离" = 本进程和 1 号进程的 net 命名空间不同。
 #   macOS:系统自带的 `/usr/bin/sandbox-exec` 带一份「只禁外网」的规则重跑自己;
-#          "已隔离" = 内核的 sandbox_check 说本进程在沙箱里。规则、问内核、实测出口、拒跑的话
+#          "已隔离" = 内核证明本进程在本守卫自己的沙箱里。规则、问内核、实测出口、拒跑的话
 #          只在 python 版 `_no_egress.py` 里定义,细节写在那边;本文件在 Mac 上一律问它。
 
 __noeg_die() {
@@ -60,7 +60,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
 
   __noeg_isolated() {
     local v
-    v="$(python3 -I "$__noeg_py" sandboxed)" || __noeg_py_failed $?
+    v="$(python3 -I "$__noeg_py" isolated)" || __noeg_py_failed $?
     case "$v" in
       1) return 0 ;;
       0) return 1 ;;
