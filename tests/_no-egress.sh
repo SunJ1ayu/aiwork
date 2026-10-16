@@ -72,7 +72,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
     esac
   }
 
-  __noeg_egress_open() {  # 只有明确连不上才算没有出口(检查本身坏了也当连得出去)
+  __noeg_egress_open() {  # 只有权限拒绝才算没有出口;超时、其他错误或检查失败均当可能连得出去
     [[ "$(python3 -I "$__noeg_py" egress 2>/dev/null)" != closed ]]
   }
 

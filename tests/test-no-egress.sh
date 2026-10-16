@@ -518,12 +518,45 @@ n8_host_channel_stays_with_the_oracle() {
   check "N8: 没有令牌的子进程用不了这条通道(rc=$rc)" $?
 }
 
+# ps runs outside the guard: macOS refuses ps inside its sandbox.
+# Like test_timeout.py, a Z state means stopped even before init reaps it.
+n10_running() {
+  local state
+  state="$(in_host ps -o stat= -p "$1" 2>/dev/null)" || return 1
+  case "${state//[[:space:]]/}" in ""|Z*) return 1 ;; *) return 0 ;; esac
+}
+
 # ---------------------------------------------------------------- N10
 n10_host_runner_itself() {
   echo "[N10] 沙箱外代跑进程自己:坏请求不让它停摆;判据被 kill -9 后它起过的进程全收掉"
   # 代跑进程是平台无关的 python,这里两边都单独起一个,配一个替身判据来考。
   local w="$D/runner" out i p alive runner
   mkdir -p "$w"
+  n10_running "$$"; check "N10: 状态检查能认出活着的判据进程" $?
+  python3 - "$w/zombie.pid" "$w/reap" 9<&- <<'PY' &
+import os, pathlib, sys, time
+pid = os.fork()
+if pid == 0:
+    os._exit(0)
+pathlib.Path(sys.argv[1]).write_text(str(pid))
+until = time.monotonic() + 120
+while not pathlib.Path(sys.argv[2]).exists() and time.monotonic() < until:
+    time.sleep(.05)
+os.waitpid(pid, 0)
+PY
+  local zombie_parent=$! zombie=""
+  for i in $(seq 1 50); do
+    [[ -s "$w/zombie.pid" ]] && { zombie="$(cat "$w/zombie.pid")"; break; }
+    sleep .1
+  done
+  for i in $(seq 1 50); do
+    [[ -n "$zombie" ]] && ! n10_running "$zombie" && break
+    sleep .1
+  done
+  [[ -n "$zombie" ]] && ! n10_running "$zombie"
+  check "N10: 尚未被父进程回收的僵尸不算活着" $?
+  touch "$w/reap"
+  wait "$zombie_parent"
   printf '%s\n' "$NOEG_HOST_CLIENT_PY" > "$w/client.py"
 
   cat > "$w/bad.sh" <<'BAD'
@@ -572,8 +605,8 @@ VICTIM
     sleep 0.1
   done
   kill -9 "$(cat "$w/oracle.pid" 2>/dev/null)" 2>/dev/null
-  for i in $(seq 1 200); do kill -0 "$runner" 2>/dev/null || break; sleep 0.1; done
-  if kill -0 "$runner" 2>/dev/null; then
+  for i in $(seq 1 200); do n10_running "$runner" || break; sleep 0.1; done
+  if n10_running "$runner"; then
     kill -9 "$runner" 2>/dev/null
     bad "N10: 判据被 kill -9 后,代跑进程 20 秒内退出"
   else
@@ -582,7 +615,7 @@ VICTIM
   wait "$runner" 2>/dev/null
   for i in $(seq 1 150); do
     alive=""
-    for p in $(cat "$w/kids" 2>/dev/null); do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
+    for p in $(cat "$w/kids" 2>/dev/null); do n10_running "$p" && alive="$alive $p"; done
     [[ -z "$alive" ]] && break
     sleep 0.1
   done
@@ -607,7 +640,7 @@ ORPHAN
   wait "$runner" 2>/dev/null
   for i in $(seq 1 300); do
     alive=""
-    for p in $(cat "$w/orphans" 2>/dev/null); do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
+    for p in $(cat "$w/orphans" 2>/dev/null); do n10_running "$p" && alive="$alive $p"; done
     [[ -z "$alive" ]] && break
     sleep 0.1
   done
@@ -622,7 +655,7 @@ n11_macos_local_egress_routes() {
   [[ "$OS" == Darwin ]] || return 0
   echo "[N11] Mac 本机中转:真实 CONNECT 代理和临时目录外的 unix socket"
   cat > "$D/local-routes.py" <<'PY'
-import http.server, os, pathlib, shlex, socket, socketserver
+import contextlib, http.server, os, pathlib, shlex, signal, socket, socketserver
 import subprocess, sys, tempfile, threading, time
 
 tests = pathlib.Path(sys.argv[1])
@@ -737,41 +770,105 @@ print('DIRECT_DENIED')
               proc.stderr.decode().strip())
     del clients['direct']
 
-    # 在一次性 CI 主机上暂设真正的系统 HTTPS 代理,finally 恢复原设置。
-    def networksetup(*args):
-        return subprocess.check_output(['/usr/sbin/networksetup', *args], text=True, timeout=15)
-    services = [s for s in networksetup('-listallnetworkservices').splitlines()[1:]
-                if s and not s.startswith('*')]
-    service = services[0]
-    old = dict(line.split(': ', 1) for line in networksetup('-getsecurewebproxy', service).splitlines()
-               if ': ' in line)
-    def setproxy(*args):
-        subprocess.run(['sudo', '-n', '/usr/sbin/networksetup', *args], check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
-    try:
-        setproxy('-setsecurewebproxy', service, '127.0.0.1', str(server.server_address[1]))
-        setproxy('-setsecurewebproxystate', service, 'on')
-        # 等系统设置传播,同时确认它确实被 urllib 读取,不是一个没生效的配置。
-        system_ready = False
-        for _ in range(30):
-            before = request_count()
-            run_client('Python', clean)
-            if request_count() > before:
-                system_ready = True
-                break
-            time.sleep(.1)
-        check('系统代理控制组:无代理环境变量的 urllib 真的发出 CONNECT', system_ready)
-        for entry in ('bash', 'Python'):
-            for name in clients:
+    # Exercise urllib's real selection/bypass functions without changing the machine.
+    # The sentinel replaces only the native-settings reader, not getproxies itself.
+    policy = """import urllib.request
+reads = []
+def native_proxy():
+    reads.append(True)
+    return {'https': 'http://127.0.0.1:9'}
+urllib.request.getproxies_macosx_sysconf = native_proxy
+proxies = urllib.request.getproxies()
+if reads:
+    print('SYSTEM_PROXY_USED')
+elif proxies == {'no': '*'} and all(urllib.request.proxy_bypass(host) for host in
+        ('model.invalid', 'example.com', 'arbitrary.invalid:443', '1.1.1.1', '[::1]')):
+    print('SYSTEM_PROXY_BYPASSED')
+"""
+    clients['system-policy'] = [sys.executable, '-c', policy]
+    control = run_client('system-policy', clean)
+    check('系统代理读取控制组:没有环境代理时 urllib 会读原生设置',
+          b'SYSTEM_PROXY_USED' in control.stdout)
+    for entry in ('bash', 'Python'):
+        proc = run_client('system-policy', clean, entry)
+        check(entry + ' 守卫下 getproxies 没有代理服务器,任意主机均绕过且不读取系统代理',
+              b'GUARD_READY' in proc.stdout and b'SYSTEM_PROXY_BYPASSED' in proc.stdout)
+    del clients['system-policy']
+
+    # These two official runner flags gate only this destructive test, never isolation.
+    if (os.environ.get('GITHUB_ACTIONS') == 'true'
+            and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'):
+        def networksetup(*args):
+            return subprocess.check_output(['/usr/sbin/networksetup', *args], text=True, timeout=15)
+
+        def settings(service):
+            return dict(line.split(': ', 1) for line in
+                        networksetup('-getsecurewebproxy', service).splitlines() if ': ' in line)
+
+        def setproxy(*args):
+            subprocess.run(['sudo', '-n', '/usr/sbin/networksetup', *args], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+
+        @contextlib.contextmanager
+        def system_proxy(service):
+            old = settings(service)
+            def interrupted(signum, _frame):
+                raise SystemExit(128 + signum)
+            signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+            handlers = {sig: signal.signal(sig, interrupted) for sig in signals}
+            try:
+                setproxy('-setsecurewebproxy', service, '127.0.0.1', str(server.server_address[1]))
+                setproxy('-setsecurewebproxystate', service, 'on')
+                yield
+            finally:
+                # Finish bounded restoration before accepting another TERM/HUP/INT.
+                for sig in signals:
+                    signal.signal(sig, signal.SIG_IGN)
+                try:
+                    try:
+                        setproxy('-setsecurewebproxy', service, old['Server'], old['Port'])
+                    finally:
+                        setproxy('-setsecurewebproxystate', service,
+                                 'on' if old['Enabled'] == 'Yes' else 'off')
+                finally:
+                    for sig, handler in handlers.items():
+                        signal.signal(sig, handler)
+
+        services = [s for s in networksetup('-listallnetworkservices').splitlines()[1:]
+                    if s and not s.startswith('*')]
+        service = services[0]
+        original = settings(service)
+        with system_proxy(service):
+            system_ready = False
+            for _ in range(30):
                 before = request_count()
-                proc = run_client(name, clean, entry)
-                check(entry + ' 守卫下 ' + name + ' 不用 Mac 系统代理',
+                run_client('Python', clean)
+                if request_count() > before:
+                    system_ready = True
+                    break
+                time.sleep(.1)
+            check('系统代理控制组:无代理环境变量的 urllib 真的发出 CONNECT', system_ready)
+            # curl does not read macOS system proxy settings; only urllib is tested here.
+            for entry in ('bash', 'Python'):
+                before = request_count()
+                proc = run_client('Python', clean, entry)
+                check(entry + ' 守卫下 urllib 不用真实 Mac 系统代理',
                       system_ready and b'GUARD_READY' in proc.stdout and request_count() == before,
                       'rc=%d requests=%d' % (proc.returncode, request_count() - before))
-    finally:
-        if old.get('Server'):
-            setproxy('-setsecurewebproxy', service, old['Server'], old['Port'])
-        setproxy('-setsecurewebproxystate', service, 'on' if old.get('Enabled') == 'Yes' else 'off')
+        check('真实系统代理测试后设置完整恢复(含空服务器、0 端口和原开关)',
+              settings(service) == original)
+        try:
+            with system_proxy(service):
+                os.kill(os.getpid(), signal.SIGTERM)
+        except SystemExit as exc:
+            check('系统代理测试收到 TERM 时走退出路径', exc.code == 128 + signal.SIGTERM)
+        else:
+            check('系统代理测试收到 TERM 时走退出路径', False)
+        check('TERM 退出后系统代理设置完整恢复', settings(service) == original)
+    else:
+        print('SKIP: N11: 真实系统代理测试没跑:不是 GitHub 一次性托管 runner '
+              '(需 GITHUB_ACTIONS=true 且 RUNNER_ENVIRONMENT=github-hosted); '
+              '不改整机设置,不调用 sudo。', flush=True)
 
     # 沙箱外服务放在用户目录下,不在任何临时目录中。临时目录里的另一个服务必须仍然可连。
     with tempfile.TemporaryDirectory(prefix='.aiwork-noeg-', dir=pathlib.Path.home()) as outside, \
