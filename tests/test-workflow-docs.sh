@@ -116,10 +116,13 @@ grep -q '最新 main' "$SOURCE/CLAUDE.md" \
   && grep -q '机器人' "$SOURCE/CLAUDE.md" \
   && grep -q '停下' "$SOURCE/CLAUDE.md"
 check "W4: 任务通过分支、实现、全测、机器人 PR 收尾" $?
-grep -q '另一家族' "$SOURCE/CLAUDE.md" \
+grep -q 'CI 绿了以后' "$SOURCE/CLAUDE.md" \
+  && grep -q '见 `summary` skill' "$SOURCE/CLAUDE.md" \
+  && ! grep -q 'skills/summary/SKILL.md' "$SOURCE/CLAUDE.md" \
+  && ! grep -q '另一家族' "$SOURCE/CLAUDE.md" \
   && grep -q 'review-pr.*沙箱外' "$SOURCE/CLAUDE.md" \
   && grep -q 'review-pr' "$SOURCE/CLAUDE.md"
-check "W4: 正式评审在 PR 上使用沙箱外 review-pr" $?
+check "W4: CI 绿后用沙箱外 review-pr 派评审，各腿出结果后由汇总处理" $?
 grep -q 'review-pr` 从共享检出跑，跑之前先把共享检出更新到最新 main' "$SOURCE/CLAUDE.md" \
   && ! grep -q '从共享检出跑，跑之前先把共享检出更新到最新 main；合并后用' "$SOURCE/CLAUDE.md" \
   && grep -q '合并由项目关卡或业主完成。合并后用 `sync-workflow-docs` 同步部署出去的工作流文档。' "$SOURCE/CLAUDE.md"
