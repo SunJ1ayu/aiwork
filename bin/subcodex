@@ -40,7 +40,7 @@ ARGS=()
 for arg in "$@"; do
   if [[ "$arg" == --dry-run ]]; then DRY_RUN=1; else ARGS+=("$arg"); fi
 done
-set -- "${ARGS[@]}"
+set -- ${ARGS[@]+"${ARGS[@]}"}
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
 [[ $# -ge 3 && $# -le 4 ]] || { usage; exit 2; }
 MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"

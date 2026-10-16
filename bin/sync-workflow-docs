@@ -42,7 +42,10 @@ workflow_mappings() {
     printf '%s\n' "skills/${name}/SKILL.md|.claude/skills/${name}/SKILL.md"
   done
 }
-mapfile -t MAPPINGS < <(workflow_mappings)
+MAPPINGS=()
+while IFS= read -r mapping; do
+  MAPPINGS+=("$mapping")
+done < <(workflow_mappings)
 
 has_symlink_component() {  # has_symlink_component <relative destination>
   local rel="$1" here="$TARGET_ROOT" part

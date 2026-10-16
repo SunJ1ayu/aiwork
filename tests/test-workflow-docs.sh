@@ -22,7 +22,10 @@ workflow_mappings() {
     printf '%s\n' "skills/${name}/SKILL.md|.claude/skills/${name}/SKILL.md"
   done
 }
-mapfile -t MAPPINGS < <(workflow_mappings)
+MAPPINGS=()
+while IFS= read -r mapping; do
+  MAPPINGS+=("$mapping")
+done < <(workflow_mappings)
 
 echo "=== workflow docs oracle ==="
 # 家目录里那份部署副本是本机状态。同步器对临时目录的行为由下面 W2 问;
