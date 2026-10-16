@@ -64,8 +64,8 @@ TIMEOUT_SECONDS="${SUBCODEX_TIMEOUT:-1500}"
 [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die 'SUBCODEX_TIMEOUT must be a positive integer'
 CODEX="${CODEX_BIN:-codex}"
 command -v "$CODEX" >/dev/null 2>&1 || die "codex CLI not found ($CODEX)"
-[[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcodex: missing ro-repo-exec; refusing to review in a writable repo (fail closed)' >&2; exit 78; }
-[[ -x "$BIN_DIR/aiwork-timeout" ]] || { echo 'subcodex: missing aiwork-timeout; refusing dispatch' >&2; exit 78; }
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发（不在可写的仓里跑评审腿）\n' "$(basename "$0")" "$BIN_DIR/ro-repo-exec" >&2; exit 78; }
+[[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 
 . "$BIN_DIR/_review-workspace.sh" || die 'missing _review-workspace.sh'

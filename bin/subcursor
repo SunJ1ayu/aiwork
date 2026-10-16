@@ -46,8 +46,8 @@ if [[ -n "$API_KEY" ]]; then
 else
   [[ -s "$AUTH_FILE" ]] || die "no session credentials: $AUTH_FILE (run cursor-agent login)"
 fi
-[[ -x "$BIN_DIR/ro-repo-exec" ]] || { echo 'subcursor: missing ro-repo-exec; refusing dispatch' >&2; exit 78; }
-[[ -x "$BIN_DIR/aiwork-timeout" ]] || { echo 'subcursor: missing aiwork-timeout; refusing dispatch' >&2; exit 78; }
+[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发（不在可写的仓里跑评审腿）\n' "$(basename "$0")" "$BIN_DIR/ro-repo-exec" >&2; exit 78; }
+[[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 [[ -f "$BIN_DIR/_cursor-stream.py" ]] || die 'missing Composer stream decoder'
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 . "$BIN_DIR/_review-workspace.sh" || die 'missing review workspace helper'
