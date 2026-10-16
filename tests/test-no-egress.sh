@@ -188,7 +188,10 @@ if op == "hello":
         fail(ans.get("error", "认领失败"))
     print(ans["token"])
 else:
-    req = frame({"op": "run", "token": os.environ.pop("__NOEG_HOST_TOKEN", ""),
+    limit = None
+    if argv[:1] == ["--limit"]:
+        limit, argv = float(argv[1]), argv[2:]
+    req = frame({"op": "run", "token": os.environ.pop("__NOEG_HOST_TOKEN", ""), "limit": limit,
                  "argv": argv, "env": dict(os.environ), "cwd": os.getcwd()})
     socket.send_fds(chan, [req[:4]], [0, 1, 2])
     chan.sendall(req[4:])
@@ -276,10 +279,19 @@ if [[ "$OS" == Darwin ]]; then
   in_host() {  # 在沙箱外跑(判据要有网,才问得出"守卫切断了网")
     __NOEG_HOST_TOKEN="$NOEG_HOST_TOKEN" python3 -I -c "$NOEG_HOST_CLIENT_PY" 9 run "$@"
   }
-  # 分平台 ②:sandbox-exec 写死了绝对路径,换不成假货;改为先套一层什么都放行的沙箱。
-  # Mac 的沙箱套不了第二层,守卫只能看到「已经在沙箱里」而照样实测出口 —— 连得出去就该拒跑。
-  # 这正是被别家 CLI 的不禁网沙箱包着时的真实处境。
-  NO_ISOLATION=(/usr/bin/sandbox-exec -p '(version 1)(allow default)')
+  # 分平台 ②:sandbox-exec 写死了绝对路径,换不成假货;改为先套一层别人的沙箱。Mac 的沙箱套不了
+  # 第二层,守卫只能看出「在别人的沙箱里」,那层规则它验证不了 —— 该拒跑。被别家 CLI 的沙箱包着
+  # 就是这种处境。两种外层:
+  #   open:   什么都放行;
+  #   no-443: 放行网络,只拒绝 443 端口 —— 守卫的探测地址被明确拒绝,别处照样连得出去。
+  NO_ISOLATION_CASES="open no-443"
+  no_isolation() {
+    case "$1" in
+      open)   NO_ISOLATION=(/usr/bin/sandbox-exec -p '(version 1)(allow default)') ;;
+      no-443) NO_ISOLATION=(/usr/bin/sandbox-exec -p
+              '(version 1)(allow default)(deny network-outbound (remote ip "*:443"))') ;;
+    esac
+  }
 else
   in_host() {  # 在**宿主**网络命名空间里跑(判据要有网,才问得出"守卫切断了网")
     nsenter -t 1 -n -- "$@"
@@ -287,8 +299,14 @@ else
   # 分平台 ②:把 `unshare` 换成必然失败的假货。
   mkdir -p "$D/fakebin"
   printf '#!/bin/bash\nexit 1\n' > "$D/fakebin/unshare"; chmod +x "$D/fakebin/unshare"
-  NO_ISOLATION=(env PATH="$D/fakebin:$PATH")
+  NO_ISOLATION_CASES="fake-unshare"
+  no_isolation() { NO_ISOLATION=(env PATH="$D/fakebin:$PATH"); }
 fi
+
+# 「说清了原因」只认守卫抬头「无出口守卫:」冒号后面那半句。抬头自己带「出口」,每次拒跑都打,
+# 另一行固定的说明也带「出口」,拿它们算数等于这条断言永远过。
+REASON='无出口守卫:.*(unshare|隔离|出口|沙箱|命名空间)'
+
 
 # ---------------------------------------------------------------- C0
 c0_this_machine_has_egress_at_all() {
@@ -364,21 +382,24 @@ n3_every_suite_carries_the_guard() {
   # N3c **行为抽检**:让隔离做不到(见分平台 ②),每个套件都必须当场拒跑。
   #     骗得过 N3a 的注释骗不过这里 —— 注释不会让套件拒跑。
   #     成本很低:fail-closed 会在第一个用例之前就退出,不会真跑完套件。
-  local leaky="" runner out rc
+  local leaky="" runner out rc case
   for f in $(__noeg_suites); do
     [[ -f "$f" ]] || continue
     b="$(basename "$f")"
     [[ "$b" == "test-no-egress.sh" ]] && continue   # 本判据的行为由 N4 直接考
     runner=bash; [[ "$f" == *.py ]] && runner=python3
+    for case in $NO_ISOLATION_CASES; do
+    no_isolation "$case"
     out="$(in_host "${NO_ISOLATION[@]}" "$TESTS/../bin/aiwork-timeout" 20 "$runner" "$f" 2>&1)"; rc=$?
     # 非零、且不是超时(超时说明它压根没理守卫、跑起来了)、且一条用例都没跑
     # 不只问"拒跑了",还要问"**是不是被这道闸**拒的" —— 因为别的原因早死也会非零,
     # 那样 N3c 会为了错误的理由变绿(08-10 四审 subkimi 与我自审 F3 同时点到)。
     if [[ $rc -eq 0 || $rc -eq 124 ]] \
        || grep -qE '^[[:space:]]*(PASS|ok|FAIL):' <<<"$out" \
-       || ! grep -qE "unshare|隔离|出口" <<<"$out"; then
-      leaky="$leaky $b"
+       || ! grep -qE "$REASON" <<<"$out"; then
+      leaky="$leaky $b($case)"
     fi
+    done
   done
   [[ -z "$leaky" ]]
   check "N3c: 隔离做不到时每个套件都当场拒跑(带着网跑起来的:${leaky:-无})" $?
@@ -409,17 +430,20 @@ n3_every_suite_carries_the_guard() {
 n4_fail_closed() {
   echo "[N4] fail-closed:隔离做不到就**拒跑**,不许静默带着网往下跑"
   write_probe "$D/probe_failclosed.sh" yes
-  local out rc
-  out="$(in_host "${NO_ISOLATION[@]}" bash "$D/probe_failclosed.sh" 2>&1)"; rc=$?
-  [[ $rc -ne 0 ]]
-  check "N4: 隔离做不到 ⇒ 非零退出" $?
-  # ⚠️ 匹配词里**不许**出现 `egress`:守卫文件名就叫 `_no-egress.sh`,
-  #    bash 的 "No such file or directory" 会把这个路径打出来,于是一条什么都没解释的
-  #    报错也能"通过" —— 08-10 写这份判据时当场撞见的假绿,靠的是路径名而不是解释。
-  grep -qE "unshare|隔离|出口" <<<"$out"
-  check "N4: 拒跑时说清是为什么(不是一句无头的报错)" $?
-  ! grep -q "EGRESS_OPEN" <<<"$out"
-  check "N4: 拒跑时**没有**继续跑下面的用例(fail-open 是本机反复踩的坑)" $?
+  local out rc case
+  for case in $NO_ISOLATION_CASES; do
+    no_isolation "$case"
+    out="$(in_host "${NO_ISOLATION[@]}" bash "$D/probe_failclosed.sh" 2>&1)"; rc=$?
+    [[ $rc -ne 0 ]]
+    check "N4($case): 隔离做不到 ⇒ 非零退出" $?
+    # ⚠️ 匹配词里**不许**出现 `egress`:守卫文件名就叫 `_no-egress.sh`,
+    #    bash 的 "No such file or directory" 会把这个路径打出来,于是一条什么都没解释的
+    #    报错也能"通过" —— 08-10 写这份判据时当场撞见的假绿,靠的是路径名而不是解释。
+    grep -qE "$REASON" <<<"$out"
+    check "N4($case): 拒跑时说清是为什么(不是一句无头的报错、也不是只有固定抬头)" $?
+    ! grep -q "EGRESS_OPEN" <<<"$out"
+    check "N4($case): 拒跑时**没有**继续跑下面的用例(fail-open 是本机反复踩的坑)" $?
+  done
 }
 
 # ---------------------------------------------------------------- N5
@@ -556,6 +580,31 @@ VICTIM
   for p in $alive; do kill -9 "$p" 2>/dev/null; done
   [[ $(wc -l < "$w/kids" 2>/dev/null || echo 0) -ge 2 && -z "$alive" ]]
   check "N10: 代跑的命令和它起的子进程都在 15 秒内没了(还活着的:${alive:-无})" $?
+
+  # 代跑进程自己被 kill -9:没人替它收了,只能靠每条命令自己的上限(这里给 5 秒)。
+  cat > "$w/orphan.sh" <<'ORPHAN'
+#!/usr/bin/env bash
+tok="$(python3 -I "$1/client.py" 9 hello)" || exit 70
+__NOEG_HOST_TOKEN="$tok" python3 -I "$1/client.py" 9 run --limit 5 \
+  bash -c 'sleep 300 & echo $! >> "$0/orphans"; echo $$ >> "$0/orphans"; wait' "$1"
+ORPHAN
+  python3 -I -c "$NOEG_HOST_PY" "$TESTS" 9 bash "$w/orphan.sh" "$w" 9<&- >/dev/null 2>&1 &
+  runner=$!
+  for i in $(seq 1 150); do
+    [[ -f "$w/orphans" && $(wc -l < "$w/orphans") -ge 2 ]] && break
+    sleep 0.1
+  done
+  kill -9 "$runner" 2>/dev/null
+  wait "$runner" 2>/dev/null
+  for i in $(seq 1 300); do
+    alive=""
+    for p in $(cat "$w/orphans" 2>/dev/null); do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
+    [[ -z "$alive" ]] && break
+    sleep 0.1
+  done
+  for p in $alive; do kill -9 "$p" 2>/dev/null; done
+  [[ $(wc -l < "$w/orphans" 2>/dev/null || echo 0) -ge 2 && -z "$alive" ]]
+  check "N10: 代跑进程自己被 kill -9,它起的命令和子进程也在上限加宽限内(30 秒)没了(还活着的:${alive:-无})" $?
 }
 
 # ---------------------------------------------------------------- N9
