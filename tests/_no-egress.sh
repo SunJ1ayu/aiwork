@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # 无出口守卫(bash 版)—— 2026-08-10,track no-egress-judging。
 #
-# 不变量只有一句:**跑判据的进程不许有外网出口。**
+# 目标:避免判据误呼外部服务。Mac 的保证范围见 `_no_egress.py` 文件头「Mac 上出网的路」。
 #
 # 用法(判据套件顶部,越靠前越好,`set` 之后第一件事):
 #   . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh"
 #
 # 它做的事:发现自己还没隔离 ⇒ 把整个脚本 `exec` 进隔离里重跑(Linux 是 `unshare -n` 的
-# 命名空间、把 `lo` 拉起来;macOS 是只禁外网的沙箱;本机连接都留着,桩服务器还要用);
+# 命名空间、把 `lo` 拉起来;macOS 的保证范围见 python 版文件头「Mac 上出网的路」);
 # 做不到就**拒跑**。
 #
 # 为什么守卫要待在**套件里**而不是总跑入口里:手跑单个套件是开发时的日常,
@@ -30,11 +30,10 @@
 # 它堵不住蓄意外呼,也不打算堵。真要防蓄意,得换层级(凭证隔离 / 独立账号)。
 #
 # **这是指定的分平台处。** 平台判断只许出现在这里、python 版 `_no_egress.py` 和它们的判据
-# `test-no-egress.sh`;别的套件不分平台。两个平台守的是同一句不变量,只是手段不同:
+# `test-no-egress.sh`;别的套件不分平台。保证范围按平台说明:
 #   Linux:独立网络命名空间(`unshare -n`),"已隔离" = 本进程和 1 号进程的 net 命名空间不同。
-#   macOS:系统自带的 `/usr/bin/sandbox-exec` 带一份「只禁外网」的规则重跑自己;
-#          "已隔离" = 内核证明本进程在本守卫自己的沙箱里。规则、问内核、实测出口、拒跑的话
-#          只在 python 版 `_no_egress.py` 里定义,细节写在那边;本文件在 Mac 上一律问它。
+#   macOS:保证范围、出网路径清单与做法,只在 `_no_egress.py` 文件头「Mac 上出网的路」。
+#          本文件经 python CLI 复用,不另定义规则。
 
 __noeg_die() {
   printf '🔴 无出口守卫:%s\n' "$1" >&2
@@ -52,6 +51,11 @@ if [[ "$(uname -s)" == Darwin ]]; then
     [[ "$1" -eq 78 ]] && exit 78
     __noeg_die "调不起 python 版守卫($__noeg_py),做不到网络隔离 ⇒ 拒跑"
   }
+
+  __noeg_workspace="$(python3 -I "$__noeg_py" workspace "${BASH:-bash}" "$0" "$@")" \
+    || __noeg_py_failed $?
+  eval "$__noeg_workspace" || __noeg_py_failed $?
+  unset __noeg_workspace
 
   { IFS= read -r __noeg_not_isolated_msg; IFS= read -r __noeg_leak_msg; } \
     < <(python3 -I "$__noeg_py" messages 2>/dev/null)
@@ -136,7 +140,7 @@ fi
 
 # Test model defaults are disposable fixtures, never the owner's machine settings.
 _test_settings_py="$(dirname "${BASH_SOURCE[0]}")/_test_settings.py"
-_test_review_unset="$(python3 "$_test_settings_py" clear-review-env)" || exit 78
+_test_review_unset="$(python3 "$_test_settings_py" clear-inherited-env)" || exit 78
 eval "$_test_review_unset"
 unset _test_review_unset
 if [[ -z "${AIWORK_CONFIG_DIR:-}" || -z "${AIWORK_DATA_DIR:-}" ]]; then

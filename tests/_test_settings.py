@@ -14,14 +14,21 @@ MODELS = {'codex': 'gpt-6-sol', 'cursor': 'grok-4.7-high',
           'kimi': 'kimi-code/kimi-for-coding', 'mimo': 'xiaomi/mimo-v2.6-pro'}
 
 
-def review_environment_keys():
-    """Inherited review context is cleared once, before suites set fixtures."""
-    return [key for key in os.environ if key.startswith(('AIWORK_REVIEW_', 'PANEL_', 'REVIEW_'))]
+PROXY_BYPASS = {'NO_PROXY': '*', 'no_proxy': '*'}
 
 
-def clear_review_environment():
-    for key in review_environment_keys():
+def inherited_environment_keys():
+    """Remove inherited review context and proxy settings before suites set fixtures."""
+    return [key for key in os.environ
+            if key.startswith(('AIWORK_REVIEW_', 'PANEL_', 'REVIEW_'))
+            or key.lower().endswith('_proxy') or key.lower() == 'git_proxy_command']
+
+
+def clear_inherited_environment():
+    for key in inherited_environment_keys():
         os.environ.pop(key)
+    # A nonempty proxy dictionary also prevents urllib's macOS system-proxy fallback.
+    os.environ.update(PROXY_BYPASS)
 
 
 def write_settings(directory):
@@ -45,7 +52,17 @@ def set_model(directory, leg, model):
     path.write_text('\n'.join(lines) + '\n')
 
 
-def ensure_settings():
+def ensure_workspace():
+    if not os.environ.get('AIWORK_TEST_TMPDIR'):
+        workspace = tempfile.TemporaryDirectory(prefix='ng-')
+        atexit.register(workspace.cleanup)
+        os.environ['AIWORK_TEST_TMPDIR'] = workspace.name
+        os.environ['TMPDIR'] = workspace.name
+
+
+def ensure_settings(*, workspace=False):
+    if workspace:
+        ensure_workspace()
     if not os.environ.get('AIWORK_DATA_DIR'):
         data = tempfile.TemporaryDirectory(prefix='aiwork-test-data-')
         atexit.register(data.cleanup)
@@ -57,12 +74,17 @@ def ensure_settings():
 
 
 if __name__ == '__main__':
-    if sys.argv[1] == 'clear-review-env':
-        keys = review_environment_keys()
+    if sys.argv[1] == 'clear-inherited-env':
+        keys = inherited_environment_keys()
         print(shlex.join(['unset', '-v', '--', *keys]) if keys else ':')
+        print(shlex.join(['export', *(key + '=' + value for key, value in PROXY_BYPASS.items())]))
     elif sys.argv[1] == 'set-model':
         set_model(os.environ['AIWORK_CONFIG_DIR'], *sys.argv[2:])
     else:
+        command = sys.argv[1:]
+        if command[:1] == ['--workspace']:
+            ensure_workspace()
+            command = command[1:]
         with tempfile.TemporaryDirectory(prefix='aiwork-test-settings-') as directory, \
                 tempfile.TemporaryDirectory(prefix='aiwork-test-data-') as data:
             env = dict(os.environ)
@@ -70,4 +92,4 @@ if __name__ == '__main__':
                 env['AIWORK_CONFIG_DIR'] = str(write_settings(directory))
             if not env.get('AIWORK_DATA_DIR'):
                 env['AIWORK_DATA_DIR'] = data
-            raise SystemExit(subprocess.call(sys.argv[1:], env=env))
+            raise SystemExit(subprocess.call(command, env=env))

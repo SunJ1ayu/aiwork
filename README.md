@@ -84,11 +84,11 @@ The runner is list-driven (`SUITES`) and hard-reds when a `tests/test-*` file is
 NOT in that list — a judging suite nobody runs rots silently. Individual suites
 still run standalone (`bash tests/test-subcodex.sh`); each one first reruns
 itself with no egress — inside a network namespace on Linux, under the system
-`sandbox-exec` with a network-only profile on macOS (loopback and unix sockets
-stay open, DNS is blocked) — and refuses to run (78) if it cannot, including on
-macOS inside another tool's sandbox, whose rules it cannot verify, because **a
-judging process must have no egress** (2026-08-10: an oracle called a paid model
-and burned the quota). Details: `tests/_no-egress.sh`, `tests/_no_egress.py`.
+`sandbox-exec` on macOS — and refuses to run (78) if isolation cannot be verified.
+The macOS guarantees and limitations are defined in one place:
+[`tests/_no_egress.py`, “Mac 上出网的路”](tests/_no_egress.py).
+Linux details: `tests/_no-egress.sh`. This guard prevents accidental paid calls
+from tests (the 2026-08-10 incident), within the documented platform limits.
 
 ## MiMo agent CLI setup
 

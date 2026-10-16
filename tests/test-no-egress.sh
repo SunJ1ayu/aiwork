@@ -48,7 +48,7 @@ limiter = os.path.join(tests, os.pardir, "bin", "aiwork-timeout")
 LIMIT = 600  # 秒;判据里最长的代跑命令是 N3c 的单个套件,它自己还套着 20 秒
 sys.path.insert(0, tests)
 import _test_settings
-_test_settings.ensure_settings()
+_test_settings.ensure_settings(workspace=True)
 
 mine, theirs = socket.socketpair()
 os.dup2(theirs.fileno(), fd)
@@ -485,7 +485,7 @@ n6_idempotent_no_exec_loop() {
 
 # ---------------------------------------------------------------- N7
 n7_transparent() {
-  echo "[N7] 透传:守卫只拿走网络,别的什么都不许动"
+  echo "[N7] 透传:参数、stdin 和退出码保持原样"
   cat > "$D/pass.sh" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
@@ -622,7 +622,7 @@ n11_macos_local_egress_routes() {
   [[ "$OS" == Darwin ]] || return 0
   echo "[N11] Mac 本机中转:真实 CONNECT 代理和临时目录外的 unix socket"
   cat > "$D/local-routes.py" <<'PY'
-import contextlib, http.server, json, os, pathlib, socket, socketserver
+import http.server, os, pathlib, shlex, socket, socketserver
 import subprocess, sys, tempfile, threading, time
 
 tests = pathlib.Path(sys.argv[1])
@@ -651,6 +651,10 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 server = Server(('127.0.0.1', 0), Proxy)
 server.requests = []
 threading.Thread(target=server.serve_forever, daemon=True).start()
+# System proxy changes can also wake unrelated host services; count this probe's target only.
+def request_count():
+    return server.requests.count('model.invalid:443')
+
 proxy = 'http://127.0.0.1:%d' % server.server_address[1]
 clean = {k: v for k, v in os.environ.items() if not k.lower().endswith('_proxy')}
 clean.pop('AIWORK_NO_EGRESS_TRIED', None)
@@ -669,7 +673,7 @@ def run_client(name, env, entry=None):
     cmd = clients[name]
     if entry == 'bash':
         probe = root / 'guarded-client.sh'
-        probe.write_text('. %s || exit 78\necho GUARD_READY\nexec "$@"\n' % __import__('shlex').quote(str(guard)))
+        probe.write_text('. %s || exit 78\necho GUARD_READY\nexec "$@"\n' % shlex.quote(str(guard)))
         cmd = ['bash', str(probe)] + cmd
     elif entry == 'Python':
         code = ('import sys, subprocess; sys.path.insert(0, %r); import _no_egress; '
@@ -681,18 +685,57 @@ def run_client(name, env, entry=None):
 
 try:
     inherited = dict(clean, HTTPS_PROXY=proxy, https_proxy=proxy, ALL_PROXY=proxy,
-                     all_proxy=proxy, HtTp_PrOxY=proxy, No_PrOxY='localhost')
+                     all_proxy=proxy, HtTp_PrOxY=proxy, No_PrOxY='localhost',
+                     GIT_PROXY_COMMAND='/unused-proxy-command')
     for name in clients:
-        before = len(server.requests)
+        before = request_count()
         run_client(name, inherited)
-        check(name + ' 裸跑的控制组真的发出 CONNECT', len(server.requests) > before)
+        check(name + ' 裸跑的控制组真的发出 CONNECT', request_count() > before)
     for entry in ('bash', 'Python'):
         for name in clients:
-            before = len(server.requests)
+            before = request_count()
             proc = run_client(name, inherited, entry)
             check(entry + ' 守卫清掉继承的代理,' + name + ' 不向代理发 CONNECT',
-                  b'GUARD_READY' in proc.stdout and len(server.requests) == before,
-                  'rc=%d requests=%d' % (proc.returncode, len(server.requests) - before))
+                  b'GUARD_READY' in proc.stdout and request_count() == before,
+                  'rc=%d requests=%d' % (proc.returncode, request_count() - before))
+
+    # 行为上确认所有大小写变体都消失,而不是仅因某个客户端不认混合大小写就假绿。
+    clients['environment'] = [sys.executable, '-c',
+        "import os; proxies={k:v for k,v in os.environ.items() if k.lower().endswith('_proxy') "
+        "or k.lower()=='git_proxy_command'}; "
+        "print('PROXIES_CLEAN' if proxies=={'NO_PROXY':'*','no_proxy':'*'} else 'PROXIES_PRESENT')"]
+    for entry in ('bash', 'Python'):
+        proc = run_client('environment', inherited, entry)
+        check(entry + ' 守卫清掉混合大小写和 git 代理变量,只留下两种 NO_PROXY=*',
+              b'GUARD_READY' in proc.stdout and b'PROXIES_CLEAN' in proc.stdout)
+    del clients['environment']
+
+    direct = """import socket
+for family, kind, address in (
+    (socket.AF_INET, socket.SOCK_STREAM, ('1.1.1.1', 443)),
+    (socket.AF_INET, socket.SOCK_DGRAM, ('1.1.1.1', 53)),
+    (socket.AF_INET6, socket.SOCK_STREAM, ('::ffff:1.1.1.1', 443)),
+    (socket.AF_INET6, socket.SOCK_DGRAM, ('::ffff:1.1.1.1', 53)),
+):
+    with socket.socket(family, kind) as sock:
+        sock.settimeout(3)
+        try:
+            if kind == socket.SOCK_DGRAM:
+                sock.sendto(b'x', address)
+            else:
+                sock.connect(address)
+        except PermissionError:
+            continue
+        raise SystemExit('direct route was not denied')
+print('DIRECT_DENIED')
+"""
+    clients['direct'] = [sys.executable, '-c', direct]
+    for entry in ('bash', 'Python'):
+        proc = run_client('direct', clean, entry)
+        check(entry + ' 守卫内核拒绝 TCP/UDP、IPv4/IPv6 socket 的直连',
+              b'GUARD_READY' in proc.stdout and b'DIRECT_DENIED' in proc.stdout,
+              proc.stderr.decode().strip())
+    del clients['direct']
 
     # 在一次性 CI 主机上暂设真正的系统 HTTPS 代理,finally 恢复原设置。
     def networksetup(*args):
@@ -711,30 +754,32 @@ try:
         # 等系统设置传播,同时确认它确实被 urllib 读取,不是一个没生效的配置。
         system_ready = False
         for _ in range(30):
-            before = len(server.requests)
+            before = request_count()
             run_client('Python', clean)
-            if len(server.requests) > before:
+            if request_count() > before:
                 system_ready = True
                 break
             time.sleep(.1)
         check('系统代理控制组:无代理环境变量的 urllib 真的发出 CONNECT', system_ready)
         for entry in ('bash', 'Python'):
             for name in clients:
-                before = len(server.requests)
+                before = request_count()
                 proc = run_client(name, clean, entry)
                 check(entry + ' 守卫下 ' + name + ' 不用 Mac 系统代理',
-                      system_ready and b'GUARD_READY' in proc.stdout and len(server.requests) == before,
-                      'rc=%d requests=%d' % (proc.returncode, len(server.requests) - before))
+                      system_ready and b'GUARD_READY' in proc.stdout and request_count() == before,
+                      'rc=%d requests=%d' % (proc.returncode, request_count() - before))
     finally:
         if old.get('Server'):
             setproxy('-setsecurewebproxy', service, old['Server'], old['Port'])
         setproxy('-setsecurewebproxystate', service, 'on' if old.get('Enabled') == 'Yes' else 'off')
 
     # 沙箱外服务放在用户目录下,不在任何临时目录中。临时目录里的另一个服务必须仍然可连。
-    with tempfile.TemporaryDirectory(prefix='.aiwork-noeg-', dir=pathlib.Path.home()) as outside:
+    with tempfile.TemporaryDirectory(prefix='.aiwork-noeg-', dir=pathlib.Path.home()) as outside, \
+            tempfile.TemporaryDirectory(prefix='ng-neighbour-', dir='/tmp') as neighbour:
         sockets = []
         try:
             for label, directory, allowed in (('非临时目录', pathlib.Path(outside), False),
+                                               ('/tmp 下别人的目录', pathlib.Path(neighbour), False),
                                                ('测试临时目录', root, True)):
                 path = str(directory / 'service.sock')
                 srv = socket.socket(socket.AF_UNIX)

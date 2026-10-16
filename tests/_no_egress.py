@@ -1,32 +1,39 @@
-"""无出口守卫(python 版)—— 2026-08-10,track no-egress-judging。
-
-不变量只有一句:**跑判据的进程不许有外网出口。**
+"""无出口守卫(python 版)—— track no-egress-judging。
 
 用法(判据顶部,任何别的事情之前):
 
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import _no_egress  # noqa: F401  ← 无出口守卫
+    import _no_egress  # noqa: F401
 
-导入即生效。逻辑与 bash 版 `_no-egress.sh` 逐条对应,两份的取舍写在那边:
-fail-closed、不认环境变量(问内核)、每次实测一次出口。
+导入即生效。Linux 的独立网络命名空间见 `_no-egress.sh` 文件头。
+本文件是指定的分平台处之一;Mac 的规则、内核判定、出口实测和拒跑原因只在这里定义,
+bash 版经 `python3 -I _no_egress.py <子命令>` 复用。做不到隔离或已在别人的沙箱里就拒跑(78)。
+只认内核证明的本守卫规则(沙箱状态及标记路径的权限错);每次直连实测只有权限错才算断网。
 
-**这是指定的分平台处**(和 bash 版、它们的判据 `test-no-egress.sh` 一起;别的套件不分平台)。
-Linux 用 `unshare -n`,细节写在 bash 版文件头。
+Mac 上出网的路
+===============
+Mac 的沙箱约束本进程树的操作,没有 Linux 的独立网络命名空间。这张清单是唯一的保证范围;
+挡不了的本机中转由 `.aiwork/accepted-risks.md` 第 3 条接受。这道闸防手滑,不防故意绕过。
 
-macOS 上的做法只在本文件定义一次,bash 版在 Mac 上经 `python3 _no_egress.py <子命令>` 问这里
-(当脚本跑时不做导入时那套检查):
-  · 没隔离:用系统自带的 `/usr/bin/sandbox-exec`(写死绝对路径)带一份现场生成的「只禁外网」
-    规则重跑自己。规则放行 127.0.0.1 和 unix socket(桩服务器要用);系统解析器的 unix socket
-    (`/var/run/mDNSResponder`,规则里写真实路径)单独禁掉,DNS 查询也出不去。
-  · "已隔离" = 内核的 sandbox_check 说本进程在沙箱里,**而且**是本守卫这份规则:规则里多拒绝
-    一个只有我们拒绝的路径,读它得到权限错才算。在别人的沙箱里(比如别家 CLI 的)就拒跑:
-    Mac 的沙箱套不了第二层,别人的规则又验证不了。
-  · 出口实测只认「被明确拒绝」(权限错)为没出口,超时之类都当可能连得出去;用 python 的
-    连接超时(Mac 上没有 GNU timeout)。
+| 路 | 处理 |
+|---|---|
+| 直连外网地址(TCP/UDP、IPv4/IPv6) | 内核挡:默认拒绝 network*,只放行 loopback 和下述临时 Unix socket。 |
+| 查 DNS | 内核挡:系统解析器的 /private/var/run/mDNSResponder 不在 Unix socket 放行目录中;直接 DNS 也被外网规则挡住。 |
+| 被别人的沙箱包着 | 守卫拒跑:Mac 不能套第二层,不把验证不了的外层规则当成本守卫。 |
+| 继承来的代理环境变量、Mac 系统代理 | 守卫消掉:测试设置入口统一清掉大小写各种写法的代理变量,再设 NO_PROXY/no_proxy=*;urllib 因而不会回退到系统代理。 |
+| 显式连接本机代理、客户端配置文件里的本机代理(TCP/UDP、127.0.0.1/::1) | 挡不了:loopback 与宿主共用,无法区分测试桩和宿主代理;测试后来主动重新设置代理也属此类。 |
+| 本机服务的具名 Unix socket | 内核挡:只放行本测试进程树专属临时目录的真实路径(subpath),不放行整个 /tmp 或 /var/folders;桩服务全部在该目录,没有额外 socket 例外。 |
+| 请系统服务代为联网(mach/XPC) | 挡不了:系统服务不属于测试进程树;测试和各家 CLI 不用此路。 |
+| 事先打开/传入的本机服务通信 fd | 不承诺撤销既有通信能力;挡不了。本判据的沙箱外代跑通道是刻意传入的实例,另由判据验证只有主进程能用。 |
+
+专属临时目录由现有测试设置监督进程持有并清理,TMPDIR 随进程树继承;Mac 的规则仅引用该路径。
+测试设置入口也统一处理继承环境,两个平台共用;Linux 的隔离判定不变。
 """
 
 import ctypes
+import json
+import shlex
 import os
 import socket
 import subprocess
@@ -89,17 +96,22 @@ if _MACOS:
             _die(_FOREIGN)
         return True
 
+    def _workspace_command(command):
+        if os.environ.get("AIWORK_TEST_TMPDIR"):
+            return []
+        settings = os.path.join(os.path.dirname(__file__), "_test_settings.py")
+        return [sys.executable, settings, "--workspace"] + command
+
     def _rules():
-        """只禁外网。规则里的路径要写真实路径(/var 是指向 /private/var 的链接)。"""
-        run = os.path.realpath("/var/run")
+        """路径过滤使用真实路径,只给本测试进程树的 Unix socket 开口。"""
+        workspace = json.dumps(os.path.realpath(os.environ["AIWORK_TEST_TMPDIR"]))
         return "\n".join([
             "(version 1)", "(allow default)", "(deny network*)",
             '(allow network-bind (local ip "localhost:*"))',
             '(allow network-inbound (local ip "localhost:*"))',
             '(allow network-outbound (remote ip "localhost:*"))',
-            "(allow network* (local unix-socket))",
-            "(allow network* (remote unix-socket))",
-            '(deny network-outbound (remote unix-socket (path-literal "%s/mDNSResponder")))' % run,
+            '(allow network* (local unix-socket (subpath %s)))' % workspace,
+            '(allow network* (remote unix-socket (subpath %s)))' % workspace,
             '(deny file-read-metadata (literal "%s"))' % _MARK,
         ]) + "\n"
 
@@ -163,6 +175,11 @@ else:
 
 
 def _enforce():
+    if _MACOS:
+        command = _workspace_command([sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
+        if command:
+            # The existing settings supervisor owns cleanup of this process tree's temp root.
+            os.execv(command[0], command)
     if not _isolated():
         if os.environ.get("AIWORK_NO_EGRESS_TRIED"):
             _die(_NOT_ISOLATED)
@@ -184,8 +201,14 @@ def _enforce():
 def _cli(argv):
     """macOS 上 bash 版守卫问的就是这几样;python3 是它起的子进程,沙箱随进程继承、去不掉,
     所以这里问自己在不在沙箱里,就是在问那个 bash。"""
-    usage = "用法(只给 macOS 上的 bash 版守卫用):_no_egress.py isolated|egress|prepare|messages"
-    if not _MACOS or len(argv) != 1:
+    usage = "用法(只给 macOS 上的 bash 版守卫用):_no_egress.py workspace COMMAND...|isolated|egress|prepare|messages"
+    if not _MACOS or not argv:
+        sys.exit(usage)
+    if argv[0] == "workspace" and len(argv) > 1:
+        command = _workspace_command(argv[1:])
+        print("exec " + shlex.join(command) if command else ":")
+        return
+    if len(argv) != 1:
         sys.exit(usage)
     if argv[0] == "isolated":
         print(1 if _isolated() else 0)
@@ -207,6 +230,6 @@ if __name__ == "__main__":
 else:
     _enforce()
 
-    from _test_settings import clear_review_environment, ensure_settings
-    clear_review_environment()
+    from _test_settings import clear_inherited_environment, ensure_settings
+    clear_inherited_environment()
     ensure_settings()
