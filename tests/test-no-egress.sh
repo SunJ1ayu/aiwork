@@ -472,6 +472,23 @@ n8_host_channel_stays_with_the_oracle() {
   check "N8: 没有令牌的子进程用不了这条通道(rc=$rc)" $?
 }
 
+# ---------------------------------------------------------------- N9
+n9_platform_checks_stay_in_the_designated_files() {
+  echo "[N9] 平台判断只许出现在指定的分平台处(两份守卫和本判据)"
+  local f b hits=""
+  for f in "$TESTS"/* "$TESTS"/../bin/*; do
+    [[ -f "$f" ]] || continue
+    b="$(basename "$f")"
+    case "$b" in _no-egress.sh|_no_egress.py|test-no-egress.sh) continue ;; esac
+    # 只看能执行的行(整行注释里提一句不算)
+    grep -vE '^[[:space:]]*(#|//)' "$f" 2>/dev/null \
+      | grep -IqE 'uname|sys\.platform|platform\.(system|mac_ver)|os\.uname|OSTYPE|[Dd]arwin|process\.platform' \
+      && hits="$hits $b"
+  done
+  [[ -z "$hits" ]]
+  check "N9: 别的文件里没有平台判断(出现在:${hits:-无})" $?
+}
+
 echo "=== no-egress oracle ==="
 c0_this_machine_has_egress_at_all
 n1_no_egress_under_guard
@@ -482,5 +499,6 @@ n5_env_is_not_a_backdoor
 n6_idempotent_no_exec_loop
 n7_transparent
 n8_host_channel_stays_with_the_oracle
+n9_platform_checks_stay_in_the_designated_files
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
