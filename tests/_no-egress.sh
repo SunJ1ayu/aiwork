@@ -32,12 +32,9 @@
 # **这是指定的分平台处。** 平台判断只许出现在这里、python 版 `_no_egress.py` 和它们的判据
 # `test-no-egress.sh`;别的套件不分平台。两个平台守的是同一句不变量,只是手段不同:
 #   Linux:独立网络命名空间(`unshare -n`),"已隔离" = 本进程和 1 号进程的 net 命名空间不同。
-#   macOS:系统自带的 `/usr/bin/sandbox-exec`(写死绝对路径),带一份现场生成的「只禁外网」规则
-#          重跑自己;"已隔离" = 内核的 sandbox_check 说本进程在沙箱里。Mac 的沙箱只能套一层:
-#          已经在别的沙箱里(比如别家 CLI 的)就不再套,照样实测出口,连得出去就拒跑。
-#          规则放行 127.0.0.1 和 unix socket(桩服务器要用);系统解析器的 unix socket
-#          (`/var/run/mDNSResponder`,规则里写真实路径)单独禁掉,DNS 查询也出不去。
-#          Mac 上没有 GNU timeout,出口实测用 python 的连接超时。
+#   macOS:系统自带的 `/usr/bin/sandbox-exec` 带一份「只禁外网」的规则重跑自己;
+#          "已隔离" = 内核的 sandbox_check 说本进程在沙箱里。规则、问内核、实测出口、拒跑的话
+#          只在 python 版 `_no_egress.py` 里定义,细节写在那边;本文件在 Mac 上一律问它。
 
 __noeg_die() {
   printf '🔴 无出口守卫:%s\n' "$1" >&2
@@ -47,51 +44,40 @@ __noeg_die() {
 }
 
 if [[ "$(uname -s)" == Darwin ]]; then
-  __noeg_sbx=/usr/bin/sandbox-exec
-  __noeg_not_isolated_msg="已经自举过一次,却仍然不在沙箱里($__noeg_sbx 没生效?)"
-  __noeg_leak_msg="已经在沙箱里,却**仍然连得出去** ⇒ 拒跑(这道闸没生效,别当它生效了;若是被别的工具的沙箱包着,那一层不禁外网,而 Mac 的沙箱套不了第二层)"
+  # macOS 的规则、问内核在不在沙箱里、实测出口、拒跑的话都只在 python 版里定义一次,
+  # 这里一律问它(bash 调不了 C 函数,本来就要借 python3)。
+  __noeg_py="$(dirname "${BASH_SOURCE[0]}")/_no_egress.py"
 
-  __noeg_isolated() {  # 内核说本进程在沙箱里?bash 调不了 C 函数,借 python3 问 sandbox_check。
+  __noeg_py_failed() {  # python 版拒跑时自己说清了原因(78);别的失败是它根本没跑起来
+    [[ "$1" -eq 78 ]] && exit 78
+    __noeg_die "调不起 python 版守卫($__noeg_py),做不到网络隔离 ⇒ 拒跑"
+  }
+
+  { IFS= read -r __noeg_not_isolated_msg; IFS= read -r __noeg_leak_msg; } \
+    < <(python3 -I "$__noeg_py" messages 2>/dev/null)
+  : "${__noeg_not_isolated_msg:=拒跑(python 版守卫调不起来,给不出原因)}"
+  : "${__noeg_leak_msg:=拒跑(python 版守卫调不起来,给不出原因)}"
+
+  __noeg_isolated() {
     local v
-    # python3 是本 shell 直接起的子进程:问它的父进程,就是在问本 shell。
-    v="$(python3 -c 'import ctypes, os
-f = ctypes.CDLL(None).sandbox_check
-f.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int)
-f.restype = ctypes.c_int
-print(f(os.getppid(), None, 0))' 2>/dev/null)"
+    v="$(python3 -I "$__noeg_py" sandboxed)" || __noeg_py_failed $?
     case "$v" in
       1) return 0 ;;
       0) return 1 ;;
-      *) __noeg_die "问不到内核本进程在不在沙箱里(python3 调 sandbox_check 失败)⇒ 拒跑" ;;
+      *) __noeg_py_failed 1 ;;
     esac
   }
 
-  __noeg_egress_open() {  # 还连得出去?只有明确连不上才算没有出口(检查本身坏了也当连得出去)
-    [[ "$(python3 -c 'import socket
-try:
-    socket.create_connection(("1.1.1.1", 443), timeout=3).close()
-    print("open")
-except OSError:
-    print("closed")' 2>/dev/null)" != closed ]]
+  __noeg_egress_open() {  # 只有明确连不上才算没有出口(检查本身坏了也当连得出去)
+    [[ "$(python3 -I "$__noeg_py" egress 2>/dev/null)" != closed ]]
   }
 
-  __noeg_rules() {  # 只禁外网。规则里的路径要写真实路径(/var 是指向 /private/var 的链接)
-    local run
-    run="$(cd -P /var/run 2>/dev/null && pwd)" || return 1
-    printf '%s\n' '(version 1)' '(allow default)' '(deny network*)' \
-      '(allow network-bind (local ip "localhost:*"))' \
-      '(allow network-inbound (local ip "localhost:*"))' \
-      '(allow network-outbound (remote ip "localhost:*"))' \
-      '(allow network* (local unix-socket))' \
-      '(allow network* (remote unix-socket))' \
-      "(deny network-outbound (remote unix-socket (path-literal \"$run/mDNSResponder\")))"
-  }
-
-  __noeg_prepare() {
-    [[ -x "$__noeg_sbx" ]] || __noeg_die "找不到 $__noeg_sbx,做不到网络隔离 ⇒ 拒跑"
-    __noeg_profile="$(__noeg_rules)" || __noeg_die "生成不了只禁外网的规则(/var/run 的真实路径取不到)⇒ 拒跑"
-    "$__noeg_sbx" -p "$__noeg_profile" /usr/bin/true 2>/dev/null \
-      || __noeg_die "$__noeg_sbx 套不上只禁外网的规则,做不到网络隔离 ⇒ 拒跑"
+  __noeg_prepare() {  # python 版探过规则套得上,才给出沙箱程序和规则
+    local out
+    out="$(python3 -I "$__noeg_py" prepare)" || __noeg_py_failed $?
+    __noeg_sbx="${out%%$'\n'*}"
+    __noeg_profile="${out#*$'\n'}"
+    [[ -n "$__noeg_sbx" && "$__noeg_profile" != "$out" ]] || __noeg_py_failed 1
   }
 
   __noeg_reexec() {

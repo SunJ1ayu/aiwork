@@ -12,8 +12,16 @@
 fail-closed、不认环境变量(问内核)、每次实测一次出口。
 
 **这是指定的分平台处**(和 bash 版、它们的判据 `test-no-egress.sh` 一起;别的套件不分平台)。
-Linux 用 `unshare -n`;macOS 用 `/usr/bin/sandbox-exec` 带只禁外网的规则重跑自己,
-"已隔离" = 内核的 sandbox_check 说本进程在沙箱里。两边的细节写在 bash 版文件头。
+Linux 用 `unshare -n`,细节写在 bash 版文件头。
+
+macOS 上的做法只在本文件定义一次,bash 版在 Mac 上经 `python3 _no_egress.py <子命令>` 问这里
+(当脚本跑时不做导入时那套检查):
+  · 没隔离:用系统自带的 `/usr/bin/sandbox-exec`(写死绝对路径)带一份现场生成的「只禁外网」
+    规则重跑自己。规则放行 127.0.0.1 和 unix socket(桩服务器要用);系统解析器的 unix socket
+    (`/var/run/mDNSResponder`,规则里写真实路径)单独禁掉,DNS 查询也出不去。
+  · "已隔离" = 内核的 sandbox_check 说本进程在沙箱里。Mac 的沙箱只能套一层:已经在别的沙箱里
+    (比如别家 CLI 的)就不再套,照样实测出口,连得出去就拒跑。
+  · 出口实测用 python 的连接超时(Mac 上没有 GNU timeout)。
 """
 
 import ctypes
@@ -134,8 +142,32 @@ def _enforce():
         _die(_LEAK)
 
 
-_enforce()
+def _cli(argv):
+    """macOS 上 bash 版守卫问的就是这几样;python3 是它起的子进程,沙箱随进程继承、去不掉,
+    所以这里问自己在不在沙箱里,就是在问那个 bash。"""
+    usage = "用法(只给 macOS 上的 bash 版守卫用):_no_egress.py sandboxed|egress|prepare|messages"
+    if not _MACOS or len(argv) != 1:
+        sys.exit(usage)
+    if argv[0] == "sandboxed":
+        print(1 if _isolated() else 0)
+    elif argv[0] == "egress":
+        print("open" if _egress_open() else "closed")
+    elif argv[0] == "prepare":
+        _prepare()
+        print(_SANDBOX_EXEC)
+        sys.stdout.write(_rules())
+    elif argv[0] == "messages":
+        print(_NOT_ISOLATED)
+        print(_LEAK)
+    else:
+        sys.exit(usage)
 
-from _test_settings import clear_review_environment, ensure_settings
-clear_review_environment()
-ensure_settings()
+
+if __name__ == "__main__":
+    _cli(sys.argv[1:])
+else:
+    _enforce()
+
+    from _test_settings import clear_review_environment, ensure_settings
+    clear_review_environment()
+    ensure_settings()
