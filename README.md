@@ -85,7 +85,8 @@ NOT in that list — a judging suite nobody runs rots silently. Individual suite
 still run standalone (`bash tests/test-subcodex.sh`); each one first reruns
 itself with no egress — inside a network namespace on Linux, under the system
 `sandbox-exec` with a network-only profile on macOS (loopback and unix sockets
-stay open, DNS is blocked) — and refuses to run (78) if it cannot, because **a
+stay open, DNS is blocked) — and refuses to run (78) if it cannot, including on
+macOS inside another tool's sandbox, whose rules it cannot verify, because **a
 judging process must have no egress** (2026-08-10: an oracle called a paid model
 and burned the quota). Details: `tests/_no-egress.sh`, `tests/_no_egress.py`.
 
