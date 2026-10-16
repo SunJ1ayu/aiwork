@@ -616,6 +616,161 @@ ORPHAN
   check "N10: 代跑进程自己被 kill -9,它起的命令和子进程也在上限加宽限内(30 秒)没了(还活着的:${alive:-无})" $?
 }
 
+
+# ---------------------------------------------------------------- N11
+n11_macos_local_egress_routes() {
+  [[ "$OS" == Darwin ]] || return 0
+  echo "[N11] Mac 本机中转:真实 CONNECT 代理和临时目录外的 unix socket"
+  cat > "$D/local-routes.py" <<'PY'
+import contextlib, http.server, json, os, pathlib, socket, socketserver
+import subprocess, sys, tempfile, threading, time
+
+tests = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+guard = tests / '_no-egress.sh'
+pyguard = tests / '_no_egress.py'
+results = []
+
+def check(label, passed, detail=''):
+    results.append(passed)
+    print(('PASS' if passed else 'FAIL') + ': N11: ' + label + (' ' + detail if detail else ''), flush=True)
+
+# 只接收和记录 CONNECT,从不替客户端转发。控制组和受保护请求用同一个真服务。
+class Proxy(http.server.BaseHTTPRequestHandler):
+    def do_CONNECT(self):
+        self.server.requests.append(self.path)
+        self.send_error(502, 'record only')
+    def log_message(self, *args):
+        pass
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)  # HTTPServer 的本机名反查与本测试无关
+
+server = Server(('127.0.0.1', 0), Proxy)
+server.requests = []
+threading.Thread(target=server.serve_forever, daemon=True).start()
+proxy = 'http://127.0.0.1:%d' % server.server_port
+clean = {k: v for k, v in os.environ.items() if not k.lower().endswith('_proxy')}
+clean.pop('AIWORK_NO_EGRESS_TRIED', None)
+python_request = """import urllib.request
+try:
+    urllib.request.urlopen('https://model.invalid/', timeout=3).close()
+except Exception:
+    pass
+"""
+clients = {
+    'Python': [sys.executable, '-c', python_request],
+    'curl': ['/usr/bin/curl', '--max-time', '3', '-sS', 'https://model.invalid/'],
+}
+
+def run_client(name, env, entry=None):
+    cmd = clients[name]
+    if entry == 'bash':
+        cmd = ['bash', '-c', '. "$1" || exit 78; shift; echo GUARD_READY; exec "$@"', 'probe', str(guard)] + cmd
+    elif entry == 'Python':
+        code = ('import sys, subprocess; sys.path.insert(0, %r); import _no_egress; '
+                'print("GUARD_READY", flush=True); raise SystemExit(subprocess.call(sys.argv[1:]))') % str(tests)
+        probe = root / 'guarded-client.py'
+        probe.write_text(code)
+        cmd = [sys.executable, str(probe)] + cmd
+    return subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
+
+try:
+    inherited = dict(clean, HTTPS_PROXY=proxy, https_proxy=proxy, ALL_PROXY=proxy,
+                     all_proxy=proxy, HtTp_PrOxY=proxy, No_PrOxY='localhost')
+    for name in clients:
+        before = len(server.requests)
+        run_client(name, inherited)
+        check(name + ' 裸跑的控制组真的发出 CONNECT', len(server.requests) > before)
+    for entry in ('bash', 'Python'):
+        for name in clients:
+            before = len(server.requests)
+            proc = run_client(name, inherited, entry)
+            check(entry + ' 守卫清掉继承的代理,' + name + ' 不向代理发 CONNECT',
+                  b'GUARD_READY' in proc.stdout and len(server.requests) == before,
+                  'rc=%d requests=%d' % (proc.returncode, len(server.requests) - before))
+
+    # 在一次性 CI 主机上暂设真正的系统 HTTPS 代理,finally 恢复原设置。
+    def networksetup(*args):
+        return subprocess.check_output(['/usr/sbin/networksetup', *args], text=True, timeout=15)
+    services = [s for s in networksetup('-listallnetworkservices').splitlines()[1:]
+                if s and not s.startswith('*')]
+    service = services[0]
+    old = dict(line.split(': ', 1) for line in networksetup('-getsecurewebproxy', service).splitlines()
+               if ': ' in line)
+    def setproxy(*args):
+        subprocess.run(['sudo', '-n', '/usr/sbin/networksetup', *args], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    try:
+        setproxy('-setsecurewebproxy', service, '127.0.0.1', str(server.server_port))
+        setproxy('-setsecurewebproxystate', service, 'on')
+        # 等系统设置传播,同时确认它确实被 urllib 读取,不是一个没生效的配置。
+        system_ready = False
+        for _ in range(30):
+            before = len(server.requests)
+            run_client('Python', clean)
+            if len(server.requests) > before:
+                system_ready = True
+                break
+            time.sleep(.1)
+        check('系统代理控制组:无代理环境变量的 urllib 真的发出 CONNECT', system_ready)
+        for entry in ('bash', 'Python'):
+            for name in clients:
+                before = len(server.requests)
+                proc = run_client(name, clean, entry)
+                check(entry + ' 守卫下 ' + name + ' 不用 Mac 系统代理',
+                      system_ready and b'GUARD_READY' in proc.stdout and len(server.requests) == before,
+                      'rc=%d requests=%d' % (proc.returncode, len(server.requests) - before))
+    finally:
+        setproxy('-setsecurewebproxy', service, old.get('Server') or '', old.get('Port') or '0')
+        setproxy('-setsecurewebproxystate', service, 'on' if old.get('Enabled') == 'Yes' else 'off')
+
+    # 沙箱外服务放在用户目录下,不在任何临时目录中。临时目录里的另一个服务必须仍然可连。
+    with tempfile.TemporaryDirectory(prefix='.aiwork-noeg-', dir=pathlib.Path.home()) as outside:
+        sockets = []
+        try:
+            for label, directory, allowed in (('非临时目录', pathlib.Path(outside), False),
+                                               ('测试临时目录', root, True)):
+                path = str(directory / 'service.sock')
+                srv = socket.socket(socket.AF_UNIX)
+                srv.bind(path)
+                srv.listen()
+                sockets.append(srv)
+                code = ("import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(3); "
+                        "s.connect(%r); print('UNIX_CONNECTED')") % path
+                control = subprocess.run([sys.executable, '-c', code], env=clean,
+                                         capture_output=True, text=True, timeout=10)
+                check(label + ' unix socket 控制组能连', control.returncode == 0)
+                for entry in ('bash', 'Python'):
+                    clients['unix'] = [sys.executable, '-c', code]
+                    proc = run_client('unix', clean, entry)
+                    connected = b'UNIX_CONNECTED' in proc.stdout
+                    denied = b'PermissionError' in proc.stderr
+                    check(entry + ' 守卫' + ('放行' if allowed else '内核拒绝') + label + ' unix socket',
+                          connected if allowed else denied and not connected,
+                          'rc=%d' % proc.returncode)
+        finally:
+            for srv in sockets:
+                srv.close()
+finally:
+    server.shutdown()
+    server.server_close()
+raise SystemExit(0 if all(results) else 1)
+PY
+  local out rc line
+  out="$(in_host python3 "$D/local-routes.py" "$TESTS" "$D" 2>&1)"; rc=$?
+  while IFS= read -r line; do
+    case "$line" in
+      'PASS: '*) ok "${line#PASS: }" ;;
+      'FAIL: '*) bad "${line#FAIL: }" ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done <<< "$out"
+  [[ $rc -eq 0 ]]; check "N11: 本机中转行为测试完整跑完" $?
+}
+
 # ---------------------------------------------------------------- N9
 n9_platform_checks_stay_in_the_designated_files() {
   echo "[N9] 平台判断只许出现在指定的分平台处(两份守卫和本判据)"
@@ -645,5 +800,6 @@ n7_transparent
 n8_host_channel_stays_with_the_oracle
 n9_platform_checks_stay_in_the_designated_files
 n10_host_runner_itself
+n11_macos_local_egress_routes
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
