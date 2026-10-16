@@ -291,19 +291,26 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             "exited", "partial", None, None, 137,
             "exited rc=137 (log: {log})"))
 
-    def test_missing_timeout_refuses_before_any_cli_runs(self):
-        (self.bin / "aiwork-timeout").unlink()
+    def test_missing_tool_refuses_with_one_message_before_any_cli_runs(self):
         marker = self.root / "cli-ran"
         for name in ("claude", "kimi", "mimo", "codex", "cursor-agent"):
             path = self.bin / name
             shebang, body = path.read_text().split("\n", 1)
             path.write_text(shebang + "\nimport pathlib\npathlib.Path(%r).touch()\n" % str(marker) + body)
-        for leg in ("subagent", "subkimi", "submimo", "subcodex", "subcursor"):
-            with self.subTest(leg=leg):
-                result = self._run(leg, "review", "pass")
-                self.assertEqual(result.returncode, 78, result.stderr)
-                self.assertIn("aiwork-timeout", result.stderr)
-                self.assertFalse(marker.exists(), result.stderr)
+        bindir = os.path.realpath(self.bin)
+        for tool, reason in (("aiwork-timeout", ""), ("ro-repo-exec", "（不在可写的仓里跑评审腿）")):
+            hidden = self.root / tool
+            (self.bin / tool).rename(hidden)
+            try:
+                for leg in ("subagent", "subkimi", "submimo", "subcodex", "subcursor"):
+                    with self.subTest(tool=tool, leg=leg):
+                        result = self._run(leg, "review", "pass")
+                        self.assertEqual(result.returncode, 78, result.stderr)
+                        self.assertEqual(result.stderr.splitlines()[-1:], [
+                            "%s: 少了 %s/%s ⇒ 拒绝派发%s" % (leg, bindir, tool, reason)])
+                        self.assertFalse(marker.exists(), result.stderr)
+            finally:
+                hidden.rename(self.bin / tool)
 
     def test_subagent_explore_quota_is_not_hardcoded_runtime(self):
         env = self._env()

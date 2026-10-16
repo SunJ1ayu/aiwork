@@ -4,18 +4,24 @@
 Usage: aiwork-timeout [-k GRACE_SECONDS] SECONDS COMMAND [ARG ...]
 Durations are nonnegative seconds; SECONDS=0 disables the deadline.
 After the deadline, send TERM, then KILL after the grace period (default 10s).
-Timeouts return 124; external INT/TERM return 130/143 after group cleanup.
-Otherwise preserve the command's status (128 + signal for a signal death).
 An independent watchdog kills the command's group if this supervisor dies,
 including SIGKILL. Nested supervisors therefore share the outer cleanup bound.
 Descendants that leave this process group themselves, e.g. via setsid(),
 cannot be managed by this tool.
+
+Exit status:
+  124      the deadline passed, whether TERM or the later KILL ended the group
+  125      this tool failed: its watchdog failed or did not accept the command
+  126      COMMAND (or this tool's own helper) could not be executed
+  127      COMMAND (or this tool's own helper) was not found
+  2        invalid arguments
+  130/143  this tool received INT/TERM; the group was cleaned up first
+  other    COMMAND's own status, or 128 + N when signal N ended it
 """
 
 import argparse
 import math
 import os
-import select
 import signal
 import subprocess
 import sys
@@ -36,10 +42,17 @@ def watchdog(alive, identity, ready):
         with os.fdopen(identity, "rb") as channel:
             line = channel.readline()
         if not line:
-            return 0  # Supervisor died before spawning a command.
+            return 125  # No command registered: its spawn failed or died first.
         pgid = int(line)
-        readable, _, _ = select.select([alive], [], [], 0)
-        if not readable:
+        # A nonblocking read, not select(): select() rejects descriptor numbers
+        # from 1024 up, which callers holding many open files reach.
+        os.set_blocking(alive, False)
+        try:
+            supervisor_gone = os.read(alive, 1) == b""
+        except BlockingIOError:
+            supervisor_gone = False
+        os.set_blocking(alive, True)
+        if not supervisor_gone:
             os.write(ready, b"1")
         os.close(ready)
         os.read(alive, 1)  # Only the supervisor owns the write end: EOF = death.
@@ -66,9 +79,8 @@ def exec_command(identity, ready, command):
         return 125
     # Python ignores these at startup and exec keeps ignored signals; restore
     # the dispositions Popen(restore_signals=True) would give the command.
-    for name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
-        if hasattr(signal, name):
-            signal.signal(getattr(signal, name), signal.SIG_DFL)
+    for signum in (signal.SIGPIPE, signal.SIGXFSZ):
+        signal.signal(signum, signal.SIG_DFL)
     try:
         os.execvpe(command[0], command, os.environ)
     except OSError as exc:
@@ -142,14 +154,11 @@ def main():
 
     deadline = started + args.seconds if args.seconds else math.inf
     timed_out = False
-    guard_failed = False
     while interrupted is None:
         if process.poll() is not None:
             break
         if guard.poll() is not None:
-            guard_failed = True
             send(signal.SIGKILL)
-            print("aiwork-timeout: watchdog exited early; stopping command", file=sys.stderr)
             break
         if time.monotonic() >= deadline:
             timed_out = True
@@ -174,7 +183,14 @@ def main():
         time.sleep(0.02)
     status = process.wait()
     os.close(alive_w)
-    guard.wait()
+    # A healthy watchdog exits 0 only after alive_w closes. A failing one may
+    # kill the command first, so the command's own status cannot reveal it.
+    guard_status = guard.wait()
+    guard_failed = guard_status != 0
+    if guard_failed:
+        print("aiwork-timeout: watchdog failed (%s)"
+              % ("signal %d" % -guard_status if guard_status < 0 else "status %d" % guard_status),
+              file=sys.stderr)
     if interrupted is not None:
         return 128 + interrupted
     if timed_out:
