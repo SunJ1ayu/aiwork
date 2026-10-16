@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
 
+import resource
 import signal
 import select
 import shutil
@@ -20,12 +21,13 @@ from pathlib import Path
 TOOL = Path(__file__).resolve().parents[1] / "bin" / "aiwork-timeout"
 
 # Three generations in one group. The grandchild refuses graceful shutdown;
-# the leader handles INT/TERM by returning 0 to test the supervisor's status.
+# the leader handles INT/TERM by returning 0 to test the supervisor's status,
+# unless mode "stubborn" makes the leader refuse it as well.
 TREE = r'''
 import os, signal, subprocess, sys, time
 from pathlib import Path
 root, role, mode = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-if role == "grandchild":
+if role == "grandchild" or (role == "leader" and mode == "stubborn"):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 else:
@@ -41,6 +43,20 @@ if role == "leader" and mode == "exit":
     sys.exit(17)
 while True:
     time.sleep(60)
+'''
+
+# Holds descriptors 3..1029 open, then becomes the caller of aiwork-timeout.
+# select() cannot watch descriptor numbers at or above FD_SETSIZE (1024).
+HOLD_FDS = r'''
+import os, resource, sys
+_, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (int(sys.argv[1]), hard))
+while True:
+    fd = os.open(os.devnull, os.O_RDONLY)
+    os.set_inheritable(fd, True)
+    if fd >= 1029:
+        break
+os.execv(sys.argv[2], sys.argv[2:])
 '''
 
 
@@ -157,6 +173,80 @@ class Timeout(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 2)
             self.assert_stopped(members)
 
+    def test_leader_ignoring_term_is_killed_after_grace_and_returns_124(self):
+        grace = 0.5
+        with self.tree(limit="1", grace=str(grace), mode="stubborn") as (process, members):
+            ready, _, _ = select.select([process.stderr], [], [], 5)
+            self.assertTrue(ready, "missing deadline diagnostic")
+            diagnostic = process.stderr.readline()
+            started = time.monotonic()
+            _stdout, stderr = process.communicate(timeout=5)
+            elapsed = time.monotonic() - started
+            self.assertEqual(process.returncode, 124, diagnostic + stderr)
+            self.assertIn("timed out after 1s", diagnostic)
+            self.assertGreaterEqual(elapsed, grace - 0.05)
+            self.assert_stopped(members)
+
+    def test_command_runs_when_caller_holds_descriptors_past_1024(self):
+        _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
+        if want < 1100:
+            self.skipTest("hard descriptor limit %d keeps every descriptor below 1024, "
+                          "so the select() limit cannot be reached" % hard)
+        result = subprocess.run(
+            [sys.executable, "-c", HOLD_FDS, str(want),
+             str(TOOL), "5", sys.executable, "-c", "print('ran')"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "ran\n", ""))
+
+    def test_watchdog_accepts_only_while_supervisor_lives(self):
+        # Drives the private watchdog mode: a supervisor dying between spawn
+        # and registration cannot be timed from outside.
+        for supervisor_alive in (True, False):
+            with self.subTest(supervisor_alive=supervisor_alive):
+                victim = subprocess.Popen(["sleep", "30"], start_new_session=True)
+                alive_r, alive_w = os.pipe()
+                identity_r, identity_w = os.pipe()
+                ready_r, ready_w = os.pipe()
+                os.write(identity_w, b"%d\n" % victim.pid)
+                os.close(identity_w)
+                if not supervisor_alive:
+                    os.close(alive_w)
+                guard = subprocess.Popen(
+                    [sys.executable, str(TOOL), "--_watchdog",
+                     str(alive_r), str(identity_r), str(ready_w)],
+                    pass_fds=(alive_r, identity_r, ready_w))
+                for fd in (alive_r, identity_r, ready_w):
+                    os.close(fd)
+                accepted = os.read(ready_r, 1)
+                os.close(ready_r)
+                if supervisor_alive:
+                    os.close(alive_w)
+                self.assertEqual(guard.wait(timeout=5), 0)
+                self.assertEqual(accepted, b"1" if supervisor_alive else b"")
+                self.assertEqual(victim.wait(timeout=5), -signal.SIGKILL)
+
+    def watchdog_of(self, supervisor):
+        listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,args="],
+                                 capture_output=True, text=True, timeout=5).stdout
+        pids = [int(fields[0]) for fields in (line.split(None, 2) for line in listing.splitlines())
+                if len(fields) == 3 and int(fields[1]) == supervisor.pid
+                and "--_watchdog" in fields[2]]
+        self.assertEqual(len(pids), 1, listing)
+        return pids[0]
+
+    def test_watchdog_failure_returns_125_and_says_so(self):
+        # INT makes the watchdog kill the group, then exit abnormally, as an
+        # unexpected watchdog error does; KILL removes it without any cleanup.
+        for signum in (signal.SIGINT, signal.SIGKILL):
+            with self.subTest(signal=signum), self.tree(limit="30") as (process, members):
+                os.kill(self.watchdog_of(process), signum)
+                _stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 125, stderr)
+                self.assertEqual(len(stderr.splitlines()), 1, stderr)
+                self.assertIn("watchdog", stderr)
+                self.assert_stopped(members)
+
     def test_zero_limit_disables_deadline(self):
         started = time.monotonic()
         result = subprocess.run(
@@ -196,7 +286,8 @@ class Timeout(unittest.TestCase):
             result = subprocess.run(["bash", str(runner)], capture_output=True,
                                     text=True, timeout=5)
             self.assertEqual(result.returncode, 78, result.stderr)
-            self.assertIn("aiwork-timeout", result.stderr)
+            self.assertEqual(result.stderr, "rust-check-review-tooling: 少了 %s ⇒ 拒绝派发\n"
+                             % (Path(os.path.realpath(folder)) / "bin" / "aiwork-timeout"))
 
     def test_external_int_and_term_clean_tree_and_override_child_success(self):
         for signum in (signal.SIGINT, signal.SIGTERM):

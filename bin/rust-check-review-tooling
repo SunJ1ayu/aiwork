@@ -62,7 +62,7 @@ if [[ "${1:-}" == "--coverage-only" ]]; then
   exit 0
 fi
 
-[[ -x "$ROOT/bin/aiwork-timeout" ]] || { echo 'rust-check-review-tooling: missing aiwork-timeout; refusing dispatch' >&2; exit 78; }
+[[ -x "$ROOT/bin/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$ROOT/bin/aiwork-timeout" >&2; exit 78; }
 
 names=(); rcs=(); summaries=(); outs=()
 for entry in "${SUITES[@]}"; do
