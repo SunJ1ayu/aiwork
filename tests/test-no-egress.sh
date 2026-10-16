@@ -651,7 +651,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 server = Server(('127.0.0.1', 0), Proxy)
 server.requests = []
 threading.Thread(target=server.serve_forever, daemon=True).start()
-proxy = 'http://127.0.0.1:%d' % server.server_port
+proxy = 'http://127.0.0.1:%d' % server.server_address[1]
 clean = {k: v for k, v in os.environ.items() if not k.lower().endswith('_proxy')}
 clean.pop('AIWORK_NO_EGRESS_TRIED', None)
 python_request = """import urllib.request
@@ -704,7 +704,7 @@ try:
         subprocess.run(['sudo', '-n', '/usr/sbin/networksetup', *args], check=True,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
     try:
-        setproxy('-setsecurewebproxy', service, '127.0.0.1', str(server.server_port))
+        setproxy('-setsecurewebproxy', service, '127.0.0.1', str(server.server_address[1]))
         setproxy('-setsecurewebproxystate', service, 'on')
         # 等系统设置传播,同时确认它确实被 urllib 读取,不是一个没生效的配置。
         system_ready = False
