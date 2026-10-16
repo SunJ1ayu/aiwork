@@ -668,7 +668,9 @@ clients = {
 def run_client(name, env, entry=None):
     cmd = clients[name]
     if entry == 'bash':
-        cmd = ['bash', '-c', '. "$1" || exit 78; shift; echo GUARD_READY; exec "$@"', 'probe', str(guard)] + cmd
+        probe = root / 'guarded-client.sh'
+        probe.write_text('. %s || exit 78\necho GUARD_READY\nexec "$@"\n' % __import__('shlex').quote(str(guard)))
+        cmd = ['bash', str(probe)] + cmd
     elif entry == 'Python':
         code = ('import sys, subprocess; sys.path.insert(0, %r); import _no_egress; '
                 'print("GUARD_READY", flush=True); raise SystemExit(subprocess.call(sys.argv[1:]))') % str(tests)
@@ -724,7 +726,8 @@ try:
                       system_ready and b'GUARD_READY' in proc.stdout and len(server.requests) == before,
                       'rc=%d requests=%d' % (proc.returncode, len(server.requests) - before))
     finally:
-        setproxy('-setsecurewebproxy', service, old.get('Server') or '', old.get('Port') or '0')
+        if old.get('Server'):
+            setproxy('-setsecurewebproxy', service, old['Server'], old['Port'])
         setproxy('-setsecurewebproxystate', service, 'on' if old.get('Enabled') == 'Yes' else 'off')
 
     # 沙箱外服务放在用户目录下,不在任何临时目录中。临时目录里的另一个服务必须仍然可连。
