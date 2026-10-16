@@ -1,0 +1,49 @@
+name: ci-macos
+
+# Report-only: the gate reads .github/workflows/ci.yml alone, so a red run here
+# never blocks a merge. It shows every PR how the suites fare on a real Mac.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  review-tooling-macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Like the future Mac mini: system directories plus the two tools set up
+      # above, nothing from Homebrew. bash is the system /bin/bash 3.2.
+      - name: Keep PATH to system directories and the set-up python and node
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: |
+          node_dir="$(dirname "$(command -v node)")"
+          echo "AIWORK_CI_PATH=$(dirname "$PYTHON_PATH"):$node_dir:/usr/bin:/bin:/usr/sbin:/sbin" >> "$GITHUB_ENV"
+      - name: No-egress suite (must pass)
+        run: |
+          export PATH="$AIWORK_CI_PATH"
+          bash tests/test-no-egress.sh
+      - name: All offline suites (report only for now)
+        if: ${{ !cancelled() }}
+        run: |
+          export PATH="$AIWORK_CI_PATH"
+          bash bin/rust-check-review-tooling
