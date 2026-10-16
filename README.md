@@ -82,9 +82,13 @@ bash bin/rust-check-review-tooling --coverage-only   # 只查没登记进总跑�
 
 The runner is list-driven (`SUITES`) and hard-reds when a `tests/test-*` file is
 NOT in that list — a judging suite nobody runs rots silently. Individual suites
-still run standalone (`bash tests/test-subcodex.sh`); each one execs
-itself into a network namespace first, because **a judging process must have no
-egress** (2026-08-10: an oracle called a paid model and burned the quota).
+still run standalone (`bash tests/test-subcodex.sh`); each one first reruns
+itself with no egress — inside a network namespace on Linux, under the system
+`sandbox-exec` on macOS — and refuses to run (78) if isolation cannot be verified.
+The macOS guarantees and limitations are defined in one place:
+[`tests/_no_egress.py`, “Mac 上出网的路”](tests/_no_egress.py).
+Linux details: `tests/_no-egress.sh`. This guard prevents accidental paid calls
+from tests (the 2026-08-10 incident), within the documented platform limits.
 
 ## MiMo agent CLI setup
 
