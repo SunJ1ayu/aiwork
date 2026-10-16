@@ -34,12 +34,16 @@ OS="$(uname -s)"
 # 拿回退出码 —— 和 Linux 上 nsenter 干的是同一件事。
 #   · 只有判据主进程用得到:第一次「认领」拿到的令牌只放在判据 shell 的非导出变量里,
 #     别的请求没令牌一律拒;它替判据起的命令拿不到 fd 9,判据直接起的探针也关掉 fd 9(N6、N8)。
-#   · 判据一结束(包括被杀),它收掉正在替判据跑的那条命令就退出,不留在后台。
+#   · 它起的每条命令都经 bin/aiwork-timeout 放进自己的进程组:命令跑完,组里甩下的子孙一并收掉;
+#     判据一结束(包括被 kill -9),它停掉正在跑的那条,整组收掉再退出;它自己被 kill -9 时,
+#     aiwork-timeout 的看门进程照样收组。光收直接起的那个进程,孙进程会留在沙箱外(N10)。
+#   · 只有对方真的关了连接才停止服务;请求不成形就回一句错,接着服务(N10)。
 #   · 守卫最后一步缺测试设置时会经 _test_settings.py 重跑一次,那次会关掉继承来的 fd、
 #     通道就断了,所以测试设置由它先备好。
 read -r -d '' NOEG_HOST_PY <<'PY' || true
 import json, os, secrets, signal, socket, struct, subprocess, sys, threading
 tests, fd, shell, script, args = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5:]
+limiter = os.path.join(tests, os.pardir, "bin", "aiwork-timeout")
 sys.path.insert(0, tests)
 import _test_settings
 _test_settings.ensure_settings()
@@ -83,7 +87,8 @@ def handle(req, fds):
     if len(fds) != 3:
         return reply({"error": "请求没带 stdin/stdout/stderr"})
     try:
-        proc = subprocess.Popen(req["argv"], stdin=fds[0], stdout=fds[1], stderr=fds[2],
+        proc = subprocess.Popen([limiter, "0"] + list(req["argv"]),
+                                stdin=fds[0], stdout=fds[1], stderr=fds[2],
                                 env=req["env"], cwd=req["cwd"])
     except OSError as e:
         return reply({"error": "起不来:%s" % e})
@@ -102,17 +107,18 @@ def serve():
         except OSError:
             return
         if not head:
-            return
+            return  # 对方关了连接
         try:
-            req = json.loads(read_exact(struct.unpack("!I", read_exact(4, head))[0]))
-        except (EOFError, OSError, ValueError):
-            req = None
-        try:
-            if req is None:
-                return
             try:
+                body = read_exact(struct.unpack("!I", read_exact(4, head))[0])
+            except (EOFError, OSError):
+                return  # 读到一半连接没了
+            try:
+                req = json.loads(body)
+                if not isinstance(req, dict):
+                    raise ValueError("请求不是一个对象")
                 handle(req, fds)
-            except Exception as e:  # 请求不成形也只回一句错,不让代跑线程死掉
+            except Exception as e:
                 reply({"error": "请求不成形:%s" % type(e).__name__})
         finally:
             for f in fds:
@@ -174,6 +180,7 @@ try:
     chan = socket.socket(fileno=os.dup(fd))
 except OSError:
     fail("不在(本进程不是经沙箱外的代跑进程启动的判据主进程)")
+chan.setblocking(True)  # 阻塞与否是各个持有者共用的状态,别信前一个用过的人留下的
 if op == "hello":
     chan.sendall(frame({"op": "hello"}))
     ans = answer()
@@ -368,7 +375,7 @@ n3_every_suite_carries_the_guard() {
     # 不只问"拒跑了",还要问"**是不是被这道闸**拒的" —— 因为别的原因早死也会非零,
     # 那样 N3c 会为了错误的理由变绿(08-10 四审 subkimi 与我自审 F3 同时点到)。
     if [[ $rc -eq 0 || $rc -eq 124 ]] \
-       || grep -qE '^\s*(PASS|ok|FAIL):' <<<"$out" \
+       || grep -qE '^[[:space:]]*(PASS|ok|FAIL):' <<<"$out" \
        || ! grep -qE "unshare|隔离|出口" <<<"$out"; then
       leaky="$leaky $b"
     fi
@@ -387,8 +394,10 @@ n3_every_suite_carries_the_guard() {
     # 08-10 四审 subdeepseek 抓到:守卫文件头部的强度声明里写了这个词,
     # N3b 于是把**守卫自己**报成逃逸口(而且那笔 commit 在我全部绿收据之后,
     # 收据没覆盖到它 —— verify.md 上写着 18/0,HEAD 上其实是 17/1)。
-    grep -vE '^[[:space:]]*#' "$f" | grep -q "nsenter" && leak="$leak $b"
-    grep -vE '^[[:space:]]*#' "$f" | grep -qi "noeg_host" && hostleak="$hostleak $b"
+    # 数匹配行,不用 grep -q:-q 一匹配就退出,前一个 grep 写到一半挨 SIGPIPE,
+    # 在 pipefail 下整条管道算失败 —— 文件一大,命中的反而被当成没命中。
+    [[ $(grep -vE '^[[:space:]]*#' "$f" | grep -c "nsenter") -gt 0 ]] && leak="$leak $b"
+    [[ $(grep -vE '^[[:space:]]*#' "$f" | grep -ci "noeg_host") -gt 0 ]] && hostleak="$hostleak $b"
   done
   [[ -z "$leak" ]]
   check "N3b: 只有本判据允许用 nsenter 回宿主(逃逸口:${leak:-无})" $?
@@ -487,13 +496,14 @@ n10_host_runner_itself() {
   cat > "$w/bad.sh" <<'BAD'
 #!/usr/bin/env bash
 python3 -I - <<'PY'
-import json, os, socket, struct
+import json, os, select, socket, struct
 chan = socket.socket(fileno=os.dup(9))
-chan.settimeout(10)
 chan.sendall(struct.pack("!I", 4) + b"null")
 def take(n):
     buf = b""
     while len(buf) < n:
+        if not select.select([chan], [], [], 10)[0]:
+            raise TimeoutError
         chunk = chan.recv(n - len(buf))
         if not chunk:
             raise EOFError
@@ -556,9 +566,9 @@ n9_platform_checks_stay_in_the_designated_files() {
     [[ -f "$f" ]] || continue
     b="$(basename "$f")"
     case "$b" in _no-egress.sh|_no_egress.py|test-no-egress.sh) continue ;; esac
-    # 只看能执行的行(整行注释里提一句不算)
-    grep -vE '^[[:space:]]*(#|//)' "$f" 2>/dev/null \
-      | grep -IqE 'uname|sys\.platform|platform\.(system|mac_ver)|os\.uname|OSTYPE|[Dd]arwin|process\.platform' \
+    # 只看能执行的行(整行注释里提一句不算);数匹配行的缘由见 N3b
+    [[ $(grep -vE '^[[:space:]]*(#|//)' "$f" 2>/dev/null \
+         | grep -IcE 'uname|sys\.platform|platform\.(system|mac_ver)|os\.uname|OSTYPE|[Dd]arwin|process\.platform') -gt 0 ]] \
       && hits="$hits $b"
   done
   [[ -z "$hits" ]]
