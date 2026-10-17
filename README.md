@@ -40,14 +40,16 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 仓库里的这些命令服务 `review-pr`。同一个 PR 要换一家评审，由关卡判断。
 
 - `bin/subdeepseek-agent` — DeepSeek，经 Claude Code headless 读仓库。模型来自 `~/.config/aiwork/models.env` 的 deepseek 行。
-- `bin/subkimi` — Kimi，kimi-code CLI。模型来自 kimi 行。
-- `bin/submimo <review|explore>` — MiMo，官方 `mimo` CLI。在可丢弃副本里读和跑检查。模型来自 mimo 行。
+- `bin/subkimi` — Kimi，kimi-code CLI。review、explore 仅有 Read/ReadMediaFile/Glob/Grep，CLI 的 agent profile 关闭命令和写工具，hook 再拒一次；任务复制进快照，由 Read 读取，正文不进命令行参数。模型来自 kimi 行。
+- `bin/submimo <review|explore>` — MiMo，官方 `mimo` CLI。review、explore 仅有 read/glob/grep，CLI 配置关闭 bash 并拒绝 bash 权限。模型来自 mimo 行。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。源仓经 `ro-repo-exec` 只读，副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。
   失败时打印脱敏后的 stderr 末 40 行，诊断留在数据目录 `review-failures/<run-id>/`，不含仓库检出和凭证助手。保留规矩见 `bin/_aiwork_config.py` 的 `DATA_ENTRIES`。旧的 `logs/review-pr-failures/` 不再写入，按 `logs` 的保留规矩清理。
   任务在 diff 之后再次要求结论。完整 diff（含删除）放得下就内联。超过 `READER_INLINE_DIFF_BYTES`（200KB）时，任务只列每个文件的状态和行数，完整 diff 在快照文件 `aiwork-review.diff`。
   这条命令默认给评审命令 2400 秒；已有的超时环境变量可以覆盖。只有缺结论或输出被截断时重试一次，并在终端和发布的评审里写明。每次失败的尝试都留下，包括重试成功的那次；其他失败不重新启动评审命令。
+
+Kimi、MiMo 的快照内有 `aiwork-git-context.txt`，含可用的 Git 历史和状态；它们没有命令工具，不能运行或声称运行测试。
 
 所有评审命令：`<tool> review TASK LOG REPO`。输出是主 agent 要核对的证据。
 
@@ -126,9 +128,9 @@ mimo                      # or: mimo providers login / list
 ## 评审运行目录
 
 `kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。
-每次只渲染配置和 guard；credentials 链接到 Kimi CLI 自己的凭证目录。缺少 `kimi-code.json` 时拒跑并提示先用 kimi 登录。
+每次渲染配置和 guard，另写 CLI 的只读 agent profile；credentials 链接到 Kimi CLI 自己的凭证目录。缺少 `kimi-code.json` 时拒跑并提示先用 kimi 登录。
 `submimo` 的临时 `XDG_CONFIG_HOME` 与评审副本一起删除，凭证仍由 MiMo 自己管理。
-`KIMI_REVIEW_HOME`、`MIMO_REVIEW_HOME` 指定的目录由调用方管理：不渲染种子、不删除，仍经过 `review_home_guard`；MiMo 照旧重写隔离评审配置。
+`KIMI_REVIEW_HOME`、`MIMO_REVIEW_HOME` 指定的目录由调用方管理：不渲染种子、不删除，仍经过 `review_home_guard`；Kimi 仍重写只读 agent profile，MiMo 仍重写隔离评审配置。
 
 ### 加新评审腿的规矩
 

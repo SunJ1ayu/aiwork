@@ -5,6 +5,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
+from _test_settings import write_kimi_config
 
 from contextlib import redirect_stderr, redirect_stdout
 import http.server
@@ -374,7 +375,7 @@ class ReaderFailureClassificationTests(LegCase):
         home = self.d / 'kimi-home'
         (home / 'hooks').mkdir(parents=True)
         (home / 'credentials').mkdir()
-        (home / 'config.toml').write_text('default_model = "fixture"\n')
+        write_kimi_config(home)
         (home / 'hooks/guard.mjs').write_text('process.exit(2); // offline deny fixture\n')
         (home / 'credentials/kimi-code.json').write_text('{}')
         for leg in ('subdeepseek-agent', 'subkimi'):

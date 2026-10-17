@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from _test_settings import write_settings
+from _test_settings import write_settings, write_kimi_config
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ("timeout", "nonzero", "blank", "no_verdict", "pass",
@@ -29,7 +29,7 @@ class LegFinish(unittest.TestCase):
         self.bin.mkdir()
         for name in ("aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
                      "_paths.py",
-                     "_review-home-guard.sh", "_review_result.py", "_cursor-stream.py",
+                     "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_cursor-stream.py",
                      "ro-repo-exec",
                      "subagent", "subkimi", "submimo", "subcodex", "subcursor"):
             shutil.copy(ROOT / "bin" / name, self.bin / name)
@@ -96,7 +96,7 @@ print('{"type":"result","result":' + __import__("json").dumps(text) + "}")
         (home / "credentials").mkdir()
         (home / "hooks" / "guard.mjs").write_text("process.exit(2)\n")
         (home / "credentials" / "kimi-code.json").write_text("{}\n")
-        (home / "config.toml").write_text('default_model = "x"\n')
+        write_kimi_config(home)
         self._write("kimi", """#!/usr/bin/env python3
 import json, os, sys, time
 case = os.environ["FINISH_CASE"]

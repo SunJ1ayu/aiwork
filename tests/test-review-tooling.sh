@@ -301,16 +301,14 @@ v13_subkimi_leg() {
     echo '{"tool_name":"Read","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: Read allowed (rc=0)" $?
 
-    # 腿现在在独立可写副本里执行，源仓由外层 ro-repo-exec 承重。Bash 不再
-    # 假装是一张能兜住 git 参数面的安全白名单；测试、lint、build、解释器和
-    # 它们的缓存都允许落在副本。工具级 Write/Edit/Agent 仍是独立禁口。
+    # 命令工具完全禁用；不能靠匹配命令字符串限制能力。
     local kcmd
     for kcmd in "bash tests/probe.sh" \
                 "python3 -m pytest -q" \
                 "git diff HEAD"; do
       echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$kcmd\"}}" \
         | node "$guard" >/dev/null 2>&1
-      check "guard: 副本内本地 Bash 放行 —— $kcmd" $?
+      check "guard: Bash 必须拒绝 —— $kcmd" $([[ $? -eq 2 ]]; echo $?)
     done
     echo '{"tool_name":"SomeFutureTool","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: unknown tool denied (default-deny)" $([[ $? -eq 2 ]]; echo $?)
@@ -321,10 +319,10 @@ v13_subkimi_leg() {
   fi
 
   # --- subkimi wrapper against a stub kimi + fixture review home
-  cp "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
-  printf 'default_model = "x"\n' > "$rh/config.toml"
+  python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
   cp "$guard" "$rh/hooks/guard.mjs" 2>/dev/null || printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
   echo '{}' > "$rh/credentials/kimi-code.json"
   cat > "$b/kimi" <<'PYEOF'
@@ -350,8 +348,8 @@ PYEOF
   python3 -c "
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
-sys.exit(0 if any('tests' in str(x) and 'Bash' in str(x) for x in a) else 1)" "$d/k1.json" 2>/dev/null
-  check "subkimi: 提示词如实写明 Bash 可跑本地诊断/测试" $?
+sys.exit(0 if any('Shell and write tools are unavailable. Do not claim to have run tests.' in str(x) for x in a) else 1)" "$d/k1.json" 2>/dev/null
+  check "subkimi: 提示词如实写明没有命令工具、不能声称跑过测试" $?
   [[ "$(kimiget "$d/k1.json" KIMI_CODE_NO_AUTO_UPDATE)" == "1" ]]
   check "subkimi: auto-update disabled" $?
   grep -q 'Conclusion: PASS' "$d/k1.log"; check "subkimi: verdict recorded in log" $?
@@ -403,7 +401,7 @@ PY
 
   # broken (fail-open) guard must refuse to dispatch BEFORE invoking kimi
   local rh2="$d/review-home2"; mkdir -p "$rh2/hooks" "$rh2/credentials"
-  printf 'default_model = "x"\n' > "$rh2/config.toml"
+  python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh2"
   printf 'process.exit(0)\n' > "$rh2/hooks/guard.mjs"
   echo '{}' > "$rh2/credentials/kimi-code.json"
   rm -f "$d/k4.json"
@@ -510,10 +508,10 @@ v24_coverage_report() {
 }
 
 v33_submimo_review_leg_is_read_only() {
-  echo "[V33] submimo 写口关掉、bash 留着,fix 被拒绝"
+  echo "[V33] submimo 仅保留读文件工具,fix 被拒绝"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
-  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   printf '# t\n' > "$d/t.md"
   local repo="$d/repo"; mkdir -p "$repo"
@@ -545,7 +543,7 @@ print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
   local mhome="$d/mimohome"
 
   # 内置 plan 档是否名不副实,问的是这台机器装的 mimo,不在仓库判据里。
-  # 下面只钉仓库自己写出的档:不用 plan、写口关掉、bash 留着。
+  # 下面只钉仓库自己写出的档:不用 plan、写口和命令工具全关。
 
   # ── ① review 不许再用内置 plan 档
   rm -f "$d/c_review"
@@ -581,7 +579,7 @@ print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
     && [[ ! -f "$d/c_fix" ]]
   check "V33: fix 被拒绝，mimo 一次都不启动" $?
 
-  # 上面 explore 会按旧语义把 Bash 收回只读 git；O4 问的是 review 能力。
+  # review 和 explore 必须使用同一份无命令工具配置。
   # 再跑一次 review，让下面检查 review 最终写下的配置。
   env PATH="$b:$PATH" CAPTURE="$d/c_review_config" MIMO_REVIEW_HOME="$mhome" \
     bash "$b/submimo" review "$d/t.md" "$d/r-config.log" "$repo" >/dev/null 2>&1
@@ -600,24 +598,24 @@ tools = ag.get("tools") or {}
 perm = ag.get("permission") or {}
 closed = [k for k in ("write", "edit", "patch", "task", "webfetch", "skill") if tools.get(k) is not False]
 print("CLOSED" if not closed else "OPEN:" + ",".join(closed))
-print("BASH_ON" if tools.get("bash") is True else "BASH_OFF")
-print("ALLOW" if perm.get("bash") == "allow" else "NOT_ALLOW")
+print("BASH_OFF" if tools.get("bash") is False else "BASH_ON")
+print("DENY" if perm.get("bash") == "deny" else "NOT_DENY")
 print("KEEP" if all(tools.get(k) is True for k in ("read", "glob", "grep")) else "MISSING")
 PYV33
 )"
     grep -qx "CLOSED" <<< "$v33json"
     check "V33: 配置里写口全关 —— write/edit/patch/task/webfetch/skill" $?
-    grep -qx "BASH_ON" <<< "$v33json"
-    check "V33: 配置里 bash 留着(关掉它就得自己喂 diff,那条路已被推翻)" $?
-    grep -qx "ALLOW" <<< "$v33json"
-    check "V33: 配置里 Bash permission 是整项 allow" $?
+    grep -qx "BASH_OFF" <<< "$v33json"
+    check "V33: 配置里 bash 工具关闭" $?
+    grep -qx "DENY" <<< "$v33json"
+    check "V33: 配置里 Bash permission 是 deny" $?
     grep -qx "KEEP" <<< "$v33json"
     check "V33: 配置里 read/glob/grep 还在" $?
   else
     bad "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染调用者的 mimocode)"
     bad "V33: 配置里写口全关 —— write/edit/patch/task/webfetch/skill"
-    bad "V33: 配置里 bash 留着(关掉它就得自己喂 diff,那条路已被推翻)"
-    bad "V33: 配置里 Bash permission 是整项 allow"
+    bad "V33: 配置里 bash 工具关闭"
+    bad "V33: 配置里 Bash permission 是 deny"
     bad "V33: 配置里 read/glob/grep 还在"
   fi
 
@@ -859,7 +857,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
@@ -961,26 +959,26 @@ assert p['view'] == {'delivery_state':'complete','mode':'full_snapshot'}
 PY
   check "V36: submimo 把 models.env 的 mimo 行模型与完整 snapshot 事实交给唯一 terminal producer" $?
   # MiMo CLI 自带模型表会落后于新模型(09-22:mimo-v2.6-pro 发布当天 CLI 报 Model not found)。
-  # submimo 必须在运行时把 models.env 的 mimo 行模型登记给 CLI,且登记**只含 provider 段**
-  # —— 带 agent/permission 段就可能盖掉评审档那把锁。
-  python3 - "$d/o2" "$("$BIN/aiwork-config" model mimo)" <<'PY'
+  # 模型登记与隔离配置合并；agent 必须逐字等于这次生成的只读配置，不能被覆盖。
+  python3 - "$d/o2" "$("$BIN/aiwork-config" model mimo)" "$d/mimo-home-v36/mimocode/mimocode.json" <<'PY'
 import json,sys
 cfg=[l[len('mimocfg='):] for l in open(sys.argv[1]).read().splitlines() if l.startswith('mimocfg=')]
 assert len(cfg)==1 and cfg[0], cfg
 c=json.loads(cfg[0])
 provider,mid=sys.argv[2].split('/',1)
-assert set(c)=={'provider'}, sorted(c)
+assert set(c)=={'provider','agent'}, sorted(c)
+assert c['agent'] == json.load(open(sys.argv[3]))['agent']
 m=c['provider'][provider]['models'][mid]
 assert m['tool_call'] is True and m['limit']['context']>0 and m['limit']['output']>0, m
 PY
-  check "V36: submimo 把 models.env 的 mimo 行模型登记给 MiMo CLI(只含 provider 段)" $?
+  check "V36: submimo 把 models.env 的 mimo 行模型登记给 MiMo CLI(同一份只读 agent 配置随模型一起传入)" $?
 
   # ── ③ subkimi
   # subkimi 要一份 review home 才肯派发(config.toml + 守卫 + 凭证),照 V13 的建法。
   # 第一版没建 ⇒ 它在调 kimi **之前**就退了,断言红在"没跑"上 —— 那不是防线的功劳,
   # 是夹具的洞。**红也要红在该红的地方**,本仓为这条记过账。
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
-  printf 'default_model = "x"\n' > "$rh/config.toml"
+  python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
   printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
   echo '{}' > "$rh/credentials/kimi-code.json"
   rm -f "$d/o3" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
@@ -1055,7 +1053,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -1178,7 +1176,7 @@ v38_leg_runtime_home_outside_repo() {
   # 同一个文件里几十行外就写着,我还是踩了。
   _mk_kimi_home() {   # $1 = home 路径
     mkdir -p "$1/hooks" "$1/credentials"
-    printf 'default_model = "x"\n' > "$1/config.toml"
+    python3 "$BIN/../tests/_test_settings.py" kimi-config "$1"
     printf 'process.exit(2)\n' > "$1/hooks/guard.mjs"
     echo '{}' > "$1/credentials/kimi-code.json"
   }
@@ -1613,11 +1611,11 @@ v46_final_report_is_the_last_message() {
   fixture_git_repo "$d/repo"
   printf '# t\n' > "$d/t.md"
   cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
-    "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" \
+    "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" \
     "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/ro-repo-exec" "$b/"
   printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
-  printf 'default_model = "x"\n' > "$rh/config.toml"
+  python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
   printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
   echo '{}' > "$rh/credentials/kimi-code.json"
 
