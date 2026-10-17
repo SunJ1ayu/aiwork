@@ -3,23 +3,9 @@ set -euo pipefail
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
-# subkimi - Kimi (Moonshot) review command on kimi-code CLI, headless (`kimi -p`).
-# The model explores the repo itself (Read/Glob/Grep + Bash). Review runs in a
-# writable disposable clone while the original repository stays physically read-only.
-#
-#   review -> kimi -p, verdict-gated.
-#   fix    -> not on this command. Change code in your own worktree.
-#
-# Isolation: KIMI_CODE_HOME points at a dedicated review home whose config
-# carries a PreToolUse guard hook. Read/ReadMediaFile/Glob/Grep/todo-goal and
-# Bash are allowed; Bash writes only the disposable clone. The original repo is
-# separately protected by ro-repo-exec. Write/Edit/Agent/AgentSwarm/Skill,
-# Cron*/FetchURL/WebSearch, and unknown tools are blocked.
-# CLI-owned credentials may be refreshed by Kimi. Auth is the
-# Kimi membership OAuth token, shared via a credentials symlink in the review
-# home. NOTE: kimi-code's hook protocol is fail-open (non-0/2 exit = allow),
-# so this wrapper preflights the guard (must deny a canary Write with rc=2)
-# and refuses to dispatch if the guard is broken or node is missing.
+# Kimi reviews/explores with a CLI agent profile containing only file readers.
+# The PreToolUse hook is a second layer; preflight failures refuse dispatch.
+# Runtime state lives in a disposable home outside the source repository.
 
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
@@ -40,8 +26,8 @@ Usage:
   subkimi fix     TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
 
 Runs Kimi (Moonshot kimi-code CLI, headless) as an isolated review sub-agent.
-The reviewer reads and tests a disposable clone; the source repo remains
-read-only and direct write tools stay blocked in an isolated KIMI_CODE_HOME.
+The reviewer reads a disposable snapshot with Read/ReadMediaFile/Glob/Grep.
+Shell and write tools are unavailable. Do not claim to have run tests.
 
 Environment:
   AIWORK_DATA_DIR  optional, overrides the common machine data directory
@@ -51,7 +37,8 @@ Environment:
   KIMI_TIMEOUT      optional, seconds before timeout (default 1500; 07-27 取证:
                     900 不够,时间花在长推理而非自读仓库)
   KIMI_REVIEW_HOME  optional, caller-owned home; default is a disposable workspace home
-                    (override: no seed rendering or cleanup; checked by _review-home-guard.sh)
+                    (override: no seed rendering or cleanup; reader profile still rewritten;
+                     checked by _review-home-guard.sh)
 
 Examples:
   subkimi review <数据目录>/tasks/001-review.md <数据目录>/logs/001-review.log /path/to/repo
@@ -59,6 +46,7 @@ EOF
 }
 
 die() { echo "subkimi: $*" >&2; exit 1; }
+config_die() { echo "subkimi: $* ⇒ 拒绝派发" >&2; exit 78; }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
 if [[ $# -lt 3 || $# -gt 4 ]]; then usage; exit 2; fi
@@ -87,17 +75,7 @@ fi
 MODEL="$("$BIN_DIR/aiwork-config" model kimi "${KIMI_MODEL:-}")" || exit 1
 "$BIN_DIR/aiwork-config" family subkimi "$MODEL" >/dev/null || die 'model must be one kimi-code/<model-id>'
 
-# ── 原仓只读 + review 副本可写 ─────────────────────────────────────────────
-# Kimi 的 cwd 是独立 clone；mount namespace 只保护 SOURCE_REPO。腿可在 clone
-# 跑 tests/build，但原仓写口物理消失 —— 08-18 我发现
-# `git diff --output=<path>` 绕得过任何命令行白名单,而"把 bash 整个关掉"那条路
-# 已被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
-# **一个写口都不开。** 腿日志是父 shell 重定向写的(`>> "$LOG_FILE"` / `| tee -a`),
-# fd 在**父 namespace** 就打开了,挂载管不着已经打开的 fd —— 探针实测过。
-# 第一版开了 `--rw <日志目录>`,那个写口不但多余,还带来两条真 bug:
-# `dirname` 相对调用方 cwd 解析 ⇒ 从仓根裸文件名调用时整仓开闸(安静失效);
-# 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。
-# fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
+# Source repository protection remains independent of the CLI tool allowlist.
 [[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发（不在可写的仓里跑评审腿）\n' "$(basename "$0")" "$BIN_DIR/ro-repo-exec" >&2; exit 78; }
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
@@ -111,7 +89,7 @@ fi
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
 command -v kimi >/dev/null 2>&1 || die "kimi CLI not found on PATH (npm i -g @moonshot-ai/kimi-code)"
-command -v node >/dev/null 2>&1 || die "node not found on PATH (guard hook needs it; without it the hook fails OPEN)"
+command -v node >/dev/null 2>&1 || config_die "node not found on PATH (guard hook needs it; without it the hook fails OPEN)"
 
 _RW="$BIN_DIR/_review-workspace.sh"
 [ -f "$_RW" ] || die '找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)'
@@ -154,10 +132,10 @@ if [[ -z "${KIMI_REVIEW_HOME:-}" ]]; then
   [[ -f "$KIMI_CREDENTIALS_DIR/kimi-code.json" ]] || die "Kimi 凭证缺少 kimi-code.json；先用 kimi 登录"
   ln -s -- "$KIMI_CREDENTIALS_DIR" "$REVIEW_HOME/credentials" || die 'cannot link Kimi CLI credentials'
   umask 077
-  mkdir -p "$REVIEW_HOME/hooks"
-  cp -f "$KIMI_SEED_HOME/hooks/guard.mjs" "$REVIEW_HOME/hooks/guard.mjs" || die 'cannot sync review guard'
+  mkdir -p "$REVIEW_HOME/hooks" || config_die 'cannot create review hook directory'
+  cp -f "$KIMI_SEED_HOME/hooks/guard.mjs" "$REVIEW_HOME/hooks/guard.mjs" || config_die 'cannot sync review guard'
   # 种子只声明占位符；命令渲染为运行期 home 自己那份 guard。
-  KIMI_RUNTIME_HOME="$REVIEW_HOME" python3 - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || die 'cannot render review config'
+  KIMI_RUNTIME_HOME="$REVIEW_HOME" python3 - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || config_die 'cannot render review config'
 import json, os, shlex, sys
 home = os.environ["KIMI_RUNTIME_HOME"].rstrip("/")
 model = sys.argv[2]
@@ -173,54 +151,63 @@ PYHOOK
 fi
 
 GUARD="$REVIEW_HOME/hooks/guard.mjs"
-[[ -f "$REVIEW_HOME/config.toml" ]] || die "review home config missing: $REVIEW_HOME/config.toml"
-[[ -f "$GUARD" ]] || die "guard hook missing: $GUARD"
+[[ -f "$REVIEW_HOME/config.toml" ]] || config_die "review home config missing"
+[[ -f "$GUARD" ]] || config_die "guard hook missing"
 [[ -f "$REVIEW_HOME/credentials/kimi-code.json" ]] || die "Kimi 凭证缺少 kimi-code.json；先用 kimi 登录"
 
-# Preflight the guard: it must DENY a canary Write with rc=2. kimi-code hooks
-# fail open on any other exit code, so a broken guard means no sandbox at all.
-set +e
-echo '{"tool_name":"Write","tool_input":{"path":"canary"}}' | node "$GUARD" >/dev/null 2>&1
-GUARD_RC=$?
-set -e
-[[ $GUARD_RC -eq 2 ]] || die "guard preflight failed (rc=$GUARD_RC, want 2) - refusing to dispatch with a fail-open sandbox"
+# A working hook file is useless if the CLI configuration does not attach it.
+python3 - "$REVIEW_HOME/config.toml" "$GUARD" <<'PYCHECK' || config_die 'invalid review hook configuration'
+import shlex, sys, tomllib
+with open(sys.argv[1], "rb") as fh:
+    config = tomllib.load(fh)
+hooks = config.get("hooks", [])
+if len(hooks) != 1:
+    raise ValueError("expected exactly one review guard")
+hook = hooks[0]
+if (hook["event"] != "PreToolUse" or hook["matcher"] != ".*"
+        or shlex.split(hook["command"]) != ["node", sys.argv[2]]
+        or hook.get("timeout", 0) <= 0):
+    raise ValueError("review guard is not attached to every tool")
+PYCHECK
+
+# kimi-code fails open on hook errors. Both canaries must be denied before launch.
+for CANARY in Write Bash; do
+  GUARD_RC=0
+  printf '{"tool_name":"%s","tool_input":{}}\n' "$CANARY" | node "$GUARD" >/dev/null 2>&1 || GUARD_RC=$?
+  [[ $GUARD_RC -eq 2 ]] || config_die "guard $CANARY preflight failed (rc=$GUARD_RC, want 2)"
+done
+
+# --agent-file is the CLI's native tool configuration (both engine versions).
+# An explicit allowlist also excludes future command tools, MCP and sub-agents.
+AGENT_FILE="$REVIEW_HOME/aiwork-review.md"
+cat > "$AGENT_FILE" <<'PROFILE' || config_die 'cannot write read-only agent profile'
+---
+name: aiwork-review
+description: Read-only repository reviewer
+tools: ["Read", "ReadMediaFile", "Glob", "Grep"]
+subagents: []
+---
+Read the task and repository files. Shell and write tools are unavailable. Do not claim to have run tests.
+PROFILE
 
 review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# 08-18~08-19 这里曾经有一整套 diff 注入(为了补偿"把 bash 关掉"造成的失明):
-# 按 argv 预算截断、基线校验、工件排除。业主推翻了那个方向 —— 评审腿没有
-# "改判据让自己及格"的动机(那是执行腿的威胁模型),而关 bash 的代价是
-# E2BIG(这条腿 rc=126 直接起不来)、`git diff | head -c N` 在本文件的
-# `set -euo pipefail` 下让 git 吃 SIGPIPE **静默暴毙 rc=141 一个字不留**。
-# 现在腿在独立副本里自己看 diff 并跑本地检查；原仓由只读挂载承重。
-if [[ "$MODE" == "explore" ]]; then
-PROMPT="You are reading a disposable snapshot of a repository.
-Read it with Read, Glob, Grep, and Bash. The original repository stays read-only.
-Answer the task in your final message. Do not modify source files, push, merge,
-install dependencies, or spawn other agents.
-
---- TASK ---
-$(cat "$TASK_FILE")"
-else
-PROMPT="You are an independent code reviewer running inside a disposable writable repository snapshot.
-Explore the repository yourself with the tools you have
-(Read, Glob, Grep, and Bash for local tests, lint, build, and diagnostics).
-Do not take the task's claims at face value -
-verify them against the actual files. Some tools are intentionally blocked by
-the harness; if a call is denied, work with the allowed tools instead of
-retrying it.
-
-Command outputs and caches may be written inside this disposable snapshot, but
-do not intentionally edit source files. Do not push, merge, install dependencies,
-run migrations, access production systems, or change credentials.
-
-Report findings with file:line references and a severity each.
-
---- REVIEW TASK ---
-$(cat "$TASK_FILE")"
-fi
+# Keep task bytes out of argv: even an inline diff below review-pr's threshold
+# can exceed the OS limit for one argument. Read consumes the complete file.
+TASK_COPY="$(mktemp "$REPO_DIR/.subkimi-task-XXXXXX")" || config_die 'cannot create task snapshot'
+cp "$TASK_FILE" "$TASK_COPY" || config_die 'cannot copy task into snapshot'
+_READER_CONTEXT="$BIN_DIR/_review-reader-context.sh"
+[[ -f "$_READER_CONTEXT" ]] || config_die 'missing reader context helper'
+. "$_READER_CONTEXT"
+review_reader_context "$REPO_DIR" || config_die 'cannot prepare Git context'
+PROMPT="Read the task file \"${TASK_COPY##*/}\" first with Read.
+You are an independent code reviewer reading a disposable repository snapshot ($MODE mode).
+Use Read, ReadMediaFile, Glob, and Grep to verify the task against actual files.
+Shell and write tools are unavailable. Do not claim to have run tests.
+Git history and status are in aiwork-git-context.txt. Read aiwork-review.diff when the task refers to it.
+Answer the task in your final message. If context is insufficient, return NEEDS_MORE_INFO with the missing context."
 
 {
   echo "# subkimi $MODE log"
@@ -240,7 +227,7 @@ STREAM="${LOG_FILE}.stream.jsonl"
   cd "$REPO_DIR"
   KIMI_CODE_HOME="$REVIEW_HOME" \
   KIMI_CODE_NO_AUTO_UPDATE=1 \
-    "${RO_EXEC[@]}" "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" kimi --output-format stream-json -m "$MODEL" -p "$PROMPT"
+    "${RO_EXEC[@]}" "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" kimi --agent-file "$AGENT_FILE" --output-format stream-json -m "$MODEL" -p "$PROMPT"
 ) > "$STREAM" 2>>"$LOG_FILE" || RC=$?
 if [[ -s "$STREAM" ]]; then cat "$STREAM" >> "$LOG_FILE"; fi
 python3 - "$STREAM" "$REPORT" <<'PY'

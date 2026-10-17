@@ -14,6 +14,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
+from _test_settings import write_kimi_config
 
 import http.server
 import json
@@ -105,6 +106,145 @@ class VerdictContract(LegCase):
         self.assertNotIn("Conclusion:", message)
 
 
+class CommandlessReaders(LegCase):
+    """Inspect the configuration and readable files received by the CLI, offline."""
+
+    def setUp(self):
+        super().setUp()
+        self.copy("subkimi", "submimo", "ro-repo-exec")
+        shutil.copytree(ROOT / "kimi-review-home", self.d / "kimi-review-home")
+        self.home = self.d / "kimi-home"
+        (self.home / "credentials").mkdir(parents=True)
+        (self.home / "hooks").mkdir()
+        (self.home / "credentials/kimi-code.json").write_text("{}")
+        shutil.copy2(ROOT / "kimi-review-home/hooks/guard.mjs", self.home / "hooks/guard.mjs")
+        seed = (ROOT / "kimi-review-home/config.toml").read_text()
+        import shlex
+        seed = seed.replace('"__KIMI_GUARD_COMMAND__"', json.dumps('node ' + shlex.quote(str(self.home / 'hooks/guard.mjs'))))
+        (self.home / "config.toml").write_text(seed)
+        self.cap = self.d / "reader.json"
+        self.started = self.d / "cli-started"
+        stub = r'''#!/usr/bin/env python3
+import json, os, pathlib, sys
+pathlib.Path(os.environ["CLI_STARTED"]).touch()
+args = sys.argv[1:]
+record = {"argv": args, "files": {p.name: p.read_text() for p in pathlib.Path.cwd().glob(".subkimi-task-*")}}
+record["diff"] = pathlib.Path("aiwork-review.diff").read_text()
+record["context"] = pathlib.Path("aiwork-git-context.txt").read_text() if pathlib.Path("aiwork-git-context.txt").exists() else ""
+if pathlib.Path(sys.argv[0]).name == "kimi":
+    record["profile"] = pathlib.Path(args[args.index("--agent-file")+1]).read_text() if "--agent-file" in args else ""
+    print(json.dumps({"role": "assistant", "content": "Conclusion: PASS"}))
+else:
+    record["config"] = json.loads((pathlib.Path(os.environ["XDG_CONFIG_HOME"]) / "mimocode/mimocode.json").read_text())
+    record["inline_config"] = json.loads(os.environ.get("MIMOCODE_CONFIG_CONTENT", "{}"))
+    record["disable_project_config"] = os.environ.get("MIMOCODE_DISABLE_PROJECT_CONFIG")
+    record["task"] = pathlib.Path(args[args.index("--file")+1]).read_text()
+    print(json.dumps({"type":"text","part":{"messageID":"m","id":"p","text":"Conclusion: PASS"}}))
+pathlib.Path(os.environ["CAPTURE"]).write_text(json.dumps(record))
+'''
+        for cli in ("kimi", "mimo"):
+            self.fake(cli, stub)
+        (self.repo / "aiwork-review.diff").write_text("deleted-line-evidence\n")
+
+    def invoke(self, leg, mode):
+        self.cap.unlink(missing_ok=True)
+        self.started.unlink(missing_ok=True)
+        return self.run_cmd([str(self.bin / leg), mode, str(self.task), str(self.d / (leg + ".log")), str(self.repo)],
+                            CAPTURE=str(self.cap), CLI_STARTED=str(self.started), KIMI_REVIEW_HOME=str(self.home),
+                            MIMO_REVIEW_HOME=str(self.d / "mimo-home"))
+
+    def test_kimi_large_task_is_read_from_snapshot_not_argv_in_both_modes(self):
+        self.task.write_text("context line\n" * 20000 + TASK_MARKER)
+        for mode in ("review", "explore"):
+            with self.subTest(mode=mode):
+                result = self.invoke("subkimi", mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(self.cap.read_text())
+                self.assertNotIn(TASK_MARKER, " ".join(record["argv"]))
+                self.assertLess(max(map(len, record["argv"])), 8192)
+                self.assertEqual(list(record["files"].values()), [self.task.read_text()])
+                self.assertEqual(record["diff"], "deleted-line-evidence\n")
+
+    def test_both_modes_only_offer_file_readers_and_honest_prompts(self):
+        for leg in ("subkimi", "submimo"):
+            for mode in ("review", "explore"):
+                with self.subTest(leg=leg, mode=mode):
+                    result = self.invoke(leg, mode)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    record = json.loads(self.cap.read_text())
+                    if leg == "subkimi":
+                        self.assertTrue(record["profile"], "CLI did not receive a tool allowlist profile")
+                        header = record["profile"].split("---")[1]
+                        tools = json.loads(next(line[6:] for line in header.splitlines() if line.startswith("tools:")))
+                        self.assertEqual(set(tools), {"Read", "ReadMediaFile", "Glob", "Grep"})
+                    else:
+                        for config in (record["config"], record["inline_config"]):
+                            agent = config["agent"]["aiwork-review"]
+                            self.assertEqual({k for k,v in agent["tools"].items() if v}, {"read", "glob", "grep"})
+                            self.assertIs(agent["tools"]["bash"], False)
+                            self.assertEqual(agent["permission"]["bash"], "deny")
+                        self.assertEqual(record["disable_project_config"], "1")
+                        self.assertIn("--pure", record["argv"])
+                        self.assertEqual(record["task"], self.task.read_text())
+                    prompt = " ".join(record["argv"])
+                    self.assertIn("Shell and write tools are unavailable. Do not claim to have run tests.", prompt)
+                    self.assertIn("base", record["context"])
+                    self.assertEqual(record["diff"], "deleted-line-evidence\n")
+
+    def test_kimi_broken_hook_or_config_refuses_with_78_without_dispatch(self):
+        config = self.home / "config.toml"
+        guard = self.home / "hooks/guard.mjs"
+        good_config, good_guard = config.read_text(), guard.read_text()
+        cases = [("invalid TOML", "invalid = [", good_guard),
+                 ("hook missing from config", 'default_model = "x"\n', good_guard),
+                 ("hook crashes", good_config, 'throw new Error("broken")'),
+                 ("hook only denies Write", good_config,
+                  'import {readFileSync} from "node:fs"; process.exit(JSON.parse(readFileSync(0,"utf8")).tool_name === "Write" ? 2 : 0)')]
+        for mode in ("review", "explore"):
+            for name, body, hook in cases:
+                with self.subTest(mode=mode, fault=name):
+                    config.write_text(body)
+                    guard.write_text(hook)
+                    result = self.invoke("subkimi", mode)
+                    self.assertEqual(result.returncode, 78, result.stderr)
+                    self.assertFalse(self.started.exists())
+        config.write_text(good_config)
+        guard.write_text(good_guard)
+
+    def test_mimo_broken_or_weakened_config_refuses_with_78_without_dispatch(self):
+        # chmod runs after the atomic config write; inject disk corruption there.
+        self.fake("chmod", r'''#!/usr/bin/env python3
+import json, pathlib, os, sys
+path = pathlib.Path(sys.argv[-1])
+if path.name == "mimocode.json":
+    if os.environ["CONFIG_FAULT"] == "malformed":
+        path.write_text("{broken")
+    else:
+        config = json.loads(path.read_text())
+        config["agent"]["aiwork-review"]["tools"]["bash"] = True
+        path.write_text(json.dumps(config))
+''')
+        for mode in ("review", "explore"):
+            for fault in ("malformed", "bash enabled"):
+                with self.subTest(mode=mode, fault=fault):
+                    self.cap.unlink(missing_ok=True)
+                    self.started.unlink(missing_ok=True)
+                    result = self.run_cmd([str(self.bin / "submimo"), mode, str(self.task),
+                                          str(self.d / "fault.log"), str(self.repo)],
+                                         CAPTURE=str(self.cap), CLI_STARTED=str(self.started), CONFIG_FAULT=fault,
+                                         MIMO_REVIEW_HOME=str(self.d / "mimo-home"))
+                    self.assertEqual(result.returncode, 78, result.stderr)
+                    self.assertFalse(self.started.exists())
+
+    def test_kimi_profile_write_failure_refuses_with_78_without_dispatch(self):
+        (self.home / "aiwork-review.md").mkdir()
+        for mode in ("review", "explore"):
+            with self.subTest(mode=mode):
+                result = self.invoke("subkimi", mode)
+                self.assertEqual(result.returncode, 78, result.stderr)
+                self.assertFalse(self.started.exists())
+
+
 class FailureKind(LegCase):
     """A2: provider limits are classified from the words the CLI actually printed."""
 
@@ -155,7 +295,7 @@ class FailureKind(LegCase):
         home = self.d / "review-home"
         (home / "hooks").mkdir(parents=True)
         (home / "credentials").mkdir()
-        (home / "config.toml").write_text('default_model = "x"\n')
+        write_kimi_config(home)
         shutil.copy2(ROOT / "kimi-review-home" / "hooks" / "guard.mjs", home / "hooks" / "guard.mjs")
         (home / "credentials" / "kimi-code.json").write_text("{}")
         self.fake("kimi", "#!/usr/bin/env python3\nprint(%r)\nraise SystemExit(1)\n" % KIMI_LIMIT)
@@ -171,7 +311,7 @@ class FailureKind(LegCase):
         home = self.d / "review-home"
         (home / "hooks").mkdir(parents=True)
         (home / "credentials").mkdir()
-        (home / "config.toml").write_text('default_model = "x"\n')
+        write_kimi_config(home)
         shutil.copy2(ROOT / "kimi-review-home" / "hooks" / "guard.mjs", home / "hooks" / "guard.mjs")
         (home / "credentials" / "kimi-code.json").write_text("{}")
         prose = "PROSE_LINE_4d2e the reviewed code handles usage limit errors"

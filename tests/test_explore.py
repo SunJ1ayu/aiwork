@@ -21,7 +21,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 import io
 
-from _test_settings import write_settings
+from _test_settings import write_settings, write_kimi_config
 from _test_retention import extreme_mtime
 
 
@@ -646,7 +646,7 @@ class ExploreLegContractTests(unittest.TestCase):
         (home / "hooks" / "guard.mjs").write_text("process.exit(2)\n", encoding="utf-8")
         (home / "credentials").mkdir()
         (home / "credentials" / "kimi-code.json").write_text("{}\n", encoding="utf-8")
-        (home / "config.toml").write_text('default_model = "x"\n', encoding="utf-8")
+        write_kimi_config(home)
         return home
 
     def _run(self, argv, env):

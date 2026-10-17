@@ -1,3 +1,4 @@
+# Tool availability is configured by subkimi through --agent-file.
 # Versioned seed rendered by subkimi from aiwork-config (or KIMI_MODEL).
 default_model = "__KIMI_MODEL_ALIAS__"
 

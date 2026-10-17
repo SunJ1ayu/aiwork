@@ -39,6 +39,16 @@ def write_settings(directory):
     return directory
 
 
+def write_kimi_config(home):
+    """A caller-owned home must attach the same guard the wrapper preflights."""
+    import json
+    home = Path(home)
+    (home / 'config.toml').write_text(
+        'default_model = "fixture"\n[[hooks]]\nevent = "PreToolUse"\nmatcher = ".*"\ncommand = '
+        + json.dumps('node ' + shlex.quote(str(home / 'hooks/guard.mjs')))
+        + '\ntimeout = 10\n')
+
+
 def set_model(directory, leg, model):
     path = Path(directory) / 'models.env'
     lines = path.read_text().splitlines()
@@ -78,6 +88,8 @@ if __name__ == '__main__':
         keys = inherited_environment_keys()
         print(shlex.join(['unset', '-v', '--', *keys]) if keys else ':')
         print(shlex.join(['export', *(key + '=' + value for key, value in PROXY_BYPASS.items())]))
+    elif sys.argv[1] == 'kimi-config':
+        write_kimi_config(sys.argv[2])
     elif sys.argv[1] == 'set-model':
         set_model(os.environ['AIWORK_CONFIG_DIR'], *sys.argv[2:])
     else:
