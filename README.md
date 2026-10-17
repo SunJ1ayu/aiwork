@@ -29,7 +29,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 - `bin/` review commands (below)
 - 本机数据目录(不在这个仓库里):里面有哪些东西见 `bin/_aiwork_config.py` 的登记表
 - `gate/` shared merge gate. A project connects by the steps in [gate/README.md](gate/README.md)
-- `templates/` starter task file (`review-task.md`) and the two gate workflow templates
+- `templates/` gate workflow templates (`aiwork-gate.yml`, `aiwork-review-ping.yml`) and `models.env.example`
 - `tests/` regression oracles for this tooling itself
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use disposable review workspaces
