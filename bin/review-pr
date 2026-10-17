@@ -17,6 +17,7 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
+import _review_ci
 from _review_result import leg_identity
 from _aiwork_config import ConfigError, data_dir, data_path, prune_data
 from _leg_session import (
@@ -126,12 +127,17 @@ def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = T
             print("--- leg stderr (last 40 lines) ---\n" + tail, file=sys.stderr)
 
 
-def github(token: str, endpoint: str, payload: dict | None = None) -> dict:
+def github(token: str, endpoint: str, payload: dict | None = None, *,
+           raw: bool = False, timeout: float | None = None) -> dict | str:
     env = dict(os.environ, GH_TOKEN=token)
     command = ["gh", "api", endpoint]
     if payload is not None:
         command += ["--method", "POST", "--input", "-"]
+    if timeout is not None:
+        command = [str(BIN / "aiwork-timeout"), "-k", "1", str(timeout), *command]
     data = _leg_session.run(command, env=env, input_text=json.dumps(payload) if payload is not None else None)
+    if raw:
+        return data
     try:
         value = json.loads(data)
     except json.JSONDecodeError as exc:
@@ -141,11 +147,11 @@ def github(token: str, endpoint: str, payload: dict | None = None) -> dict:
     return value
 
 
-def pr_state(token: str, number: int, *, repository: str) -> dict:
+def pr_state(token: str, number: int, *, repository: str, preview: bool = False) -> dict:
     value = github(token, f"repos/{repository}/pulls/{number}")
     head = value.get("head") or {}
     base = value.get("base") or {}
-    if value.get("state") != "open":
+    if value.get("state") != "open" and not (preview and value.get("state") == "closed"):
         raise ReviewError(f"PR #{number} is not open")
     if not SHA.fullmatch(head.get("sha", "")) or not SHA.fullmatch(base.get("sha", "")):
         raise ReviewError("PR head/base SHA is missing or invalid")
@@ -248,18 +254,19 @@ def _change_line(change: Change) -> str:
 
 def compose_task(repo: Path, *, number: int, pr: dict, merge_base: str,
                  files: list[str], diff: str, changes: list[Change], review_rules: str,
-                 risks: str, rules_sha: str, repository: str) -> str:
+                 risks: str, rules_sha: str, repository: str, ci: str | None = None) -> str:
     diff_file = None
     if len(diff.encode("utf-8")) > READER_INLINE_DIFF_BYTES:
         diff_file = place_review_diff(repo, diff)
     return task_text(number, pr, merge_base, files, diff, review_rules, risks,
                      rules_sha=rules_sha, repository=repository, changes=changes,
-                     diff_file=diff_file)
+                     diff_file=diff_file, ci=ci)
 
 
 def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: str,
               review_rules: str, risks: str, *, rules_sha: str, repository: str,
-              changes: list[Change] | None = None, diff_file: str | None = None) -> str:
+              changes: list[Change] | None = None, diff_file: str | None = None,
+              ci: str | None = None) -> str:
     rules_repository, rules_path = REVIEW_RULES_SOURCE
     inline_bytes = len(diff.encode("utf-8"))
     omit_inline = inline_bytes > READER_INLINE_DIFF_BYTES
@@ -296,6 +303,7 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
         f"规则来源提交: {rules_sha}\n\n" + review_rules
         + "\n\n## 项目 main 的 .aiwork/accepted-risks.md（原文；不存在时为无）\n\n" + risks
         + "\n\n"
+        + (ci if ci is not None else _review_ci.render(head, "未查询", {})) + "\n"
         + file_list
         + "\n" + diff_section
         + CONCLUSION_REQUIREMENT + "\n"
@@ -347,23 +355,27 @@ def main() -> int:
     parser.add_argument("--repo", type=repository_name, default=None,
                         help="target owner/name (default: this checkout's origin)")
     parser.add_argument("--leg", default="subcodex")
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print the task only; allow previewing merged PRs; never run a leg or publish")
     args = parser.parse_args()
     try:
         drop_inherited_git_env()
         data_dir()
         main_sha = aiwork_main_commit()
-        require_latest_aiwork_main(main_sha)
+        if not args.dry_run:
+            require_latest_aiwork_main(main_sha)
         if args.pr < 1:
             raise ReviewError("PR number must be positive")
-        family, frozen_model = _leg_session.choose_leg(args.leg, BIN)
+        if not args.dry_run:
+            family, frozen_model = _leg_session.choose_leg(args.leg, BIN)
         repository = args.repo or repository_from_origin()
         if not args.dry_run:
             prune_data()
         token = _leg_session.run([str(BIN / "gh-app-token"), "review", "--repo", repository]).strip()
         if not token:
             raise ReviewError("review App returned an empty token")
-        pr = pr_state(token, args.pr, repository=repository)
+        pr = (pr_state(token, args.pr, repository=repository, preview=True) if args.dry_run
+              else pr_state(token, args.pr, repository=repository))
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
             directory = Path(temporary)
             run_id = f"pr-{repository.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}-{directory.name.removeprefix('aiwork-review-pr-')}"
@@ -372,15 +384,26 @@ def main() -> int:
                     token, pr, directory, repository=repository)
                 rules_sha, review_rules = aiwork_main_rules(main_sha)
                 risks = main_document(repo, ".aiwork/accepted-risks.md", required=False)
+                try:
+                    target_main = _leg_session.run(["git", "-C", str(repo), "rev-parse", "refs/aiwork/main"]).strip()
+                except ReviewError:
+                    target_main = None
+                ci = _review_ci.context(
+                    lambda endpoint, **kwargs: github(token, endpoint, **kwargs),
+                    repository=repository, head=pr["head"]["sha"], main=target_main,
+                    branch=pr["head"]["ref"])
                 task = directory / "task.md"
 
                 def write_task() -> None:
                     task.write_text(compose_task(
                         repo, number=args.pr, pr=pr, merge_base=merge_base,
                         files=files, diff=diff, changes=changes, review_rules=review_rules,
-                        risks=risks, rules_sha=rules_sha, repository=repository), encoding="utf-8")
+                        risks=risks, rules_sha=rules_sha, repository=repository, ci=ci), encoding="utf-8")
 
                 write_task()
+                if args.dry_run:
+                    print(task.read_text(encoding="utf-8"), end="")
+                    return 0
                 selected_leg = args.leg
                 notices = []
                 env = dict(os.environ)
@@ -425,9 +448,6 @@ def main() -> int:
                     raise PrivacyError("privacy-check refused review publication:\n"
                                        + privacy.stdout + privacy.stderr)
                 check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=repository))
-                if args.dry_run:
-                    print(body, end="")
-                    return 0
                 response = github(token, f"repos/{repository}/pulls/{args.pr}/reviews",
                                   {"commit_id": pr["head"]["sha"], "event": "COMMENT", "body": body})
                 link = response.get("html_url")
