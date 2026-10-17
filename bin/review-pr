@@ -388,10 +388,19 @@ def main() -> int:
                     target_main = _leg_session.run(["git", "-C", str(repo), "rev-parse", "refs/aiwork/main"]).strip()
                 except ReviewError:
                     target_main = None
+                try:
+                    ci_policy = json.loads(main_document(repo, ".aiwork/policy.json", required=False))
+                    ci = ci_policy.get("ci") if isinstance(ci_policy, dict) else None
+                    if (not isinstance(ci, dict) or not all(isinstance(value, str) and value for value in (
+                            ci.get("workflow_path"), ci.get("event"), ci_policy.get("check_name")))
+                            or type(ci_policy.get("gate_app_id")) is not int or ci_policy["gate_app_id"] <= 0):
+                        ci_policy = None
+                except (ReviewError, ValueError, AttributeError):
+                    ci_policy = None
                 ci = _review_ci.context(
                     lambda endpoint, **kwargs: github(token, endpoint, **kwargs),
                     repository=repository, head=pr["head"]["sha"], main=target_main,
-                    branch=pr["head"]["ref"])
+                    number=args.pr, policy=ci_policy)
                 task = directory / "task.md"
 
                 def write_task() -> None:

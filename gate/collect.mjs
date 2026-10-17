@@ -30,25 +30,33 @@ function stripRef(workflowPath) {
   return String(workflowPath ?? "").replace(/@.*$/, "");
 }
 
+// main 基线与 PR 共用工作流/SHA 匹配及重跑排序；main 基线不作 PR 归属判断。
+export function orderedCiRuns(runs, headSha, policy) {
+  return runs
+    .filter((r) => stripRef(r.path) === policy.ci.workflow_path && r.head_sha === headSha)
+    // 同一 PR 重跑沿用运行号，按开始时间挑，时间相同再按运行号挑。
+    .sort((a, b) => String(b.run_started_at ?? "").localeCompare(String(a.run_started_at ?? "")) || b.id - a.id);
+}
+
 // 同一个提交可能同时是别的 PR 的 head(基线不同,合并结果就不同):只认明确关联到本 PR 的那次运行。
+export function selectCiRun(runs, headSha, policy, prNumber) {
+  const ciRuns = orderedCiRuns(runs, headSha, policy);
+  return { run: ciRuns.find((r) => (r.pull_requests ?? []).some((p) => p.number === prNumber)) ?? null,
+           count: ciRuns.length };
+}
+
 export async function collectCi(api, repo, headSha, policy, prNumber) {
   const runs = await paginate(
     api,
     `/repos/${repo}/actions/runs?head_sha=${headSha}&event=${policy.ci.event}&per_page=100`,
     "workflow_runs",
   );
-  const ciRuns = runs.filter((r) => stripRef(r.path) === policy.ci.workflow_path && r.head_sha === headSha);
-  // 同一 PR 在同一提交上可能跑过几次(重开 PR、手动重跑):认最后开始的那次执行。
-  // 重跑沿用原来的运行号、只更新 run_started_at,所以不能按运行号排(按运行号,旧运行重跑失败会被较新的成功盖住)
-  const mine = ciRuns
-    .filter((r) => (r.pull_requests ?? []).some((p) => p.number === prNumber))
-    .sort((a, b) => String(b.run_started_at ?? "").localeCompare(String(a.run_started_at ?? "")) || b.id - a.id);
-  if (!mine.length) {
-    return ciRuns.length
-      ? { state: "failure", detail: `这个提交上有 ${ciRuns.length} 次 ci.yml 运行,但都没关联到 PR #${prNumber}` }
+  const { run, count } = selectCiRun(runs, headSha, policy, prNumber);
+  if (!run) {
+    return count
+      ? { state: "failure", detail: `这个提交上有 ${count} 次 ci.yml 运行,但都没关联到 PR #${prNumber}` }
       : { state: "missing", detail: "没有 ci.yml 的运行" };
   }
-  const run = mine[0];
   // created_at 是触发这次运行的事件的时间;重跑(re-run)沿用当时的合并提交,所以不看 run_started_at
   const at = { created_at: run.created_at ?? null };
   if (run.status !== "completed") return { state: "pending", detail: `运行 ${run.id} 状态 ${run.status}`, ...at };

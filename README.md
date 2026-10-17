@@ -46,7 +46,8 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。源仓经 `ro-repo-exec` 只读，副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。
   失败时打印脱敏后的 stderr 末 40 行，诊断留在数据目录 `review-failures/<run-id>/`，不含仓库检出和凭证助手。保留规矩见 `bin/_aiwork_config.py` 的 `DATA_ENTRIES`。旧的 `logs/review-pr-failures/` 不再写入，按 `logs` 的保留规矩清理。
-  任务统一附带当前 head 与 main 的「CI 结果」：Linux / Mac 工作流状态、Mac 断网判据、离线红套件及红绿变化。状态来自 GitHub 接口；套件名单来自 PR 可影响的日志，只能参考。查询失败或未完成会如实标明，继续派腿；本节最多 4 KiB，超长注明截断，关卡规则不变。
+  任务统一附带当前 head 与 main 的「CI 结果」：Linux / Mac 工作流状态、Mac 断网判据、离线红套件及相对 main 当前提交的红名单差异。Linux G1 直接引用关卡自己的检查；挑运行共用关卡选择器，工作流路径和事件读取项目 main 的策略。状态来自 GitHub 接口；套件名单来自 PR 可影响的日志，只能参考。查询失败或未完成会如实标明，继续派腿；本节最多 4 KiB，超长注明截断，关卡规则不变。
+  review 机器人读 CI：公开仓库目前能读到；私有仓库须在 GitHub App 和本机 `apps/review.env` 的 `PERMISSIONS` 同时加入 `actions:read`（运行和日志）、`checks:read`（关卡 G1 检查）。配置示例见 `bin/gh-app-token`；取不到时如实注明并继续派腿。
   `--dry-run` 只把任务打印到标准输出，不调用模型、不发布评审、不清理过期数据；允许从开发工作树预览已合并的 PR。正式派腿仍须从干净且为最新 main 的共享检出运行。
   任务在 diff 之后再次要求结论。完整 diff（含删除）放得下就内联。超过 `READER_INLINE_DIFF_BYTES`（200KB）时，任务只列每个文件的状态和行数，完整 diff 在快照文件 `aiwork-review.diff`。
   这条命令默认给评审命令 2400 秒；已有的超时环境变量可以覆盖。只有缺结论或输出被截断时重试一次，并在终端和发布的评审里写明。每次失败的尝试都留下，包括重试成功的那次；其他失败不重新启动评审命令。

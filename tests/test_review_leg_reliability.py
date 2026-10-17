@@ -19,7 +19,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from test_review_pr import load_script
+from test_review_pr import load_script, CiFixture, CI_POLICY
 from test_leg_quick_fixes import LegCase
 
 
@@ -86,6 +86,8 @@ class ReliabilityTests(unittest.TestCase):
         bin_dir = BIN
         self.leg_calls = []
         self.seen_tasks = []
+        ci = CiFixture(head=self.head, number=1)
+        self.ci_reads = ci.reads
         if fake_attempts is not None:
             self.run_count += 1
             bin_dir = self.directory / f'bin-{self.run_count}'
@@ -132,7 +134,9 @@ class ReliabilityTests(unittest.TestCase):
                 return 'fixture-token'
             return real_run(command, **kwargs)
 
-        def github(token, endpoint, payload=None):
+        def github(token, endpoint, payload=None, **kwargs):
+            if payload is None:
+                return ci.api(endpoint, **kwargs)
             posted.append(payload)
             return {'html_url': 'https://github.com/example/repo/pull/1#pullrequestreview-1'}
 
@@ -153,7 +157,8 @@ class ReliabilityTests(unittest.TestCase):
                     changes if changes is not None else [
                         self.review.Change('M', (files or ['file'])[0], None, 1, 0)])), \
                 patch.object(self.review, 'aiwork_main_rules', return_value=('d' * 40, 'Trusted rules.')), \
-                patch.object(self.review, 'main_document', return_value='无'), \
+                patch.object(self.review, 'main_document', side_effect=lambda repo, path, **kwargs:
+                             json.dumps(CI_POLICY) if path == '.aiwork/policy.json' else '无'), \
                 patch.object(self.review, 'github', side_effect=github), \
                 patch.object(self.review, 'BIN', bin_dir), \
                 patch.object(self.review, 'aiwork_main_commit', return_value='d' * 40), \
@@ -168,6 +173,9 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(payloads, [])
         self.assertEqual(self.seen_tasks[0].count(DIFF_MARKER), 1)
+        self.assertIn('✅ G1 CI(ci.yml)在当前 head 上通过', self.seen_tasks[0])
+        self.assertIn('existing-suite', self.seen_tasks[0])
+        self.assertTrue(any(options.get('raw') for _, options in self.ci_reads))
         self.assertEqual(len(posted), 1)
 
     def test_conclusion_requirement_is_after_full_diff_at_task_end(self):
