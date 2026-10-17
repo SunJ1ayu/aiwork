@@ -10,7 +10,10 @@
 #   INSTALLATION_ID=165993669
 #   KEY=aiwork-review.pem
 #   REPOS="OpenDesign"                                         # 令牌只对这些仓库有效(空格分隔)
-#   PERMISSIONS='{"contents":"read","pull_requests":"write"}'  # 令牌只带这些权限;App 以后多给了也不会带上
+#   PERMISSIONS='{"contents":"read","pull_requests":"write","actions":"read","checks":"read"}'  # 令牌只带这些权限;App 以后多给了也不会带上
+#
+# review 读 CI：公开仓库目前可直接读；私有仓库需在 App 和本机 PERMISSIONS 中授予 actions:read，
+# 读取关卡自己的 G1 检查还需 checks:read；只在 App 加权限而不改本机配置，换出的令牌仍不带它。
 #
 # 用法:GH_TOKEN="$(gh-app-token review)" gh pr review …   (GH_TOKEN 优先于 gh 里登录的账号)
 # 私钥和 token 都不许打印、不许写进日志或仓库;JWT 与 token 都不出现在命令行参数里(ps 看不到)。

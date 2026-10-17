@@ -19,6 +19,7 @@ import shutil
 import tempfile
 import unittest
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 from _test_settings import write_settings
 from _test_retention import extreme_mtime
@@ -35,6 +36,88 @@ def load_script(name="review-pr"):
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
+
+
+CI_POLICY = {
+    'ci': {'workflow_path': '.github/workflows/ci.yml', 'event': 'pull_request'},
+    'check_name': 'aiwork-gate', 'gate_app_id': 5121026,
+}
+
+
+class CiFixture:
+    """GitHub API-shaped responses; job log lines use real Actions timestamp format."""
+    def __init__(self, *, head_mac=None, main_mac=None, api_error=False, head="a" * 40, number=12):
+        self.specs = {
+            11: {'state': 'success', 'red': []},
+            12: head_mac or {'state': 'failure', 'red': ['existing-suite']},
+            21: {'state': 'success', 'red': []},
+            22: main_mac or {'state': 'failure', 'red': ['existing-suite']},
+        }
+        self.head, self.number = head, number
+        self.policy = json.loads(json.dumps(CI_POLICY))
+        self.check_title = '不放行:其他条件未满足'
+        self.g1 = '✅ G1 CI(ci.yml)在当前 head 上通过'
+        self.check_status = 'completed'
+        self.check_app = CI_POLICY['gate_app_id']
+        self.check_prs = [number]
+        self.api_error = api_error
+        self.reads = []
+
+    def api(self, endpoint, **kwargs):
+        self.reads.append((endpoint, kwargs))
+        if self.api_error:
+            raise HTTPError('https://api.github.com/' + endpoint, 403, 'Forbidden', {}, None)
+        if '/check-runs?' in endpoint:
+            return {'total_count': 1, 'check_runs': [{
+                'id': 123, 'name': 'aiwork-gate', 'head_sha': self.head,
+                'app': {'id': self.check_app}, 'status': self.check_status, 'conclusion': 'failure',
+                'pull_requests': [{'number': n} for n in self.check_prs],
+                'output': {'title': self.check_title, 'summary': self.g1},
+            }]}
+        if '/actions/runs?' in endpoint:
+            query = parse_qs(urlsplit(endpoint).query)
+            sha = query['head_sha'][0]
+            is_head = sha == self.head
+            runs = []
+            for rid in ((11, 12) if is_head else (21, 22)):
+                spec = self.specs[rid]
+                if spec['state'] == 'missing':
+                    continue
+                runs.append({'id': rid, 'run_attempt': 1, 'head_sha': sha,
+                             'head_branch': 'f' if is_head else 'main',
+                             'event': query['event'][0],
+                             'path': self.policy['ci']['workflow_path'] if rid % 10 == 1 else '.github/workflows/ci-macos.yml',
+                             'run_started_at': '2026-10-17T04:28:39Z',
+                             'status': 'in_progress' if spec['state'] == 'running' else 'completed',
+                             'conclusion': None if spec['state'] == 'running' else spec['state'],
+                             'pull_requests': [{'number': self.number}] if is_head else []})
+            return {'total_count': len(runs), 'workflow_runs': runs}
+        import re
+        match = re.search(r'/actions/runs/(\d+)/(?:attempts/\d+/)?jobs', endpoint)
+        if match:
+            rid = int(match[1]); spec = self.specs[rid]
+            is_mac = rid % 10 == 2
+            steps = []
+            if is_mac:
+                steps.append({'name': 'No-egress suite (must pass)', 'status': 'completed', 'conclusion': 'success'})
+            steps.append({'name': 'All offline suites (report only for now)' if is_mac else
+                          'Run the offline suite inside a real network namespace',
+                          'status': 'in_progress' if spec['state'] == 'running' else 'completed',
+                          'conclusion': None if spec['state'] == 'running' else spec['state']})
+            return {'total_count': 1, 'jobs': [{'id': rid + 100, 'steps': steps}]}
+        match = re.search(r'/actions/jobs/(\d+)/logs', endpoint)
+        if match:
+            spec = self.specs[int(match[1]) - 100]
+            if spec.get('log_error'):
+                raise HTTPError('https://api.github.com/' + endpoint, 403, 'Forbidden', {}, None)
+            if 'log' in spec:
+                return spec['log']
+            stamp = '2026-10-17T04:33:38.6466470Z '
+            lines = ['UNTRUSTED_LOG_BODY_DO_NOT_COPY',
+                     ('❌ 工具链防锈失败(外部漂移/环境升级?先跑本地判据复现):' if spec['red'] else '✅ 工具链防锈通过 | suite: OK')]
+            lines.extend('--- ' + name + ' (rc=1) ---' for name in spec['red'])
+            return '\n'.join(stamp + line for line in lines)
+        raise AssertionError('unexpected CI endpoint: ' + endpoint)
 
 
 class ReviewPrTests(unittest.TestCase):
@@ -141,6 +224,241 @@ class ReviewPrTests(unittest.TestCase):
             self.assertEqual(reached, [True])
             self.assertTrue(all(path.exists() for path in files))
 
+    def ci_task(self, fixture):
+        rc, calls, _stdout, stderr = self.run_main_with_leg_result('gpt-5.6', ci=fixture)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls['leg_runs'], 1)
+        self.assertEqual(len(calls['github_writes']), 1)
+        task = calls['task']
+        self.assertIn('## CI 结果', task)
+        return task.split('## CI 结果', 1)[1].split('## 改动文件', 1)[0]
+
+    def test_ci_other_pr_success_cannot_replace_this_pr_failure(self):
+        fixture = CiFixture(head_mac={'state': 'failure', 'red': ['our-suite']})
+        fixture.specs[11] = {'state': 'failure', 'red': ['our-linux-suite']}
+        fixture.specs[31] = fixture.specs[32] = {'state': 'success', 'red': []}
+        fixture.g1 = '❌ G1 CI 没通过:结论 failure(运行 11)'
+        real_api = fixture.api
+        def api(endpoint, **kwargs):
+            value = real_api(endpoint, **kwargs)
+            if '/actions/runs?' in endpoint and 'head_sha=' + fixture.head in endpoint:
+                others = [dict(ours, id=ours['id'] + 20, conclusion='success', pull_requests=[{'number': 13}],
+                               run_started_at='2026-10-18T00:00:00Z') for ours in value['workflow_runs']]
+                value['workflow_runs'].extend(others)
+                value['total_count'] += len(others)
+            return value
+        fixture.api = api
+        section = self.ci_task(fixture)
+        self.assertIn(fixture.g1, section)
+        self.assertRegex(section, r'ci-macos.yml[^\n]*当前 head 失败')
+        self.assertIn('our-linux-suite', section)
+        self.assertIn('our-suite', section)
+        self.assertFalse(any('/runs/31/' in endpoint or '/runs/32/' in endpoint for endpoint, _ in fixture.reads))
+
+    def test_ci_retarget_after_ci_uses_gate_g1_instead_of_workflow_success(self):
+        fixture = CiFixture()
+        fixture.g1 = ('❌ G1 目标分支在这次 CI 之后改过(2026-10-17T05:00:00Z),'
+                      'CI 测的是旧目标:推一个新提交,或关掉再重开 PR,让 CI 在新目标上重跑')
+        section = self.ci_task(fixture)
+        self.assertIn(fixture.g1, section)
+        self.assertNotRegex(section, r'关卡要求通过[^\n]*当前 head 通过')
+
+    def test_ci_main_advance_does_not_add_a_freshness_rule_beyond_gate(self):
+        fixture = CiFixture()
+        section = self.ci_task(fixture)
+        # The main snapshot has a different SHA; the actual published G1 is still the authority.
+        self.assertIn('当前 head ' + fixture.g1, section)
+        self.assertNotIn('关卡结论没取到', section)
+
+    def test_ci_uses_main_policy_workflow_path_and_event(self):
+        fixture = CiFixture()
+        fixture.policy['ci'] = {'workflow_path': '.github/workflows/project-tests.yml',
+                                'event': 'pull_request_target'}
+        section = self.ci_task(fixture)
+        self.assertIn('project-tests.yml（Linux', section)
+        head_reads = [endpoint for endpoint, _ in fixture.reads
+                      if '/actions/runs?' in endpoint and 'head_sha=' + fixture.head in endpoint]
+        self.assertTrue(head_reads)
+        self.assertTrue(all('event=pull_request_target' in endpoint for endpoint in head_reads))
+
+    def test_ci_missing_gate_does_not_become_workflow_success(self):
+        fixture = CiFixture()
+        real_api = fixture.api
+        def api(endpoint, **kwargs):
+            if '/check-runs?' in endpoint:
+                raise HTTPError('https://api.github.com/' + endpoint, 403, 'Forbidden', {}, None)
+            return real_api(endpoint, **kwargs)
+        fixture.api = api
+        section = self.ci_task(fixture)
+        self.assertIn('关卡结论没取到（HTTP 403', section)
+        self.assertNotIn(fixture.g1, section)
+        self.assertIn('本 PR 关联的工作流运行状态（不代替 G1）：通过', section)
+
+    def test_ci_gate_g1_requires_own_app_and_unambiguous_pr_attribution(self):
+        for mode in ('other_app', 'ambiguous_pr', 'other_pr'):
+            with self.subTest(mode=mode):
+                fixture = CiFixture()
+                if mode == 'other_app':
+                    fixture.check_app = 999
+                else:
+                    fixture.check_prs = [12, 13]
+                    if mode == 'other_pr':
+                        fixture.check_title = 'PR #13:不放行'
+                section = self.ci_task(fixture)
+                self.assertNotIn(fixture.g1, section)
+        fixture = CiFixture()
+        fixture.check_prs = [12, 13]
+        fixture.check_title = 'PR #12:不放行'
+        self.assertIn(fixture.g1, self.ci_task(fixture))
+
+    def test_ci_new_gate_in_progress_never_falls_back_to_old_success(self):
+        fixture = CiFixture()
+        fixture.check_status = 'in_progress'
+        real_api = fixture.api
+        def api(endpoint, **kwargs):
+            value = real_api(endpoint, **kwargs)
+            if '/check-runs?' in endpoint:
+                value['check_runs'].append(dict(value['check_runs'][0], id=122, status='completed'))
+                value['total_count'] += 1
+            return value
+        fixture.api = api
+        section = self.ci_task(fixture)
+        self.assertIn('关卡还没判', section)
+        self.assertNotIn(fixture.g1, section)
+
+    def test_ci_section_in_shared_task_uses_current_head_and_warns_about_log_trust(self):
+        fixture = CiFixture()
+        section = self.ci_task(fixture)
+        self.assertIn('a' * 40, section)
+        self.assertIn('ci.yml', section)
+        self.assertIn('ci-macos.yml', section)
+        self.assertIn('GitHub 接口', section)
+        self.assertIn('只能参考', section)
+        self.assertIn('PR 自己的代码', section)
+        self.assertIn('78', section)
+        self.assertIn('不是 PR 的问题', section)
+        self.assertIn('只报不拦', section)
+        self.assertNotIn('UNTRUSTED_LOG_BODY_DO_NOT_COPY', section)
+
+    def test_ci_mac_running_is_reported_without_inventing_a_comparison(self):
+        section = self.ci_task(CiFixture(head_mac={'state': 'running', 'red': []}))
+        self.assertRegex(section, r'ci-macos.yml[^\n]*还在跑')
+        self.assertIn('断网判据：通过', section)
+        self.assertIn('对比没取到', section)
+        self.assertNotRegex(section, r'不再出现在红名单里的套件：[^\n]*existing-suite')
+
+    def test_ci_unavailable_does_not_block_dispatch_or_echo_raw_errors(self):
+        section = self.ci_task(CiFixture(api_error=True))
+        self.assertIn('没取到', section)
+        self.assertIn('403', section)
+        self.assertIn('权限', section)
+
+    def test_ci_marks_newly_red_suites(self):
+        section = self.ci_task(CiFixture(head_mac={'state': 'failure', 'red': ['new-suite', 'existing-suite']}))
+        self.assertRegex(section, r'相对 main 当前提交，多出来的红套件：[^\n]*new-suite')
+        self.assertNotRegex(section, r'相对 main 当前提交，多出来的红套件：[^\n]*existing-suite')
+
+    def test_ci_marks_suites_that_were_already_red(self):
+        section = self.ci_task(CiFixture())
+        self.assertRegex(section, r'两边都有的红套件：[^\n]*existing-suite')
+        self.assertNotRegex(section, r'相对 main 当前提交，多出来的红套件：[^\n]*existing-suite')
+
+    def test_ci_reports_removed_red_names_without_claiming_deleted_suites_passed(self):
+        section = self.ci_task(CiFixture(head_mac={'state': 'success', 'red': []}))
+        self.assertRegex(section, r'不再出现在红名单里的套件：[^\n]*existing-suite')
+        self.assertNotIn('变绿', section)
+        self.assertIn('也可能未运行或被删除', section)
+
+    def test_ci_missing_run_is_distinct_from_failure(self):
+        section = self.ci_task(CiFixture(head_mac={'state': 'missing', 'red': []}))
+        self.assertRegex(section, r'ci-macos.yml[^\n]*没有运行')
+        self.assertIn('对比没取到', section)
+
+    def test_ci_log_unavailable_keeps_github_state_but_does_not_invent_green(self):
+        section = self.ci_task(CiFixture(head_mac={'state': 'failure', 'red': [], 'log_error': True}))
+        self.assertRegex(section, r'ci-macos.yml[^\n]*失败')
+        self.assertIn('没取到', section)
+        self.assertNotRegex(section, r'不再出现在红名单里的套件：[^\n]*existing-suite')
+
+    def test_dry_run_outputs_task_without_leg_or_publication_even_outside_latest_main(self):
+        rc, calls, stdout, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', dry_run=True, ci=CiFixture(), checkout_error=True)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls['leg_runs'], 0)
+        self.assertEqual(calls['github_writes'], [])
+        self.assertIn('## CI 结果', stdout)
+        self.assertNotIn('**aiwork-review', stdout)
+
+    def test_ci_section_is_byte_bounded_and_marks_truncation(self):
+        names = ['suite-' + str(i).zfill(4) + '-' + 'x' * 40 for i in range(200)]
+        section = '## CI 结果' + self.ci_task(CiFixture(head_mac={'state': 'failure', 'red': names}))
+        self.assertLessEqual(len(section.rstrip().encode('utf-8')), self.review._review_ci.MAX_BYTES)
+        for required in ('已截断', '只能参考', '78', 'ci.yml', 'ci-macos.yml', '断网判据'):
+            self.assertIn(required, section)
+
+    def test_ci_incomplete_or_unrelated_log_never_implies_green(self):
+        for log in ('unrelated output', '--- existing-suite (rc=1) ---',
+                    '✅ 工具链防锈通过 | unrelated: OK', '❌ 工具链防锈失败:'):
+            with self.subTest(log=log):
+                section = self.ci_task(CiFixture(head_mac={'state': 'failure', 'red': [], 'log': log}))
+                self.assertIn('套件名单没取到', section)
+                self.assertNotRegex(section, r'不再出现在红名单里的套件：[^\n]*existing-suite')
+
+    def test_ci_selects_exact_workflow_sha_pr_and_latest_attempt(self):
+        fixture = CiFixture()
+        real_api = fixture.api
+        def api(endpoint, **kwargs):
+            value = real_api(endpoint, **kwargs)
+            if '/actions/runs?' in endpoint:
+                current = value['workflow_runs'][1]
+                # A newer run id can be older than a rerun of this PR.
+                old = dict(current, id=999, run_started_at='2026-10-16T00:00:00Z')
+                decoys = [dict(current, **change) for change in (
+                    {'head_sha': 'e' * 40}, {'path': '.github/workflows/other.yml'})]
+                if current['pull_requests']:
+                    decoys.append(dict(current, pull_requests=[{'number': 13}]))
+                for decoy in decoys:
+                    decoy.update(id=1000, run_started_at='2026-10-18T00:00:00Z')
+                current['run_attempt'] = 2
+                value['workflow_runs'] += [old, *decoys]
+                value['total_count'] = len(value['workflow_runs'])
+            return value
+        fixture.api = api
+        section = self.ci_task(fixture)
+        self.assertIn('两边都有的红套件：["existing-suite"]', section)
+        endpoints = [endpoint for endpoint, _ in fixture.reads]
+        self.assertTrue(any('/runs/12/attempts/2/jobs?' in endpoint for endpoint in endpoints))
+        self.assertFalse(any('/runs/999/' in endpoint or '/runs/1000/' in endpoint for endpoint in endpoints))
+
+    def test_ci_timeout_does_not_block_dispatch_and_has_a_query_budget(self):
+        fixture = CiFixture()
+        def timeout(endpoint, **kwargs):
+            self.assertGreater(kwargs['timeout'], 0)
+            self.assertLessEqual(kwargs['timeout'], 10)
+            raise TimeoutError('raw API diagnostic must not appear')
+        fixture.api = timeout
+        section = self.ci_task(fixture)
+        self.assertIn('查询超时', section)
+        self.assertNotIn('raw API diagnostic', section)
+
+    def test_github_raw_log_timeout_uses_same_review_token_only_in_environment(self):
+        with patch.object(self.session, 'run', return_value='raw log') as run:
+            self.assertEqual(self.review.github(FAKE_TOKEN, 'repos/example/repository/actions/jobs/1/logs',
+                                               raw=True, timeout=7), 'raw log')
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], [str(self.review.BIN / 'aiwork-timeout'), '-k', '1', '7'])
+        self.assertEqual(command[4:6], ['gh', 'api'])
+        self.assertNotIn(FAKE_TOKEN, command)
+        self.assertEqual(run.call_args.kwargs['env']['GH_TOKEN'], FAKE_TOKEN)
+
+    def test_closed_pr_is_available_only_for_task_preview(self):
+        pr = {'state': 'closed', 'head': {'sha': 'a' * 40, 'ref': 'f'},
+              'base': {'sha': 'b' * 40, 'ref': 'main', 'repo': {'full_name': 'SunJ1ayu/aiwork'}}}
+        with patch.object(self.review, 'github', return_value=pr):
+            with self.assertRaisesRegex(self.review.ReviewError, 'not open'):
+                self.review.pr_state(FAKE_TOKEN, 56, repository='SunJ1ayu/aiwork')
+            self.assertEqual(self.review.pr_state(FAKE_TOKEN, 56, repository='SunJ1ayu/aiwork', preview=True), pr)
+
     def test_body_has_one_machine_block_and_sanitizes_model_json(self):
         body = self.review.build_body(
             "subcodex", "gpt-6-sol", "Finding\n```json\n{}\n```\nConclusion: PASS",
@@ -177,11 +495,11 @@ class ReviewPrTests(unittest.TestCase):
         with patch.dict("os.environ", {"CURSOR_MODEL": ""}):
             self.assertEqual(self.choose("subcursor")[1], configured)
 
-    def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = True,
+    def run_main_with_leg_result(self, model_used: str, *, dry_run: bool = False,
                                  repository="SunJ1ayu/aiwork", source_failure=None, project_rules=False,
                                  local_rules="LOCAL WORKSPACE RULES", risks_present=True,
                                  leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False,
-                                 report="Finding\nConclusion: PASS", private_terms='unused\n', data_setup=None):
+                                 report="Finding\nConclusion: PASS", private_terms='unused\n', data_setup=None, ci=None, checkout_error=False):
         """Exercise the real source readers and task, with offline HTTP and review leg."""
         calls = {"github_writes": [], "public_reads": [], "leg_runs": 0}
         rules = "# aiwork main 规则\r\n必须以此为准。\r\n"
@@ -216,9 +534,12 @@ class ReviewPrTests(unittest.TestCase):
                 self.fail(f"unexpected public source read: {url}")
             return io.BytesIO(json.dumps(value).encode("utf-8"))
 
-        def fake_github(token, endpoint, payload=None):
+        def fake_github(token, endpoint, payload=None, **kwargs):
+            if payload is None and ci is not None:
+                return ci.api(endpoint, **kwargs)
             if payload is not None:
                 calls["github_writes"].append(endpoint)
+                calls["posted_body"] = payload["body"]
                 calls['posted_block'] = json.loads(payload['body'].split('```json\n', 1)[1].split('\n```', 1)[0])
             return {"html_url": "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1"}
 
@@ -281,6 +602,7 @@ class ReviewPrTests(unittest.TestCase):
             (repo / ".aiwork").mkdir()
             if risks_present:
                 (repo / ".aiwork/accepted-risks.md").write_bytes(risks.encode("utf-8"))
+            (repo / '.aiwork/policy.json').write_text(json.dumps(ci.policy if ci else CI_POLICY))
             if project_rules:
                 (repo / ".aiwork/review-rules.md").write_text("PROJECT RULES DECOY", encoding="utf-8")
             (repo / "file").touch()
@@ -295,7 +617,7 @@ class ReviewPrTests(unittest.TestCase):
                        + (["--dry-run"] if dry_run else [])), \
                     patch.dict("os.environ", {"CURSOR_MODEL": "gpt-5.6"}), \
                     patch.object(self.review, "BIN", bin_dir), \
-                    patch.object(self.review, "require_latest_aiwork_main"), \
+                    patch.object(self.review, "require_latest_aiwork_main", side_effect=self.review.ReviewError("not latest main") if checkout_error else None), \
                     patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data"), AIWORK_CONFIG_DIR=str(config)), \
                     patch.object(self.session, "run", side_effect=fake_run), \
                     patch("urllib.request.urlopen", side_effect=fake_public_read), \
@@ -334,18 +656,16 @@ class ReviewPrTests(unittest.TestCase):
 
     def test_private_review_body_is_refused_without_echoing_report_or_leg_stderr(self):
         marker = 'private-marker'
-        for dry_run in (False, True):
-            with self.subTest(dry_run=dry_run):
-                rc, calls, stdout, stderr = self.run_main_with_leg_result(
-                    'gpt-5.6', dry_run=dry_run, private_terms=' \t' + marker + '\t\n',
-                    report='Finding ' + marker.upper() + '\nConclusion: PASS',
-                    leg_stderr='provider diagnostic ' + marker)
-                self.assertEqual(rc, 1)
-                self.assertEqual(calls['github_writes'], [])
-                self.assertEqual(stdout, '')
-                self.assertIn('review-body.md:3 私人词第 1 条', stderr)
-                self.assertNotIn(marker, stderr.casefold())
-                self.assertNotIn('Finding', stderr)
+        rc, calls, stdout, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', dry_run=False, private_terms=' \t' + marker + '\t\n',
+            report='Finding ' + marker.upper() + '\nConclusion: PASS',
+            leg_stderr='provider diagnostic ' + marker)
+        self.assertEqual(rc, 1)
+        self.assertEqual(calls['github_writes'], [])
+        self.assertEqual(stdout, '')
+        self.assertIn('review-body.md:3 私人词第 1 条', stderr)
+        self.assertNotIn(marker, stderr.casefold())
+        self.assertNotIn('Finding', stderr)
 
     def test_secret_shape_in_review_body_is_refused_with_an_empty_wordlist(self):
         secret = 'sk' + '-' + 'a' * 20
@@ -860,12 +1180,13 @@ grep -q -F -- "$3" "$clone/$4"
         self.assertEqual((base, files), ("c" * 40, ["src/a.py"]))
 
     def test_cursor_model_is_frozen_for_leg_and_result(self):
-        rc, calls, body, stderr = self.run_main_with_leg_result("gpt-5.6")
+        rc, calls, _stdout, stderr = self.run_main_with_leg_result("gpt-5.6")
         self.assertEqual(rc, 0, stderr)
         emit = calls["emit"]
         self.assertEqual(calls["leg_env"]["CURSOR_MODEL"], "gpt-5.6")
         self.assertEqual(emit[emit.index("--expected-model") + 1], "gpt-5.6")
         self.assertEqual(emit[emit.index("--family") + 1], "openai")
+        body = calls["posted_body"]
         self.assertIn("**aiwork-review · subcursor · gpt-5.6**", body)
         block = json.loads(body.split("```json\n", 1)[1].split("\n```", 1)[0])
         self.assertEqual((block["model"], block["family"]), ("gpt-5.6", "openai"))
@@ -1214,7 +1535,7 @@ grep -q -F -- "$3" "$clone/$4"
                 self.fail(f"unexpected public source read: {url}")
             return io.BytesIO(json.dumps(value).encode("utf-8"))
 
-        def fake_github(token, endpoint, payload=None):
+        def fake_github(token, endpoint, payload=None, **kwargs):
             if payload is not None:
                 calls["github_writes"].append(endpoint)
             return {"html_url": "https://github.com/Example/other/pull/12#pullrequestreview-1"}
