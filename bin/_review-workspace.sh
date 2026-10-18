@@ -356,10 +356,24 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
 # Review reads REPORT here. A missing normalizer exits 78 whether or not the
 # report is empty. A missing or empty report is otherwise UNKNOWN. A normalize
 # error is this tool being broken: exit 78.
-review_workspace_finish() { # leg rc mode model billing reported degraded
+# $8 is the post-run reader-tool audit sentence. It replaces a result only when
+# this call would otherwise exit 0. Timeout, quota, and no-verdict stay as they are.
+review_workspace_reader_audit() { # audit-kimi|audit-mimo stream-file
+  local kind="${1:-}" stream="${2:-}" helper out rc=0
+  helper="$REVIEW_WORKSPACE_BIN/_reader_tools.py"
+  [[ -f "$helper" ]] || { printf '%s\n' '少了 _reader_tools.py ⇒ 拒绝派发'; return 78; }
+  out="$(python3 "$helper" "$kind" "$stream" 2>&1)" || rc=$?
+  printf '%s\n' "$out"
+  if [[ "$rc" -eq 0 || "$rc" -eq 1 ]]; then
+    return "$rc"
+  fi
+  return 78
+}
+review_workspace_finish() { # leg rc mode model billing reported degraded [audit-message]
   local leg="${1:-}" rc="${2:-0}" mode="${3:-}" model="${4:-}"
   [[ -n "$leg" ]] || { review_workspace__say 'finish 缺腿名'; exit 78; }
   local billing="${5:-subscription}" reported="${6:-}" degraded="${7:-}"
+  local audit_msg="${8:-}"
   local verdict=""
   if [[ "$mode" == review ]]; then
     local helper
@@ -401,6 +415,12 @@ review_workspace_finish() { # leg rc mode model billing reported degraded
   fi
   if [[ "$mode" == explore ]]; then
     if [[ -f "${REPORT:-}" ]] && grep -q '[^[:space:]]' -- "$REPORT"; then
+      if [[ -n "$audit_msg" ]]; then
+        printf '%s: %s\n' "$leg" "$audit_msg" >&2
+        review_workspace_write_facts "$model" "$model" "$billing" \
+          exited partial readonly_tools "" "$degraded" "$reported" || exit 78
+        exit 1
+      fi
       review_workspace_write_facts "$model" "$model" "$billing" \
         exited complete "" "" "$degraded" "$reported" || exit 78
       exit 0
@@ -415,6 +435,12 @@ review_workspace_finish() { # leg rc mode model billing reported degraded
       exited partial no_verdict UNKNOWN "$degraded" "$reported" || exit 78
     printf '%s: model returned no verdict (expected '\''Conclusion: PASS|BLOCK|NEEDS_MORE_INFO'\''; log: %s)\n' \
       "$leg" "$LOG_FILE" >&2
+    exit 1
+  fi
+  if [[ -n "$audit_msg" ]]; then
+    printf '%s: %s\n' "$leg" "$audit_msg" >&2
+    review_workspace_write_facts "$model" "$model" "$billing" \
+      exited partial readonly_tools "$verdict" "$degraded" "$reported" || exit 78
     exit 1
   fi
   review_workspace_write_facts "$model" "$model" "$billing" \

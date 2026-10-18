@@ -319,7 +319,7 @@ class ReliabilityTests(unittest.TestCase):
 
     def test_other_reader_failures_are_never_retried(self):
         for failure in ('auth', 'quota', 'rate_limit', 'timeout', 'runtime',
-                        'identity_mismatch', 'snapshot', 'unknown'):
+                        'identity_mismatch', 'snapshot', 'unknown', 'readonly_tools'):
             with self.subTest(failure=failure):
                 rc, _, posted, _, stderr = self.run_review('subcursor', fake_attempts=[
                     {'failure': failure, 'exit': 1}])

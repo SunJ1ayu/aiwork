@@ -78,7 +78,7 @@ def failure_reason(result: dict, stderr_text: str) -> str | None:
         reason = kind
     else:
         reason = f"process {process['state']} {process['exit_code']}"
-    if kind in {"runtime", "unknown", "none"} and stderr_text.strip():
+    if kind in {"runtime", "unknown", "none", "readonly_tools"} and stderr_text.strip():
         tail = "\n".join(redact(stderr_text).splitlines()[-8:])
         reason = f"{reason}: {tail}"
     return reason

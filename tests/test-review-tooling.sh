@@ -319,7 +319,7 @@ v13_subkimi_leg() {
   fi
 
   # --- subkimi wrapper against a stub kimi + fixture review home
-  cp "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
@@ -511,7 +511,7 @@ v33_submimo_review_leg_is_read_only() {
   echo "[V33] submimo 仅保留读文件工具,fix 被拒绝"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
-  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$b/"
+  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   printf '# t\n' > "$d/t.md"
   local repo="$d/repo"; mkdir -p "$repo"
@@ -680,13 +680,14 @@ sys.exit(0 if o.get('XDG_CONFIG_HOME')==os.environ['WANT'] else 1)" "$d/c_review
     bad "V33: 原子写不许留下 tmp 残留(留了说明 replace 那步没走到)"
   fi
   # 字面断言:必须 tmp + os.replace,不许把 open(...,"w") 直接喂给 json.dump。
-  python3 - "$BIN/submimo" <<'PYATOM'
+  # 写入在 _reader_tools.py:配置和跑完核对共用那一份,submimo 不再内联第二份。
+  python3 - "$BIN/submimo" "$BIN/_reader_tools.py" <<'PYATOM'
 import re, sys
-src = open(sys.argv[1]).read()
-direct = re.search(r'json\.dump\([^)]*open\(', src)
-atomic = 'os.replace(' in src
-per_process = 'os.getpid()' in src
-sys.exit(0 if (atomic and per_process and not direct) else 1)
+wrapper, writer = (open(p).read() for p in sys.argv[1:])
+direct = re.search(r'json\.dump\([^)]*open\(', wrapper) or re.search(r'json\.dump\([^)]*open\(', writer)
+atomic = 'os.replace(' in writer and 'os.getpid()' in writer
+calls = 'mimo-config' in wrapper
+sys.exit(0 if (atomic and calls and not direct) else 1)
 PYATOM
   check "V33: 配置走每进程唯一 tmp + os.replace 原子落盘" $?
 
@@ -857,7 +858,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
@@ -1053,7 +1054,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -1612,7 +1613,7 @@ v46_final_report_is_the_last_message() {
   printf '# t\n' > "$d/t.md"
   cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
     "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" \
-    "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/ro-repo-exec" "$b/"
+    "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/ro-repo-exec" "$b/"
   printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
@@ -1678,6 +1679,8 @@ PY
   # 样本从本机真实 kimi --output-format stream-json 日志裁出：meta / assistant /
   # tool，工具调用号换成占位符，正文缩短。这次运行停在工具调用前，最后一条
   # 助手消息补上评审契约要求的结论行，用来区分报告和更早的 Conclusion: BLOCK。
+  # 工具名从那份日志里的 Bash 改成 Read。这条判据要的是成功运行的最后一条消息；
+  # Bash 现在是跑完核实的失败，不能再当成功样本。失败样本在 test_reader_tool_audit.py。
   printf '%s' $'做最后的语法检查和一次差异总览。\n\nConclusion: PASS\n' > "$d/kimi-want.txt"
   env PATH="$b:$PATH" KIMI_STREAM_FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/kimi-stream.jsonl" \
     KIMI_REVIEW_HOME="$rh" \
@@ -1699,6 +1702,7 @@ PY
   # 样本从真实 mimo run --format json 日志裁出：几条 step_start / tool_use / text /
   # step_finish，会话号换成占位符，正文缩短。最后一条消息的 text 部分先出现一次
   # 旧快照，再用同 part.id 的后一次内容和后一个 part 拼成报告。
+  # 工具名从那份日志里的 bash 改成 read，原因和上面的 Kimi 样本一样。
   printf '%s' $'Shared fixture checked.\n\nConclusion: PASS' > "$d/mimo-want.txt"
   env PATH="$b:$PATH" MIMO_JSON_FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/mimo-run-json.jsonl" \
     MIMO_REVIEW_HOME="$d/mimo-home" \
