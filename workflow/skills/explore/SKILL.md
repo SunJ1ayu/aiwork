@@ -7,7 +7,7 @@ description: 让几条腿各自对同一份题面提方案。
 
 评审与修复规则见 [REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md)。
 这里只说明 `explore` 怎么用。方案不发到 GitHub，也不自动比较或挑选。
-派单前何时用它、方案交给谁决定，见 `workflow/skills/delegate/SKILL.md`「写单前」。
+派单前何时用它、方案交给谁决定，见 `delegate` skill「写单前」。
 
 ## 用法
 
