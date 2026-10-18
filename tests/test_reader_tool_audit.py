@@ -31,12 +31,59 @@ KIMI_WRITE = textwrap.dedent("""\
     {"role":"assistant","content":"Conclusion: PASS\\n"}
     """)
 
+# Same flushAssistant shape as KIMI_TOOL_ONLY, with a tool outside the list.
+KIMI_WRITE_TOOL_ONLY = (
+    '{"role":"assistant","tool_calls":[{"type":"function","id":"tool_write",'
+    '"function":{"name":"Write","arguments":"{}"}}]}\n'
+    '{"role":"tool","tool_call_id":"tool_write","content":"permission denied"}\n'
+    '{"role":"assistant","content":"Conclusion: PASS\\n"}\n'
+)
+
 KIMI_READ = textwrap.dedent("""\
     {"role":"meta","type":"system.version","version":"0.36.1"}
     {"role":"assistant","content":"","tool_calls":[{"type":"function","id":"tool_read","function":{"name":"Read","arguments":"{}"}}]}
     {"role":"tool","tool_call_id":"tool_read","content":"file"}
     {"role":"assistant","content":"Conclusion: PASS\\n"}
     """)
+
+# kimi-code 0.36.1 dist/main.mjs PromptJsonWriter.flushAssistant:
+# content is assistantText when it is non-empty, otherwise void 0.
+# JSON.stringify omits undefined, so a tool-only turn has no content key.
+# The tool_calls object is writeToolCall: type, id, function.name, function.arguments.
+KIMI_TOOL_ONLY = (
+    '{"role":"meta","type":"system.version","version":"0.36.1"}\n'
+    '{"role":"assistant","tool_calls":[{"type":"function","id":"tool_read",'
+    '"function":{"name":"Read","arguments":"{}"}}]}\n'
+    '{"role":"tool","tool_call_id":"tool_read","content":"file"}\n'
+    '{"role":"assistant","content":"Conclusion: PASS\\n"}\n'
+)
+
+# Same writer, writeToolResult: stringifyToolOutput returns a string unchanged,
+# then writeJsonLine does JSON.stringify(message) + "\\n". Node 22 leaves U+2028
+# inside that string (checked against the installed CLI on 2026-10-19). U+2029
+# and U+0085 are the other separators splitlines() breaks that JSON allows
+# unescaped. The assistant turn keeps "content":"" so this sample fails only
+# because the tool-result record is split.
+def kimi_line_separator(separator):
+    return (
+        '{"role":"meta","type":"system.version","version":"0.36.1"}\n'
+        '{"role":"assistant","content":"","tool_calls":[{"type":"function","id":"tool_read",'
+        '"function":{"name":"Read","arguments":"{}"}}]}\n'
+        '{"role":"tool","tool_call_id":"tool_read","content":"a' + separator + 'b"}\n'
+        '{"role":"assistant","content":"Conclusion: PASS\\n"}\n'
+    )
+
+
+KIMI_BAD_CONTENT = (
+    '{"role":"assistant","content":["not a string"],"tool_calls":[{"type":"function",'
+    '"id":"tool_read","function":{"name":"Read","arguments":"{}"}}]}\n'
+    '{"role":"assistant","content":"Conclusion: PASS\\n"}\n'
+)
+
+KIMI_NOT_JSON = (
+    '{"role":"assistant","content":"Conclusion: PASS\\n"}\n'
+    'not json\n'
+)
 
 KIMI_UNKNOWN = textwrap.dedent("""\
     {"role":"assistant","content":"Conclusion: PASS\\n"}
@@ -183,20 +230,22 @@ class ReaderToolAuditTests(unittest.TestCase):
         return json.loads(out.read_text(encoding="utf-8"))
 
     def test_kimi_write_tool_is_not_a_successful_review(self):
-        result, _body, facts, _log, slot = self._run_leg("subkimi", KIMI_WRITE)
-        self.assertNotEqual(result.returncode, 0, result.stderr)
-        self.assertIn("只读清单以外的工具", result.stderr)
-        self.assertIn("Write", result.stderr)
-        self.assertNotIn("no verdict", result.stderr)
-        self.assertEqual(facts["failure_kind"], "readonly_tools")
-        self.assertEqual(facts["verdict"], "PASS")
-        emitted = self._emit(
-            "subkimi", "moonshot", result, slot / "facts.json",
-            slot / "report.md", slot / "leg.log")
-        review = _load("review-pr")
-        with self.assertRaises(review.ReviewError) as caught:
-            review.publishable_model(emitted)
-        self.assertEqual(str(caught.exception), "review leg failed: readonly_tools; verdict=PASS")
+        for stream in (KIMI_WRITE, KIMI_WRITE_TOOL_ONLY):
+            result, _body, facts, _log, slot = self._run_leg("subkimi", stream)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("只读清单以外的工具", result.stderr)
+            self.assertIn("Write", result.stderr)
+            self.assertNotIn("看不出这次调用了哪些工具", result.stderr)
+            self.assertNotIn("no verdict", result.stderr)
+            self.assertEqual(facts["failure_kind"], "readonly_tools")
+            self.assertEqual(facts["verdict"], "PASS")
+            emitted = self._emit(
+                "subkimi", "moonshot", result, slot / "facts.json",
+                slot / "report.md", slot / "leg.log")
+            review = _load("review-pr")
+            with self.assertRaises(review.ReviewError) as caught:
+                review.publishable_model(emitted)
+            self.assertEqual(str(caught.exception), "review leg failed: readonly_tools; verdict=PASS")
 
     def test_mimo_bash_is_not_a_successful_review(self):
         result, _body, facts, _log, slot = self._run_leg("submimo", MIMO_BASH)
@@ -247,6 +296,35 @@ class ReaderToolAuditTests(unittest.TestCase):
                 self.assertIsNone(facts["failure_kind"])
                 self.assertEqual(facts["verdict"], "PASS")
                 self.assertIn(f"核实工具: {listed}", logged)
+
+    def test_kimi_tool_only_turn_is_a_successful_review(self):
+        result, body, facts, logged, _slot = self._run_leg("subkimi", KIMI_TOOL_ONLY)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("看不出这次调用了哪些工具", result.stderr)
+        self.assertIn("Conclusion: PASS", body)
+        self.assertIsNone(facts["failure_kind"])
+        self.assertEqual(facts["verdict"], "PASS")
+        self.assertIn("核实工具: Read", logged)
+
+    def test_line_separator_inside_tool_result_stays_one_record(self):
+        for separator in ("\u2028", "\u2029", "\u0085"):
+            with self.subTest(separator=hex(ord(separator))):
+                result, body, facts, logged, _slot = self._run_leg(
+                    "subkimi", kimi_line_separator(separator))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("看不出这次调用了哪些工具", result.stderr)
+                self.assertIn("Conclusion: PASS", body)
+                self.assertIsNone(facts["failure_kind"])
+                self.assertEqual(facts["verdict"], "PASS")
+                self.assertIn("核实工具: Read", logged)
+
+    def test_unknown_shape_still_fails(self):
+        for stream in (KIMI_BAD_CONTENT, KIMI_NOT_JSON):
+            with self.subTest(stream=stream.split("\n", 1)[0][:40]):
+                result, _body, facts, _log, _slot = self._run_leg("subkimi", stream)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn("看不出这次调用了哪些工具", result.stderr)
+                self.assertEqual(facts["failure_kind"], "readonly_tools")
 
     def test_existing_failure_is_not_replaced(self):
         limited, _body, facts, _log, _slot = self._run_leg("subkimi", KIMI_LIMIT, exit_code=124)

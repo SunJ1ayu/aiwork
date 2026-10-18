@@ -40,8 +40,8 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 仓库里的这些命令服务 `review-pr`。同一个 PR 要换一家评审，由关卡判断。
 
 - `bin/subdeepseek-agent` — DeepSeek，经 Claude Code headless 读仓库。模型来自 `~/.config/aiwork/models.env` 的 deepseek 行。
-- `bin/subkimi` — Kimi，kimi-code CLI。review、explore 的只读工具只写在 `bin/_reader_tools.py`：agent profile 用这份清单，跑完也用它核对流里的工具调用。清单以外的工具（含被 CLI 拒掉的尝试），或者输出里看不出用了哪些工具，这次结果失败，不发评审，不重试。hook 仍在派发前拒一次。任务复制进快照，由 Read 读取，正文不进命令行参数。模型来自 kimi 行。
-- `bin/submimo <review|explore>` — MiMo，官方 `mimo` CLI。review、explore 的只读工具和 `subkimi` 共用 `bin/_reader_tools.py` 这一处来源（两家名字不同，各用自己的那张表）。CLI 配置按这张表关掉命令工具，跑完按同一张表核对。对不上，或者输出里看不出用了哪些工具，这次结果失败，不发评审，不重试。模型来自 mimo 行。
+- `bin/subkimi` — Kimi，kimi-code CLI。review、explore 的 agent profile 和跑完核对读 `bin/_reader_tools.py`。派发前的 hook 是 `kimi-review-home/hooks/guard.mjs`，放行名单是另一份。清单以外的工具（含被 CLI 拒掉的尝试），或者输出里看不出用了哪些工具，只在这次本来会成功时记成 `readonly_tools`：不发评审，这个失败原因不重试。没有结论的那次仍是 `no_verdict`，会重试一次。任务复制进快照，由 Read 读取，正文不进命令行参数。模型来自 kimi 行。
+- `bin/submimo <review|explore>` — MiMo，官方 `mimo` CLI。review、explore 的 CLI 配置和跑完核对跟 `subkimi` 一样读 `bin/_reader_tools.py`（两家名字不同，各用自己的那张表）。对不上，或者输出里看不出用了哪些工具，只在这次本来会成功时记成 `readonly_tools`：不发评审，这个失败原因不重试。没有结论的那次仍是 `no_verdict`，会重试一次。模型来自 mimo 行。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。源仓经 `ro-repo-exec` 只读，副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。

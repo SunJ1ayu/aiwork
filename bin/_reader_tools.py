@@ -95,9 +95,14 @@ def write_mimo_config(path: Path, agent: str) -> None:
 
 
 def _events(text):
-    """Known-or-not is decided by the caller. None means a line is not a JSON object."""
+    """JSON objects, one per newline. None means a line is not a JSON object.
+
+    Records end with ``\\n``. ``splitlines()`` also splits on U+2028, U+2029,
+    and U+0085, which kimi-code's ``JSON.stringify`` leaves inside a tool
+    result string.
+    """
     events = []
-    for raw in text.splitlines():
+    for raw in text.split("\n"):
         line = raw.strip()
         if not line:
             continue
@@ -123,7 +128,11 @@ def audit_kimi(text):
             return None
         if role != "assistant":
             continue
-        if not isinstance(event.get("content"), str):
+        # flushAssistant omits content when the turn is only tool calls:
+        # the value is undefined, and JSON.stringify drops the key.
+        if "content" in event and not isinstance(event["content"], str):
+            return None
+        if "content" not in event and "tool_calls" not in event:
             return None
         if "tool_calls" not in event:
             continue
