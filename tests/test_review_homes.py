@@ -173,18 +173,20 @@ class ReviewHomes(unittest.TestCase):
                 with self.subTest(leg=leg, case=case):
                     result = self.run_leg(leg, case)
                     capture = Path(self.env['HOME_CAPTURE'])
-                    self.assertTrue(capture.exists(), f'{leg}: CLI stub never ran: {result.stderr}')
-                    self.assertEqual(result.returncode, rc, result.stderr)
-                    record = json.loads(capture.read_text())
-                    workspace = Path(record['workspace'])
-                    self.assertFalse(workspace.exists())
-                    if record['cli'] == 'codex':
-                        self.assertTrue(record['ephemeral'])
-                        self.assertIsNone(record['runtime'])
-                    else:
-                        self.assertEqual(Path(record['runtime']).parent, workspace)
-                        self.assertEqual(record['mode'], 0o700)
-                    self.assert_clean()
+                    with self.subTest(actual_rc=result.returncode, cli_started=capture.exists(),
+                                      diagnostic=result.stderr[-800:]):
+                        self.assertTrue(capture.exists(), f'{leg}: CLI stub never ran: {result.stderr}')
+                        self.assertEqual(result.returncode, rc, result.stderr)
+                        record = json.loads(capture.read_text())
+                        workspace = Path(record['workspace'])
+                        self.assertFalse(workspace.exists())
+                        if record['cli'] == 'codex':
+                            self.assertTrue(record['ephemeral'])
+                            self.assertIsNone(record['runtime'])
+                        else:
+                            self.assertEqual(Path(record['runtime']).parent, workspace)
+                            self.assertEqual(record['mode'], 0o700)
+                        self.assert_clean()
 
     def test_kimi_renders_only_seed_and_links_cli_credentials_each_run(self):
         homes = []
