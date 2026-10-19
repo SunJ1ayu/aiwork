@@ -72,7 +72,8 @@ class ReliabilityTests(unittest.TestCase):
         return f'http://127.0.0.1:{server.server_port}', payloads
 
     def run_review(self, leg='subdeepseek-agent', *, responses=None, env=None,
-                   fake_attempts=None, missing_agent=False, files=None, changes=None):
+                   fake_attempts=None, missing_agent=False, files=None, changes=None,
+                   on_leg=None, snapshot_side_effect=None):
         """Run the real publisher, leg, chat engine and result producer offline."""
         default_response = [
             {'choices': [{'message': {'content': 'Checked file.\nConclusion: PASS'},
@@ -102,6 +103,8 @@ class ReliabilityTests(unittest.TestCase):
 
         def invoke(command, **kwargs):
             is_leg = Path(command[0]).parent == bin_dir and Path(command[0]).name.startswith('sub')
+            if is_leg and on_leg is not None:
+                on_leg(len(self.leg_calls), Path(command[2]), Path(command[4]))
             if is_leg:
                 self.leg_calls.append((Path(command[0]).name, kwargs['env'].copy()))
                 self.seen_tasks.append(Path(command[2]).read_text(encoding='utf-8'))
@@ -147,15 +150,21 @@ class ReliabilityTests(unittest.TestCase):
                      AIWORK_DATA_DIR=str(self.directory / 'data'))
         clean.update(env or {})
         Path(clean['AIWORK_DATA_DIR']).mkdir(parents=True, exist_ok=True)
+        if snapshot_side_effect is None:
+            snapshot_return = (
+                self.repo, self.base, files or ['file'], self.diff,
+                changes if changes is not None else [
+                    self.review.Change('M', (files or ['file'])[0], None, 1, 0)])
+
+            def snapshot_side_effect(*_args, **_kwargs):
+                return snapshot_return
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch.dict(os.environ, clean, clear=True), \
                 patch('sys.argv', ['review-pr', '1', '--repo', 'example/repo', '--leg', leg]), \
                 patch.object(sys.modules['_leg_session'], 'run', side_effect=run), \
                 patch.object(self.review, 'pr_state', return_value=pr), \
-                patch.object(sys.modules['_leg_session'], 'snapshot', return_value=(
-                    self.repo, self.base, files or ['file'], self.diff,
-                    changes if changes is not None else [
-                        self.review.Change('M', (files or ['file'])[0], None, 1, 0)])), \
+                patch.object(sys.modules['_leg_session'], 'snapshot',
+                             side_effect=snapshot_side_effect), \
                 patch.object(self.review, 'aiwork_main_rules', return_value=('d' * 40, 'Trusted rules.')), \
                 patch.object(self.review, 'main_document', side_effect=lambda repo, path, **kwargs:
                              json.dumps(CI_POLICY) if path == '.aiwork/policy.json' else '无'), \
@@ -281,6 +290,141 @@ class ReliabilityTests(unittest.TestCase):
         body = posted[0]['body']
         self.assertLess(body.index('**Execution:**'), body.index('Conclusion: PASS'))
         self.assertNotIn('**Execution:**', body.split('Conclusion: PASS', 1)[1].split('```json', 1)[0])
+
+    def test_retry_second_leg_does_not_see_what_the_first_leg_wrote(self):
+        for failure in ('no_verdict', 'output_truncated'):
+            with self.subTest(failure=failure):
+                seen = []
+
+                def side_effect(token, pr, directory, *, repository):
+                    repo = Path(directory) / 'repo'
+                    repo.mkdir()
+                    return (repo, self.base, ['file'], self.diff, [
+                        self.review.Change('M', 'file', None, 1, 0)])
+
+                def on_leg(index, task, repo):
+                    seen.append({
+                        'repo': repo,
+                        'task_path': task,
+                        'task': task.read_text(encoding='utf-8'),
+                        'marker': (repo / 'leg-marker').is_file(),
+                    })
+                    if index == 0:
+                        (repo / 'leg-marker').write_text('touched-by-first-leg\n')
+                        task.write_text(
+                            task.read_text(encoding='utf-8') + '\nLEG_TOUCHED_MARKER\n',
+                            encoding='utf-8')
+
+                rc, _, posted, _, stderr = self.run_review(
+                    'subcursor',
+                    fake_attempts=[
+                        {'report': 'No conclusion.', 'failure': failure, 'exit': 1},
+                        {},
+                    ],
+                    snapshot_side_effect=side_effect,
+                    on_leg=on_leg,
+                )
+                self.assertFalse(
+                    seen[1]['marker'],
+                    'second leg still sees the marker the first leg wrote into its snapshot')
+                self.assertNotIn('LEG_TOUCHED_MARKER', seen[1]['task'])
+                self.assertEqual(seen[0]['task'], seen[1]['task'])
+                self.assertNotEqual(seen[0]['repo'], seen[1]['repo'])
+                self.assertNotEqual(seen[0]['task_path'], seen[1]['task_path'])
+                self.assertEqual((rc, len(posted), len(seen)), (0, 1, 2), stderr)
+
+    def test_retry_second_snapshot_keeps_the_full_diff_file(self):
+        payload = 'RETRY_DIFF_PAYLOAD_9f3c\n'
+        diff = payload * ((self.review.READER_INLINE_DIFF_BYTES // len(payload)) + 2)
+        self.assertGreater(len(diff.encode()), self.review.READER_INLINE_DIFF_BYTES)
+        change = self.review.Change('M', 'file', None, 1, 0)
+        seen = []
+
+        def side_effect(token, pr, directory, *, repository):
+            repo = Path(directory) / 'repo'
+            repo.mkdir()
+            subprocess.check_call(['git', 'init', '-q', str(repo)])
+            return (repo, self.base, ['file'], diff, [change])
+
+        def on_leg(index, task, repo):
+            diff_path = repo / self.review.REVIEW_DIFF_PATH
+            seen.append({
+                'repo': repo,
+                'task': task.read_text(encoding='utf-8'),
+                'diff': diff_path.read_bytes() if diff_path.is_file() else None,
+            })
+            if index == 0:
+                diff_path.write_bytes(b'truncated-by-leg\n')
+
+        rc, _, posted, _, stderr = self.run_review(
+            'subcursor',
+            fake_attempts=[
+                {'report': 'No conclusion.', 'failure': 'no_verdict', 'exit': 1},
+                {},
+            ],
+            snapshot_side_effect=side_effect,
+            on_leg=on_leg,
+        )
+        self.assertEqual(seen[1]['diff'], diff.encode(),
+                         'second leg does not see the full snapshot diff file')
+        self.assertNotIn(payload.strip(), seen[1]['task'])
+        self.assertIn(self.review.REVIEW_DIFF_PATH, seen[1]['task'])
+        self.assertEqual(seen[0]['task'], seen[1]['task'])
+        self.assertNotEqual(seen[0]['repo'], seen[1]['repo'])
+        self.assertEqual((rc, len(posted), len(seen)), (0, 1, 2), stderr)
+
+    def test_retry_is_refused_when_the_fresh_view_cannot_be_rebuilt(self):
+        calls = {'n': 0}
+
+        def side_effect(token, pr, directory, *, repository):
+            calls['n'] += 1
+            if calls['n'] > 1:
+                raise self.review.ReviewError('fetch failed: simulated')
+            repo = Path(directory) / 'repo'
+            repo.mkdir()
+            return (repo, self.base, ['file'], self.diff, [
+                self.review.Change('M', 'file', None, 1, 0)])
+
+        rc, _, posted, _, stderr = self.run_review(
+            'subcursor',
+            fake_attempts=[
+                {'report': 'No conclusion.', 'failure': 'no_verdict', 'exit': 1},
+                {},
+            ],
+            snapshot_side_effect=side_effect,
+        )
+        self.assertEqual(rc, 1, stderr)
+        self.assertEqual(posted, [])
+        self.assertEqual(len(self.leg_calls), 1)
+        self.assertIn('retry refused after no_verdict', stderr)
+        self.assertIn('fetch failed: simulated', stderr)
+        self.assertNotIn('retry 2/2', stderr)
+
+    def test_retry_is_refused_when_the_rebuilt_snapshot_does_not_match(self):
+        calls = {'n': 0}
+
+        def side_effect(token, pr, directory, *, repository):
+            calls['n'] += 1
+            repo = Path(directory) / 'repo'
+            repo.mkdir()
+            diff = self.diff if calls['n'] == 1 else self.diff + '\nnot-the-same\n'
+            return (repo, self.base, ['file'], diff, [
+                self.review.Change('M', 'file', None, 1, 0)])
+
+        rc, _, posted, _, stderr = self.run_review(
+            'subcursor',
+            fake_attempts=[
+                {'report': 'No conclusion.', 'failure': 'no_verdict', 'exit': 1},
+                {},
+            ],
+            snapshot_side_effect=side_effect,
+        )
+        self.assertEqual(rc, 1, stderr)
+        self.assertEqual(posted, [])
+        self.assertEqual(len(self.leg_calls), 1)
+        self.assertIn('retry refused after no_verdict', stderr)
+        self.assertIn('does not match', stderr)
+        self.assertIn('diff', stderr)
 
     def test_missing_report_file_is_not_published(self):
         rc, _, posted, _, stderr = self.run_review('subkimi', fake_attempts=[{'write_report': False}])
