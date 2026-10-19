@@ -3,6 +3,9 @@ set -euo pipefail
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
+. "$BIN_DIR/_review-platform.sh" || exit 78
+review_platform_check subkimi || exit 78
+
 # Kimi reviews/explores with a CLI agent profile containing only file readers.
 # The PreToolUse hook is a second layer; preflight failures refuse dispatch.
 # Runtime state lives in a disposable home outside the source repository.
@@ -75,10 +78,9 @@ fi
 MODEL="$("$BIN_DIR/aiwork-config" model kimi "${KIMI_MODEL:-}")" || exit 1
 "$BIN_DIR/aiwork-config" family subkimi "$MODEL" >/dev/null || die 'model must be one kimi-code/<model-id>'
 
-# Source repository protection remains independent of the CLI tool allowlist.
-[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发（不在可写的仓里跑评审腿）\n' "$(basename "$0")" "$BIN_DIR/ro-repo-exec" >&2; exit 78; }
+# Platform source protection is separate from the CLI tool allowlist.
+review_platform_reader_exec "$SOURCE_REPO" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
-RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 
 if [[ "$MODE" == "fix" ]]; then
@@ -115,7 +117,7 @@ trap _subkimi_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 SOURCE_REPO="$REVIEW_SOURCE_REPO"
-RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+review_platform_reader_exec "$SOURCE_REPO" || exit 78
 REPO_DIR="$(review_workspace_repo)" || exit 78
 REVIEW_HOME="${KIMI_REVIEW_HOME:-$(review_workspace_home kimi-home)}" || exit 78
 # 先检查位置，再同步种子。
@@ -222,7 +224,7 @@ STREAM="${LOG_FILE}.stream.jsonl"
   cd "$REPO_DIR"
   KIMI_CODE_HOME="$REVIEW_HOME" \
   KIMI_CODE_NO_AUTO_UPDATE=1 \
-    "${RO_EXEC[@]}" "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" kimi --agent-file "$AGENT_FILE" --output-format stream-json -m "$MODEL" -p "$PROMPT"
+    ${RO_EXEC[@]+"${RO_EXEC[@]}"} "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" kimi --agent-file "$AGENT_FILE" --output-format stream-json -m "$MODEL" -p "$PROMPT"
 ) > "$STREAM" 2>>"$LOG_FILE" || RC=$?
 if [[ -s "$STREAM" ]]; then cat "$STREAM" >> "$LOG_FILE"; fi
 python3 - "$STREAM" "$REPORT" <<'PY'

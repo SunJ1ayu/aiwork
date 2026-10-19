@@ -15,6 +15,7 @@ export PATH="$_MIMO_FLOOR:$PATH"
 # 写死路径会让判据仍去测主仓的文件 = 改了也永远红(2026-08-01 派活前发现)。
 # 可用 TEST_REVIEW_BIN 覆盖。
 BIN="${TEST_REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
+. "$BIN/_review-platform.sh" || exit 78
 
 # Fake credentials are generated at runtime, never stored as literal values.
 FIXTURE_CHAT_KEY="$(printf '\170')"
@@ -77,7 +78,7 @@ v9_claude_shell_base() {
   # 这一组问的是**claude 壳这条底座本身**(env 注入、工具白名单、裁决 gate),
   # 它对 deepseek 仍然完全有效,断言一条不删、一条不弱。GLM 那条底座由 V28 问。
   # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
@@ -319,7 +320,7 @@ v13_subkimi_leg() {
   fi
 
   # --- subkimi wrapper against a stub kimi + fixture review home
-  cp "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
+  cp "$BIN/_review-platform.sh" "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
@@ -462,7 +463,7 @@ v21_agent_leg_body_is_single_source() {
 
   local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   fixture_git_repo "$d/repo"
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
+  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"
   cat > "$ab/claude" <<'CAPEOF'
 #!/usr/bin/env python3
@@ -511,7 +512,7 @@ v33_submimo_review_leg_is_read_only() {
   echo "[V33] submimo 仅保留读文件工具,fix 被拒绝"
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
-  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
+  cp "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   printf '# t\n' > "$d/t.md"
   local repo="$d/repo"; mkdir -p "$repo"
@@ -723,9 +724,12 @@ v35_legs_run_in_readonly_repo() {
   # "写仓失败"这类断言会**全部假绿** —— 命令根本没跑,当然写不进去。
   # 11 条里有 6 条这样绿了(2026-08-19 红检当场照出来,我自己看 PASS 数发现的)。
   # ⇒ 前置不满足就把**每一条**都判红,一条都不许留在"看起来绿"的状态。
-  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
-    local why="机器上没有 unshare"
-    [[ -x "$BIN/ro-repo-exec" ]] || why="$BIN/ro-repo-exec 不存在或不可执行"
+  if review_platform_is_macos; then
+    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
+    rm -rf "$d"; return
+  fi
+  if [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    local why="$BIN/ro-repo-exec 不存在或不可执行"
     local t
     for t in "锚 —— ro-repo-exec 确实把命令送进了只读仓" \
              "腿写不了仓内新文件" "\`git diff --output=\` 写不进去" \
@@ -847,18 +851,22 @@ v36_wrappers_actually_use_readonly_repo() {
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
   printf '# t\n' > "$d/t.md"
 
-  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+  if review_platform_is_macos; then
+    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
+    rm -rf "$d"; return
+  fi
+  if [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local t
     for t in "subdeepseek-agent 副本可写/原仓只读" \
              "submimo review 副本可写/原仓只读" \
              "subkimi 副本可写/原仓只读" "submimo fix 拒绝运行且不写原仓" \
              "腿在只读下仍然正常出结论(防线没把腿弄死)"; do
-      bad "V36: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
+      bad "V36: $t(前置不满足:缺 ro-repo-exec)"
     done
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
@@ -1044,17 +1052,21 @@ v37_wrappers_open_no_write_hole() {
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
   printf '# t\n' > "$d/t.md"
 
-  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+  if review_platform_is_macos; then
+    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
+    rm -rf "$d"; return
+  fi
+  if [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local t
     for t in "腿日志不靠写口也写得出" "wrapper 一个 --rw 都不传" \
              "相对日志路径 + cwd=仓根 ⇒ 防线仍然生效" \
              "日志目录不存在 ⇒ wrapper 自己建好并跑起来"; do
-      bad "V37: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
+      bad "V37: $t(前置不满足:缺 ro-repo-exec)"
     done
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -1239,13 +1251,17 @@ v39_readonly_blind_spots() {
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
 
-  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
+  if review_platform_is_macos; then
+    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
+    rm -rf "$d"; return
+  fi
+  if [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local t
     for t in "worktree:工作树写不了" "worktree:git commit 写不进主仓" \
              "worktree:git tag 写不进主仓" "对照组:worktree 的读能力没被削" \
              "挂载没生效 ⇒ 拒跑" "挂载没生效时命令根本没跑" \
              "对照组:挂载真生效时照常跑"; do
-      bad "V39: $t(前置不满足:缺 unshare 或 ro-repo-exec)"
+      bad "V39: $t(前置不满足:缺 ro-repo-exec)"
     done
     rm -rf "$d"; return
   fi
@@ -1531,8 +1547,12 @@ v42_git_common_dir_no_silent_gap() {
   # 这是全工具唯一一处**失败被吞而不是 fail-closed** 的地方,而 fail-closed 正是本单的规格。
   local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
 
-  if ! command -v unshare >/dev/null 2>&1 || [[ ! -x "$BIN/ro-repo-exec" ]]; then
-    bad "V42①: 老 git 下 worktree 共同目录仍然只读(缺 unshare/ro-repo-exec ⇒ 不许静默跳过)"
+  if review_platform_is_macos; then
+    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
+    rm -rf "$d"; return
+  fi
+  if [[ ! -x "$BIN/ro-repo-exec" ]]; then
+    bad "V42①: 老 git 下 worktree 共同目录仍然只读(缺 ro-repo-exec ⇒ 不许静默跳过)"
     bad "V42②: 共同目录拿不到时拒跑(缺件同上)"
     rm -rf "$d"; return
   fi
@@ -1611,7 +1631,7 @@ v46_final_report_is_the_last_message() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
   fixture_git_repo "$d/repo"
   printf '# t\n' > "$d/t.md"
-  cp "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
+  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
     "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" \
     "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/ro-repo-exec" "$b/"
   printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"

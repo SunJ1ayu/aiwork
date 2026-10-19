@@ -14,6 +14,9 @@ set -uo pipefail
 #   · 任务书走 stdin(argv 单参数上限 128KiB,delegate-codex 为此踩过 E2BIG)。
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+
+. "$BIN_DIR/_review-platform.sh" || exit 78
+review_platform_check subcodex || exit 78
 die() { echo "subcodex: $*" >&2; exit 1; }
 usage() {
   cat >&2 <<'EOF'

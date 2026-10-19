@@ -3,6 +3,9 @@ set -euo pipefail
 
 BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 
+. "$BIN_DIR/_review-platform.sh" || exit 78
+review_platform_check submimo || exit 78
+
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
 # 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
@@ -20,8 +23,8 @@ Runs official MiMoCode CLI as a review or explore leg.
 No fix mode. Change code in your own worktree.
 
 Modes:
-  review   Isolated review. Uses a writable disposable snapshot while the
-           source repo stays read-only; only read/glob/grep are available. Uses a
+  review   Isolated review. Uses a writable disposable snapshot;
+           source protection is in bin/_review-platform.sh. Only read/glob/grep are available. Uses a
            self-built `aiwork-review` agent — **NOT** the built-in
            `plan` agent: 2026-08-19 实测它自称 Disallows all edit tools,
            实际 bash/write/edit/task 全开 + 权限 `*` allow。
@@ -68,8 +71,8 @@ REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
 TIMEOUT_SECONDS="${MIMO_CLI_TIMEOUT:-900}"
 
-# review/explore 的保护单位永远是 Git 顶层；调用方即使传进子目录，也不能只把
-# 那个子目录挂只读而把同仓其他路径留成写口。
+# review/explore 总从 Git 顶层取快照；Linux 上的只读保护也以顶层为单位，
+# 不能只护子目录而把同仓其他路径留成写口。
 _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
   || die "review/explore needs a Git worktree with HEAD: $SOURCE_REPO"
 SOURCE_REPO="$(cd "$_SOURCE_TOP" && pwd -P)" || die "cannot resolve source repo: $_SOURCE_TOP"
@@ -88,11 +91,9 @@ if [[ "$MODEL" == xiaomi/* ]]; then
   MIMO_MODEL_CFG="$(printf '{"provider":{"xiaomi":{"models":{"%s":{"name":"%s","reasoning":true,"tool_call":true,"interleaved":{"field":"reasoning_content"},"temperature":true,"limit":{"context":1048576,"output":131072}}}}}}' "${MODEL#xiaomi/}" "${MODEL#xiaomi/}")"
 fi
 
-# Source protection remains independent of the CLI tool configuration.
-RO_EXEC=()
-[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发（不在可写的仓里跑评审腿）\n' "$(basename "$0")" "$BIN_DIR/ro-repo-exec" >&2; exit 78; }
+# Platform source protection is separate from the CLI tool configuration.
+review_platform_reader_exec "$SOURCE_REPO" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
-RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
 
 command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: mimo"
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
@@ -117,7 +118,7 @@ AGENT="$REVIEW_AGENT"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# review 和 explore 都在可写副本里读仓库，调用方给的原仓只读挂载。
+# review 和 explore 都在可写副本里读仓库；源仓保护见 _review-platform.sh。
 REVIEW_WORKSPACE_ACTIVE=0
 CLEANUP_TASK=""
 _RW="$BIN_DIR/_review-workspace.sh"
@@ -144,7 +145,7 @@ trap _submimo_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 SOURCE_REPO="$REVIEW_SOURCE_REPO"
-RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
+review_platform_reader_exec "$SOURCE_REPO" || exit 78
 REPO_DIR="$(review_workspace_repo)" || exit 78
 MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$(review_workspace_home mimo-home)}" || exit 78
 # 运行期 home 不许在被评审的仓里(共享闸)。
