@@ -30,6 +30,7 @@ SUITES=(
   "leg-quick-fixes|python3|$ROOT/tests/test_leg_quick_fixes.py"
   "timeout|python3|$ROOT/tests/test_timeout.py"
   "leg-finish|python3|$ROOT/tests/test_leg_finish.py"
+  "reader-tool-audit|python3|$ROOT/tests/test_reader_tool_audit.py"
   "review-homes|python3|$ROOT/tests/test_review_homes.py"
   "review-tooling|bash|$ROOT/tests/test-review-tooling.sh"
   "subcodex|bash|$ROOT/tests/test-subcodex.sh"

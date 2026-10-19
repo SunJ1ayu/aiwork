@@ -26,7 +26,7 @@ Usage:
   subkimi fix     TASK_FILE LOG_FILE [REPO_DIR]   (unsupported - see notes)
 
 Runs Kimi (Moonshot kimi-code CLI, headless) as an isolated review sub-agent.
-The reviewer reads a disposable snapshot with Read/ReadMediaFile/Glob/Grep.
+The reviewer reads a disposable snapshot with the file readers in bin/_reader_tools.py.
 Shell and write tools are unavailable. Do not claim to have run tests.
 
 Environment:
@@ -178,17 +178,12 @@ for CANARY in Write Bash; do
 done
 
 # --agent-file is the CLI's native tool configuration (both engine versions).
-# An explicit allowlist also excludes future command tools, MCP and sub-agents.
+# The allowlist is bin/_reader_tools.py, the same list the post-run check uses.
 AGENT_FILE="$REVIEW_HOME/aiwork-review.md"
-cat > "$AGENT_FILE" <<'PROFILE' || config_die 'cannot write read-only agent profile'
----
-name: aiwork-review
-description: Read-only repository reviewer
-tools: ["Read", "ReadMediaFile", "Glob", "Grep"]
-subagents: []
----
-Read the task and repository files. Shell and write tools are unavailable. Do not claim to have run tests.
-PROFILE
+python3 "$BIN_DIR/_reader_tools.py" kimi-profile "$AGENT_FILE" \
+  || config_die 'cannot write read-only agent profile'
+READER_TOOLS="$(python3 "$BIN_DIR/_reader_tools.py" kimi-tools)" \
+  || config_die 'cannot read reader tool list'
 
 review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
@@ -204,7 +199,7 @@ _READER_CONTEXT="$BIN_DIR/_review-reader-context.sh"
 review_reader_context "$REPO_DIR" || config_die 'cannot prepare Git context'
 PROMPT="Read the task file \"${TASK_COPY##*/}\" first with Read.
 You are an independent code reviewer reading a disposable repository snapshot ($MODE mode).
-Use Read, ReadMediaFile, Glob, and Grep to verify the task against actual files.
+Use $READER_TOOLS to verify the task against actual files.
 Shell and write tools are unavailable. Do not claim to have run tests.
 Git history and status are in aiwork-git-context.txt. Read aiwork-review.diff when the task refers to it.
 Answer the task in your final message. If context is insufficient, return NEEDS_MORE_INFO with the missing context."
@@ -255,4 +250,17 @@ PY
 if [[ $RC -ne 0 ]]; then
   { grep -a -E '^error: failed to run prompt:' "$LOG_FILE" || true; } | tail -n 3 >&2
 fi
-review_workspace_finish subkimi "$RC" "$MODE" "$MODEL" subscription "" ""
+AUDIT_MSG=""
+if [[ "$RC" -eq 0 ]]; then
+  AUDIT_RC=0
+  AUDIT_OUT="$(review_workspace_reader_audit audit-kimi "$STREAM")" || AUDIT_RC=$?
+  if [[ "$AUDIT_RC" -eq 0 ]]; then
+    printf '核实工具: %s\n' "$AUDIT_OUT" >> "$LOG_FILE"
+  elif [[ "$AUDIT_RC" -eq 1 ]]; then
+    AUDIT_MSG="$AUDIT_OUT"
+  else
+    printf 'subkimi: %s\n' "$AUDIT_OUT" >&2
+    exit 78
+  fi
+fi
+review_workspace_finish subkimi "$RC" "$MODE" "$MODEL" subscription "" "" "$AUDIT_MSG"

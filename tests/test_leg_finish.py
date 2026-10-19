@@ -29,7 +29,7 @@ class LegFinish(unittest.TestCase):
         self.bin.mkdir()
         for name in ("aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
                      "_paths.py",
-                     "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_cursor-stream.py",
+                     "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_reader_tools.py", "_cursor-stream.py",
                      "ro-repo-exec",
                      "subagent", "subkimi", "submimo", "subcodex", "subcursor"):
             shutil.copy(ROOT / "bin" / name, self.bin / name)

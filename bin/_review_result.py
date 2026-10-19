@@ -50,6 +50,7 @@ FAILURE_KINDS = frozenset(
         "identity_mismatch",
         "snapshot",
         "unknown",
+        "readonly_tools",
     }
 )
 BILLING_MODES = frozenset({"subscription", "api", "local"})
