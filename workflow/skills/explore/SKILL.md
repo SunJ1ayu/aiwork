@@ -24,7 +24,7 @@ explore BRIEF --repo DIR --leg subdeepseek-agent --leg submimo
 
 超时没设时，`explore` 给该腿 2400 秒。下面的环境变量若已设置，用那个值。
 
-失败时先看命令打出的那一行原因：`timeout` 是到点，`auth` 是凭证，`quota` / `rate_limit` 是额度或窗口，`runtime` 后面带该腿 stderr 的末尾。没有报告文件时，原因是腿没有交出最后一条消息。只有空白也算没交出。
+失败时先看命令打出的那一行原因：`timeout` 是到点，`auth` 是凭证，`quota` / `rate_limit` 是额度或窗口，`readonly_tools` 是这次调用了只读清单以外的工具，或输出里看不出用了哪些工具，`runtime` 和 `readonly_tools` 后面带该腿 stderr 的末尾。没有报告文件时，原因是腿没有交出最后一条消息。只有空白也算没交出。
 
 - `subdeepseek-agent explore TASK LOG REPO` — Claude Code headless。凭证 `~/.config/aiwork/deepseek.env` 的 `DEEPSEEK_API_KEY`。超时 `DEEPSEEK_TIMEOUT`。
 - `subkimi explore TASK LOG REPO` — `kimi -p`。凭证 `~/.kimi-code/credentials/kimi-code.json`（运行目录见 [README「评审运行目录」](../../../README.md#评审运行目录)）。超时 `KIMI_TIMEOUT`。

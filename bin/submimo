@@ -107,14 +107,13 @@ command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: m
 #     permission: {"*": allow "*"},只有 edit 被 deny
 # ⇒ **自称禁编辑,实际能写新文件、能 spawn 子代理**。和 opencode 内置 plan 档一个病。
 #
-# Use a custom agent containing only read/glob/grep; never rely on command
-# matching or the built-in plan agent. XDG_CONFIG_HOME isolates configuration.
+# Use a custom agent whose tools come from bin/_reader_tools.py; never rely on
+# command matching or the built-in plan agent. XDG_CONFIG_HOME isolates configuration.
 REVIEW_AGENT="aiwork-review"
 # MIMO_REVIEW_HOME 的用法见上方 Environment；覆盖时仍检查数据目录存在。
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 
 AGENT="$REVIEW_AGENT"
-MESSAGE='Read the attached task file first. Review the repository with read, glob, and grep. Shell and write tools are unavailable. Do not claim to have run tests. Git history and status are in aiwork-git-context.txt; read aiwork-review.diff when the task refers to it. Treat the task file as self-contained. Do not read or request paths outside the working directory, spawn sub-agents, or wait for input. Output the complete answer now as plain text. If context is insufficient, output NEEDS_MORE_INFO with the missing context.'
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -153,48 +152,29 @@ review_home_guard mimo "$MIMO_CFG_HOME" "$SOURCE_REPO" MIMO_REVIEW_HOME || exit 
 # 配置**每次重写**:它就是那把锁,不许留隔夜残留(判据查的也是它)。
 umask 077
 mkdir -p "$MIMO_CFG_HOME/mimocode" || { echo "submimo: cannot create config ⇒ 拒绝派发" >&2; exit 78; }
-  python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$REVIEW_AGENT" <<'PYCFG' || { echo "submimo: invalid reader config ⇒ 拒绝派发" >&2; exit 78; }
-import json, os, sys
-cfgpath, agent = sys.argv[1:3]
-# Only file readers are enabled, in both modes.
-# 名字是 `mimo debug agent` 解析出来的全集 —— 关不掉的会在判据里露出来。
-tools = {"write": False, "edit": False, "patch": False, "task": False,
-         "webfetch": False, "websearch": False, "skill": False,
-         "actor": False, "workflow": False, "memory": False,
-         "change_directory": False, "history": False, "plan_exit": False,
-         "question": False, "todowrite": False, "todoread": False, "invalid": False,
-         "bash": False, "read": True, "glob": True, "grep": True}
-perm = {"read": "allow", "glob": "allow", "grep": "allow",
-        "write": "deny", "edit": "deny", "patch": "deny", "task": "deny",
-        "webfetch": "deny", "external_directory": "deny", "bash": "deny"}
-cfg = {"agent": {agent: {"description": "aiwork isolated review leg",
-                         "mode": "primary", "tools": tools, "permission": perm}}}
-# **原子落盘**(2026-08-19,第三轮四审 subkimi 抓到):直接 `open(cfgpath,"w")`
-# 是 truncate 之后逐步写 —— 两个 agent 并发跑 review 时共享同一份配置
-# (当时 MIMO_REVIEW_HOME 没设时都落在 <数据目录>/mimo-review-home,
-#  <数据目录> 用 aiwork-config data-path 查),
-# 另一边可能读到半截 JSON。窗口小,但**失败形态没验过**:mimo 解析不了这份配置
-# 会不会回退到内置 plan 档(写口全开的那个,本单整单就是在推翻它)—— 不去猜它,
-# 直接把窗口关掉。tmp 由上面的 umask 077 保证也是 600,replace 是 POSIX 原子改名。
-tmpath = cfgpath + ".tmp." + str(os.getpid())
-with open(tmpath, "w") as fh:
-    json.dump(cfg, fh, indent=2)
-os.replace(tmpath, cfgpath)
-PYCFG
+  # Tools and permissions come from bin/_reader_tools.py. The same map is
+  # the post-run allowlist. Atomic replace lives in that module: a half-written
+  # config can make mimo fall back to the built-in plan agent (bash and write on).
+  python3 "$BIN_DIR/_reader_tools.py" mimo-config \
+    "$MIMO_CFG_HOME/mimocode/mimocode.json" "$REVIEW_AGENT" \
+    || { echo "submimo: invalid reader config ⇒ 拒绝派发" >&2; exit 78; }
 chmod 600 "$MIMO_CFG_HOME/mimocode/mimocode.json" || exit 78
 # Inline config is loaded after project config; keep the reader lock there too.
 # Otherwise a repository's agent section could turn command tools back on.
-MIMO_CONFIG_CONTENT="$(python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$MIMO_MODEL_CFG" <<'PYMERGE'
+MIMO_CONFIG_CONTENT="$(python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$MIMO_MODEL_CFG" "$BIN_DIR" <<'PYMERGE'
 import json, sys
+sys.path.insert(0, sys.argv[3])
+from _reader_tools import MIMO_PERMISSION, MIMO_TOOLS
 config = json.load(open(sys.argv[1]))
 agent = config["agent"]["aiwork-review"]
-if ({k for k, v in agent["tools"].items() if v} != {"read", "glob", "grep"}
-        or agent["tools"]["bash"] is not False or agent["permission"]["bash"] != "deny"):
+if agent["tools"] != MIMO_TOOLS or agent["permission"] != MIMO_PERMISSION:
     raise ValueError("command tools or missing file readers in review configuration")
 config.update(json.loads(sys.argv[2] or "{}"))
 print(json.dumps(config))
 PYMERGE
 )" || { echo 'submimo: invalid reader config ⇒ 拒绝派发' >&2; exit 78; }
+MESSAGE="$(python3 "$BIN_DIR/_reader_tools.py" mimo-prompt)" \
+  || { echo 'submimo: invalid reader config ⇒ 拒绝派发' >&2; exit 78; }
 _READER_CONTEXT="$BIN_DIR/_review-reader-context.sh"
 [[ -f "$_READER_CONTEXT" ]] || { echo 'submimo: missing reader context helper ⇒ 拒绝派发' >&2; exit 78; }
 . "$_READER_CONTEXT"
@@ -296,5 +276,18 @@ for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
     print(line)
 PY
 fi
-review_workspace_finish submimo "$mimo_rc" "$MODE" "$MODEL" subscription "" ""
+AUDIT_MSG=""
+if [[ "$mimo_rc" -eq 0 ]]; then
+  AUDIT_RC=0
+  AUDIT_OUT="$(review_workspace_reader_audit audit-mimo "$MIMO_RAW")" || AUDIT_RC=$?
+  if [[ "$AUDIT_RC" -eq 0 ]]; then
+    printf '核实工具: %s\n' "$AUDIT_OUT" >> "$LOG_FILE"
+  elif [[ "$AUDIT_RC" -eq 1 ]]; then
+    AUDIT_MSG="$AUDIT_OUT"
+  else
+    printf 'submimo: %s\n' "$AUDIT_OUT" >&2
+    exit 78
+  fi
+fi
+review_workspace_finish submimo "$mimo_rc" "$MODE" "$MODEL" subscription "" "" "$AUDIT_MSG"
 exit "$mimo_rc"
