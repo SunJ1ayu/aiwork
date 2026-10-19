@@ -100,7 +100,7 @@ raise SystemExit(95)
                     self.assertTrue(self.marker.is_file(), result.stderr)
                     args = self.marker.read_text().splitlines()
                     self.assertEqual(args[:2], [str(self.fixture.repo.resolve()), '--'])
-                    self.assertIn(str(self.bin / 'aiwork-timeout'), args)
+                    self.assertIn(str((self.bin / 'aiwork-timeout').resolve()), args)
                     self.assertNotEqual(result.returncode, 0)
 
 
