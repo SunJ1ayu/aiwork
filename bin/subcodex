@@ -4,7 +4,7 @@ set -uo pipefail
 # subcodex —— GPT(codex CLI)评审命令:review / explore。
 #
 # 写代码在自己的工作树里打开 codex。这条仓库里的命令服务 review-pr:
-#   · 源仓经 ro-repo-exec 物理只读;codex 在一份可丢弃副本里读、跑测试;
+#   · Codex 沙箱只许写这次的可丢弃副本;Linux 外层另经 ro-repo-exec 护源仓;
 #   · 模型单源 ~/.config/aiwork/models.env(SUBCODEX_MODEL 单次覆盖);
 #   · -c project_doc_max_bytes=0 每次都带(否则它会吞被评审仓里的 AGENTS.md 并向上递归找);
 #   · --ignore-user-config:不加载业主 ~/.codex/config.toml 里的插件/MCP/profile;
@@ -23,7 +23,8 @@ usage() {
 Usage: subcodex [--dry-run] <review|explore> TASK_FILE LOG_FILE [REPO_DIR]
 
 GPT review leg on the codex CLI. codex reads and tests a disposable snapshot;
-the source repo stays physically read-only. review requires a standalone
+its native sandbox permits writes only in that copy (Linux also mounts the
+source read-only). review requires a standalone
 `Conclusion: PASS|BLOCK|NEEDS_MORE_INFO` line; explore requires a non-empty answer.
 No fix mode. Change code in your own worktree.
 
@@ -67,7 +68,7 @@ TIMEOUT_SECONDS="${SUBCODEX_TIMEOUT:-1500}"
 [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die 'SUBCODEX_TIMEOUT must be a positive integer'
 CODEX="${CODEX_BIN:-codex}"
 command -v "$CODEX" >/dev/null 2>&1 || die "codex CLI not found ($CODEX)"
-[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发（不在可写的仓里跑评审腿）\n' "$(basename "$0")" "$BIN_DIR/ro-repo-exec" >&2; exit 78; }
+review_platform_ro_exec "$SOURCE_REPO" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
 
@@ -85,6 +86,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 REPO_DIR="$(review_workspace_repo)" || exit 78
+CODEX_TMP_DIR="$(mktemp -d "$REPO_DIR/.aiwork-codex-tmp.XXXXXXXX")" || exit 78
 
 # ── 腿身上不许有子 agent、不许联网(2026-09-13 真跑实测后改)───────────────────────
 # 第一版只带 `--disable multi_agent --disable multi_agent_v2`,真跑一次就被证伪:gpt-6-astra 身上
@@ -103,6 +105,12 @@ REPO_DIR="$(review_workspace_repo)" || exit 78
 # 每次 `codex exec` 会往业主 ~/.codex/config.toml 追加一条这个临时副本的 trust 记录。
 CODEX_CFG=(
   -c project_doc_max_bytes=0 -c "model_reasoning_effort=$EFFORT" -c "model=\"$MODEL\""
+  # workspace-write otherwise grants the shared system temp tree, which also
+  # holds publisher results, source snapshots, and concurrent legs' copies.
+  -c 'sandbox_workspace_write.writable_roots=[]'
+  -c sandbox_workspace_write.exclude_slash_tmp=true
+  -c sandbox_workspace_write.exclude_tmpdir_env_var=true
+  -c sandbox_workspace_write.network_access=false
   -c 'web_search="disabled"'
   --disable multi_agent --disable multi_agent_v2
   --disable apps --disable plugins --disable browser_use --disable browser_use_external
@@ -110,7 +118,7 @@ CODEX_CFG=(
   --disable memories --disable hooks
 )
 CATALOG="$REVIEW_WORKSPACE_DIR/model-catalog.json"
-MA_DECLARED="$("$CODEX" debug models 2>/dev/null | python3 -c '
+MA_DECLARED="$( ( cd "$REPO_DIR" && TMPDIR="$CODEX_TMP_DIR" "$CODEX" debug models ) 2>/dev/null | python3 -c '
 import json, sys
 model, out = sys.argv[1], sys.argv[2]
 data = json.load(sys.stdin)
@@ -128,7 +136,7 @@ json.dump(data, open(out, "w", encoding="utf-8"))
 }
 BASELINE="$REVIEW_WORKSPACE_DIR/prompt-baseline.json"
 if [[ "$MA_DECLARED" == declared ]]; then
-  if ! ( cd "$REPO_DIR" && "$CODEX" debug prompt-input "${CODEX_CFG[@]}" probe ) > "$BASELINE" 2>/dev/null \
+  if ! ( cd "$REPO_DIR" && TMPDIR="$CODEX_TMP_DIR" "$CODEX" debug prompt-input "${CODEX_CFG[@]}" probe ) > "$BASELINE" 2>/dev/null \
       || ! grep -q 'multi_agent_role' "$BASELINE"; then
     echo "subcodex: the sub-agent check is blind: the catalog declares multi_agent_version for $MODEL but codex" \
       "no longer renders <multi_agent_role> without the override; re-verify with a live probe (fail closed)" >&2
@@ -137,13 +145,13 @@ if [[ "$MA_DECLARED" == declared ]]; then
 fi
 CODEX_CFG+=(-c "model_catalog_json=\"$CATALOG\"")
 PREVIEW="$REVIEW_WORKSPACE_DIR/prompt-preview.json"
-if ! ( cd "$REPO_DIR" && "$CODEX" debug prompt-input "${CODEX_CFG[@]}" probe ) > "$PREVIEW" 2>/dev/null \
+if ! ( cd "$REPO_DIR" && TMPDIR="$CODEX_TMP_DIR" "$CODEX" debug prompt-input "${CODEX_CFG[@]}" probe ) > "$PREVIEW" 2>/dev/null \
     || [[ ! -s "$PREVIEW" ]] || grep -q 'multi_agent_role' "$PREVIEW"; then
   echo "subcodex: codex would still expose sub-agent tools to $MODEL; refusing (fail closed)" >&2; exit 78
 fi
 
 PROMPT_FILE="$REVIEW_WORKSPACE_DIR/prompt.md"
-LAST_MSG="$REVIEW_WORKSPACE_DIR/last-message.md"
+LAST_MSG="$CODEX_TMP_DIR/last-message.md"
 if [[ "$MODE" == review ]]; then
   cat > "$PROMPT_FILE" <<'EOF'
 You are an independent reviewer working in a disposable writable snapshot of a repository.
@@ -174,7 +182,7 @@ STREAM="$BASE.stream.jsonl"; STDERR_LOG="$BASE.stderr"
   echo "# subcodex $MODE log"
   echo "time: $(date -Iseconds)"
   echo "model: $MODEL (effort: $EFFORT)"
-  echo "repo: $REPO_DIR (snapshot of $SOURCE_REPO, source mounted read-only)"
+  echo "repo: $REPO_DIR (snapshot of $SOURCE_REPO; native sandbox writes only this copy)"
   echo "task: $TASK_FILE"
   echo
 } > "$LOG_FILE"
@@ -182,7 +190,7 @@ review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
 (
   cd "$REPO_DIR" || exit 78
-  "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- "$BIN_DIR/aiwork-timeout" -k 10 "$TIMEOUT_SECONDS" "$CODEX" exec \
+  TMPDIR="$CODEX_TMP_DIR" ${RO_EXEC[@]+"${RO_EXEC[@]}"} "$BIN_DIR/aiwork-timeout" -k 10 "$TIMEOUT_SECONDS" "$CODEX" exec \
     -C "$REPO_DIR" -m "$MODEL" --json -o "$LAST_MSG" \
     --ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check \
     "${CODEX_CFG[@]}" \

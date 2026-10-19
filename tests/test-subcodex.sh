@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# subcodex oracle。codex 是桩,只读挂载 ro-repo-exec 是真的。
+# subcodex oracle。codex 是桩;Linux 的 ro-repo-exec 挂载是真的。
 #
 # 桩只证明「我们递给 codex 的参数长这样、结果被这样收尾」;开关在真 codex 里是否生效,
 # **这份判据证明不了**,要靠真跑(verify.md 里单列)。
@@ -19,6 +19,10 @@ if [[ "${SUBCODEX_ENV_SCRUBBED:-}" != "1" ]]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/bin/_review-platform.sh" || exit 78
+CODEX_TEST_MACOS=0
+review_platform_is_macos && CODEX_TEST_MACOS=1
+export CODEX_TEST_MACOS
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -86,7 +90,11 @@ for a in "$@"; do  # 派发那一刻把目录副本抄走(ws 跑完就清理了)
 done
 pwd -P > "$cap.pwd"
 cat > "$cap.stdin"
-{ if touch "$CODEX_TEST_SOURCE/PWNED" 2>/dev/null; then echo src-writable; else echo src-readonly; fi
+{ if [[ "$CODEX_TEST_MACOS" == 0 ]]; then
+    if touch "$CODEX_TEST_SOURCE/PWNED" 2>/dev/null; then echo src-writable; else echo src-readonly; fi
+  else
+    echo native-sandbox-required
+  fi
   if touch ./clone-write-probe 2>/dev/null; then echo clone-writable; else echo clone-readonly; fi
 } > "$cap.writes"
 out=""; model=""; prev=""
@@ -175,8 +183,16 @@ check "C1: 任务书经 stdin 递给 codex(不走 argv,躲开 128KiB 单参数�
 _pwd="$(cat "$d/cap/c1.pwd" 2>/dev/null)"
 check "C1: codex 的工作目录是 ws 下的可丢弃副本,不是源仓" \
   $([[ -n "$_pwd" && "$_pwd" != "$d/repo" && "$_pwd" == "$(cd "$d/ws" && pwd -P)"/* ]]; echo $?)
-check "C1: 源仓物理只读(桩试写被拒)、副本可写" \
-  $([[ "$(cat "$d/cap/c1.writes" 2>/dev/null)" == $'src-readonly\nclone-writable' && ! -e "$d/repo/PWNED" ]]; echo $?)
+if review_platform_is_macos; then
+  # A CLI stub has no native sandbox; its own host writes cannot stand in for
+  # Codex's tools. The real tool boundary is checked by the installation probe.
+  argv_pair c1 -s workspace-write
+  check "C1: Mac 交给 Codex 自带沙箱、副本可写" \
+    $([[ $? -eq 0 && "$(cat "$d/cap/c1.writes" 2>/dev/null)" == $'native-sandbox-required\nclone-writable' && ! -e "$d/repo/PWNED" ]]; echo $?)
+else
+  check "C1: 源仓物理只读(桩试写被拒)、副本可写" \
+    $([[ "$(cat "$d/cap/c1.writes" 2>/dev/null)" == $'src-readonly\nclone-writable' && ! -e "$d/repo/PWNED" ]]; echo $?)
+fi
 grep -q '^Conclusion: PASS' "$d/c1.log" 2>/dev/null; check "C1: 报告落进 LOG_FILE" $?
 [[ -s "$d/c1.stream.jsonl" ]]; check "C1: 事件流另存 <log 去掉 .log>.stream.jsonl" $?
 facts c1 "f['model']['requested'] == f['model']['invoked'] == '$MODEL' and f['model']['reported'] == '$MODEL' and f['view'] == {'delivery_state':'complete','mode':'full_snapshot'} and f['process_state'] == 'exited' and f['verdict'] == 'PASS'"

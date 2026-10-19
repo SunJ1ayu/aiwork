@@ -92,7 +92,7 @@ if [[ "$MODEL" == xiaomi/* ]]; then
 fi
 
 # Platform source protection is separate from the CLI tool configuration.
-review_platform_reader_exec "$SOURCE_REPO" || exit 78
+review_platform_ro_exec "$SOURCE_REPO" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 
 command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: mimo"
@@ -145,7 +145,7 @@ trap _submimo_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 SOURCE_REPO="$REVIEW_SOURCE_REPO"
-review_platform_reader_exec "$SOURCE_REPO" || exit 78
+review_platform_ro_exec "$SOURCE_REPO" || exit 78
 REPO_DIR="$(review_workspace_repo)" || exit 78
 MIMO_CFG_HOME="${MIMO_REVIEW_HOME:-$(review_workspace_home mimo-home)}" || exit 78
 # 运行期 home 不许在被评审的仓里(共享闸)。
