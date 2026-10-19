@@ -237,7 +237,12 @@ check "C3: 模型正文里的 usage limit 不会被抄到 stderr" \
 facts c4b "f['failure_kind'] is None"
 check "C3: 模型正文不让腿自己写成 quota" $?
 _t0=$(date +%s)
-CODEX_TEST_MODE=sleep SUBCODEX_TIMEOUT=1 sc c5 review "$d/task.md" "$d/c5.log" "$d/repo" >/dev/null 2>&1; rc=$?
+CODEX_TEST_MODE=sleep SUBCODEX_TIMEOUT=1 sc c5 review "$d/task.md" "$d/c5.log" "$d/repo" >/dev/null 2>"$d/c5.err"; rc=$?
+if [[ $rc -ne 124 ]]; then
+  echo "  FAIL detail C3: timeout invocation returned rc=$rc"
+  tail -5 "$d/c5.err" | sed 's/^/  FAIL detail C3 stderr: /'
+  [[ ! -f "$d/c5.stderr" ]] || tail -5 "$d/c5.stderr" | sed 's/^/  FAIL detail C3 CLI: /'
+fi
 check "C3: 超时 ⇒ rc=124 且没有干等 30 秒" $([[ $rc -eq 124 && $(( $(date +%s) - _t0 )) -lt 20 ]]; echo $?)
 facts c5 "f['process_state'] == 'timed_out'"
 check "C3: facts 记 timed_out" $?
