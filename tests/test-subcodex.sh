@@ -262,7 +262,7 @@ check 'C4: explore 设了报告路径时不另写 ${LOG_FILE}.report' \
 printf ' \t\n' > "$d/blank-expect"
 CODEX_TEST_MODE=blank AIWORK_REVIEW_REPORT_PATH="$d/c7d.md" \
   sc c7d explore "$d/task.md" "$d/c7d.log" "$d/repo" >/dev/null 2>"$d/c7d.err"; rc=$?
-want="subcodex: explore produced no final message (log: $d/c7d.log)"
+want="subcodex: explore produced no final message (log: $(python3 "$ROOT/bin/_paths.py" canon -- "$d/c7d.log"))"
 check 'C4: explore 最后一条消息只有空白时失败，句子与其他腿相同' \
   $([[ $rc -eq 1 && "$(cat "$d/c7d.err")" == "$want" ]] && cmp -s "$d/c7d.md" "$d/blank-expect"; echo $?)
 facts c7d "f['process_state']=='exited' and f['evidence_completeness']=='partial' and f['failure_kind'] is None and f['verdict'] is None"
