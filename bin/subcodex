@@ -86,7 +86,10 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 REPO_DIR="$(review_workspace_repo)" || exit 78
-CODEX_TMP_DIR="$(mktemp -d "$REPO_DIR/.aiwork-codex-tmp.XXXXXXXX")" || exit 78
+# CLI files must stay outside the model-writable tree: the CLI and wrapper
+# follow symlinks when writing/reading the final message.
+CODEX_TMP_DIR="$(review_workspace_home codex-tmp)" || exit 78
+COMMAND_TMP_DIR="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$REPO_DIR")" || exit 78
 
 # ── 腿身上不许有子 agent、不许联网(2026-09-13 真跑实测后改)───────────────────────
 # 第一版只带 `--disable multi_agent --disable multi_agent_v2`,真跑一次就被证伪:gpt-6-astra 身上
@@ -111,6 +114,9 @@ CODEX_CFG=(
   -c sandbox_workspace_write.exclude_slash_tmp=true
   -c sandbox_workspace_write.exclude_tmpdir_env_var=true
   -c sandbox_workspace_write.network_access=false
+  # Only model commands inherit this override; CLI scratch stays outside.
+  # Using the copy root also survives commands that run git clean -fd.
+  -c "shell_environment_policy.set.TMPDIR=$COMMAND_TMP_DIR"
   -c 'web_search="disabled"'
   --disable multi_agent --disable multi_agent_v2
   --disable apps --disable plugins --disable browser_use --disable browser_use_external
