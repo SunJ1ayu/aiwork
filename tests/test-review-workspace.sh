@@ -6,6 +6,7 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78
 
 BIN="${TEST_REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
+. "$BIN/_review-platform.sh" || exit 78
 HELPER="${TEST_REVIEW_WORKSPACE_HELPER:-$BIN/_review-workspace.sh}"
 PASS=0; FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -242,7 +243,7 @@ test_wrapper_helper_failure() {
   echo '[RW6] no wrapper invokes a model when workspace preparation fails'
   local d b repo rc mimo_rc deepseek_rc kimi_rc
   d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
-  cp "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
+  cp "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
      "$BIN/subkimi" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
 review_workspace_reset_report() { return 0; }
@@ -293,8 +294,13 @@ MODEL_STUB
   deepseek_rc=$?
   [[ $deepseek_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: Claude-base helper failure is nonzero with zero model calls' $?
-  grep -qx subdeepseek-agent "$d/prepare-mark"
-  check 'RW6: Claude-base reached the stub review_workspace_prepare' $?
+  if review_platform_is_macos; then
+    [[ $deepseek_rc -eq 78 ]] && ! grep -qx subdeepseek-agent "$d/prepare-mark"
+    check 'RW6: Mac Claude-base refuses before review_workspace_prepare' $?
+  else
+    grep -qx subdeepseek-agent "$d/prepare-mark"
+    check 'RW6: Claude-base reached the stub review_workspace_prepare' $?
+  fi
 
   mkdir -p "$d/kimi-home/hooks" "$d/kimi-home/credentials"
   printf '[hooks]\n' > "$d/kimi-home/config.toml"

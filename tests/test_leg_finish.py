@@ -28,7 +28,7 @@ class LegFinish(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for name in ("aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
-                     "_paths.py",
+                     "_paths.py", "_review-platform.sh",
                      "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_reader_tools.py", "_cursor-stream.py",
                      "ro-repo-exec",
                      "subagent", "subkimi", "submimo", "subcodex", "subcursor"):
@@ -292,6 +292,9 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             "exited rc=137 (log: {log})"))
 
     def test_missing_tool_refuses_with_one_message_before_any_cli_runs(self):
+        macos = subprocess.run(
+            ['bash', '-c', '. "$1"; review_platform_is_macos',
+             'bash', str(self.bin / '_review-platform.sh')]).returncode == 0
         marker = self.root / "cli-ran"
         for name in ("claude", "kimi", "mimo", "codex", "cursor-agent"):
             path = self.bin / name
@@ -303,11 +306,16 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             (self.bin / tool).rename(hidden)
             try:
                 for leg in ("subagent", "subkimi", "submimo", "subcodex", "subcursor"):
+                    if macos and tool == 'ro-repo-exec' and leg in ('subkimi', 'submimo'):
+                        continue  # This is no longer a dependency of Mac reader legs.
                     with self.subTest(tool=tool, leg=leg):
                         result = self._run(leg, "review", "pass")
                         self.assertEqual(result.returncode, 78, result.stderr)
-                        self.assertEqual(result.stderr.splitlines()[-1:], [
-                            "%s: 少了 %s/%s ⇒ 拒绝派发%s" % (leg, bindir, tool, reason)])
+                        if macos and leg in ('subagent', 'subcodex', 'subcursor'):
+                            self.assertIn('Mac 上暂不运行，等待', result.stderr)
+                        else:
+                            self.assertEqual(result.stderr.splitlines()[-1:], [
+                                "%s: 少了 %s/%s ⇒ 拒绝派发%s" % (leg, bindir, tool, reason)])
                         self.assertFalse(marker.exists(), result.stderr)
             finally:
                 hidden.rename(self.bin / tool)

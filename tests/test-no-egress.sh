@@ -923,7 +923,7 @@ n9_platform_checks_stay_in_the_designated_files() {
   for f in "$TESTS"/* "$TESTS"/../bin/*; do
     [[ -f "$f" ]] || continue
     b="$(basename "$f")"
-    case "$b" in _no-egress.sh|_no_egress.py|test-no-egress.sh) continue ;; esac
+    case "$b" in _no-egress.sh|_no_egress.py|test-no-egress.sh|_review-platform.sh) continue ;; esac
     # 只看能执行的行(整行注释里提一句不算);数匹配行的缘由见 N3b
     [[ $(grep -vE '^[[:space:]]*(#|//)' "$f" 2>/dev/null \
          | grep -IcE 'uname|sys\.platform|platform\.(system|mac_ver)|os\.uname|OSTYPE|[Dd]arwin|process\.platform') -gt 0 ]] \
