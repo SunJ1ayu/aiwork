@@ -310,6 +310,49 @@ def task_text(number: int, pr: dict, merge_base: str, files: list[str], diff: st
     )
 
 
+def _differing(expected: tuple, actual: tuple, names: tuple[str, ...]) -> list[str]:
+    return [name for name, left, right in zip(names, expected, actual, strict=True) if left != right]
+
+
+def rebuild_retry_view(
+    directory: Path, *, token: str, pr: dict, repository: str,
+    merge_base: str, files: list[str], diff: str, changes: list[Change],
+    task_bytes: bytes, number: int, review_rules: str, risks: str,
+    rules_sha: str, ci: str | None,
+) -> tuple[Path, Path, Path]:
+    """New snapshot and task for a retry, checked against the values saved before the leg ran.
+
+    The leg can write the snapshot and the task file it was given. Those are the
+    files the next attempt would read, so the retry builds another view and
+    compares it to the saved values instead of copying the used ones.
+    """
+    attempt_directory = directory / "attempt-2"
+    attempt_directory.mkdir()
+    repo, new_base, new_files, new_diff, new_changes = _leg_session.snapshot(
+        token, pr, attempt_directory, repository=repository)
+    mismatched = _differing(
+        (merge_base, files, diff, changes),
+        (new_base, new_files, new_diff, new_changes),
+        ("merge_base", "files", "diff", "changes"))
+    if mismatched:
+        raise ReviewError(
+            "rebuilt snapshot does not match the first attempt (" + ", ".join(mismatched) + ")")
+    task = attempt_directory / "task.md"
+    task.write_text(compose_task(
+        repo, number=number, pr=pr, merge_base=merge_base, files=files, diff=diff,
+        changes=changes, review_rules=review_rules, risks=risks, rules_sha=rules_sha,
+        repository=repository, ci=ci), encoding="utf-8")
+    if task.read_bytes() != task_bytes:
+        raise ReviewError("rebuilt task does not match the first attempt")
+    if len(diff.encode("utf-8")) > READER_INLINE_DIFF_BYTES:
+        placed = repo / REVIEW_DIFF_PATH
+        if not placed.is_file() or placed.is_symlink():
+            raise ReviewError("rebuilt snapshot is missing the diff file")
+        if placed.read_bytes() != diff.encode("utf-8"):
+            raise ReviewError("rebuilt snapshot diff file does not match the first attempt")
+    return task, repo, attempt_directory
+
+
 def publishable_model(result: dict) -> str:
     process = result["process"]
     # A classified failure (rate limit, timeout, auth) is the reason, including
@@ -425,6 +468,7 @@ def main() -> int:
                     env[timeout_variable] = READER_TIMEOUT_SECONDS
                 if frozen_model is not None:
                     env["CURSOR_MODEL"] = frozen_model
+                task_bytes = task.read_bytes()
                 attempt_directory = directory
                 for attempt in range(2):
                     result, report_path = _leg_session.run_leg_attempt(
@@ -433,11 +477,18 @@ def main() -> int:
                     if (attempt == 0 and result["process"]["state"] == "exited"
                             and result["failure_kind"] in {"no_verdict", "output_truncated"}):
                         report_failure(directory, run_id + "-attempt-1")
+                        try:
+                            task, repo, attempt_directory = rebuild_retry_view(
+                                directory, token=token, pr=pr, repository=repository,
+                                merge_base=merge_base, files=files, diff=diff, changes=changes,
+                                task_bytes=task_bytes, number=args.pr, review_rules=review_rules,
+                                risks=risks, rules_sha=rules_sha, ci=ci)
+                        except (ReviewError, OSError) as exc:
+                            raise ReviewError(
+                                f"retry refused after {result['failure_kind']}: {exc}") from exc
                         note = f"retry 2/2 for {selected_leg}: {result['failure_kind']}; first failure artifacts preserved"
                         notices.append(note)
                         print(f"review-pr: {note}", file=sys.stderr)
-                        attempt_directory = directory / "attempt-2"
-                        attempt_directory.mkdir()
                         continue
                     break
                 model = publishable_model(result)
