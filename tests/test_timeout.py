@@ -61,16 +61,16 @@ os.execv(sys.argv[2], sys.argv[2:])
 
 # Only the supervisor's kernel boundary is replaced. The command tree and
 # independent watchdog still run normally, including their real signals.
-DENIED_PROBE = r'''
+DENIED_GROUP_CALL = r'''
 import errno, os, runpy, sys, time
 from pathlib import Path
-tool, audit = sys.argv[1:3]
-sys.argv = [tool] + sys.argv[3:]
+tool, audit, denied = sys.argv[1:4]
+sys.argv = [tool] + sys.argv[4:]
 real_killpg = os.killpg
 def killpg(pgid, signum):
     with Path(audit).open("a") as output:
         output.write("%d %.9f\n" % (signum, time.monotonic()))
-    if signum == 0:
+    if signum == int(denied):
         raise PermissionError(errno.EPERM, "Operation not permitted")
     return real_killpg(pgid, signum)
 os.killpg = killpg
@@ -95,13 +95,14 @@ class Timeout(unittest.TestCase):
         self.assertEqual(result.stderr, "")
 
     @contextmanager
-    def tree(self, limit="2", mode="wait", grace="0.2", nested=False, denied_probe=False):
+    def tree(self, limit="2", mode="wait", grace="0.2", nested=False, denied_signal=None):
         with tempfile.TemporaryDirectory(prefix="aiwork-timeout-test-") as folder:
             root = Path(folder)
             (root / "tree.py").write_text(TREE)
             command = [sys.executable, str(TOOL)]
-            if denied_probe:
-                command = [sys.executable, "-c", DENIED_PROBE, str(TOOL), str(root / "signals")]
+            if denied_signal is not None:
+                command = [sys.executable, "-c", DENIED_GROUP_CALL, str(TOOL),
+                           str(root / "signals"), str(denied_signal)]
             if grace is not None:
                 command += ["-k", grace]
             job = [sys.executable, "-c", TREE, folder, "leader", mode]
@@ -171,7 +172,7 @@ class Timeout(unittest.TestCase):
                 ("interrupt", "30", "stubborn", signal.SIGINT, 130),
                 ("terminate", "30", "stubborn", signal.SIGTERM, 143)):
             with self.subTest(case=case), self.tree(
-                    limit=limit, mode=mode, grace="0.3", denied_probe=True) as (process, members):
+                    limit=limit, mode=mode, grace="0.3", denied_signal=0) as (process, members):
                 if signum is not None:
                     process.send_signal(signum)
                 _stdout, stderr = process.communicate(timeout=6)
@@ -187,6 +188,54 @@ class Timeout(unittest.TestCase):
                 elapsed = float(events[-1][1]) - float(events[0][1])
                 self.assertGreaterEqual(elapsed, 0.29, "must retain the TERM grace period")
                 self.assertLess(elapsed, 1.5, "unknown status must not extend the grace period")
+
+    def test_denied_term_does_not_skip_kill_or_change_deadline_status(self):
+        with self.tree(limit="2", mode="stubborn", grace="0.3",
+                       denied_signal=signal.SIGTERM) as (process, members):
+            _stdout, stderr = process.communicate(timeout=6)
+            self.assertEqual(process.returncode, 124, stderr)
+            self.assertNotIn("Traceback", stderr)
+            self.assert_stopped(members)
+            events = [line.split() for line in Path(process.args[4]).read_text().splitlines()]
+            self.assertEqual(int(events[0][0]), signal.SIGTERM)
+            self.assertEqual(int(events[-1][0]), signal.SIGKILL)
+            elapsed = float(events[-1][1]) - float(events[0][1])
+            self.assertGreaterEqual(elapsed, 0.29)
+            self.assertLess(elapsed, 1.5)
+
+    def test_watchdog_denied_kill_of_departed_group_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as folder:
+            # The group has no running members. A denied signal must not turn
+            # normal watchdog cleanup into a false tool failure (125).
+            victim = subprocess.Popen(["sleep", "0"], start_new_session=True)
+            victim.wait(timeout=5)
+            alive_r, alive_w = os.pipe()
+            identity_r, identity_w = os.pipe()
+            ready_r, ready_w = os.pipe()
+            os.write(identity_w, b"%d\n" % victim.pid)
+            os.close(identity_w)
+            os.close(alive_w)
+            guard = subprocess.Popen(
+                [sys.executable, "-c", DENIED_GROUP_CALL, str(TOOL),
+                 str(Path(folder) / "signals"), str(signal.SIGKILL),
+                 "--_watchdog", str(alive_r), str(identity_r), str(ready_w)],
+                pass_fds=(alive_r, identity_r, ready_w),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for fd in (alive_r, identity_r, ready_w):
+                os.close(fd)
+            try:
+                self.assertEqual(os.read(ready_r, 1), b"")
+                _stdout, stderr = guard.communicate(timeout=5)
+                self.assertEqual(guard.returncode, 0, stderr)
+                self.assertEqual(stderr, "")
+                events = (Path(folder) / "signals").read_text().splitlines()
+                self.assertEqual(len(events), 1)
+                self.assertEqual(int(events[0].split()[0]), signal.SIGKILL)
+            finally:
+                os.close(ready_r)
+                if guard.poll() is None:
+                    guard.kill()
+                    guard.communicate(timeout=5)
 
     def test_deadline_returns_124_even_when_term_handler_exits_zero(self):
         code = ("import signal, sys, time; "

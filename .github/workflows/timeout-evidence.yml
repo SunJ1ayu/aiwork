@@ -15,8 +15,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Deterministic denied-probe regression on this revision
-        continue-on-error: true
-        run: python3 tests/test_timeout.py Timeout.test_denied_group_probe_preserves_status_and_bounded_cleanup
+        run: |
+          python3 tests/test_timeout.py \
+            Timeout.test_denied_group_probe_preserves_status_and_bounded_cleanup \
+            Timeout.test_denied_term_does_not_skip_kill_or_change_deadline_status \
+            Timeout.test_watchdog_denied_kill_of_departed_group_does_not_crash
       - name: Native kernel calls without the test sandbox (100 trials)
         run: |
           python3 - <<'PY'
@@ -35,6 +38,7 @@ jobs:
               if key[1] and counts[key] == 1:
                   print('NATIVE FAILURE trial', trial, result.stderr, flush=True)
           print('NATIVE_COUNTS (exit, PermissionError):', dict(counts), flush=True)
+          assert counts == {(124, False): 100}, counts
           PY
       - name: Repeated original Codex timeout and homes cases (10 trials)
         run: |
@@ -44,9 +48,13 @@ jobs:
             status=$?
             cat "$RUNNER_TEMP/codex-$trial.log"
             echo "CODEX_STATUS=$status"
+            test "$status" -eq 0 || exit 1
             python3 tests/test_review_homes.py ReviewHomes.test_every_discovered_leg_cleans_success_failure_and_timeout > "$RUNNER_TEMP/homes-$trial.log" 2>&1
             status=$?
             cat "$RUNNER_TEMP/homes-$trial.log"
             echo "HOMES_STATUS=$status"
+            if grep -E "FAIL:.*leg='subcodex'|PermissionError" "$RUNNER_TEMP/homes-$trial.log"; then
+              exit 1
+            fi
           done
         shell: /bin/bash --noprofile --norc -o pipefail {0}

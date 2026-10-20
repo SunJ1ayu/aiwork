@@ -29,10 +29,16 @@ import time
 
 
 def kill_group(pgid, signum):
+    """Return False only when the kernel confirms the group is gone."""
     try:
         os.killpg(pgid, signum)
     except ProcessLookupError:
+        return False
+    except PermissionError:
+        # A group in teardown can reject probes and signals. Its state is
+        # unknown; keep the grace bound and still attempt the later KILL.
         pass
+    return True
 
 
 def watchdog(alive, identity, ready):
@@ -173,9 +179,7 @@ def main():
     grace_deadline = time.monotonic() + args.grace
     while True:
         process.poll()
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
+        if not kill_group(process.pid, 0):
             break
         if time.monotonic() >= grace_deadline:
             send(signal.SIGKILL)
