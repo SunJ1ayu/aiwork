@@ -179,7 +179,9 @@ class Timeout(unittest.TestCase):
                 self.assertEqual(process.returncode, expected, stderr)
                 self.assertNotIn("Traceback", stderr)
                 self.assertEqual("timed out" in stderr, case == "deadline", stderr)
-                self.assert_stopped(members)
+                # Every generation inherits these pipes and never closes them:
+                # communicate() reaching EOF proves no worker is still running.
+                self.assertEqual(_stdout, "")
                 events = [line.split() for line in Path(process.args[4]).read_text().splitlines()]
                 signals = [int(event[0]) for event in events]
                 self.assertEqual(signals[0], signum or signal.SIGTERM)
@@ -195,7 +197,7 @@ class Timeout(unittest.TestCase):
             _stdout, stderr = process.communicate(timeout=6)
             self.assertEqual(process.returncode, 124, stderr)
             self.assertNotIn("Traceback", stderr)
-            self.assert_stopped(members)
+            self.assertEqual(_stdout, "")  # Inherited pipe EOF also covers workers.
             events = [line.split() for line in Path(process.args[4]).read_text().splitlines()]
             self.assertEqual(int(events[0][0]), signal.SIGTERM)
             self.assertEqual(int(events[-1][0]), signal.SIGKILL)
