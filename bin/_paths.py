@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""Path canonicalization and directory containment.
+#!/bin/sh
+"""exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
+Path canonicalization and directory containment.
 
 canon [--no-symlinks] -- PATH
     One absolute path. Default matches GNU realpath -m: existing symlinks

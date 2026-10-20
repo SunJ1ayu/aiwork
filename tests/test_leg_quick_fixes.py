@@ -14,7 +14,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
-from _test_settings import write_kimi_config
+from _test_settings import write_kimi_config, write_programs
 
 import http.server
 import json
@@ -44,6 +44,8 @@ class LegCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.d = Path(self.tmp.name)
+        self.config = self.d / "settings"
+        shutil.copytree(os.environ["AIWORK_CONFIG_DIR"], self.config, symlinks=True)
         self.bin = self.d / "bin"
         self.bin.mkdir()
         for helper in BIN.glob("_*"):
@@ -71,8 +73,9 @@ class LegCase(unittest.TestCase):
         path.chmod(0o755)
 
     def env(self, **extra):
+        write_programs(self.config, self.bin)
         env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-        env.update(PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}",
+        env.update(AIWORK_CONFIG_DIR=str(self.config), PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}",
                    REVIEW_WORKSPACE_BASE=str(self.d / "workspaces"))
         env.update(extra)
         return env
@@ -120,7 +123,7 @@ class CommandlessReaders(LegCase):
         shutil.copy2(ROOT / "kimi-review-home/hooks/guard.mjs", self.home / "hooks/guard.mjs")
         seed = (ROOT / "kimi-review-home/config.toml").read_text()
         import shlex
-        seed = seed.replace('"__KIMI_GUARD_COMMAND__"', json.dumps('node ' + shlex.quote(str(self.home / 'hooks/guard.mjs'))))
+        seed = seed.replace('"__KIMI_GUARD_COMMAND__"', json.dumps(shlex.quote(str(self.config / 'programs/node')) + ' ' + shlex.quote(str(self.home / 'hooks/guard.mjs'))))
         (self.home / "config.toml").write_text(seed)
         self.cap = self.d / "reader.json"
         self.started = self.d / "cli-started"
@@ -295,7 +298,7 @@ class FailureKind(LegCase):
         home = self.d / "review-home"
         (home / "hooks").mkdir(parents=True)
         (home / "credentials").mkdir()
-        write_kimi_config(home)
+        write_kimi_config(home, self.config)
         shutil.copy2(ROOT / "kimi-review-home" / "hooks" / "guard.mjs", home / "hooks" / "guard.mjs")
         (home / "credentials" / "kimi-code.json").write_text("{}")
         self.fake("kimi", "#!/usr/bin/env python3\nprint(%r)\nraise SystemExit(1)\n" % KIMI_LIMIT)
@@ -311,7 +314,7 @@ class FailureKind(LegCase):
         home = self.d / "review-home"
         (home / "hooks").mkdir(parents=True)
         (home / "credentials").mkdir()
-        write_kimi_config(home)
+        write_kimi_config(home, self.config)
         shutil.copy2(ROOT / "kimi-review-home" / "hooks" / "guard.mjs", home / "hooks" / "guard.mjs")
         (home / "credentials" / "kimi-code.json").write_text("{}")
         prose = "PROSE_LINE_4d2e the reviewed code handles usage limit errors"

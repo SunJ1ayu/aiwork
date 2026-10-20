@@ -4,6 +4,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
+from _test_settings import write_programs
 
 from pathlib import Path
 import shutil
@@ -28,6 +29,9 @@ class LocalDataTests(unittest.TestCase):
         self.env = dict(os.environ, HOME=str(self.home), AIWORK_DATA_DIR=str(self.data))
 
     def run_tool(self, name, *args, env=None):
+        config = Path((env or self.env)['AIWORK_CONFIG_DIR'])
+        if not (config / 'programs').exists():
+            write_programs(config)
         return subprocess.run([str(self.tool / 'bin' / name), *args],
                               env=env or self.env, capture_output=True, text=True, timeout=20)
 

@@ -113,6 +113,23 @@ mimo                      # or: mimo providers login / list
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。
 
+`programs/` 登记本机程序路径：每项是指向唯一安装位置的符号链接（不要复制可执行文件）。
+`python3` 必须是 Python 3.11 以上；其余项为 `codex`、`cursor-agent`、`kimi`、`mimo`、`claude`、`node`。
+例如确认安装位置后，执行 `ln -s /绝对安装路径/python3 ~/.config/aiwork/programs/python3`；
+先用 `install -d -m 700 ~/.config/aiwork/programs` 建目录，其余项同样登记。
+两台机器分别登记自己的安装位置，不能直接沿用另一台的链接目标。
+
+入口在启动时校验 Python 和本次所需程序；依赖表见 `bin/_programs.sh`，
+可用下述 `check-programs` 命令预检，不在文档中另抄一份依赖表。
+不使用某条腿时可以不登记它（例如尚未开放的 Mac DeepSeek / Cursor）；
+现有平台拒跑仍在读取设置之前。设置缺项、断链、非文件、不能执行或 Python 版本不够时，
+打印 `programs/项名` 与设置路径并退出，不查 PATH 补缺。`CODEX_BIN` 不再覆盖本机登记。
+Python 自举和版本检查共用 `bin/_python`、`bin/_programs.sh`；
+实际调用用登记路径，供应商的 `env node` / `env python3` shebang 也先看到登记目录。
+`aiwork-config program 项名` 查询并校验单项，`aiwork-config check-programs 入口名` 预检入口依赖。
+Kimi 自动生成的 hook 使用登记的 node 路径；自管 `KIMI_REVIEW_HOME` 的配置也要使用
+`aiwork-config program node` 返回的绝对路径（路径含空格时按 shell 规则引用）。
+
 换机器时把整个目录复制过去并保持权限。`bin/aiwork-config` 是统一读取入口；
 `AIWORK_CONFIG_DIR` 可指定其他设置目录，测试只指向临时目录。
 `AIWORK_APPS_DIR` 仍可单独覆盖 App 配置目录。

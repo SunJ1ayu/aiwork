@@ -6,6 +6,7 @@ import json
 import re
 import time
 import subprocess
+from _aiwork_config import program
 from pathlib import Path
 from urllib.parse import quote
 from urllib.error import HTTPError
@@ -25,7 +26,7 @@ def workflow_paths(policy):
 
 
 def select_run(runs, head, policy, number, timeout):
-    result = subprocess.run(['node', str(Path(__file__).with_suffix('.mjs'))],
+    result = subprocess.run([str(program('node')), str(Path(__file__).with_suffix('.mjs'))],
                             input=json.dumps(dict(runs=runs, head=head, policy=policy, number=number)),
                             text=True, capture_output=True, timeout=timeout, check=True)
     return json.loads(result.stdout)['run']

@@ -1,0 +1,9 @@
+#!/bin/sh
+. "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_programs.sh" || exit 78
+case "${1-}" in
+  --path) aiwork_init '' && aiwork_program "$2"; exit $? ;;
+  --check) aiwork_init "$2"; exit $? ;;
+esac
+aiwork_target="$(/bin/realpath "$1")" || exit 78
+aiwork_init "${aiwork_target##*/}" || exit 78
+exec "$AIWORK_PROGRAMS/python3" "$@"

@@ -58,7 +58,9 @@ class ProgramPaths(unittest.TestCase):
         self.env['PATH'] = str(wrong) + os.pathsep + self.env['PATH']
         alias = self.root / 'config-alias'
         alias.symlink_to(ROOT / 'bin/aiwork-config')
-        for configured in (str(self.config), '~/settings'):
+        config_alias = self.root / 'settings-alias'
+        config_alias.symlink_to(self.config, target_is_directory=True)
+        for configured in (str(self.config), '~/settings', str(config_alias)):
             with self.subTest(configured=configured):
                 result = subprocess.run([str(alias), 'data-path'],
                                         env=dict(self.env, AIWORK_CONFIG_DIR=configured, HOME=str(self.root)),
@@ -66,6 +68,12 @@ class ProgramPaths(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), str(self.data))
                 self.assertIn('selected', self.marker.read_text())
+                reported = subprocess.run([str(alias), 'path', 'models.env'],
+                                          env=dict(self.env, AIWORK_CONFIG_DIR=configured, HOME=str(self.root)),
+                                          capture_output=True, text=True, timeout=15)
+                self.assertEqual(reported.returncode, 0, reported.stderr)
+                expected = self.config if configured == '~/settings' else Path(configured)
+                self.assertEqual(reported.stdout.strip(), str(expected / 'models.env'))
 
     def test_invalid_python_refuses_all_executable_python_entries_before_help(self):
         entries = [p.name for p in (ROOT / 'bin').iterdir()
@@ -175,6 +183,20 @@ class ProgramPaths(unittest.TestCase):
                 self.assertIn('programs/codex', result.stderr)
                 self.assertEqual(result.stdout, '')
                 self.assertEqual(list(self.data.iterdir()), [])
+
+    def test_fixture_settings_survive_a_nested_temporary_directory(self):
+        from _test_settings import write_settings
+        write_settings(self.config)
+        before = {p.name: os.readlink(p) for p in self.programs.iterdir() if p.is_symlink()}
+        nested = self.root / 'nested-tmp'
+        nested.mkdir()
+        result = subprocess.run([sys.executable, str(ROOT / 'tests/_test_settings.py'),
+                                 'run-with-programs', '/bin/true'],
+                                env=dict(self.env, TMPDIR=str(nested),
+                                         AIWORK_TEST_FIXTURE_ROOT=str(self.root)),
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({p.name: os.readlink(p) for p in self.programs.iterdir() if p.is_symlink()}, before)
 
     def test_ci_selector_uses_configured_node_over_path(self):
         node = self.script('selected node', 'echo selected > ' + shlex.quote(str(self.marker))

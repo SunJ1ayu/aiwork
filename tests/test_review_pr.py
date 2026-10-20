@@ -582,7 +582,7 @@ class ReviewPrTests(unittest.TestCase):
             workspace = Path(temporary)
             bin_dir = workspace / "bin"
             bin_dir.mkdir()
-            for name in ('privacy-check', 'aiwork-config', '_aiwork_config.py',
+            for name in ('privacy-check', '_python', '_programs.sh', 'aiwork-config', '_aiwork_config.py',
                          '_secret_shapes.py', '_secret-shapes'):
                 shutil.copy2(ROOT / 'bin' / name, bin_dir / name)
             config = workspace / 'settings'

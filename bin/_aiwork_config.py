@@ -19,6 +19,26 @@ def config_dir() -> Path:
     return Path(os.environ.get('AIWORK_CONFIG_DIR') or Path.home() / '.config/aiwork').expanduser()
 
 
+def _program_query(option: str, value: str) -> str:
+    import subprocess
+    try:
+        result = subprocess.run([str(Path(__file__).resolve().with_name('_python')), option, value],
+                                capture_output=True, text=True)
+    except OSError as exc:
+        raise ConfigError(f'程序路径读取入口不可用: {exc}') from exc
+    if result.returncode:
+        raise ConfigError(result.stderr.strip())
+    return result.stdout.strip()
+
+
+def program(name: str) -> Path:
+    return Path(_program_query('--path', name))
+
+
+def check_programs(entry: str) -> None:
+    _program_query('--check', entry)
+
+
 def data_dir() -> Path:
     # Provider wrappers override XDG_* for their own isolation. Keep aiwork's
     # machine data stable across those child environments.

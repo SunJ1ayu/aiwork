@@ -1,17 +1,22 @@
-#!/usr/bin/env python3
-"""Read machine settings and locate machine data through the aiwork entries."""
+#!/bin/sh
+"""exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
+Read machine settings and locate machine data through the aiwork entries."""
 import argparse
 import json
 import sys
 
 from _aiwork_config import (
-    ConfigError, app_key, apps_dir, data_path, model, model_family, prune_data, setting_path, setting_value,
+    ConfigError, program, check_programs, app_key, apps_dir, data_path, model, model_family, prune_data, setting_path, setting_value,
 )
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[1])
     commands = parser.add_subparsers(dest='command', required=True)
+    programs = commands.add_parser('program')
+    programs.add_argument('name')
+    checks = commands.add_parser('check-programs')
+    checks.add_argument('entry')
     models = commands.add_parser('model')
     models.add_argument('leg')
     models.add_argument('override', nargs='?')
@@ -32,7 +37,12 @@ def main():
     families.add_argument('model')
     args = parser.parse_args()
     try:
-        if args.command == 'model':
+        if args.command == 'program':
+            value = program(args.name)
+        elif args.command == 'check-programs':
+            check_programs(args.entry)
+            return 0
+        elif args.command == 'model':
             value = model(args.leg, args.override)
         elif args.command == 'data-path':
             value = data_path(args.name)

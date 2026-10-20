@@ -4,6 +4,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
+from _test_settings import write_programs
 
 import importlib.machinery
 import importlib.util
@@ -35,6 +36,7 @@ class SettingsTest(unittest.TestCase):
         self.d = Path(self.temp.name)
         self.config = self.d / 'settings'
         self.config.mkdir()
+        write_programs(self.config)
         self.models = {'codex': 'gpt-fixture', 'cursor': 'composer-2.5',
                        'deepseek': 'deepseek-fixture',
                        'kimi': 'kimi-code/k3', 'mimo': 'xiaomi/mimo-v2.5-pro'}
@@ -249,6 +251,7 @@ class SettingsTest(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         fixture.env['AIWORK_CONFIG_DIR'] = str(self.config)
+        fixture.config = self.config
         for name in ('aiwork-config', '_aiwork_config.py'):
             source = ROOT / 'bin' / name
             if source.exists():
@@ -463,7 +466,8 @@ class SettingsTest(unittest.TestCase):
         result = fixture.invoke(['--repo', 'SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), 'fake-test-token')
-        fixture.env['AIWORK_CONFIG_DIR'] = str(self.d / 'absent')
+        write_programs(self.d / 'programs-only')
+        fixture.env['AIWORK_CONFIG_DIR'] = str(self.d / 'programs-only')
         fixture.env['AIWORK_APPS_DIR'] = str(fixture.root / 'apps')
         result = fixture.invoke(['--repo', 'SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'])
         self.assertEqual(result.returncode, 0, result.stderr)

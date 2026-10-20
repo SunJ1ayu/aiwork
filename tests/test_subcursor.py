@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import unittest
 
-from _test_settings import write_settings, set_model
+from _test_settings import write_settings, set_model, write_programs
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'bin'))
@@ -124,7 +124,7 @@ class CursorTest(unittest.TestCase):
         self.d = Path(self.tmp.name).resolve()
         self.config = write_settings(self.d / 'settings')
         self.bin = self.d/'bin'; self.bin.mkdir()
-        for name in ('subcursor','aiwork-config', '_aiwork_config.py','_cursor-stream.py','_review-workspace.sh', 'aiwork-timeout',
+        for name in ('_python','_programs.sh','subcursor','aiwork-config', '_aiwork_config.py','_cursor-stream.py','_review-workspace.sh', 'aiwork-timeout',
                      '_paths.py', '_review-platform.sh', '_review_result.py', 'ro-repo-exec'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         set_model(self.config, 'cursor', ('composer-2.5\n').strip())
@@ -148,10 +148,13 @@ class CursorTest(unittest.TestCase):
             FAKE_SOURCE=str(self.repo), FAKE_RECORD=str(self.d/'record.json'),
             PANEL_STAGGER_MAX='0', PANEL_STATE_DIR=str(self.d/'state'))
 
+        write_programs(self.config, self.fake)
+
     def git(self, *args):
         return subprocess.check_output(['git','-C',str(self.repo),*args],stderr=subprocess.DEVNULL).decode()
 
     def run_leg(self, mode='review', case='', tag='leg', extra=None):
+        write_programs(self.config, self.fake)
         env = dict(self.env, FAKE_CASE=case,
                    FAKE_RECORD=str(self.d/(tag+'.record.json')),
                    AIWORK_REVIEW_FACTS_PATH=str(self.d/(tag+'.facts.json')))

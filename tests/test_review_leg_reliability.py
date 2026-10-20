@@ -98,7 +98,8 @@ class ReliabilityTests(unittest.TestCase):
                 if missing_agent and name == leg + '-agent':
                     continue
                 (bin_dir / name).touch()
-            shutil.copy2(BIN / '_review_result.py', bin_dir / '_review_result.py')
+            for helper in ('_python', '_programs.sh', '_review_result.py'):
+                shutil.copy2(BIN / helper, bin_dir / helper)
             (bin_dir / 'privacy-check').symlink_to(BIN / 'privacy-check')
 
         def invoke(command, **kwargs):
@@ -527,7 +528,7 @@ class ReaderFailureClassificationTests(LegCase):
         home = self.d / 'kimi-home'
         (home / 'hooks').mkdir(parents=True)
         (home / 'credentials').mkdir()
-        write_kimi_config(home)
+        write_kimi_config(home, self.config)
         (home / 'hooks/guard.mjs').write_text('process.exit(2); // offline deny fixture\n')
         (home / 'credentials/kimi-code.json').write_text('{}')
         for leg in ('subdeepseek-agent', 'subkimi'):

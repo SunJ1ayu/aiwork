@@ -2,6 +2,7 @@
 # 留下的评审命令的离线判据。
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78
+_test_settings_py="$(realpath "$_test_settings_py")"
 unset DEEPSEEK_INCLUDE
 export CURSOR_MODEL=composer-2.5
 _MIMO_FLOOR="$(mktemp -d)"
@@ -108,7 +109,7 @@ v9_claude_shell_base() {
   # 这一组问的是**claude 壳这条底座本身**(env 注入、工具白名单、裁决 gate),
   # 它对 deepseek 仍然完全有效,断言一条不删、一条不弱。GLM 那条底座由 V28 问。
   # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
-  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
@@ -136,7 +137,7 @@ PYEOF
   # env-key path: token, base url, model mapping, API_KEY scrubbed
   env PATH="$b:$PATH" CAPTURE="$d/a1.json" ANTHROPIC_API_KEY="$FIXTURE_ANTHROPIC_KEY" \
     DEEPSEEK_API_KEY="$FIXTURE_DS_ENV_KEY" DEEPSEEK_MODEL=ds-test-model \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a1.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent review (env key) exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18 后端换成 OpenCode Go 之后,**认证 header 也换了**:
   # deepseek 的 Anthropic 面走 Authorization: Bearer(= ANTHROPIC_AUTH_TOKEN)。
@@ -267,7 +268,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   cp "$AIWORK_CONFIG_DIR/models.env" "$cfg/models.env"
   printf 'export DEEPSEEK_API_KEY="%s"\n' "$FIXTURE_DS_AUTH_KEY" > "$cfg/deepseek.env"
   env -u DEEPSEEK_API_KEY PATH="$b:$PATH" CAPTURE="$d/a2.json" AIWORK_CONFIG_DIR="$cfg" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent settings-file key exits 0" $([[ $rc -eq 0 ]]; echo $?)
   # 2026-08-18:env-key 那条路已经换成 x-api-key,**这条 auth-file 路当时被漏掉了**
   # —— 是判据自己在这儿红了一次才发现的。所以这里不止把变量名跟着改,还补上
@@ -279,7 +280,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
 
   env PATH="$b:$PATH" CAPTURE="$d/a2b.json" AIWORK_CONFIG_DIR="$cfg" \
     DEEPSEEK_API_KEY="$FIXTURE_DS_ENV_KEY" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2b.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a2b.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: env override over deepseek.env exits 0" $([[ $rc -eq 0 ]]; echo $?)
   [[ "$(agentget "$d/a2b.json" ANTHROPIC_AUTH_TOKEN)" == "$FIXTURE_DS_ENV_KEY" ]]
   check "agent: DEEPSEEK_API_KEY overrides deepseek.env" $?
@@ -287,7 +288,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   # verdict gate: no Conclusion -> non-zero, log still written
   env PATH="$b:$PATH" CAPTURE="$d/a3.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     STUB_REVIEW_OUT="looks fine to me" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: verdict-less output exits non-zero" $([[ $rc -ne 0 ]]; echo $?)
   [[ -f "$d/a3.log" ]]; check "agent: log still written on verdict miss" $?
 
@@ -295,14 +296,14 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
   # that drifted twice (Track B + client-tools)
   env PATH="$b:$PATH" CAPTURE="$d/a3b.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     STUB_REVIEW_OUT=$'review body\n结论：PASS' \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3b.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$d/a3b.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: Chinese 结论+full-width colon accepted" $([[ $rc -eq 0 ]]; echo $?)
 
   # fix refused; -h ok
   env PATH="$b:$PATH" CAPTURE="$d/a4.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
-    bash "$b/subdeepseek-agent" fix "$d/t.md" "$d/a4.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" fix "$d/t.md" "$d/a4.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "agent: fix refused" $([[ $rc -ne 0 ]]; echo $?)
-  bash "$b/subdeepseek-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
+  python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" -h >/dev/null 2>&1; check "agent: -h exits 0" $?
 
   rm -rf "$d"
 }
@@ -350,7 +351,7 @@ v13_subkimi_leg() {
   fi
 
   # --- subkimi wrapper against a stub kimi + fixture review home
-  cp "$BIN/_review-platform.sh" "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
@@ -372,7 +373,7 @@ PYEOF
   kimiget() { python3 -c "import json,sys;o=json.load(open(sys.argv[1]));v=o['env'].get(sys.argv[2]);print('' if v is None else v)" "$1" "$2"; }
 
   env PATH="$b:$PATH" CAPTURE="$d/k1.json" KIMI_REVIEW_HOME="$rh" \
-    bash "$b/subkimi" review "$d/t.md" "$d/k1.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$d/k1.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: review exits 0" $([[ $rc -eq 0 ]]; echo $?)
   [[ "$(kimiget "$d/k1.json" KIMI_CODE_HOME)" == "$rh" ]]
   check "subkimi: KIMI_CODE_HOME points at review home" $?
@@ -390,7 +391,7 @@ sys.exit(0 if any('Shell and write tools are unavailable. Do not claim to have r
   for km in kimi-code/fixture-next kimi-code/fixture-later; do
     test_model_set kimi "$km"
     env -u KIMI_MODEL PATH="$b:$PATH" CAPTURE="$d/model.json" KIMI_REVIEW_HOME="$rh" \
-      bash "$b/subkimi" review "$d/t.md" "$d/model.log" "$d/repo" >/dev/null 2>&1
+      python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$d/model.log" "$d/repo" >/dev/null 2>&1
     python3 - "$d/model.json" "$km" <<'PY'
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
@@ -399,7 +400,7 @@ PY
     check "subkimi: 只改模型文件就改变实际 CLI 调用 ($km)" $?
   done
   env KIMI_MODEL=kimi-code/fixture-override PATH="$b:$PATH" CAPTURE="$d/override.json" KIMI_REVIEW_HOME="$rh" \
-    bash "$b/subkimi" review "$d/t.md" "$d/override.log" "$d/repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$d/override.log" "$d/repo" >/dev/null 2>&1
   python3 - "$d/override.json" <<'PY'
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
@@ -409,25 +410,25 @@ PY
   for km in '' 'kimi-code/one kimi-code/two'; do
     test_model_set kimi "$km"
     env -u KIMI_MODEL PATH="$b:$PATH" CAPTURE="$d/invalid.json" KIMI_REVIEW_HOME="$rh" \
-      bash "$b/subkimi" review "$d/t.md" "$d/invalid.log" "$d/repo" >/dev/null 2>&1; rc=$?
+      python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$d/invalid.log" "$d/repo" >/dev/null 2>&1; rc=$?
     [[ $rc -ne 0 && ! -e "$d/invalid.json" ]]
     check "subkimi: 空或非法模型配置不派发" $?
   done
   test_model_set kimi kimi-code/kimi-for-coding
 
   env PATH="$b:$PATH" CAPTURE="$d/k2.json" KIMI_REVIEW_HOME="$rh" STUB_REVIEW_OUT="no verdict here" \
-    bash "$b/subkimi" review "$d/t.md" "$d/k2.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$d/k2.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: verdict-less output rejected" $([[ $rc -ne 0 ]]; echo $?)
 
   # Chinese-style verdict (结论 + full-width colon) must pass the gate — the
   # drift that drifted twice (Track B + client-tools).
   env PATH="$b:$PATH" CAPTURE="$d/k2b.json" KIMI_REVIEW_HOME="$rh" \
     STUB_REVIEW_OUT=$'review body\n结论：PASS' \
-    bash "$b/subkimi" review "$d/t.md" "$d/k2b.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$d/k2b.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: Chinese 结论+full-width colon accepted" $([[ $rc -eq 0 ]]; echo $?)
 
   env PATH="$b:$PATH" CAPTURE="$d/k3.json" KIMI_REVIEW_HOME="$rh" \
-    bash "$b/subkimi" fix "$d/t.md" "$d/k3.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" fix "$d/t.md" "$d/k3.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: fix refused" $([[ $rc -ne 0 ]]; echo $?)
 
   # broken (fail-open) guard must refuse to dispatch BEFORE invoking kimi
@@ -437,11 +438,11 @@ PY
   echo '{}' > "$rh2/credentials/kimi-code.json"
   rm -f "$d/k4.json"
   env PATH="$b:$PATH" CAPTURE="$d/k4.json" KIMI_REVIEW_HOME="$rh2" \
-    bash "$b/subkimi" review "$d/t.md" "$d/k4.log" "$d/repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$d/k4.log" "$d/repo" >/dev/null 2>&1; rc=$?
   check "subkimi: fail-open guard refused (preflight)" $([[ $rc -ne 0 ]]; echo $?)
   if [[ -e "$d/k4.json" ]]; then bad "subkimi: kimi never invoked on bad guard"; else ok "subkimi: kimi never invoked on bad guard"; fi
 
-  bash "$b/subkimi" -h >/dev/null 2>&1; check "subkimi: -h exits 0" $?
+  python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" -h >/dev/null 2>&1; check "subkimi: -h exits 0" $?
   grep -Fq 'p + ".tmp." + str(os.getpid())' "$BIN/subkimi"
   check "subkimi: seed config rewrite uses a per-process atomic temp" $?
   rm -rf "$d"
@@ -471,7 +472,7 @@ FAKE
   cp "$AIWORK_CONFIG_DIR/models.env" "$cfg/models.env"
   printf 'export DEEPSEEK_API_KEY="%s"\n' "$FIXTURE_CHAT_KEY" > "$cfg/deepseek.env"
   PATH="$fake:$PATH" AIWORK_CONFIG_DIR="$cfg" \
-    "$BIN/subdeepseek-agent" review "$d/t.md" "$d/a.log" "$d/repo" >/dev/null 2>"$d/a.err"
+    python3 "$_test_settings_py" run-with-programs "$BIN/subdeepseek-agent" review "$d/t.md" "$d/a.log" "$d/repo" >/dev/null 2>"$d/a.err"
 
   if grep -q '^{"type":' "$d/a.log" 2>/dev/null; then
     bad "V20: 锚 —— 日志是渲染过的,不是把 stream-json 原文倒进去"
@@ -493,7 +494,7 @@ v21_agent_leg_body_is_single_source() {
 
   local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   fixture_git_repo "$d/repo"
-  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"
   cat > "$ab/claude" <<'CAPEOF'
 #!/usr/bin/env python3
@@ -506,7 +507,7 @@ CAPEOF
   printf '# t\n' > "$d/t.md"
   capturing_turns() { python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];print(a[a.index('--max-turns')+1])" "$1"; }
   env -u DEEPSEEK_MAX_TURNS PATH="$ab:$PATH" CAPTURE="$d/s.json" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
-    bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/s.log" "$d/repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$ab/subdeepseek-agent" review "$d/t.md" "$d/s.log" "$d/repo" >/dev/null 2>&1
   [[ "$(capturing_turns "$d/s.json")" -ge 200 ]]
   check "V21: deepseek 默认轮次上限 ≥200" $?
   rm -rf "$d"
@@ -542,7 +543,7 @@ v33_submimo_review_leg_is_read_only() {
   echo "[V33] submimo 仅保留读文件工具,fix 被拒绝"
   local d b rc leftovers; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
-  cp "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   printf '# t\n' > "$d/t.md"
   local repo="$d/repo"; mkdir -p "$repo"
@@ -579,7 +580,7 @@ print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
   # ── ① review 不许再用内置 plan 档
   rm -f "$d/c_review"
   env PATH="$b:$PATH" CAPTURE="$d/c_review" MIMO_REVIEW_HOME="$mhome" \
-    bash "$b/submimo" review "$d/t.md" "$d/r.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$d/r.log" "$repo" >/dev/null 2>&1
   if [[ -f "$d/c_review" ]]; then
     local ag; ag="$(agent_of "$d/c_review")"
     [[ "$ag" != "plan" && -n "$ag" ]]
@@ -592,7 +593,7 @@ print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
   # ── ② explore 同样(它的指令还写着"不许用任何工具",更不该有 shell)
   rm -f "$d/c_explore"
   env PATH="$b:$PATH" CAPTURE="$d/c_explore" MIMO_REVIEW_HOME="$mhome" \
-    bash "$b/submimo" explore "$d/t.md" "$d/e.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" explore "$d/t.md" "$d/e.log" "$repo" >/dev/null 2>&1
   if [[ -f "$d/c_explore" ]]; then
     local ag2; ag2="$(agent_of "$d/c_explore")"
     [[ "$ag2" != "plan" && -n "$ag2" ]]
@@ -604,7 +605,7 @@ print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
   # ── ③ fix 不是这条命令的模式。传 fix 必须拒绝，并且一次都不调起 mimo。
   rm -f "$d/c_fix"
   env PATH="$b:$PATH" CAPTURE="$d/c_fix" MIMO_REVIEW_HOME="$mhome" \
-    bash "$b/submimo" fix "$d/t.md" "$d/f.log" "$repo" >"$d/fix.out" 2>"$d/fix.err"
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" fix "$d/t.md" "$d/f.log" "$repo" >"$d/fix.out" 2>"$d/fix.err"
   local fix_rc=$?
   [[ "$fix_rc" -ne 0 ]] && grep -q 'fix is not supported on this command. Change code in your own worktree.' "$d/fix.err" \
     && [[ ! -f "$d/c_fix" ]]
@@ -613,7 +614,7 @@ print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
   # review 和 explore 必须使用同一份无命令工具配置。
   # 再跑一次 review，让下面检查 review 最终写下的配置。
   env PATH="$b:$PATH" CAPTURE="$d/c_review_config" MIMO_REVIEW_HOME="$mhome" \
-    bash "$b/submimo" review "$d/t.md" "$d/r-config.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$d/r-config.log" "$repo" >/dev/null 2>&1
 
   # ── ④ 锁写在仓库生成的配置里。mimo 装好的那一版是否照这份 JSON 解析,
   #    是本机体检;这里只读我们写下的文件,缺文件就红,不许跳过。
@@ -683,7 +684,7 @@ sys.exit(0 if o.get('XDG_CONFIG_HOME')==os.environ['WANT'] else 1)" "$d/c_review
     printf '{"__stale_marker__":true,"agent":{"aiwork-review":{"tools":{"bash":true}}}}' > "$mhome/mimocode/mimocode.json"
     rm -f "$d/c_rewrite"
     env PATH="$b:$PATH" CAPTURE="$d/c_rewrite" MIMO_REVIEW_HOME="$mhome" \
-      bash "$b/submimo" review "$d/t.md" "$d/r2.log" "$repo" >/dev/null 2>&1
+      python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$d/r2.log" "$repo" >/dev/null 2>&1
     grep -q '__stale_marker__' "$mhome/mimocode/mimocode.json"
     check "V33: 配置每次重写(被人改过也会被覆盖回去)" $([[ $? -ne 0 ]]; echo $?)
   else
@@ -897,7 +898,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
@@ -942,7 +943,7 @@ PWN
   _mk_pwn_stub "$b/claude"; _mk_pwn_stub "$b/mimo"; _mk_pwn_stub "$b/kimi"
 
   test_model_set deepseek deepseek-fixture-next
-  [[ "$(bash "$b/subdeepseek-agent" --help 2>&1)" == *"DeepSeek default model: deepseek-fixture-next"* ]]
+  [[ "$(python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" --help 2>&1)" == *"DeepSeek default model: deepseek-fixture-next"* ]]
   check "V36: agent help follows the shared default" $?
   local rc
   # ── ① claude 壳(subdeepseek-agent)
@@ -950,7 +951,7 @@ PWN
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o1" CAPTURE="$d/c1.json" \
     DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" DEEPSEEK_MODEL= AIWORK_REVIEW_FACTS_PATH="$d/deepseek.facts.json" \
     AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l1.log" "$repo" >/dev/null 2>&1; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l1.log" "$repo" >/dev/null 2>&1; rc=$?
   grep -q '^work=WROTE$' "$d/o1" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o1" 2>/dev/null \
     && [[ "$(sed -n 's/^repo=//p' "$d/o1")" != "$repo" ]] \
@@ -980,7 +981,7 @@ PY
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" \
     MIMO_REVIEW_HOME="$d/mimo-home-v36" AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" \
     AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
-    bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o2" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o2" 2>/dev/null \
     && [[ "$(sed -n 's/^cwd=//p' "$d/o2")" == "$(sed -n 's/^repo=//p' "$d/o2")" ]] \
@@ -1024,7 +1025,7 @@ PY
   rm -f "$d/o3" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" KIMI_REVIEW_HOME="$rh" \
     AIWORK_REVIEW_FACTS_PATH="$d/kimi.facts.json" AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
-    bash "$b/subkimi" review "$d/t.md" "$repo/logs/l3.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$repo/logs/l3.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o3" 2>/dev/null \
     && grep -q '^source=BLOCKED$' "$d/o3" 2>/dev/null \
     && [[ "$(sed -n 's/^repo=//p' "$d/o3")" != "$repo" ]] \
@@ -1044,7 +1045,7 @@ PY
   rm -f "$d/o4" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" \
     MIMO_REVIEW_HOME="$d/mimo-home-v36d" \
-    bash "$b/submimo" fix "$d/t.md" "$repo/logs/l4.log" "$repo" >"$d/fix.out" 2>"$d/fix.err"
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" fix "$d/t.md" "$repo/logs/l4.log" "$repo" >"$d/fix.out" 2>"$d/fix.err"
   local fix_rc=$?
   [[ "$fix_rc" -ne 0 ]] && grep -q 'fix is not supported on this command. Change code in your own worktree.' "$d/fix.err" \
     && [[ ! -e "$d/o4" && ! -e "$repo/PWNED_IN_SOURCE" && ! -e "$repo/PWNED_IN_WORKSPACE" ]]
@@ -1097,7 +1098,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -1130,7 +1131,7 @@ PWN2
   rm -f "$repo/logs/l.log" "$d/o"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o" CAPTURE="$d/c.json" \
     DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l.log" "$repo" >/dev/null 2>&1
   [[ -s "$repo/logs/l.log" ]]
   check "V37: 腿日志不靠写口也写得出(fd 在父 namespace 打开)" $?
 
@@ -1147,7 +1148,7 @@ RECORD
   rm -f "$d/argv.txt"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o" CAPTURE="$d/c.json" \
     RO_ARGV_OUT="$d/argv.txt" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
   ! grep -q -- '^--rw$' "$d/argv.txt" 2>/dev/null
   check "V37: wrapper 一个 --rw 都不传(写口为零 —— 多余的写口正是那两条 bug 的来源)" $?
   cp "$BIN/ro-repo-exec" "$b/"   # 换回真的
@@ -1156,7 +1157,7 @@ RECORD
   rm -f "$d/o3" "$repo/PWNED_BY_LEG"
   ( cd "$repo" && env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" \
       MIMO_REVIEW_HOME="$d/mimo-home-v37a" \
-      bash "$b/submimo" review "$d/t.md" "relative.log" "$repo" ) >/dev/null 2>&1
+      python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "relative.log" "$repo" ) >/dev/null 2>&1
   [[ "$(cat "$d/o3" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]
   check "V37: 相对日志路径 + cwd=仓根 ⇒ 防线**仍然生效**(第一版这里整仓开闸,还不报错)" $?
 
@@ -1164,7 +1165,7 @@ RECORD
   rm -rf "$repo/fresh" ; rm -f "$d/o4" "$repo/PWNED_BY_LEG"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" \
     MIMO_REVIEW_HOME="$d/mimo-home-v37b" \
-    bash "$b/submimo" review "$d/t.md" "$repo/fresh/leg.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$repo/fresh/leg.log" "$repo" >/dev/null 2>&1
   [[ -e "$repo/fresh/leg.log" && "$(cat "$d/o4" 2>/dev/null)" == "BLOCKED" ]]
   check "V37: 日志目录不存在 ⇒ wrapper 建好它并正常跑(别把防线做成回归)" $?
 
@@ -1238,7 +1239,7 @@ v38_leg_runtime_home_outside_repo() {
   _mk_kimi_home "$repo/kimi-home"
   rm -f "$d/kimi-ran"
   out="$(PATH="$fb:$PATH" KIMI_RAN_MARK="$d/kimi-ran" KIMI_REVIEW_HOME="$repo/kimi-home" \
-         bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/y.log" "$repo" 2>&1)"
+         python3 "$_test_settings_py" run-with-programs bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/y.log" "$repo" 2>&1)"
   [[ ! -e "$d/kimi-ran" ]]
   check "V38: home 在被评审的仓内 ⇒ **底座根本没被调起**(拒在前面,不是让它去撞 EROFS)" $?
   grep -qE '仓内|被评审的仓|只读|read-only' <<<"$out"
@@ -1250,7 +1251,7 @@ v38_leg_runtime_home_outside_repo() {
   _mk_kimi_home "$d/outside-home"
   rm -f "$d/kimi-ran"
   out2="$(PATH="$fb:$PATH" KIMI_RAN_MARK="$d/kimi-ran" KIMI_REVIEW_HOME="$d/outside-home" \
-          bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/z.log" "$repo" 2>&1)"
+          python3 "$_test_settings_py" run-with-programs bash "$BIN/subkimi" review "$d/t.md" "$repo/logs/z.log" "$repo" 2>&1)"
   [[ -e "$d/kimi-ran" ]]
   check "V38: 对照组 —— home 在仓外时底座照常被调起(拒的是位置,不是别的)" $?
   ! grep -qE '仓内|被评审的仓' <<<"$out2"
@@ -1666,7 +1667,7 @@ v46_final_report_is_the_last_message() {
   local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
   fixture_git_repo "$d/repo"
   printf '# t\n' > "$d/t.md"
-  cp "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
     "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" \
     "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/ro-repo-exec" "$b/"
   printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"
@@ -1723,7 +1724,7 @@ PY
   env PATH="$b:$PATH" FINAL_LAST="$d/last.txt" DEEPSEEK_API_KEY="$FIXTURE_DS_KEY" \
     AIWORK_REVIEW_FACTS_PATH="$d/ds.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
     AIWORK_REVIEW_REPORT_PATH="$d/ds-report.md" \
-    bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds.log" "$d/repo" >/dev/null 2>"$d/ds.err"; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/t.md" "$d/ds.log" "$d/repo" >/dev/null 2>"$d/ds.err"; rc=$?
   check "V46: subdeepseek-agent 退出 0" $([[ $rc -eq 0 ]]; echo $?)
   cmp -s "$d/ds-report.md" "$d/last.txt"; check "V46: subdeepseek-agent 报告与最后一条消息一字不差" $?
   check "V46: subdeepseek-agent 发布正文只有报告，过程留在日志" \
@@ -1741,7 +1742,7 @@ PY
     KIMI_REVIEW_HOME="$rh" \
     AIWORK_REVIEW_FACTS_PATH="$d/kimi.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
     AIWORK_REVIEW_REPORT_PATH="$d/kimi-report.md" \
-    bash "$b/subkimi" review "$d/t.md" "$d/kimi.log" "$d/repo" >/dev/null 2>"$d/kimi.err"; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/t.md" "$d/kimi.log" "$d/repo" >/dev/null 2>"$d/kimi.err"; rc=$?
   check "V46: subkimi 退出 0" $([[ $rc -eq 0 ]]; echo $?)
   cmp -s "$d/kimi-report.md" "$d/kimi-want.txt"; check "V46: subkimi 报告与最后一条消息一字不差" $?
   python3 - "$d/kimi-report.md" "$d/kimi.log" <<'PY'
@@ -1763,7 +1764,7 @@ PY
     MIMO_REVIEW_HOME="$d/mimo-home" \
     AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
     AIWORK_REVIEW_REPORT_PATH="$d/mimo-report.md" \
-    bash "$b/submimo" review "$d/t.md" "$d/mimo.log" "$d/repo" >/dev/null 2>"$d/mimo.err"; rc=$?
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$d/mimo.log" "$d/repo" >/dev/null 2>"$d/mimo.err"; rc=$?
   check "V46: submimo 退出 0" $([[ $rc -eq 0 ]]; echo $?)
   cmp -s "$d/mimo-report.md" "$d/mimo-want.txt"; check "V46: submimo 报告是最后一条消息按真实事件拼出的正文" $?
   python3 - "$d/mimo-report.md" "$d/mimo.log" <<'PY'

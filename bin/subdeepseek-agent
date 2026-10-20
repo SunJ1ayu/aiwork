@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
 # subdeepseek-agent - DeepSeek 底座腿;瘦 shim,躯干在 subagent(供应商表在那里)。
-exec "$(dirname "$0")/subagent" deepseek "$@"
+exec "$(/usr/bin/dirname "$(/bin/realpath "$0")")/subagent" deepseek "$@"

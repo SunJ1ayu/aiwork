@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
 set -euo pipefail
 
 # Cursor read-only review/explore adapter. Start from an empty workspace so
 # reviewed .cursor hooks/plugins/config cannot execute during CLI startup.
-BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+BIN_DIR="$(/usr/bin/dirname "$(/bin/realpath "$0")")" || exit 78
 
 . "$BIN_DIR/_review-platform.sh" || exit 78
 review_platform_check subcursor || exit 78
+aiwork_init subcursor || exit 78
 die() { echo "subcursor: $*" >&2; exit 1; }
 usage() {
   cat <<'EOF'
@@ -32,15 +34,15 @@ MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
 [[ "$MODE" == review || "$MODE" == explore ]] || { usage >&2; exit 2; }
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 TASK_FILE="$(realpath "$TASK_FILE")"
-LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subcursor: canonicalize helper 失败' >&2; exit 78; }
+LOG_FILE="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subcursor: canonicalize helper 失败' >&2; exit 78; }
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 MODEL="$("$BIN_DIR/aiwork-config" model cursor "${CURSOR_MODEL:-}")" || exit 1
-python3 "$BIN_DIR/_review_result.py" cursor-family "$MODEL" >/dev/null \
+"$AIWORK_PROGRAMS/python3" "$BIN_DIR/_review_result.py" cursor-family "$MODEL" >/dev/null \
   || die 'CURSOR_MODEL must identify an explicit supported model family (no auto routing)'
 TIMEOUT_SECONDS="${CURSOR_TIMEOUT:-900}"
 [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die 'timeout must be a positive integer'
-CURSOR_BIN="$(command -v cursor-agent)" || die 'Cursor CLI not found; install it and run cursor-agent login'
+CURSOR_BIN="$AIWORK_PROGRAMS/cursor-agent"
 AUTH_FILE="${CURSOR_AUTH_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/cursor/auth.json}"
 BILLING=subscription
 API_KEY="${CURSOR_API_KEY:-}"
@@ -81,7 +83,7 @@ git -C "$REPO_DIR" diff --no-ext-diff --no-textconv "$DIFF_BASE" "$REVIEW_SNAPSH
 # Never give this disposable process the owner's refresh token.
 AUTH_ENV=()
 if [[ "$BILLING" == subscription ]]; then
-  ACCESS_TOKEN="$(python3 - "$AUTH_FILE" <<'PYAUTH'
+  ACCESS_TOKEN="$("$AIWORK_PROGRAMS/python3" - "$AUTH_FILE" <<'PYAUTH'
 import json, sys
 with open(sys.argv[1]) as f:
     token = json.load(f).get('accessToken')
@@ -153,11 +155,11 @@ run_cursor --workspace "$EMPTY_WORKSPACE" --add-dir "$REPO_DIR" \
       --disable-auto-update --disable-project-configs \
       --allowed-tools read_tool_call,grep_tool_call,glob_tool_call,ls_tool_call \
       < "$PROMPT_FILE" \
-  | tee "$STREAM" | python3 "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL" "$REPORT"
+  | tee "$STREAM" | "$AIWORK_PROGRAMS/python3" "$BIN_DIR/_cursor-stream.py" "$LOG_FILE" "$SUMMARY" "$MODEL" "$REPORT"
 STATUS=("${PIPESTATUS[@]}")
 set -e
 RC="${STATUS[0]}"
-REPORTED="$(python3 - "$SUMMARY" <<'PY'
+REPORTED="$("$AIWORK_PROGRAMS/python3" - "$SUMMARY" <<'PY'
 import json, sys
 try:
     print(json.load(open(sys.argv[1])).get('reported_model') or '')

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
+aiwork_init "${0##*/}" || exit 78
 # ro-repo-exec —— 把一条命令放进"被评审的仓是只读的"那个 mount namespace 里跑。
 # (2026-08-19,track repo-write-audit)
 #
@@ -24,7 +26,7 @@ set -uo pipefail
 
 die() { printf 'ro-repo-exec: %s\n' "$*" >&2; exit 78; }
 
-BIN_DIR="$(python3 -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || die "工具目录解析失败"
+BIN_DIR="$("$AIWORK_PROGRAMS/python3" -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || die "工具目录解析失败"
 
 RW=()
 while [[ $# -gt 0 ]]; do
@@ -62,7 +64,7 @@ _rw_list=""
 for p in ${RW[@]+"${RW[@]}"}; do
   [[ -d "$p" ]] || die "--rw 指的目录不存在:$p(要写的地方得先存在,否则腿写日志时才炸)"
   p="$(cd "$p" && pwd -P)"
-  _rel="$(python3 "$BIN_DIR/_paths.py" inside -- "$REPO" "$p")"
+  _rel="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_paths.py" inside -- "$REPO" "$p")"
   _rc=$?
   case "$_rc" in
     0)
@@ -101,7 +103,7 @@ if command -v git >/dev/null 2>&1; then
             "$_common"; do
     [ -n "$_g" ] && [ -d "$_g" ] || continue
     _g="$(cd "$_g" && pwd -P)" || continue
-    python3 "$BIN_DIR/_paths.py" inside -- "$REPO" "$_g" >/dev/null
+    "$AIWORK_PROGRAMS/python3" "$BIN_DIR/_paths.py" inside -- "$REPO" "$_g" >/dev/null
     _rc=$?
     [[ $_rc -eq 0 ]] && continue   # 在仓里 ⇒ 已经被盖住了
     [[ $_rc -eq 1 ]] || die "git 目录路径检查失败:$_g"

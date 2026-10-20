@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""Ask selected legs for one direction each, from a snapshot of the repo's current main.
+#!/bin/sh
+"""exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
+Ask selected legs for one direction each, from a snapshot of the repo's current main.
 
 Usage: explore BRIEF --repo DIR --leg A [--leg B ...]
 
@@ -19,7 +20,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _aiwork_config import ConfigError, data_dir, data_path, prune_data
+from _aiwork_config import ConfigError, check_programs, data_dir, data_path, prune_data
 import _leg_session
 from _leg_session import (
     READER_TIMEOUT_ENV,
@@ -147,13 +148,15 @@ def allocate_out_dir(brief: Path, stamp: str) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[1])
     parser.add_argument("brief", type=Path, help="brief file: goal, facts, constraints, premises")
     parser.add_argument("--repo", type=Path, required=True, help="repository whose current main is snapshotted")
     parser.add_argument("--leg", action="append", required=True, dest="legs", help="leg command, repeatable")
     args = parser.parse_args()
     try:
         data_dir()
+        for leg in args.legs:
+            check_programs(leg)
     except ConfigError as exc:
         print(f"explore: {exc}", file=sys.stderr)
         return 1

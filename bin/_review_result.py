@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""ReviewLegResult v2 contract and shared review-result semantics.
+#!/bin/sh
+"""exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
+ReviewLegResult v2 contract and shared review-result semantics.
 
 This module is both importable and executable.  Shell adapters may provide raw
 facts, but they must not independently interpret verdicts or coverage.
