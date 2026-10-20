@@ -36,25 +36,55 @@ OWNER_CRED_DIR="/root/.kimi-code/credentials"
 # Legacy homes are read-only fingerprint targets until the separate migration.
 OWNER_KIMI_HOME="$("$BIN/aiwork-config" data-path)/kimi-review-home"
 OWNER_MIMO_CFG="$("$BIN/aiwork-config" data-path)/mimo-review-home/mimocode/mimocode.json"
-_fp1() {   # 单个路径的指纹;**先判 -L**:符号链接要当链接看,不能被 -f/-d 吞掉
-  local p="$1" n; n="$(basename "$p")"
-  if   [[ -L "$p" ]]; then printf '%s=link->%s;' "$n" "$(readlink "$p" 2>/dev/null)"
-  elif [[ -f "$p" ]]; then printf '%s=%s:%s:%s;' "$n" "$(stat -c %i "$p" 2>/dev/null)" \
-                                  "$(stat -c %y "$p" 2>/dev/null)" \
-                                  "$(sha256sum "$p" 2>/dev/null | cut -c1-12)"
-  elif [[ -d "$p" ]]; then printf '%s=目录;' "$n"
-  else                     printf '%s=absent;' "$n"; fi
+_fp1() {   # Read identity and content together; failed observations are errors.
+  python3 - "$1" <<'PY'
+import hashlib, json, os, stat, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        state = ["absent"]
+    else:
+        if stat.S_ISLNK(info.st_mode):
+            state = ["link", os.readlink(path)]
+        elif stat.S_ISREG(info.st_mode):
+            with path.open('rb') as stream:
+                info = os.fstat(stream.fileno())
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(65536), b''):
+                    digest.update(chunk)
+            state = ["file", info.st_dev, info.st_ino, info.st_mtime_ns, digest.hexdigest()]
+        elif stat.S_ISDIR(info.st_mode):
+            state = ["directory"]
+        else:
+            raise OSError("unsupported file type")
+except OSError as exc:
+    print("fingerprint: cannot observe %s: %s" % (path, exc), file=sys.stderr)
+    raise SystemExit(1)
+print(json.dumps([str(path), state], ensure_ascii=True, separators=(',', ':')) + ';', end='')
+PY
 }
 _owner_env_fp() {
-  local out="" f
-  for f in "$OWNER_CRED_DIR"/*;      do [[ -e "$f" ]] && out+="cred/$(_fp1 "$f")"; done
-  for f in "$OWNER_KIMI_HOME"/hooks/*; do [[ -e "$f" ]] && out+="hook/$(_fp1 "$f")"; done
-  out+="link/$(_fp1 "$OWNER_KIMI_HOME/credentials")"
-  out+="cfg/$(_fp1 "$OWNER_KIMI_HOME/config.toml")"
-  out+="mimo/$(_fp1 "$OWNER_MIMO_CFG")"
+  local out="" f observation
+  local paths=()
+  for f in "$OWNER_CRED_DIR"/* "$OWNER_KIMI_HOME"/hooks/*; do
+    [[ -e "$f" ]] && paths+=("$f")
+  done
+  paths+=("$OWNER_KIMI_HOME/credentials" "$OWNER_KIMI_HOME/config.toml" "$OWNER_MIMO_CFG")
+  for f in "${paths[@]}"; do
+    observation="$(_fp1 "$f")" || return 1
+    [[ -n "$observation" ]] || return 1
+    out+="$observation"
+  done
   printf '%s' "$out"
 }
 OWNER_ENV_BEFORE="$(_owner_env_fp)"
+if [[ $? -ne 0 || -z "$OWNER_ENV_BEFORE" ]]; then
+  bad "V45: 无法读取运行前的真实环境指纹"
+  exit 1
+fi
 fixture_git_repo() { # path
   local repo="$1"
   mkdir -p "$repo"
@@ -510,7 +540,7 @@ v24_coverage_report() {
 
 v33_submimo_review_leg_is_read_only() {
   echo "[V33] submimo 仅保留读文件工具,fix 被拒绝"
-  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b rc leftovers; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   cp "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
@@ -672,9 +702,10 @@ sys.exit(0 if o.get('XDG_CONFIG_HOME')==os.environ['WANT'] else 1)" "$d/c_review
   #    配置内容由上面读落盘 JSON 的检查钉住。这一条查的是写入机制,机制不在产物里。
   #    它挡的是"未来改回直写",证明不了原子性本身。
   if [[ -f "$mhome/mimocode/mimocode.json" ]]; then
-    [[ "$(stat -c '%a' "$mhome/mimocode/mimocode.json")" == "600" ]]
+    python3 -c 'import os, stat, sys; sys.exit(stat.S_IMODE(os.stat(sys.argv[1]).st_mode) != 0o600)' \
+      "$mhome/mimocode/mimocode.json"
     check "V33: 配置文件权限 600(凭证级别的东西,别人读不到)" $?
-    [[ -z "$(find "$mhome/mimocode" -name '*.tmp*' -o -name '.*tmp*' 2>/dev/null)" ]]
+    leftovers="$(find "$mhome/mimocode" -name '*.tmp*' -o -name '.*tmp*')" && [[ -z "$leftovers" ]]
     check "V33: 原子写不许留下 tmp 残留(留了说明 replace 那步没走到)" $?
   else
     bad "V33: 配置文件权限 600(凭证级别的东西,别人读不到)"
@@ -1609,6 +1640,10 @@ v45_oracle_never_touches_owner_credentials() {
   echo "V45: 判卷工具自己不许碰业主的真实评审环境"
   local after changed
   after="$(_owner_env_fp)"
+  if [[ $? -ne 0 || -z "$after" ]]; then
+    bad "V45: 无法读取运行后的真实环境指纹"
+    return 1
+  fi
   if [[ "$after" == "$OWNER_ENV_BEFORE" ]]; then
     # 🔴 PASS 时**不打印指纹**:收据是要 commit 进仓的,而指纹里有业主凭证文件的
     #    大小/时间/短哈希 —— 绿的时候没人需要它,红的时候才需要,那时也只打变了的那几项。

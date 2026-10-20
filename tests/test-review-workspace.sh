@@ -475,7 +475,9 @@ test_mutation_sensitivity() {
   # repo. RW2 must reject it because the "work" write is blocked together with
   # the source write.
   cp "$BIN/_paths.py" "$d/_paths.py"
-  sed '/^  REVIEW_SNAPSHOT_TREE="\$tree1"$/a\  REVIEW_WORK_REPO="$REVIEW_SOURCE_REPO"' \
+  sed '/^  REVIEW_SNAPSHOT_TREE="\$tree1"$/a\
+  REVIEW_WORK_REPO="$REVIEW_SOURCE_REPO"
+' \
     "$HELPER" > "$direct"
   TEST_REVIEW_WORKSPACE_CASE=write-boundary TEST_REVIEW_WORKSPACE_HELPER="$direct" \
     bash "$0" > "$d/direct.out" 2>&1
