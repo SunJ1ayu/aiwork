@@ -1,0 +1,74 @@
+name: portable-tools-evidence
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  before-after:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Use system bash and system utilities
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: |
+          node_dir="$(dirname "$(command -v node)")"
+          echo "AIWORK_CI_PATH=$(dirname "$PYTHON_PATH"):$node_dir:/usr/bin:/bin:/usr/sbin:/sbin" >> "$GITHUB_ENV"
+      - name: Replay new tests and affected suites on base and head
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          export PATH="$AIWORK_CI_PATH"
+          /bin/bash --version
+          command -v mv stat sed grep find python3
+          baseline="$RUNNER_TEMP/portable-tools-base"
+          git worktree add --detach "$baseline" "$BASE_SHA"
+          cp tests/test_machine_bits.py "$baseline/tests/test_machine_bits.py"
+          set +e
+          (cd "$baseline" && python3 tests/test_machine_bits.py)
+          before=$?
+          set -e
+          echo "BASE_NEW_TESTS_RC=$before"
+          test "$before" -ne 0
+          python3 tests/test_machine_bits.py
+          target="$(mktemp -d)"
+          set +e
+          "$baseline/bin/sync-workflow-docs" --target-root "$target"
+          before=$?
+          set -e
+          echo "BASE_NATIVE_SYNC_RC=$before"
+          test "$before" -ne 0
+          bin/sync-workflow-docs --target-root "$target"
+          for version in base head; do
+            repo="$GITHUB_WORKSPACE"
+            if [[ "$version" == base ]]; then repo="$baseline"; fi
+            for suite in test-review-tooling.sh test-review-workspace.sh test-workflow-docs.sh; do
+              echo "=== $version / $suite ==="
+              set +e
+              (cd "$repo" && bash "tests/$suite")
+              result=$?
+              set -e
+              echo "RESULT $version $suite rc=$result"
+            done
+          done
+      - name: Check retained BSD and GNU shared extensions
+        run: |
+          export PATH="$AIWORK_CI_PATH"
+          test "$(printf 'max turns\n轮次上限\n' | grep -ci 'max.turns\|轮次上限')" = 2
+          test "$(printf ' \t# comment\nexec subagent\n' | grep -cvE '^\s*(#.*)?$')" = 1
+          test "$(seq 1 2 | paste -sd ',' -)" = '1,2'
+          date -Iseconds
+          echo 'RETAINED_EXTENSIONS_OK'

@@ -90,7 +90,8 @@ for spec in "${MAPPINGS[@]}"; do
   cmp -s "$src" "$dst" 2>/dev/null && continue
   parent="$(dirname "$dst")"; mkdir -p "$parent" || exit 1
   tmp="$parent/.workflow-sync.$$.tmp"
-  if ! install -m 0644 "$src" "$tmp" || ! mv -fT -- "$tmp" "$dst"; then
+  if ! install -m 0644 "$src" "$tmp" || ! python3 -c \
+    'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$tmp" "$dst"; then
     rm -f "$tmp"; exit 1
   fi
   echo "SYNCED $dst_rel"
