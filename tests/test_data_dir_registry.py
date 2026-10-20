@@ -117,7 +117,7 @@ class DataDirRegistryTest(unittest.TestCase):
                     os.environ.pop('AIWORK_DATA_DIR', None)
                 else:
                     os.environ['AIWORK_DATA_DIR'] = old
-        self.assertEqual(got, data / 'not-a-registered-name')
+        self.assertEqual(got, data.resolve() / 'not-a-registered-name')
 
     def test_unsuffixed_python_shebang_is_scanned(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,0 +1,84 @@
+name: mac-pitfall-evidence
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  before-after:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Compare unchanged main and repaired tests on the same Mac
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: |
+          export PATH="$(dirname "$PYTHON_PATH"):$(dirname "$(command -v node)"):/usr/bin:/bin:/usr/sbin:/sbin"
+          before="$RUNNER_TEMP/before"
+          evidence="$RUNNER_TEMP/mac-pitfall-evidence"
+          mkdir "$evidence"
+          git worktree add --detach "$before" 3253f34ee63f027a70b7c5823ebf3127a8b7bc26
+          for revision in before after; do
+            checkout="$GITHUB_WORKSPACE"
+            if [[ "$revision" == before ]]; then checkout="$before"; fi
+            for suite in machine-bits local-data data-dir-registry data-retention review-pr explore timeout review-homes review-platform subcodex review-workspace; do
+              file="tests/test_${suite//-/_}.py"
+              runner=python3
+              if [[ "$suite" == subcodex || "$suite" == review-workspace ]]; then
+                file="tests/test-$suite.sh"
+                runner=bash
+              fi
+              rc=0
+              (cd "$checkout" && "$runner" "$file") > "$evidence/$revision-$suite.log" 2>&1 || rc=$?
+              echo "$revision $suite rc=$rc"
+              tail -5 "$evidence/$revision-$suite.log"
+            done
+          done
+          cp tests/test_machine_bits.py "$before/tests/test_machine_bits.py"
+          python3 - "$before" <<'PY'
+          import ast, pathlib, sys
+          before = pathlib.Path(sys.argv[1])
+          for filename, name in (
+              ('test_explore.py', 'test_main_default_branch_does_not_block_snapshot_fetch'),
+              ('test_timeout.py', 'test_process_observation_needs_no_ps_and_detects_live_workers'),
+          ):
+              source = pathlib.Path('tests', filename).read_text()
+              method = next(n for n in ast.walk(ast.parse(source))
+                            if isinstance(n, ast.FunctionDef) and n.name == name)
+              lines = source.splitlines(keepends=True)
+              text = ''.join(lines[method.lineno-1:method.end_lineno])
+              target = before / 'tests' / filename
+              old = target.read_text()
+              position = old.index('\n    def ', old.index('class '))
+              target.write_text(old[:position] + '\n' + text + '\n' + old[position:]
+                                + '\n')
+              if filename == 'test_timeout.py':
+                  content = target.read_text().replace('from pathlib import Path',
+                                                      'from pathlib import Path\nfrom unittest.mock import patch')
+                  target.write_text(content)
+          PY
+          for entry in 'machine_bits.py MachineBitsTests.test_home_guard_rejects_missing_home_beneath_symlinked_repo MachineBitsTests.test_cleanup_accepts_alias_of_base_but_rejects_escape MachineBitsTests.test_existing_path_oracles_through_symlinked_temporary_directory' 'explore.py ExploreTests.test_main_default_branch_does_not_block_snapshot_fetch' 'timeout.py Timeout.test_process_observation_needs_no_ps_and_detects_live_workers'; do
+            set -- $entry
+            rc=0
+            (cd "$before" && python3 "tests/test_$1" "${@:2}") > "$evidence/red-$1.log" 2>&1 || rc=$?
+            echo "main plus new tests: $1 rc=$rc"
+            tail -8 "$evidence/red-$1.log"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-pitfall-evidence
+          path: ${{ runner.temp }}/mac-pitfall-evidence

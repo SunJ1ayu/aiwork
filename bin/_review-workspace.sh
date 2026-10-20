@@ -450,26 +450,29 @@ review_workspace_finish() { # leg rc mode model billing reported degraded [audit
 
 review_workspace_cleanup() {
   local target="${REVIEW_WORKSPACE_DIR:-}" base="${REVIEW_WORKSPACE_BASE_REAL:-}"
-  local marker
+  local marker rel source
   [[ -n "$target" && -n "$base" ]] || return 0
-  [[ "$target" != / && "$target" != "$base" && "$target" != "${REVIEW_SOURCE_REPO:-}" ]] || {
+  target="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$target")" || return 78
+  source="${REVIEW_SOURCE_REPO:-}"
+  if [[ -n "$source" ]]; then
+    source="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$source")" || return 78
+  fi
+  [[ "$target" != / && "$target" != "$source" ]] || {
     review_workspace__say "拒绝清理不安全路径:$target"
     return 78
   }
-  case "$target" in
-    "$base"/*) ;;
-    *) review_workspace__say "拒绝清理受控根之外的路径:$target"; return 78 ;;
-  esac
+  rel="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$base" "$target")" && [[ -n "$rel" ]] || {
+    review_workspace__say "拒绝清理受控根之外的路径:$target"; return 78;
+  }
   target="$(cd "$target" 2>/dev/null && pwd -P)" || {
     # Already gone is a successful idempotent cleanup.
     [[ ! -e "${REVIEW_WORKSPACE_DIR:-}" ]] && return 0
     review_workspace__say "cleanup 目标解析失败:${REVIEW_WORKSPACE_DIR:-}"
     return 78
   }
-  case "$target" in
-    "$base"/*) ;;
-    *) review_workspace__say "cleanup 真路径逃出受控根:$target"; return 78 ;;
-  esac
+  rel="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$base" "$target")" && [[ -n "$rel" ]] || {
+    review_workspace__say "cleanup 真路径逃出受控根:$target"; return 78;
+  }
   marker="$target/.aiwork-review-workspace"
   [[ -f "$marker" ]] || {
     review_workspace__say "cleanup 目标没有 helper marker:$target"

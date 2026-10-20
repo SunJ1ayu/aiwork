@@ -65,7 +65,7 @@ test_snapshot_view() {
 
   [[ "$(git -C "$clone" rev-parse HEAD 2>/dev/null)" == "$head" ]]
   check 'RW1: clone HEAD stays at the source HEAD' $?
-  [[ "$REVIEW_SOURCE_REPO" == "$repo" ]]
+  [[ "$REVIEW_SOURCE_REPO" == "$(python3 "$BIN/_paths.py" canon -- "$repo")" ]]
   check 'RW1: a subdirectory input is normalized to the Git top-level' $?
   cmp -s "$repo/committed.txt" "$clone/committed.txt" \
     && cmp -s "$repo/modified.txt" "$clone/modified.txt" \

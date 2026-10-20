@@ -16,6 +16,9 @@ import test_leg_finish as finish
 from test_reader_tool_audit import KIMI_READ, MIMO_READ
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'bin'))
+from _paths import inside
+
 LEGS = ('subcodex', 'subdeepseek-agent', 'subcursor', 'subkimi', 'submimo')
 
 
@@ -93,7 +96,7 @@ raise SystemExit(86)
                         recorded = json.loads(capture.read_text())
                         args, cwd = recorded['args'], recorded['cwd']
                         # CLI scratch must be outside the model-writable copy.
-                        self.assertFalse(Path(recorded['tmp']).is_relative_to(Path(cwd)))
+                        self.assertEqual(inside(cwd, recorded['tmp'], literal=False)[0], 1)
                     else:
                         self.assertTrue(self.marker.exists(), result.stderr)
                         args = self.marker.read_text().splitlines()
@@ -114,7 +117,7 @@ raise SystemExit(86)
                     self.assertNotIn('--add-dir', args)
                     self.assertNotEqual(Path(cwd), self.fixture.repo.resolve())
                     last_message = Path(args[args.index('-o') + 1])
-                    self.assertFalse(last_message.is_relative_to(Path(cwd)))
+                    self.assertEqual(inside(cwd, str(last_message), literal=False)[0], 1)
 
     def test_mac_pending_legs_refuse_before_any_preparation(self):
         unexpected = self.root / 'prepared'
@@ -163,7 +166,9 @@ config = dict(arg.split('=', 1) for i, arg in enumerate(args)
               if i and args[i - 1] == '-c')
 scratch = pathlib.Path(json.loads(config.get('shell_environment_policy.set.TMPDIR',
                                            json.dumps(os.environ['TMPDIR']))))
-assert scratch.is_relative_to(cwd)
+sys.path.insert(0, str(pathlib.Path(sys.argv[0]).parent))
+from _paths import inside
+assert inside(str(cwd), str(scratch), literal=False)[0] == 0
 attack = os.environ['OUTPUT_ATTACK']
 if attack == 'clean':
     subprocess.run(['git', 'clean', '-fd'], check=True, stdout=subprocess.DEVNULL)

@@ -188,13 +188,16 @@ review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 # 常会再去 Read 任务路径本身,复制进去让这一步也落在沙箱内。
 REPO_REAL="$(realpath "$REPO_DIR")"
 TASK_REAL="$(realpath "$TASK_FILE")"
-case "$TASK_REAL" in
-  "$REPO_REAL"/*) : ;;
-  *)
+_task_rc=0
+python3 "$BIN_DIR/_paths.py" inside -- "$REPO_REAL" "$TASK_REAL" >/dev/null || _task_rc=$?
+case "$_task_rc" in
+  0) : ;;
+  1)
     CLEANUP_TASK="$REPO_REAL/.submimo-task-$$.md"
     cp "$TASK_REAL" "$CLEANUP_TASK"
     TASK_FILE="$CLEANUP_TASK"
     ;;
+  *) echo 'submimo: task 路径检查失败 ⇒ 拒绝派发' >&2; exit 78 ;;
 esac
 
 CMD=(mimo run --pure --agent "$AGENT" --dir "$REPO_DIR" --format json -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")

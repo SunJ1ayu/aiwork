@@ -230,7 +230,7 @@ def snapshot_main(source: Path, directory: Path, main_sha: str) -> Path:
     repo.mkdir()
     run(["git", "init", "-q", str(repo)])
     run(["git", "-C", str(repo), "fetch", "-q", "--no-tags", str(source),
-         f"{main_sha}:refs/heads/main"])
+         f"{main_sha}:refs/aiwork/main"])
     run(["git", "-C", str(repo), "checkout", "-q", "--detach", main_sha])
     assert_snapshot_checkout(repo, main_sha, label="main")
     return repo

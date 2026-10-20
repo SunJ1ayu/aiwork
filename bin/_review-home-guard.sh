@@ -19,17 +19,12 @@
 
 review_home_guard() {  # review_home_guard <腿名> <运行期 home> <被评审的仓> <环境变量名>
   local leg="$1" home="$2" repo="$3" var="${4:-REVIEW_HOME}"
-  local h r
-  # realpath 化再比:符号链接指进仓里也算仓内。解析不了(目录还没建)就按原样比,
-  # 那种情况下还没有链接可言。
-  h="$(cd "$home" 2>/dev/null && pwd -P)" || h="$home"
-  r="$(cd "$repo" 2>/dev/null && pwd -P)" || r="$repo"
-  [ -n "$h" ] && [ -n "$r" ] || return 0
-  case "$h" in
-    "$r"|"$r"/*) ;;
-    *) return 0 ;;
-  esac
-  printf '%s: 运行期 home 在**被评审的仓内**(%s)⇒ 拒跑。\n' "$leg" "$h" >&2
+  local helper rc=0
+  helper="$(python3 -c 'import os,sys; print(os.path.join(os.path.dirname(os.path.realpath(sys.argv[1])), "_paths.py"))' "${BASH_SOURCE[0]}")" || return 78
+  python3 "$helper" inside -- "$repo" "$home" >/dev/null || rc=$?
+  [[ $rc -eq 1 ]] && return 0
+  [[ $rc -eq 0 ]] || return 78
+  printf '%s: 运行期 home 在**被评审的仓内**(%s)⇒ 拒跑。\n' "$leg" "$home" >&2
   printf '  评审腿跑在"仓是只读的" mount namespace 里,底座往那儿写状态会当场 EROFS、\n' >&2
   printf '  腿起不来,而它吐的错误信息看不出是只读挂载(2026-08-19 真 panel 上就是这么死的)。\n' >&2
   printf '  把 %s 放到**仓外**由调用方管理的目录，或不设它使用临时运行目录。\n' "$var" >&2

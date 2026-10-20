@@ -26,6 +26,9 @@ from _test_retention import extreme_mtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "bin"))
+from _paths import inside
+
 SCRIPT = ROOT / "bin/review-pr"
 FAKE_TOKEN = '-'.join(('fake', 'token'))
 
@@ -193,7 +196,7 @@ class ReviewPrTests(unittest.TestCase):
                 self.assertEqual(self.review.main(), 1)
             self.assertEqual(reached, [True])
             self.assertTrue(bad.exists())
-            self.assertIn(str(bad), stderr.getvalue())
+            self.assertIn(str(bad.resolve()), stderr.getvalue())
             self.assertIn('simulated denied', stderr.getvalue())
 
     def test_dry_run_does_not_delete_expired_data(self):
@@ -716,7 +719,7 @@ class ReviewPrTests(unittest.TestCase):
         archive, files = next(iter(calls['archives'].items()))
         for name in ('task.md', 'review.log', 'leg.stderr', 'facts.json'):
             self.assertIn(name, files)
-        self.assertIn('raw output kept in ' + archive + '/review.log', stderr)
+        self.assertIn('raw output kept in ' + str(Path(archive).resolve() / 'review.log'), stderr)
         self.assertNotIn(calls['temporary'], stderr)
         self.assertEqual(calls['archive_modes'], [0o700])
 
@@ -1666,10 +1669,10 @@ grep -q -F -- "$3" "$clone/$4"
                     rc = tool_review.main()
             finally:
                 os.chdir(previous)
-                sys.path[:] = [item for item in sys.path if not str(item).startswith(str(root))]
+                sys.path[:] = [item for item in sys.path if inside(str(root), str(item), literal=False)[0] != 0]
                 for name, module in list(sys.modules.items()):
                     file = getattr(module, "__file__", None)
-                    if file and str(file).startswith(str(root)):
+                    if file and inside(str(root), str(file), literal=False)[0] == 0:
                         del sys.modules[name]
             calls["head_after"] = git(tool, "rev-parse", "HEAD").stdout.strip()
             calls["tree_unchanged"] = (tool / "bin" / "subcodex").read_bytes() == marker

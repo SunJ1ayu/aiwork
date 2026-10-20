@@ -148,6 +148,15 @@ class ExploreTests(unittest.TestCase):
     def _run(self, legs):
         return self._run_at(legs, str(self.repo), None)
 
+    def test_main_default_branch_does_not_block_snapshot_fetch(self):
+        self._link('subkimi')
+        self.env.update(GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='init.defaultBranch',
+                        GIT_CONFIG_VALUE_0='main', EXPLORE_PEERS='subkimi')
+        rc, stdout, stderr = self._run(['subkimi'])
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual((self.obs / 'subkimi.view').read_text().splitlines(),
+                         [self.main_sha, 'on-main.txt'])
+
     def test_invalid_repository_does_not_prune(self):
         expired = self.data / 'tasks/old.md'
         expired.parent.mkdir()
@@ -269,7 +278,7 @@ class ExploreTests(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         self.assertTrue(Path(stdout.strip()).is_file())
         self.assertTrue(bad.exists())
-        self.assertIn(str(bad), stderr)
+        self.assertIn(str(bad.resolve()), stderr)
         self.assertIn('simulated denied', stderr)
 
     def _run_at(self, legs, repo_arg, cwd):

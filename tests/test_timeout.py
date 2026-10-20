@@ -16,6 +16,7 @@ import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 
 TOOL = Path(__file__).resolve().parents[1] / "bin" / "aiwork-timeout"
@@ -27,6 +28,8 @@ TREE = r'''
 import os, signal, subprocess, sys, time
 from pathlib import Path
 root, role, mode = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+# A descriptor owned by this worker closes even while it is an unreaped zombie.
+lifeline = os.open(root / (role + ".alive"), os.O_WRONLY)
 if role == "grandchild" or (role == "leader" and mode == "stubborn"):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -59,13 +62,21 @@ while True:
 os.execv(sys.argv[2], sys.argv[2:])
 '''
 
-# Only the supervisor's kernel boundary is replaced. The command tree and
-# independent watchdog still run normally, including their real signals.
+# Observe actual watchdog creation and optionally deny a supervisor signal.
+# The command tree and watchdog still run normally, including real signals.
 DENIED_GROUP_CALL = r'''
-import errno, os, runpy, sys, time
+import errno, os, runpy, subprocess, sys, time
 from pathlib import Path
 tool, audit, denied = sys.argv[1:4]
 sys.argv = [tool] + sys.argv[4:]
+watchdog_record = os.environ.get("TEST_TIMEOUT_WATCHDOG_RECORD")
+class ObservedPopen(subprocess.Popen):
+    def __init__(self, args, **kwargs):
+        super().__init__(args, **kwargs)
+        if watchdog_record and "--_watchdog" in args:
+            with Path(watchdog_record).open("a") as output:
+                output.write(str(self.pid) + "\n")
+subprocess.Popen = ObservedPopen
 real_killpg = os.killpg
 def killpg(pgid, signum):
     with Path(audit).open("a") as output:
@@ -79,6 +90,16 @@ runpy.run_path(tool, run_name="__main__")
 
 
 class Timeout(unittest.TestCase):
+    def test_process_observation_needs_no_ps_and_detects_live_workers(self):
+        with self.tree(limit="30") as (process, members):
+            with patch.object(subprocess, 'run', side_effect=PermissionError('ps unavailable')):
+                with self.assertRaises(AssertionError):
+                    self.assert_stopped(members)
+                os.kill(self.watchdog_of(process), signal.SIGKILL)
+                _stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 125, stderr)
+                self.assert_stopped(members)
+
     def run_command(self, code):
         return subprocess.run(
             [sys.executable, str(TOOL), "5", sys.executable, "-c", code],
@@ -99,10 +120,13 @@ class Timeout(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="aiwork-timeout-test-") as folder:
             root = Path(folder)
             (root / "tree.py").write_text(TREE)
-            command = [sys.executable, str(TOOL)]
-            if denied_signal is not None:
-                command = [sys.executable, "-c", DENIED_GROUP_CALL, str(TOOL),
-                           str(root / "signals"), str(denied_signal)]
+            channels = []
+            for role in ("leader", "child", "grandchild"):
+                path = root / (role + ".alive")
+                os.mkfifo(path)
+                channels.append(os.open(path, os.O_RDONLY | os.O_NONBLOCK))
+            command = [sys.executable, "-c", DENIED_GROUP_CALL, str(TOOL),
+                       str(root / "signals"), str(denied_signal if denied_signal is not None else -1)]
             if grace is not None:
                 command += ["-k", grace]
             job = [sys.executable, "-c", TREE, folder, "leader", mode]
@@ -111,6 +135,7 @@ class Timeout(unittest.TestCase):
             process = subprocess.Popen(
                 command + [limit] + job,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                env=dict(os.environ, TEST_TIMEOUT_WATCHDOG_RECORD=str(root / "watchdog")),
                 start_new_session=True)
             members = []
             try:
@@ -125,6 +150,8 @@ class Timeout(unittest.TestCase):
                     time.sleep(0.01)
                 self.assertEqual({group for _, group in members}, {members[0][0]})
                 self.assertNotEqual(members[0][1], os.getpgrp())
+                self.worker_channels = dict(zip((pid for pid, _ in members), channels))
+                process.watchdog_record = root / "watchdog"
                 yield process, members
             finally:
                 # Independent cleanup also runs when an assertion detects a leak.
@@ -138,22 +165,21 @@ class Timeout(unittest.TestCase):
                         except ProcessLookupError:
                             pass
                 process.communicate(timeout=5)
+                for fd in channels:
+                    os.close(fd)
 
     def assert_stopped(self, members):
-        # Orphans can briefly be zombies pending reaping by the system's init;
-        # they cannot execute or hold open the command's pipes.
+        # Each worker opens its own FIFO before publishing its PID. EOF proves
+        # it has exited; zombies have closed their descriptors as well.
+        pending = dict((pid, self.worker_channels[pid]) for pid, _ in members)
         until = time.monotonic() + 3
-        while True:
-            running = []
-            for pid, _ in members:
-                result = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
-                                        capture_output=True, text=True, timeout=5)
-                if result.stdout.strip() and not result.stdout.lstrip().startswith("Z"):
-                    running.append(pid)
-            if not running or time.monotonic() >= until:
-                self.assertEqual(running, [], "surviving processes")
-                return
-            time.sleep(0.02)
+        while pending and time.monotonic() < until:
+            ready, _, _ = select.select(list(pending.values()), [], [], max(0, until - time.monotonic()))
+            for pid, fd in list(pending.items()):
+                if fd in ready:
+                    self.assertEqual(os.read(fd, 1), b"", "unexpected worker data")
+                    del pending[pid]
+        self.assertEqual(list(pending), [], "surviving processes")
 
     def test_deadline_kills_tree_including_term_ignoring_grandchild(self):
         with self.tree() as (process, members):
@@ -324,13 +350,11 @@ class Timeout(unittest.TestCase):
                 self.assertEqual(victim.wait(timeout=5), -signal.SIGKILL)
 
     def watchdog_of(self, supervisor):
-        listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,args="],
-                                 capture_output=True, text=True, timeout=5).stdout
-        pids = [int(fields[0]) for fields in (line.split(None, 2) for line in listing.splitlines())
-                if len(fields) == 3 and int(fields[1]) == supervisor.pid
-                and "--_watchdog" in fields[2]]
-        self.assertEqual(len(pids), 1, listing)
-        return pids[0]
+        # Record the actual Popen result in the disposable supervisor wrapper.
+        # No process-table command is needed inside the no-egress sandbox.
+        pids = supervisor.watchdog_record.read_text().splitlines()
+        self.assertEqual(len(pids), 1, pids)
+        return int(pids[0])
 
     def test_watchdog_failure_returns_125_and_says_so(self):
         # INT makes the watchdog kill the group, then exit abnormally, as an

@@ -182,7 +182,7 @@ grep -q 'TASK_SENTINEL_c0d3' "$d/cap/c1.stdin" 2>/dev/null
 check "C1: 任务书经 stdin 递给 codex(不走 argv,躲开 128KiB 单参数上限)" $?
 _pwd="$(cat "$d/cap/c1.pwd" 2>/dev/null)"
 check "C1: codex 的工作目录是 ws 下的可丢弃副本,不是源仓" \
-  $([[ -n "$_pwd" && "$_pwd" != "$d/repo" && "$_pwd" == "$(cd "$d/ws" && pwd -P)"/* ]]; echo $?)
+  $([[ -n "$_pwd" && "$_pwd" != "$d/repo" && -n "$(python3 "$ROOT/bin/_paths.py" inside -- "$d/ws" "$_pwd")" ]]; echo $?)
 if review_platform_is_macos; then
   # A CLI stub has no native sandbox; its own host writes cannot stand in for
   # Codex's tools. The real tool boundary is checked by the installation probe.
