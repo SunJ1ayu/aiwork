@@ -24,7 +24,7 @@ CASES = ("timeout", "nonzero", "blank", "no_verdict", "pass",
 
 class LegFinish(unittest.TestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="leg-finish-"))
+        self.root = Path(tempfile.mkdtemp(prefix="leg-finish-")).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for name in ("aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",

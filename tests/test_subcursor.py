@@ -121,7 +121,7 @@ class CursorTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.d = Path(self.tmp.name)
+        self.d = Path(self.tmp.name).resolve()
         self.config = write_settings(self.d / 'settings')
         self.bin = self.d/'bin'; self.bin.mkdir()
         for name in ('subcursor','aiwork-config', '_aiwork_config.py','_cursor-stream.py','_review-workspace.sh', 'aiwork-timeout',

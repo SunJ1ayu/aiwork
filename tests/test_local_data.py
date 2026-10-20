@@ -18,7 +18,7 @@ class LocalDataTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.d = Path(self.temp.name)
+        self.d = Path(self.temp.name).resolve()
         self.home = self.d / 'home'
         self.home.mkdir()
         self.tool = self.d / 'relocated tools'

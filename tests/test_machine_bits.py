@@ -16,6 +16,78 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MachineBitsTests(unittest.TestCase):
+    def test_home_guard_rejects_missing_home_beneath_symlinked_repo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            repo = root / 'repo'
+            repo.mkdir()
+            alias = root / 'alias'
+            alias.symlink_to(repo, target_is_directory=True)
+            sibling = root / 'repo-other'
+            sibling.mkdir()
+            for home, expected in ((alias, 1), (alias / 'missing/home', 1), (sibling, 0)):
+                with self.subTest(home=home):
+                    result = subprocess.run(
+                        ['bash', '-c', '. "$1"; review_home_guard test "$2" "$3"',
+                         'home-guard', str(ROOT / 'bin/_review-home-guard.sh'),
+                         str(home), str(repo)], capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_cleanup_accepts_alias_of_base_but_rejects_escape(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = root / 'base'
+            base.mkdir()
+            alias = root / 'alias'
+            alias.symlink_to(base, target_is_directory=True)
+            outside = root / 'outside'
+            outside.mkdir()
+            target = base / 'run'
+            target.mkdir()
+            escape = base / 'escape'
+            escape.symlink_to(outside, target_is_directory=True)
+            for path in (target, outside):
+                (path / '.aiwork-review-workspace').touch()
+            for path, expected in ((outside, 78), (escape, 78), (base, 78), (target, 0)):
+                with self.subTest(path=path):
+                    result = subprocess.run(
+                        ['bash', '-c', '. "$1"; REVIEW_WORKSPACE_BASE_REAL="$2"; '
+                         'REVIEW_WORKSPACE_DIR="$3"; review_workspace_cleanup',
+                         'cleanup', str(ROOT / 'bin/_review-workspace.sh'),
+                         str(alias), str(path)], capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+                    self.assertEqual(path.exists(), expected != 0)
+
+    def test_existing_path_oracles_through_symlinked_temporary_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            real = root / 'real'
+            real.mkdir()
+            alias = root / 'alias'
+            alias.symlink_to(real, target_is_directory=True)
+            cases = (
+                ('test_review_homes.py', 'ReviewHomes.test_kimi_renders_only_seed_and_links_cli_credentials_each_run'),
+                ('test_local_data.py', 'LocalDataTests.test_existing_data_dir_query_does_not_create_children'),
+                ('test_data_dir_registry.py', 'DataDirRegistryTest.test_data_path_still_accepts_an_unregistered_name'),
+                ('test_data_retention.py', 'DataRetentionTests.test_dry_run_lists_path_size_and_file_time_without_deleting',
+                 'DataRetentionTests.test_cli_dry_run_and_delete_use_the_same_candidates',
+                 'DataRetentionTests.test_failure_archives_expire_independently',
+                 'DataRetentionTests.test_delete_errors_warn_and_continue_with_other_units',
+                 'DataRetentionTests.test_three_hundred_levels_with_sixty_four_fds'),
+                ('test_explore.py', 'ExploreTests.test_parallel_legs_store_fixture_and_plain_answers_from_main',
+                 'ExploreTests.test_one_leg_failure_keeps_the_other_result_and_exits_nonzero',
+                 'ExploreTests.test_unexecutable_leg_fails_without_traceback_and_keeps_the_other'),
+                ('test_review_pr.py', 'ReviewPrTests.test_authoritative_main_and_inherited_git_env_cannot_retarget_the_check',
+                 'ReviewPrTests.test_prune_failure_warns_but_review_reaches_credentials',
+                 'ReviewPrTests.test_failed_leg_keeps_whole_directory_and_reports_a_live_log_path'),
+            )
+            for filename, *tests in cases:
+                with self.subTest(suite=filename):
+                    result = subprocess.run(
+                        [sys.executable, str(ROOT / 'tests' / filename), *tests],
+                        env=dict(os.environ, TMPDIR=str(alias)), capture_output=True, text=True, timeout=120)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_no_temporary_files_oracle_requires_successful_find(self):
         source = (ROOT / 'tests/test-review-tooling.sh').read_text()
         start = source.index('\n', source.index('    check "V33: 配置文件权限')) + 1
