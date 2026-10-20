@@ -1,0 +1,52 @@
+name: timeout-evidence
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  before-after:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Deterministic denied-probe regression on this revision
+        continue-on-error: true
+        run: python3 tests/test_timeout.py Timeout.test_denied_group_probe_preserves_status_and_bounded_cleanup
+      - name: Native kernel calls without the test sandbox (100 trials)
+        run: |
+          python3 - <<'PY'
+          import collections, pathlib, subprocess, sys
+          tool = pathlib.Path('bin/aiwork-timeout').resolve()
+          job = '''import signal, subprocess, sys, time
+          subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+          time.sleep(60)
+          '''
+          counts = collections.Counter()
+          for trial in range(100):
+              result = subprocess.run([str(tool), '-k', '0.05', '0.2', sys.executable, '-c', job],
+                                      capture_output=True, text=True, timeout=5)
+              key = (result.returncode, 'PermissionError' in result.stderr)
+              counts[key] += 1
+              if key[1] and counts[key] == 1:
+                  print('NATIVE FAILURE trial', trial, result.stderr, flush=True)
+          print('NATIVE_COUNTS (exit, PermissionError):', dict(counts), flush=True)
+          PY
+      - name: Repeated original Codex timeout and homes cases (10 trials)
+        run: |
+          for trial in {1..10}; do
+            echo "ORIGINAL_CASES trial=$trial"
+            bash tests/test-subcodex.sh > "$RUNNER_TEMP/codex-$trial.log" 2>&1
+            status=$?
+            cat "$RUNNER_TEMP/codex-$trial.log"
+            echo "CODEX_STATUS=$status"
+            python3 tests/test_review_homes.py ReviewHomes.test_every_discovered_leg_cleans_success_failure_and_timeout > "$RUNNER_TEMP/homes-$trial.log" 2>&1
+            status=$?
+            cat "$RUNNER_TEMP/homes-$trial.log"
+            echo "HOMES_STATUS=$status"
+          done
+        shell: /bin/bash --noprofile --norc -o pipefail {0}

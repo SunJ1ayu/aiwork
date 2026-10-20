@@ -59,6 +59,24 @@ while True:
 os.execv(sys.argv[2], sys.argv[2:])
 '''
 
+# Only the supervisor's kernel boundary is replaced. The command tree and
+# independent watchdog still run normally, including their real signals.
+DENIED_PROBE = r'''
+import errno, os, runpy, sys, time
+from pathlib import Path
+tool, audit = sys.argv[1:3]
+sys.argv = [tool] + sys.argv[3:]
+real_killpg = os.killpg
+def killpg(pgid, signum):
+    with Path(audit).open("a") as output:
+        output.write("%d %.9f\n" % (signum, time.monotonic()))
+    if signum == 0:
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+    return real_killpg(pgid, signum)
+os.killpg = killpg
+runpy.run_path(tool, run_name="__main__")
+'''
+
 
 class Timeout(unittest.TestCase):
     def run_command(self, code):
@@ -77,11 +95,13 @@ class Timeout(unittest.TestCase):
         self.assertEqual(result.stderr, "")
 
     @contextmanager
-    def tree(self, limit="2", mode="wait", grace="0.2", nested=False):
+    def tree(self, limit="2", mode="wait", grace="0.2", nested=False, denied_probe=False):
         with tempfile.TemporaryDirectory(prefix="aiwork-timeout-test-") as folder:
             root = Path(folder)
             (root / "tree.py").write_text(TREE)
             command = [sys.executable, str(TOOL)]
+            if denied_probe:
+                command = [sys.executable, "-c", DENIED_PROBE, str(TOOL), str(root / "signals")]
             if grace is not None:
                 command += ["-k", grace]
             job = [sys.executable, "-c", TREE, folder, "leader", mode]
@@ -141,6 +161,32 @@ class Timeout(unittest.TestCase):
             self.assertEqual(stderr.splitlines(), [
                 "aiwork-timeout: timed out after 2s; terminating process group"])
             self.assert_stopped(members)
+
+    def test_denied_group_probe_preserves_status_and_bounded_cleanup(self):
+        # A living stubborn leader makes skipping KILL observable even if the
+        # watchdog could eventually rescue a supervisor that crashes.
+        for case, limit, mode, signum, expected in (
+                ("deadline", "2", "stubborn", None, 124),
+                ("leader_exit", "30", "exit", None, 17),
+                ("interrupt", "30", "stubborn", signal.SIGINT, 130),
+                ("terminate", "30", "stubborn", signal.SIGTERM, 143)):
+            with self.subTest(case=case), self.tree(
+                    limit=limit, mode=mode, grace="0.3", denied_probe=True) as (process, members):
+                if signum is not None:
+                    process.send_signal(signum)
+                _stdout, stderr = process.communicate(timeout=6)
+                self.assertEqual(process.returncode, expected, stderr)
+                self.assertNotIn("Traceback", stderr)
+                self.assertEqual("timed out" in stderr, case == "deadline", stderr)
+                self.assert_stopped(members)
+                events = [line.split() for line in Path(process.args[4]).read_text().splitlines()]
+                signals = [int(event[0]) for event in events]
+                self.assertEqual(signals[0], signum or signal.SIGTERM)
+                self.assertIn(0, signals, "the denied probe must actually be reached")
+                self.assertEqual(signals[-1], signal.SIGKILL, "supervisor must attempt KILL")
+                elapsed = float(events[-1][1]) - float(events[0][1])
+                self.assertGreaterEqual(elapsed, 0.29, "must retain the TERM grace period")
+                self.assertLess(elapsed, 1.5, "unknown status must not extend the grace period")
 
     def test_deadline_returns_124_even_when_term_handler_exits_zero(self):
         code = ("import signal, sys, time; "
