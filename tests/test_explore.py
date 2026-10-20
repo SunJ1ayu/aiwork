@@ -87,7 +87,7 @@ class ExploreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
         shutil.copy2(ROOT / "bin" / "_review_result.py", self.bin / "_review_result.py")
@@ -278,7 +278,7 @@ class ExploreTests(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         self.assertTrue(Path(stdout.strip()).is_file())
         self.assertTrue(bad.exists())
-        self.assertIn(str(bad.resolve()), stderr)
+        self.assertIn(str(bad), stderr)
         self.assertIn('simulated denied', stderr)
 
     def _run_at(self, legs, repo_arg, cwd):
@@ -621,7 +621,7 @@ class ExploreLegContractTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.repo = _git_repo(self.root)
         self.config = write_settings(self.root / "settings")
         self.fake = self.root / "fake"

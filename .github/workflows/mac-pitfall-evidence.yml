@@ -34,7 +34,7 @@ jobs:
           for revision in before after; do
             checkout="$GITHUB_WORKSPACE"
             if [[ "$revision" == before ]]; then checkout="$before"; fi
-            for suite in machine-bits local-data data-dir-registry data-retention review-pr explore timeout review-homes review-platform subcodex review-workspace; do
+            for suite in machine-bits local-data data-dir-mention data-dir-registry data-retention review-pr explore timeout review-homes review-platform subcodex review-workspace subcursor leg-finish; do
               file="tests/test_${suite//-/_}.py"
               runner=python3
               if [[ "$suite" == subcodex || "$suite" == review-workspace ]]; then

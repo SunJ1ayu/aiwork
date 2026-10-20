@@ -18,7 +18,7 @@ class LocalDataTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.d = Path(self.temp.name)
+        self.d = Path(self.temp.name).resolve()
         self.home = self.d / 'home'
         self.home.mkdir()
         self.tool = self.d / 'relocated tools'
@@ -35,7 +35,7 @@ class LocalDataTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual(result.stdout.strip(), '')
         self.assertNotIn(str(path), result.stdout)
-        self.assertIn(str(path.resolve()), result.stderr)
+        self.assertIn(str(path), result.stderr)
         self.assertIn('先确认盘已经挂好', result.stderr)
         self.assertFalse(Path(path).exists())
 
@@ -71,7 +71,7 @@ class LocalDataTests(unittest.TestCase):
         default.mkdir(parents=True)
         result = self.run_tool('aiwork-config', 'data-path', 'logs', env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), str((default / 'logs').resolve()))
+        self.assertEqual(result.stdout.strip(), str(default / 'logs'))
         self.assertFalse((default / 'logs').exists())
         self.assertFalse((self.d / 'provider-xdg').exists())
 
@@ -81,7 +81,7 @@ class LocalDataTests(unittest.TestCase):
         (self.home / 'custom data').mkdir()
         result = self.run_tool('aiwork-config', 'data-path', 'refs', env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), str((self.home / 'custom data/refs').resolve()))
+        self.assertEqual(result.stdout.strip(), str(self.home / 'custom data/refs'))
         self.assertFalse((self.home / 'custom data/refs').exists())
 
         mounted = self.d / 'mounted'
@@ -91,13 +91,13 @@ class LocalDataTests(unittest.TestCase):
         result = self.run_tool('aiwork-config', 'data-path', 'logs',
                                env=dict(self.env, AIWORK_DATA_DIR=str(alias)))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), str((mounted / 'logs').resolve()))
+        self.assertEqual(result.stdout.strip(), str(mounted / 'logs'))
         self.assertFalse((mounted / 'logs').exists())
 
         for name in ('out', '.mimocode', 'etc', 'scratch', 'tasks', 'worktrees'):
             result = self.run_tool('aiwork-config', 'data-path', name)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), str((self.data / name).resolve()))
+            self.assertEqual(result.stdout.strip(), str(self.data / name))
             self.assertFalse((self.data / name).exists())
 
     def test_subkimi_refuses_when_data_dir_is_missing_without_calling_the_model(self):
@@ -128,7 +128,7 @@ class LocalDataTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertFalse(missing.exists(), result.stderr)
         self.assertFalse(calls.exists(), result.stderr)
-        self.assertIn(str(missing.resolve()), result.stderr)
+        self.assertIn(str(missing), result.stderr)
 
     def test_review_pr_stops_when_data_dir_is_missing(self):
         missing = self.d / 'missing-review-data'
@@ -137,7 +137,7 @@ class LocalDataTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), '')
         self.assertFalse(missing.exists(), result.stderr)
-        self.assertIn(str(missing.resolve()), result.stderr)
+        self.assertIn(str(missing), result.stderr)
         self.assertIn('先确认盘已经挂好', result.stderr)
 
     def test_symlink_loop_data_dir_exits_2_without_a_traceback(self):

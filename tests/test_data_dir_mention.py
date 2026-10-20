@@ -11,6 +11,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'bin'))
+from _paths import inside
+
 SCAN_ROOTS = ('bin', 'workflow', 'templates')
 
 
@@ -62,7 +65,8 @@ class DataDirMentionTests(unittest.TestCase):
                 else:
                     os.environ['AIWORK_DATA_DIR'] = previous[1]
             self.assertEqual(resolved, (home / relative).resolve())
-            self.assertEqual(resolved.relative_to(home.resolve()).as_posix(), Path(relative).as_posix())
+            self.assertEqual(inside(str(home), str(resolved), literal=False),
+                             (0, Path(relative).as_posix()))
 
         hits = []
         for name in SCAN_ROOTS:

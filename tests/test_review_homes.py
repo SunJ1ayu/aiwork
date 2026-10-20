@@ -195,7 +195,7 @@ class ReviewHomes(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             record = json.loads(Path(self.env['HOME_CAPTURE']).read_text())
             self.assertTrue(record['credentials_link'])
-            self.assertEqual(Path(record['credentials_target']).resolve(), self.credentials.resolve())
+            self.assertEqual(record['credentials_target'], str(self.credentials))
             self.assertIn(record['runtime'] + '/hooks/guard.mjs', record['config'])
             self.assertEqual(record['guard'], (self.seed / 'hooks/guard.mjs').read_text())
             self.assertFalse(record['seed_leftover'])
