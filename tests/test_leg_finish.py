@@ -306,12 +306,12 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             (self.bin / tool).rename(hidden)
             try:
                 for leg in ("subagent", "subkimi", "submimo", "subcodex", "subcursor"):
-                    if macos and tool == 'ro-repo-exec' and leg in ('subkimi', 'submimo'):
-                        continue  # This is no longer a dependency of Mac reader legs.
+                    if macos and tool == 'ro-repo-exec' and leg in ('subkimi', 'submimo', 'subcodex'):
+                        continue  # Mac readers and native Codex do not use this wrapper.
                     with self.subTest(tool=tool, leg=leg):
                         result = self._run(leg, "review", "pass")
                         self.assertEqual(result.returncode, 78, result.stderr)
-                        if macos and leg in ('subagent', 'subcodex', 'subcursor'):
+                        if macos and leg in ('subagent', 'subcursor'):
                             self.assertIn('Mac 上暂不运行，等待', result.stderr)
                         else:
                             self.assertEqual(result.stderr.splitlines()[-1:], [

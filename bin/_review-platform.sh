@@ -9,8 +9,7 @@ review_platform_check() {
   review_platform_is_macos || return 0
   local pending
   case "$1" in
-    subkimi|submimo) return 0 ;;
-    subcodex) pending='Codex 自带沙箱' ;;
+    subkimi|submimo|subcodex) return 0 ;;
     subagent|subdeepseek-agent) pending='DeepSeek 的 Claude Code 沙箱' ;;
     subcursor) pending='Cursor 收残留进程' ;;
     *) printf '%s: 未登记的评审腿 ⇒ 拒绝派发\n' "$1" >&2; return 78 ;;
@@ -19,9 +18,9 @@ review_platform_check() {
   return 78
 }
 
-# Only the two audited reader legs use this function. Other legs retain their
-# Linux wrapper and are refused above before loading settings or making a clone.
-review_platform_reader_exec() {
+# Audited readers and Codex's native sandbox use the Linux outer wrapper only.
+# Pending legs are refused above before loading settings or making a clone.
+review_platform_ro_exec() {
   RO_EXEC=()
   if review_platform_is_macos; then
     return 0

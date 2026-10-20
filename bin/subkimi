@@ -79,7 +79,7 @@ MODEL="$("$BIN_DIR/aiwork-config" model kimi "${KIMI_MODEL:-}")" || exit 1
 "$BIN_DIR/aiwork-config" family subkimi "$MODEL" >/dev/null || die 'model must be one kimi-code/<model-id>'
 
 # Platform source protection is separate from the CLI tool allowlist.
-review_platform_reader_exec "$SOURCE_REPO" || exit 78
+review_platform_ro_exec "$SOURCE_REPO" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 TIMEOUT_SECONDS="${KIMI_TIMEOUT:-1500}"
 
@@ -117,7 +117,7 @@ trap _subkimi_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 SOURCE_REPO="$REVIEW_SOURCE_REPO"
-review_platform_reader_exec "$SOURCE_REPO" || exit 78
+review_platform_ro_exec "$SOURCE_REPO" || exit 78
 REPO_DIR="$(review_workspace_repo)" || exit 78
 REVIEW_HOME="${KIMI_REVIEW_HOME:-$(review_workspace_home kimi-home)}" || exit 78
 # 先检查位置，再同步种子。

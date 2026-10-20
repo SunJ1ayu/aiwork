@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# subcodex oracle。codex 是桩,只读挂载 ro-repo-exec 是真的。
+# subcodex oracle。codex 是桩;Linux 的 ro-repo-exec 挂载是真的。
 #
 # 桩只证明「我们递给 codex 的参数长这样、结果被这样收尾」;开关在真 codex 里是否生效,
 # **这份判据证明不了**,要靠真跑(verify.md 里单列)。
@@ -19,6 +19,10 @@ if [[ "${SUBCODEX_ENV_SCRUBBED:-}" != "1" ]]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/bin/_review-platform.sh" || exit 78
+CODEX_TEST_MACOS=0
+review_platform_is_macos && CODEX_TEST_MACOS=1
+export CODEX_TEST_MACOS
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -86,7 +90,11 @@ for a in "$@"; do  # 派发那一刻把目录副本抄走(ws 跑完就清理了)
 done
 pwd -P > "$cap.pwd"
 cat > "$cap.stdin"
-{ if touch "$CODEX_TEST_SOURCE/PWNED" 2>/dev/null; then echo src-writable; else echo src-readonly; fi
+{ if [[ "$CODEX_TEST_MACOS" == 0 ]]; then
+    if touch "$CODEX_TEST_SOURCE/PWNED" 2>/dev/null; then echo src-writable; else echo src-readonly; fi
+  else
+    echo native-sandbox-required
+  fi
   if touch ./clone-write-probe 2>/dev/null; then echo clone-writable; else echo clone-readonly; fi
 } > "$cap.writes"
 out=""; model=""; prev=""
@@ -175,8 +183,16 @@ check "C1: 任务书经 stdin 递给 codex(不走 argv,躲开 128KiB 单参数�
 _pwd="$(cat "$d/cap/c1.pwd" 2>/dev/null)"
 check "C1: codex 的工作目录是 ws 下的可丢弃副本,不是源仓" \
   $([[ -n "$_pwd" && "$_pwd" != "$d/repo" && "$_pwd" == "$(cd "$d/ws" && pwd -P)"/* ]]; echo $?)
-check "C1: 源仓物理只读(桩试写被拒)、副本可写" \
-  $([[ "$(cat "$d/cap/c1.writes" 2>/dev/null)" == $'src-readonly\nclone-writable' && ! -e "$d/repo/PWNED" ]]; echo $?)
+if review_platform_is_macos; then
+  # A CLI stub has no native sandbox; its own host writes cannot stand in for
+  # Codex's tools. The real tool boundary is checked by the installation probe.
+  argv_pair c1 -s workspace-write
+  check "C1: Mac 交给 Codex 自带沙箱、副本可写" \
+    $([[ $? -eq 0 && "$(cat "$d/cap/c1.writes" 2>/dev/null)" == $'native-sandbox-required\nclone-writable' && ! -e "$d/repo/PWNED" ]]; echo $?)
+else
+  check "C1: 源仓物理只读(桩试写被拒)、副本可写" \
+    $([[ "$(cat "$d/cap/c1.writes" 2>/dev/null)" == $'src-readonly\nclone-writable' && ! -e "$d/repo/PWNED" ]]; echo $?)
+fi
 grep -q '^Conclusion: PASS' "$d/c1.log" 2>/dev/null; check "C1: 报告落进 LOG_FILE" $?
 [[ -s "$d/c1.stream.jsonl" ]]; check "C1: 事件流另存 <log 去掉 .log>.stream.jsonl" $?
 facts c1 "f['model']['requested'] == f['model']['invoked'] == '$MODEL' and f['model']['reported'] == '$MODEL' and f['view'] == {'delivery_state':'complete','mode':'full_snapshot'} and f['process_state'] == 'exited' and f['verdict'] == 'PASS'"
@@ -221,7 +237,12 @@ check "C3: 模型正文里的 usage limit 不会被抄到 stderr" \
 facts c4b "f['failure_kind'] is None"
 check "C3: 模型正文不让腿自己写成 quota" $?
 _t0=$(date +%s)
-CODEX_TEST_MODE=sleep SUBCODEX_TIMEOUT=1 sc c5 review "$d/task.md" "$d/c5.log" "$d/repo" >/dev/null 2>&1; rc=$?
+CODEX_TEST_MODE=sleep SUBCODEX_TIMEOUT=1 sc c5 review "$d/task.md" "$d/c5.log" "$d/repo" >/dev/null 2>"$d/c5.err"; rc=$?
+if [[ $rc -ne 124 ]]; then
+  echo "  FAIL detail C3: timeout invocation returned rc=$rc"
+  tail -5 "$d/c5.err" | sed 's/^/  FAIL detail C3 stderr: /'
+  [[ ! -f "$d/c5.stderr" ]] || tail -5 "$d/c5.stderr" | sed 's/^/  FAIL detail C3 CLI: /'
+fi
 check "C3: 超时 ⇒ rc=124 且没有干等 30 秒" $([[ $rc -eq 124 && $(( $(date +%s) - _t0 )) -lt 20 ]]; echo $?)
 facts c5 "f['process_state'] == 'timed_out'"
 check "C3: facts 记 timed_out" $?
@@ -246,7 +267,7 @@ check 'C4: explore 设了报告路径时不另写 ${LOG_FILE}.report' \
 printf ' \t\n' > "$d/blank-expect"
 CODEX_TEST_MODE=blank AIWORK_REVIEW_REPORT_PATH="$d/c7d.md" \
   sc c7d explore "$d/task.md" "$d/c7d.log" "$d/repo" >/dev/null 2>"$d/c7d.err"; rc=$?
-want="subcodex: explore produced no final message (log: $d/c7d.log)"
+want="subcodex: explore produced no final message (log: $(python3 "$ROOT/bin/_paths.py" canon -- "$d/c7d.log"))"
 check 'C4: explore 最后一条消息只有空白时失败，句子与其他腿相同' \
   $([[ $rc -eq 1 && "$(cat "$d/c7d.err")" == "$want" ]] && cmp -s "$d/c7d.md" "$d/blank-expect"; echo $?)
 facts c7d "f['process_state']=='exited' and f['evidence_completeness']=='partial' and f['failure_kind'] is None and f['verdict'] is None"
