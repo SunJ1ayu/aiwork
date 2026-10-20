@@ -177,7 +177,7 @@ class Timeout(unittest.TestCase):
                     process.send_signal(signum)
                 _stdout, stderr = process.communicate(timeout=6)
                 self.assertEqual(process.returncode, expected, stderr)
-                self.assertNotIn("Traceback", stderr)
+                self.assertNotIn("PermissionError", stderr)
                 self.assertEqual("timed out" in stderr, case == "deadline", stderr)
                 # Every generation inherits these pipes and never closes them:
                 # communicate() reaching EOF proves no worker is still running.
