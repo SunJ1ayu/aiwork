@@ -487,6 +487,9 @@ class _MimoDiagnosticResult(unittest.TextTestResult):
         for line in traceback.format_exception(*err):
             for part in line.splitlines():
                 print("FAIL[MIMO-DIAG] " + part, file=sys.stderr)
+        if isinstance(err[1], UnicodeDecodeError):
+            error = err[1]
+            print("FAIL[MIMO-DIAG] raw stderr: " + repr(error.object[max(0, error.start - 160):error.start + 500]), file=sys.stderr)
 
 
 if __name__ == "__main__":
