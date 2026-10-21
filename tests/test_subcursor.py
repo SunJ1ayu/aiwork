@@ -154,7 +154,6 @@ class CursorTest(unittest.TestCase):
         return subprocess.check_output(['git','-C',str(self.repo),*args],stderr=subprocess.DEVNULL).decode()
 
     def run_leg(self, mode='review', case='', tag='leg', extra=None):
-        write_programs(self.config, self.fake)
         env = dict(self.env, FAKE_CASE=case,
                    FAKE_RECORD=str(self.d/(tag+'.record.json')),
                    AIWORK_REVIEW_FACTS_PATH=str(self.d/(tag+'.facts.json')))
