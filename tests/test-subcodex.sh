@@ -380,5 +380,12 @@ raise SystemExit(0 if got == want and "## 过程" not in got and "pending ? null
 PY
 check "C7: review-pr 发布的正文就是最后一条消息" $?
 
+if [[ "$FAIL" -ne 0 && -f "$d/c1.err" ]]; then
+  python3 - "$d/c1.err" <<'PY'
+from pathlib import Path
+import sys
+print('FAIL diagnostic C1 stderr: ' + repr(Path(sys.argv[1]).read_text()[-4000:]))
+PY
+fi
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

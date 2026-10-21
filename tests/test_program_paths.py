@@ -25,6 +25,7 @@ class ProgramPaths(unittest.TestCase):
         self.data = self.root / 'data'
         self.data.mkdir()
         self.marker = self.root / 'used'
+        self.noop = self.script('success', 'exit 0\n')
         self.bind('python3', sys.executable)
         self.env = dict(os.environ, AIWORK_CONFIG_DIR=str(self.config),
                         AIWORK_DATA_DIR=str(self.data))
@@ -181,7 +182,7 @@ class ProgramPaths(unittest.TestCase):
                              + " -c 'import sys; sys.version_info=(3,10,14); sys.version=\"3.10.14\"; exec(sys.argv[2])' \"$@\"\n")
         nonexec = self.root / 'not-executable'
         nonexec.write_text('broken')
-        for target in (None, self.root / 'absent', nonexec, self.root, Path('/bin/true'), old, old310):
+        for target in (None, self.root / 'absent', nonexec, self.root, self.noop, old, old310):
             for entry in entries:
                 with self.subTest(target=target, entry=entry):
                     (self.programs / 'python3').unlink(missing_ok=True)
@@ -251,7 +252,7 @@ class ProgramPaths(unittest.TestCase):
             for target in (None, self.root / 'absent', nonexec):
                 with self.subTest(program=name, target=target, entry=leg):
                     for other in ('codex', 'cursor-agent', 'kimi', 'mimo', 'claude', 'node'):
-                        self.bind(other, '/bin/true')
+                        self.bind(other, self.noop)
                     (self.programs / name).unlink()
                     if target is not None:
                         self.bind(name, target)
@@ -266,7 +267,7 @@ class ProgramPaths(unittest.TestCase):
 
     def test_review_and_explore_check_selected_cli_before_other_work(self):
         for name in ('codex', 'node'):
-            self.bind(name, '/bin/true')
+            self.bind(name, self.noop)
         self.bind('codex', self.root / 'absent-codex')
         for entry, args in (('review-pr', ['1', '--repo', 'fixture/repo']),
                             ('explore', [str(self.root / 'absent-brief'), '--repo',
@@ -284,12 +285,19 @@ class ProgramPaths(unittest.TestCase):
         before = {p.name: os.readlink(p) for p in self.programs.iterdir() if p.is_symlink()}
         nested = self.root / 'nested-tmp'
         nested.mkdir()
+        fake = self.root / 'fake'
+        fake.mkdir()
+        provider = fake / 'codex'
+        provider.write_text('#!/bin/sh\necho selected > ' + shlex.quote(str(self.marker)) + '\n')
+        provider.chmod(0o755)
         result = subprocess.run([sys.executable, str(ROOT / 'tests/_test_settings.py'),
-                                 'run-with-programs', '/bin/true'],
+                                 'run-with-programs', str(self.programs / 'codex')],
                                 env=dict(self.env, TMPDIR=str(nested),
+                                         PATH=str(fake) + os.pathsep + self.env['PATH'],
                                          AIWORK_TEST_FIXTURE_ROOT=str(self.root)),
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.marker.read_text().strip(), 'selected')
         self.assertEqual({p.name: os.readlink(p) for p in self.programs.iterdir() if p.is_symlink()}, before)
 
     def test_ci_selector_uses_configured_node_over_path(self):
