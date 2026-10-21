@@ -2,6 +2,7 @@
 import atexit
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -33,6 +34,17 @@ def clear_inherited_environment():
 
 
 PROGRAMS = ('codex', 'cursor-agent', 'kimi', 'mimo', 'claude')
+
+
+def write_platform_probe(directory, *, macos=False):
+    """Give disposable deployments the real routing rules with a fixed probe."""
+    helper = Path(__file__).resolve().parents[1] / 'bin/_review-platform.sh'
+    source, count = re.subn(r'review_platform_is_macos\(\) \{[^}]*\}',
+                            'review_platform_is_macos() { return ' + ('0' if macos else '1') + '; }',
+                            helper.read_text())
+    if count != 1:
+        raise ValueError('platform probe definition not found')
+    (Path(directory) / helper.name).write_text(source)
 
 
 def fixture_directory(directory):

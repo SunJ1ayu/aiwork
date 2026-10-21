@@ -75,6 +75,102 @@ class ProgramPaths(unittest.TestCase):
                 expected = self.config if configured == '~/settings' else Path(configured)
                 self.assertEqual(reported.stdout.strip(), str(expected / 'models.env'))
 
+    def test_config_directory_has_one_definition_for_bootstrap_and_import(self):
+        deployed = self.root / 'deployment'
+        shutil.copytree(ROOT / 'bin', deployed)
+        # A normal one-sided default change must reach both callers. Derive the
+        # old value from the bootstrap definition, rather than copying it here.
+        import re
+        definition = deployed / '_programs.sh'
+        source = definition.read_text()
+        default = re.search(r'\$HOME/([^}]+)\}', source).group(1)
+        changed = default + '-next'
+        definition.write_text(source.replace(default, changed))
+        home = self.root / 'home'
+        target = home / changed
+        (target / 'programs').mkdir(parents=True)
+        (target / 'programs/python3').symlink_to(sys.executable)
+        alias = self.root / 'settings-alias'
+        alias.symlink_to(self.config, target_is_directory=True)
+        env = dict(self.env, HOME=str(home))
+        env.pop('AIWORK_CONFIG_DIR')
+        query = ('import sys; sys.path.insert(0, sys.argv[1]); '
+                 'from _aiwork_config import setting_path; print(setting_path("models.env"))')
+        for configured, expected in ((None, target), ('', target), ('~', home),
+                                     ('~/../settings', self.root / 'home/../settings'),
+                                     ('settings-alias', alias), (str(alias), alias)):
+            with self.subTest(configured=configured):
+                if configured is None:
+                    env.pop('AIWORK_CONFIG_DIR', None)
+                else:
+                    env['AIWORK_CONFIG_DIR'] = configured
+                # '~' points at HOME itself; only temporary program links exist.
+                if expected == home:
+                    (home / 'programs').mkdir(exist_ok=True)
+                    (home / 'programs/python3').symlink_to(sys.executable)
+                entry = subprocess.run([str(deployed / 'aiwork-config'), 'path', 'models.env'],
+                                       env=env, cwd=self.root, capture_output=True, text=True)
+                imported = subprocess.run([sys.executable, '-c', query, str(deployed)],
+                                          env=env, cwd=self.root, capture_output=True, text=True)
+                self.assertEqual(entry.returncode, 0, entry.stderr)
+                self.assertEqual(imported.returncode, 0, imported.stderr)
+                self.assertEqual(entry.stdout.strip(), str(expected / 'models.env'))
+                self.assertEqual(imported.stdout, entry.stdout)
+
+    def mac_fixture(self):
+        fixture = self.leg_fixture()
+        from _test_settings import write_platform_probe
+        write_platform_probe(fixture.bin, macos=True)
+        from test_reader_tool_audit import KIMI_READ
+        fixture._write('kimi', '#!/usr/bin/env python3\nprint(' + repr(KIMI_READ) + ')\n')
+        env = fixture._env()
+        env['AIWORK_DATA_DIR'] = str(self.data)
+        for name in ('cursor-agent', 'claude'):
+            (fixture.root / 'settings/programs' / name).unlink()
+        # No model settings for pending legs either: platform routing needs none.
+        models = fixture.root / 'settings/models.env'
+        models.write_text('\n'.join(line for line in models.read_text().splitlines()
+                                    if not line.startswith(('cursor=', 'deepseek='))) + '\n')
+        subprocess.run(['git', '-C', str(fixture.repo), 'branch', '-M', 'main'], check=True)
+        return fixture, env
+
+    def test_mac_orchestrators_refuse_pending_legs_before_program_or_model_settings(self):
+        fixture, env = self.mac_fixture()
+        env['AIWORK_DATA_DIR'] = str(self.root / 'absent-data')
+        for leg in ('subcursor', 'subdeepseek-agent'):
+            direct = subprocess.run([str(fixture.bin / leg), '--help'], env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(direct.returncode, 78, direct.stderr)
+            reason = direct.stderr.strip().split(': ', 1)[1]
+            for entry, args in (('review-pr', ['67', '--leg', leg]),
+                                ('review-pr', ['67', '--leg', leg, '--dry-run']),
+                                ('explore', [str(fixture.root / 'task.md'), '--repo',
+                                             str(fixture.repo), '--leg', leg])):
+                with self.subTest(entry=entry, leg=leg, args=args):
+                    result = subprocess.run([str(fixture.bin / entry), *args], env=env,
+                                            capture_output=True, text=True, timeout=20)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(reason, result.stderr)
+                    self.assertNotIn('programs/', result.stderr)
+                    self.assertNotIn('models.env', result.stderr)
+        self.assertFalse((self.root / 'absent-data').exists())
+
+    def test_mac_explore_keeps_allowed_leg_when_another_is_refused(self):
+        fixture, env = self.mac_fixture()
+        result = subprocess.run([str(fixture.bin / 'explore'), str(fixture.root / 'task.md'),
+                                 '--repo', str(fixture.repo), '--leg', 'subkimi',
+                                 '--leg', 'subcursor', '--leg', 'subdeepseek-agent'],
+                                env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('subcursor: Mac 上暂不运行', result.stderr)
+        self.assertIn('subdeepseek-agent: Mac 上暂不运行', result.stderr)
+        self.assertNotIn('programs/', result.stderr)
+        reports = result.stdout.splitlines()
+        self.assertEqual(len(reports), 1, result.stdout + result.stderr)
+        report = Path(reports[0])
+        self.assertEqual(report.name, 'subkimi.md')
+        self.assertIn('Conclusion: PASS', report.read_text())
+
     def test_invalid_python_refuses_all_executable_python_entries_before_help(self):
         entries = [p.name for p in (ROOT / 'bin').iterdir()
                    if p.is_file() and os.access(p, os.X_OK) and p.read_bytes().startswith((b'#!/usr/bin/env python3', b'#!/bin/sh\n"""exec"'))]
@@ -110,10 +206,8 @@ class ProgramPaths(unittest.TestCase):
         for source in (ROOT / 'bin').iterdir():
             if source.is_file():
                 shutil.copy2(source, fixture.bin / source.name)
-        platform = fixture.bin / '_review-platform.sh'
-        import re
-        platform.write_text(re.sub(r'review_platform_is_macos\(\) \{[^}]*\}',
-                                    'review_platform_is_macos() { return 1; }', platform.read_text()))
+        from _test_settings import write_platform_probe
+        write_platform_probe(fixture.bin)
         fixture._write('ro-repo-exec', '#!/bin/sh\nshift 2\nexec "$@"\n')
         fixture._write('unshare', '#!/bin/sh\nwhile [ "${1#--}" != "$1" ]; do shift; done\nexec "$@"\n')
         return fixture
