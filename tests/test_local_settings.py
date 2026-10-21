@@ -252,6 +252,7 @@ class SettingsTest(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         fixture.env['AIWORK_CONFIG_DIR'] = str(self.config)
         fixture.config = self.config
+        write_programs(fixture.config, fixture.fake)
         for name in ('aiwork-config', '_aiwork_config.py'):
             source = ROOT / 'bin' / name
             if source.exists():
