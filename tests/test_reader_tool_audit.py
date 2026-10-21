@@ -472,25 +472,5 @@ sys.stdout.write(pathlib.Path(os.environ['CLAUDE_STREAM']).read_text())
                     self.assertFalse(self.capture.exists())
 
 
-class _MimoDiagnosticResult(unittest.TextTestResult):
-    def addError(self, test, err):
-        super().addError(test, err)
-        self._diagnostic(test, err)
-
-    def addSubTest(self, test, subtest, err):
-        super().addSubTest(test, subtest, err)
-        if err is not None:
-            self._diagnostic(subtest, err)
-
-    def _diagnostic(self, test, err):
-        import traceback
-        for line in traceback.format_exception(*err):
-            for part in line.splitlines():
-                print("FAIL[MIMO-DIAG] " + part, file=sys.stderr)
-        if isinstance(err[1], UnicodeDecodeError):
-            error = err[1]
-            print("FAIL[MIMO-DIAG] raw stderr: " + repr(error.object[max(0, error.start - 160):error.start + 500]), file=sys.stderr)
-
-
 if __name__ == "__main__":
-    unittest.main(testRunner=unittest.TextTestRunner(resultclass=_MimoDiagnosticResult))
+    unittest.main()

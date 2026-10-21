@@ -218,7 +218,7 @@ ERR_FILE="$(mktemp)"
   echo "source_repo: $SOURCE_REPO"
   echo "task: $TASK_FILE"
   if [[ "$READ_ONLY" == 1 ]]; then
-    echo "视野: $READER_TOOLS，只读代码；不能跑命令。"
+    echo "视野: ${READER_TOOLS}，只读代码；不能跑命令。"
   elif [[ "$MODE" == "review" ]]; then
     echo "视野: 底座腿 —— 独立可写副本；Bash 可跑本地 tests/lint/build/诊断。"
     echo "      Write/Edit/Task 关闭；原仓由外层只读挂载保护。"
