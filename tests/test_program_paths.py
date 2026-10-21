@@ -300,6 +300,38 @@ class ProgramPaths(unittest.TestCase):
         self.assertEqual(self.marker.read_text().strip(), 'selected')
         self.assertEqual({p.name: os.readlink(p) for p in self.programs.iterdir() if p.is_symlink()}, before)
 
+    def test_concurrent_cursor_fixture_keeps_program_bindings(self):
+        import concurrent.futures
+        import threading
+        from unittest.mock import patch
+        from test_subcursor import CursorTest
+        fixture = CursorTest(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        # Only exercise the fixture's concurrent dispatch here. The adapter's
+        # source protection and platform routes have their own existing tests.
+        (fixture.bin / 'subcursor').write_text(
+            '#!/bin/sh\nexec "$AIWORK_CONFIG_DIR/programs/cursor-agent"\n')
+        (fixture.fake / 'cursor-agent').write_text('#!/bin/sh\necho cursor-stub\n')
+        programs = fixture.config / 'programs'
+        before = {p.name: os.readlink(p) for p in programs.iterdir() if p.is_symlink()}
+        overlap = threading.Barrier(2)
+        symlink = Path.symlink_to
+
+        def interleaved(path, target, *args, **kwargs):
+            if path == programs / 'python3':
+                overlap.wait(timeout=5)
+            return symlink(path, target, *args, **kwargs)
+
+        with patch.object(Path, 'symlink_to', interleaved):
+            with concurrent.futures.ThreadPoolExecutor(2) as pool:
+                futures = [pool.submit(fixture.run_leg, tag=tag) for tag in ('one', 'two')]
+                for future in futures:
+                    result = future.result()
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), 'cursor-stub')
+        self.assertEqual({p.name: os.readlink(p) for p in programs.iterdir() if p.is_symlink()}, before)
+
     def test_ci_selector_uses_configured_node_over_path(self):
         node = self.script('selected node', 'echo selected > ' + shlex.quote(str(self.marker))
                            + '\nexec ' + shlex.quote(shutil.which('node')) + ' "$@"\n')
