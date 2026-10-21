@@ -327,11 +327,13 @@ def _assignments(filename: str) -> tuple[Path, list[tuple[int, str, str]]]:
             continue
         match = _LINE.fullmatch(line)
         if match is None:
-            raise ConfigError(f'{path}:{number}: invalid setting')
+            name = re.match(r'[A-Za-z_][A-Za-z0-9_]*(?=[ \t]*=)', line)
+            item = ' ' + name.group(0) if name else ''
+            raise ConfigError(f'{path}:{number}: invalid setting{item}')
         name, token = match.group(1), match.group(2)
         value = _exact_value(token)
         if value is None:
-            raise ConfigError(f'{path}:{number}: invalid setting')
+            raise ConfigError(f'{path}:{number}: invalid setting {name}')
         if value == '':
             raise ConfigError(f'{path}:{number}: empty {name}')
         if name in seen:

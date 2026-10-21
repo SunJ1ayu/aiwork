@@ -38,7 +38,7 @@ import os, pathlib, sys
 pathlib.Path(os.environ['RO_MARKER']).write_text('\n'.join(sys.argv[1:]))
 raise SystemExit(86)
 ''')
-        for cli, stream in (('kimi', KIMI_READ), ('mimo', MIMO_READ)):
+        for cli, stream in (('kimi', KIMI_READ), ('claude', MIMO_READ)):
             self.fixture._write(cli, '#!/usr/bin/env python3\nprint(' + repr(stream) + ')\n')
 
     def run_leg(self, leg, mode, macos, **extra):

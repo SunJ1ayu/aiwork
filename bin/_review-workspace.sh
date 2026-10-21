@@ -358,7 +358,7 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
 # error is this tool being broken: exit 78.
 # $8 is the post-run reader-tool audit sentence. It replaces a result only when
 # this call would otherwise exit 0. Timeout, quota, and no-verdict stay as they are.
-review_workspace_reader_audit() { # audit-kimi|audit-mimo stream-file
+review_workspace_reader_audit() { # audit-kimi|audit-claude stream-file
   local kind="${1:-}" stream="${2:-}" helper out rc=0
   helper="$REVIEW_WORKSPACE_BIN/_reader_tools.py"
   [[ -f "$helper" ]] || { printf '%s\n' '少了 _reader_tools.py ⇒ 拒绝派发'; return 78; }

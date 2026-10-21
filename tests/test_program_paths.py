@@ -216,7 +216,7 @@ class ProgramPaths(unittest.TestCase):
     def test_each_cli_binding_wins_over_path_and_codex_override(self):
         fixture = self.leg_fixture()
         for name, leg in (('codex', 'subcodex'), ('cursor-agent', 'subcursor'),
-                          ('kimi', 'subkimi'), ('mimo', 'submimo'), ('claude', 'subagent')):
+                          ('kimi', 'subkimi'), ('claude', 'submimo'), ('claude', 'subagent')):
             with self.subTest(program=name):
                 self.marker.unlink(missing_ok=True)
                 target = self.script('selected-' + name, 'echo ' + name + ' > '
@@ -228,6 +228,7 @@ class ProgramPaths(unittest.TestCase):
                 wrong.chmod(0o755)
                 # Fixture credentials/hooks/models remain disposable too.
                 shutil.copy2(fixture.root / 'settings/models.env', self.config / 'models.env')
+                shutil.copy2(fixture.root / 'settings/mimo.env', self.config / 'mimo.env')
                 hook = fixture.root / 'kimi-home/config.toml'
                 import re
                 hook.write_text(re.sub(r'command = .*', 'command = ' + __import__('json').dumps(shlex.quote(str(self.programs / 'node')) + ' ' + shlex.quote(str(fixture.root / 'kimi-home/hooks/guard.mjs'))), hook.read_text()))
@@ -247,11 +248,11 @@ class ProgramPaths(unittest.TestCase):
         nonexec = self.root / 'nonexec'
         nonexec.touch()
         for name, leg in (('codex', 'subcodex'), ('cursor-agent', 'subcursor'),
-                          ('kimi', 'subkimi'), ('mimo', 'submimo'), ('claude', 'subagent'),
+                          ('kimi', 'subkimi'), ('claude', 'submimo'), ('claude', 'subagent'),
                           ('node', 'subkimi'), ('node', 'review-pr')):
             for target in (None, self.root / 'absent', nonexec):
                 with self.subTest(program=name, target=target, entry=leg):
-                    for other in ('codex', 'cursor-agent', 'kimi', 'mimo', 'claude', 'node'):
+                    for other in ('codex', 'cursor-agent', 'kimi', 'claude', 'node'):
                         self.bind(other, self.noop)
                     (self.programs / name).unlink()
                     if target is not None:

@@ -112,7 +112,7 @@ FACT_KEYS = (
 )
 
 ADAPTER_IDENTITIES = {
-    "submimo": ("xiaomi", "xiaomi/"),
+    "submimo": ("xiaomi", "mimo-"),
     "subdeepseek-agent": ("deepseek", "deepseek-"),
     "subkimi": ("moonshot", "kimi-code/"),
     "subcodex": ("openai", "gpt-"),

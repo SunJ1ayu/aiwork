@@ -13,7 +13,7 @@ import tempfile
 MODELS = {'codex': 'gpt-6-sol', 'cursor': 'grok-4.7-high',
           'deepseek': 'deepseek-flash', 'gemini': 'gemini-3.8-flash-high',
           'glm': 'glm-5.3-flash', 'grok': 'grok-4.6',
-          'kimi': 'kimi-code/kimi-for-coding', 'mimo': 'xiaomi/mimo-v2.6-pro'}
+          'kimi': 'kimi-code/kimi-for-coding', 'mimo': 'mimo-v2.6-pro'}
 
 
 PROXY_BYPASS = {'NO_PROXY': '*', 'no_proxy': '*'}
@@ -33,7 +33,7 @@ def clear_inherited_environment():
     os.environ.update(PROXY_BYPASS)
 
 
-PROGRAMS = ('codex', 'cursor-agent', 'kimi', 'mimo', 'claude')
+PROGRAMS = ('codex', 'cursor-agent', 'kimi', 'claude')
 
 
 def write_platform_probe(directory, *, macos=False):
@@ -105,6 +105,7 @@ def write_settings(directory):
     directory.mkdir(parents=True, exist_ok=True)
     write_programs(directory)
     (directory / 'models.env').write_text(''.join(f'{k}={v}\n' for k, v in MODELS.items()))
+    (directory / 'mimo.env').write_text('MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/anthropic\nMIMO_API_KEY=fixture-mimo-key\n')
     (directory / 'private-terms').write_text('unused\n')
     return directory
 

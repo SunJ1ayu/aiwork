@@ -244,7 +244,7 @@ test_wrapper_helper_failure() {
   echo '[RW6] no wrapper invokes a model when workspace preparation fails'
   local d b repo rc mimo_rc deepseek_rc kimi_rc
   d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_review-reader-context.sh" "$BIN/subagent" "$BIN/subdeepseek-agent" \
      "$BIN/subkimi" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
 review_workspace_reset_report() { return 0; }
@@ -257,11 +257,6 @@ HELPER_STUB
 repo="$1"; shift 2
 exec "$@"
 RO_STUB
-  cat > "$b/mimo" <<'MODEL_STUB'
-#!/usr/bin/env bash
-printf mimo > "$MODEL_COUNT"
-echo 'Conclusion: PASS'
-MODEL_STUB
   cat > "$b/claude" <<'MODEL_STUB'
 #!/usr/bin/env bash
 printf claude > "$MODEL_COUNT"
@@ -276,12 +271,11 @@ MODEL_STUB
 #!/usr/bin/env bash
 exit 2
 MODEL_STUB
-  chmod +x "$b/ro-repo-exec" "$b/mimo" "$b/claude" "$b/kimi" "$b/node"
+  chmod +x "$b/ro-repo-exec" "$b/claude" "$b/kimi" "$b/node"
   printf '# review\n' > "$d/task.md"
 
   : > "$d/prepare-mark"
   env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" PREPARE_MARK="$d/prepare-mark" \
-    MIMO_REVIEW_HOME="$d/mimo-home" \
     python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/task.md" "$d/out.log" "$repo" >/dev/null 2>&1
   mimo_rc=$?
   [[ $mimo_rc -ne 0 && ! -e "$d/model-called" ]]

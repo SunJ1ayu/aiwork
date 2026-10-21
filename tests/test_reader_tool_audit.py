@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """跑完以后核 Kimi / MiMo 这次实际调用的工具。
 
-派发前的钩子和配置挡不住：Kimi 的拦截钩子失败会放行，MiMo 找不到指定 agent
-时会退回开着 Bash 的默认配置。下面这几条在改核实之前必须是红的：调用了清单
-以外的工具，或者输出里看不出用了哪些工具，结果仍然被当成成功。
+配置只读工具之外，还须核实实际记录；未知格式和清单外调用都不能当成成功。
 """
 import os
 import sys
@@ -99,26 +97,12 @@ KIMI_LIMIT = (
     "error: failed to run prompt: provider.auth_error: 403 You've reached your weekly (7-day) usage limit\n"
 )
 
-MIMO_BASH = textwrap.dedent("""\
-    {"type":"tool_use","part":{"type":"tool","tool":"bash"}}
-    {"type":"text","part":{"id":"p","messageID":"m","text":"Conclusion: PASS"}}
-    """)
-
-MIMO_READ = textwrap.dedent("""\
-    {"type":"tool_use","part":{"type":"tool","tool":"read"}}
-    {"type":"text","part":{"id":"p","messageID":"m","text":"Conclusion: PASS"}}
-    """)
-
-MIMO_UNKNOWN = textwrap.dedent("""\
-    {"type":"text","part":{"id":"p","messageID":"m","text":"Conclusion: PASS"}}
-    {"event":"tool","name":"bash"}
-    """)
-
-MIMO_PROVIDER = textwrap.dedent("""\
-    {"type":"text","part":{"id":"p","messageID":"m","text":"partial"}}
-    {"type":"tool_use","part":{"type":"tool","tool":"bash"}}
-    provider error line
-    """)
+# Claude Code 2.1.301 / Xiaomi live probe; synthetic review prose.
+MIMO_READ = (ROOT / "tests/fixtures/claude-mimo-stream.jsonl").read_text()
+MIMO_BASH = MIMO_READ.replace('"name": "Read"', '"name": "Bash"')
+MIMO_UNKNOWN = MIMO_READ + '{"event":"tool","name":"Bash"}\n'
+MIMO_PROVIDER = "provider error line\n"
+MIMO_CLAUDE_READ = MIMO_READ
 
 
 def _load(name):
@@ -127,6 +111,11 @@ def _load(name):
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
+
+
+# Claude Code 2.1.301 / Xiaomi live probe, 2026-10-21. Content trimmed;
+# event types, tool block and tool-result shapes retained from the real stream.
+MIMO_CLAUDE_READ = '{"type": "system", "subtype": "init", "tools": ["Glob", "Grep", "Read"], "model": "mimo-v2.6-flash"}\n{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "call_06f378455dc747049614438c", "name": "Read", "input": {"file_path": "/tmp/aiwork-mimo-claude-probe-hsqedqip/repo/README.md"}}]}}\n{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "call_06f378455dc747049614438c", "type": "tool_result", "content": "1\\tSynthetic read-only probe.\\n2\\t"}]}}\n{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Conclusion: PASS\\n"}]}}\n{"type": "result", "subtype": "success", "is_error": false, "result": "Conclusion: PASS\\n"}\n'
 
 
 class ReaderToolAuditTests(unittest.TestCase):
@@ -169,7 +158,6 @@ class ReaderToolAuditTests(unittest.TestCase):
             AIWORK_CONFIG_DIR=str(self.config),
             AIWORK_DATA_DIR=str(self.data),
             KIMI_REVIEW_HOME=str(self.home),
-            MIMO_REVIEW_HOME=str(self.root / "mimo-home"),
             AIWORK_REVIEW_RESULT_BIN=str(ROOT / "bin" / "_review_result.py"),
         )
         env.update(extra)
@@ -191,12 +179,12 @@ class ReaderToolAuditTests(unittest.TestCase):
                 raise SystemExit({exit_code})
                 """))
         else:
-            self._stub("mimo", textwrap.dedent(f"""\
+            self._stub("claude", textwrap.dedent(f"""\
                 #!/usr/bin/env python3
                 import os, pathlib, sys
-                if "--format" not in sys.argv or sys.argv[sys.argv.index("--format") + 1] != "json":
-                    raise SystemExit("review must request --format json")
-                sys.stdout.write(pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8"))
+                if "--output-format" not in sys.argv or sys.argv[sys.argv.index("--output-format") + 1] != "stream-json":
+                    raise SystemExit("review must request --output-format stream-json")
+                (sys.stderr if {exit_code} else sys.stdout).write(pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8"))
                 raise SystemExit({exit_code})
                 """))
         fixture_env = {"KIMI_STREAM_FIXTURE": str(fixture)} if leg == "subkimi" else {"MIMO_JSON_FIXTURE": str(fixture)}
@@ -252,7 +240,7 @@ class ReaderToolAuditTests(unittest.TestCase):
         result, _body, facts, _log, slot = self._run_leg("submimo", MIMO_BASH)
         self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertIn("只读清单以外的工具", result.stderr)
-        self.assertIn("bash", result.stderr)
+        self.assertIn("Bash", result.stderr)
         self.assertNotIn("no verdict", result.stderr)
         self.assertEqual(facts["failure_kind"], "readonly_tools")
         self.assertEqual(facts["verdict"], "PASS")
@@ -287,7 +275,7 @@ class ReaderToolAuditTests(unittest.TestCase):
     def test_reader_tools_stay_successful_and_are_listed(self):
         cases = (
             ("subkimi", KIMI_READ, "Read"),
-            ("submimo", MIMO_READ, "read"),
+            ("submimo", MIMO_READ, "Read"),
         )
         for leg, stream, listed in cases:
             with self.subTest(leg=leg):
@@ -369,6 +357,119 @@ class ReaderToolAuditTests(unittest.TestCase):
         path = self.root / "explore-stream.txt"
         path.write_text(text, encoding="utf-8")
         return path
+
+
+class ClaudeMimoTests(unittest.TestCase):
+    def setUp(self):
+        import test_leg_finish as finish
+        self.fixture = finish.LegFinish(methodName='runTest')
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.root = self.fixture.root
+        self.config = self.root / 'settings'
+        self.settings = self.config / 'mimo.env'
+        self.settings.write_text('MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/anthropic\nMIMO_API_KEY=fixture-mimo-secret\n')
+        self.capture = self.root / 'claude-call.json'
+        self.stream = self.root / 'claude-stream.jsonl'
+        self.stream.write_text(MIMO_CLAUDE_READ)
+        self.fixture._write('claude', r"""#!/usr/bin/env python3
+import json, os, pathlib, sys
+pathlib.Path(os.environ['CLAUDE_CAPTURE']).write_text(json.dumps({
+    'argv': sys.argv[1:], 'base_url': os.environ.get('ANTHROPIC_BASE_URL'),
+    'model': os.environ.get('ANTHROPIC_DEFAULT_SONNET_MODEL'),
+    'authenticated': os.environ.get('ANTHROPIC_AUTH_TOKEN') == 'fixture-mimo-secret',
+    'prompt': sys.stdin.read()}))
+sys.stdout.write(pathlib.Path(os.environ['CLAUDE_STREAM']).read_text())
+""")
+        # The real Linux guard is exercised by the existing platform suites.
+        self.fixture._write('ro-repo-exec', '#!/bin/bash\nshift 2\nexec "$@"\n')
+
+    def run_leg(self, mode='review', macos=False, leg='submimo'):
+        from _test_settings import write_platform_probe
+        write_platform_probe(self.fixture.bin, macos=macos)
+        env=self.fixture._env()
+        env.update(CLAUDE_CAPTURE=str(self.capture), CLAUDE_STREAM=str(self.stream),
+                   AIWORK_REVIEW_REPORT_PATH=str(self.root/'report.md'),
+                   AIWORK_REVIEW_FACTS_PATH=str(self.root/'facts.json'))
+        # A retired executable is neither installed nor available via PATH.
+        self.assertFalse((self.config / 'programs/mimo').exists())
+        args=[str(self.fixture.bin/leg)]
+        if leg=='subagent':args+=['deepseek']
+        return subprocess.run(args+[mode,str(self.root/'task.md'),str(self.root/'leg.log'),str(self.fixture.repo)],
+                              env=env,capture_output=True,text=True,timeout=20)
+
+    def test_mimo_uses_claude_xiaomi_and_only_reader_tools_in_both_modes(self):
+        for mode in ('review','explore'):
+            with self.subTest(mode=mode):
+                result=self.run_leg(mode)
+                self.assertEqual(result.returncode,0,result.stderr)
+                call=json.loads(self.capture.read_text())
+                self.assertEqual(call['base_url'],'https://token-plan-cn.xiaomimimo.com/anthropic')
+                self.assertTrue(call['authenticated'])
+                self.assertEqual(call['model'],'mimo-v2.6-pro')
+                args=call['argv']
+                self.assertEqual(set(args[args.index('--tools')+1].split(',')),{'Read','Glob','Grep'})
+                self.assertEqual(args[args.index('--setting-sources')+1],'')
+                self.assertIn('--strict-mcp-config',args)
+                self.assertIn('--disable-slash-commands',args)
+                self.assertIn('Shell and write tools are unavailable',call['prompt'])
+                self.assertIn('核实工具: Read',(self.root/'leg.log').read_text())
+                self.assertNotIn('fixture-mimo-secret',result.stdout+result.stderr+(self.root/'leg.log').read_text())
+
+    def test_mimo_refuses_nonreader_or_unprovable_stream_in_both_modes(self):
+        for stream in (MIMO_CLAUDE_READ.replace('"name": "Read"','"name": "Bash"'),
+                       MIMO_CLAUDE_READ+'not json\n',
+                       '{"type":"result","result":"Conclusion: PASS"}\n'):
+            for mode in ('review','explore'):
+                with self.subTest(mode=mode,stream=stream[:60]):
+                    self.stream.write_text(stream)
+                    result=self.run_leg(mode)
+                    self.assertNotEqual(result.returncode,0,result.stderr)
+                    facts=json.loads((self.root/'facts.json').read_text())
+                    self.assertEqual(facts['failure_kind'],'readonly_tools')
+                    diagnostic=self.root/'diagnostic'
+                    diagnostic.write_text(result.stderr)
+                    emitted=self.root/'result.json'
+                    subprocess.run([str(self.fixture.bin/'_python'),str(self.fixture.bin/'_review_result.py'),
+                        'emit','--result',str(emitted),'--run-id','claude-mimo',
+                        '--name','submimo','--family','xiaomi','--adapter','submimo',
+                        '--exit-code',str(result.returncode),'--task-sha256','sha256:'+hashlib.sha256((self.root/'task.md').read_bytes()).hexdigest(),
+                        '--log',str(self.root/'leg.log'),'--diagnostic',str(diagnostic),
+                        '--report',str(self.root/'report.md'),'--facts',str(self.root/'facts.json')],check=True,capture_output=True)
+                    review = _load('review-pr')
+                    with self.assertRaises(review.ReviewError):
+                        review.publishable_model(json.loads(emitted.read_text()))
+
+    def test_mac_mimo_allowed_deepseek_still_refused(self):
+        for mode in ('review','explore'):
+            result=self.run_leg(mode,True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue(self.capture.exists(), 'MiMo must start Claude Code on Mac')
+            self.capture.unlink()
+            result=self.run_leg(mode,True,'subagent')
+            self.assertEqual(result.returncode,78,result.stderr)
+            self.assertIn('DeepSeek',result.stderr)
+            self.assertFalse(self.capture.exists())
+
+    def test_mimo_settings_fail_before_provider_and_name_bad_item(self):
+        good=self.settings.read_text()
+        for body,item in ((None,'MIMO_BASE_URL'),('', 'MIMO_BASE_URL'),
+                          ('MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/anthropic\n','MIMO_API_KEY'),
+                          (good.replace('https://','bogus://'),'MIMO_BASE_URL'),
+                          (good.replace('fixture-mimo-secret',''), 'MIMO_API_KEY'),
+                          (good+'MIMO_API_KEY=another-secret\n','MIMO_API_KEY'),
+                          (good.replace('MIMO_API_KEY=','MIMO_API_KEY ='),'MIMO_API_KEY')):
+            for mode in ('review','explore'):
+                with self.subTest(item=item,body=body,mode=mode):
+                    self.capture.unlink(missing_ok=True)
+                    if body is None:self.settings.unlink(missing_ok=True)
+                    else:self.settings.write_text(body)
+                    result=self.run_leg(mode)
+                    self.assertNotEqual(result.returncode,0,result.stderr)
+                    self.assertIn('mimo.env',result.stderr)
+                    self.assertIn(item,result.stderr)
+                    self.assertNotIn('fixture-mimo-secret',result.stderr)
+                    self.assertFalse(self.capture.exists())
 
 
 if __name__ == "__main__":

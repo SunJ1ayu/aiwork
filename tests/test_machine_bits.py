@@ -88,52 +88,6 @@ class MachineBitsTests(unittest.TestCase):
                         env=dict(os.environ, TMPDIR=str(alias)), capture_output=True, text=True, timeout=120)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_no_temporary_files_oracle_requires_successful_find(self):
-        source = (ROOT / 'tests/test-review-tooling.sh').read_text()
-        start = source.index('\n', source.index('    check "V33: 配置文件权限')) + 1
-        condition = source[start:source.index('    check "V33: 原子写不许留下 tmp', start)]
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / 'mimocode').mkdir()
-            commands = root / 'commands'
-            commands.mkdir()
-            (commands / 'find').write_text('#!/bin/sh\nexit 1\n')
-            (commands / 'find').chmod(0o755)
-            for failed in (False, True):
-                with self.subTest(find_failed=failed):
-                    env = dict(os.environ)
-                    if failed:
-                        env['PATH'] = str(commands) + os.pathsep + env['PATH']
-                    result = subprocess.run(['bash', '-c', 'mhome="$1"\n' + condition,
-                                             'temporary-files', str(root)],
-                                            env=env, capture_output=True, text=True, timeout=5)
-                    self.assertEqual(result.returncode, 1 if failed else 0,
-                                     'failed read was treated as an empty result')
-
-    def test_permission_oracle_works_without_gnu_stat(self):
-        source = (ROOT / 'tests/test-review-tooling.sh').read_text()
-        end = source.index('    check "V33: 配置文件权限')
-        start = source.rfind('  if [[ -f "$mhome/mimocode/mimocode.json" ]]; then', 0, end)
-        condition = source[start:end]
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / 'mimocode').mkdir()
-            path = root / 'mimocode/mimocode.json'
-            path.write_text('{}')
-            commands = root / 'commands'
-            commands.mkdir()
-            (commands / 'stat').write_text('#!/bin/sh\nexit 1\n')
-            (commands / 'stat').chmod(0o755)
-            for mode, expected in ((0o600, 0), (0o644, 1)):
-                with self.subTest(mode=oct(mode)):
-                    path.chmod(mode)
-                    result = subprocess.run(
-                        ['bash', '-c', 'mhome="$1"\n' + condition + '\nelse\nexit 1\nfi',
-                         'permissions', str(root)],
-                        env=dict(os.environ, PATH=str(commands) + os.pathsep + os.environ['PATH']),
-                        capture_output=True, text=True, timeout=5)
-                    self.assertEqual(result.returncode, expected, result.stderr)
-
     def oracle_functions(self):
         # Exercise the suite's actual observation functions without running
         # provider fixtures or inspecting the caller's credential directories.

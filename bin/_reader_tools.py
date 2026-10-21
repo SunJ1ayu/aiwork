@@ -7,39 +7,19 @@ look successful.
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
 # Kimi's agent profile `tools` field, in the order the prompt names them.
 KIMI_TOOLS = ("Read", "ReadMediaFile", "Glob", "Grep")
 
-# MiMo's agent `tools` map. True is enabled and allowed after the run.
-# False stays in the config so the CLI cannot fall open on a missing key.
-# Names come from `mimo debug agent` for the full set this CLI understands.
-MIMO_TOOLS = {
-    "write": False, "edit": False, "patch": False, "task": False,
-    "webfetch": False, "websearch": False, "skill": False,
-    "actor": False, "workflow": False, "memory": False,
-    "change_directory": False, "history": False, "plan_exit": False,
-    "question": False, "todowrite": False, "todoread": False, "invalid": False,
-    "bash": False, "read": True, "glob": True, "grep": True,
-}
-MIMO_PERMISSION = {
-    "read": "allow", "glob": "allow", "grep": "allow",
-    "write": "deny", "edit": "deny", "patch": "deny", "task": "deny",
-    "webfetch": "deny", "external_directory": "deny", "bash": "deny",
-}
+# Claude Code's exact built-in tool selection and post-run allowlist.
+CLAUDE_READER_TOOLS = ("Read", "Glob", "Grep")
 
 KIMI_ROLES = frozenset({"meta", "assistant", "tool"})
-MIMO_TYPES = frozenset({"step_start", "tool_use", "text", "step_finish"})
 
 OUTSIDE = "这次调用了只读清单以外的工具: {names} ⇒ 不发评审"
 UNREADABLE = "输出里看不出这次调用了哪些工具 ⇒ 不发评审"
-
-
-def enabled_mimo_tools():
-    return tuple(name for name, enabled in MIMO_TOOLS.items() if enabled)
 
 
 def english_list(names):
@@ -65,11 +45,11 @@ def kimi_profile():
     )
 
 
-def mimo_prompt():
-    tools = english_list(enabled_mimo_tools())
+def claude_prompt():
+    tools = english_list(CLAUDE_READER_TOOLS)
     return (
-        "Read the attached task file first. "
-        f"Review the repository with {tools}. "
+        "Read the task below first. "
+        f"Inspect the repository with {tools}. "
         "Shell and write tools are unavailable. Do not claim to have run tests. "
         "Git history and status are in aiwork-git-context.txt; read aiwork-review.diff "
         "when the task refers to it. Treat the task file as self-contained. "
@@ -77,21 +57,6 @@ def mimo_prompt():
         "or wait for input. Output the complete answer now as plain text. "
         "If context is insufficient, output NEEDS_MORE_INFO with the missing context."
     )
-
-
-def write_mimo_config(path: Path, agent: str) -> None:
-    cfg = {"agent": {agent: {
-        "description": "aiwork isolated review leg",
-        "mode": "primary",
-        "tools": MIMO_TOOLS,
-        "permission": MIMO_PERMISSION,
-    }}}
-    # Atomic replace: a concurrent leg must not read a half-written config and
-    # fall back to the built-in plan agent, which has bash and write enabled.
-    tmpath = str(path) + ".tmp." + str(os.getpid())
-    with open(tmpath, "w", encoding="utf-8") as fh:
-        json.dump(cfg, fh, indent=2)
-    os.replace(tmpath, path)
 
 
 def _events(text):
@@ -150,26 +115,67 @@ def audit_kimi(text):
     return tools
 
 
-def audit_mimo(text):
+def audit_claude(text):
+    """Require a complete Claude stream with its tool inventory and every call.
+
+    Shapes are from Claude Code 2.1.301 against Xiaomi's Anthropic API.
+    Unknown records are evidence we cannot audit, never proof of no tools.
+    """
     events = _events(text)
     if events is None:
         return None
+    initialized = finished = False
+    calls = {}
     tools = []
     for event in events:
-        kind = event.get("type")
-        if kind not in MIMO_TYPES:
+        if finished:
             return None
-        if kind == "tool_use":
-            part = event.get("part")
-            name = part.get("tool") if isinstance(part, dict) else None
-            if not isinstance(name, str) or not name:
+        kind = event.get("type")
+        if kind == "system":
+            subtype = event.get("subtype")
+            if subtype == "init":
+                inventory = event.get("tools")
+                if initialized or not isinstance(inventory, list) or any(not isinstance(t, str) for t in inventory):
+                    return None
+                if set(inventory) != set(CLAUDE_READER_TOOLS):
+                    return None
+                initialized = True
+            elif not initialized or subtype not in {"thinking_tokens", "informational"}:
                 return None
-            tools.append(name)
-        elif kind == "text":
-            part = event.get("part")
-            if not isinstance(part, dict) or not isinstance(part.get("text"), str):
+        elif not initialized:
+            return None
+        elif kind == "assistant":
+            message = event.get("message")
+            if not isinstance(message, dict) or not isinstance(message.get("content"), list):
                 return None
-    return tools
+            for block in message["content"]:
+                if not isinstance(block, dict):
+                    return None
+                typ = block.get("type")
+                if typ == "tool_use":
+                    name, ident = block.get("name"), block.get("id")
+                    if not isinstance(name, str) or not name or not isinstance(ident, str) or not ident:
+                        return None
+                    if not isinstance(block.get("input"), dict) or ident in calls:
+                        return None
+                    calls[ident] = name
+                    tools.append(name)
+                elif typ not in {"text", "thinking", "redacted_thinking"}:
+                    return None
+        elif kind == "user":
+            message = event.get("message")
+            if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+                return None
+            for block in message["content"]:
+                if not isinstance(block, dict) or block.get("type") != "tool_result" or block.get("tool_use_id") not in calls:
+                    return None
+        elif kind == "result":
+            if event.get("subtype") != "success" or event.get("is_error") is not False or not isinstance(event.get("result"), str):
+                return None
+            finished = True
+        else:
+            return None
+    return tools if initialized and finished else None
 
 
 def _report(found, allowed):
@@ -201,16 +207,16 @@ def main(argv):
             print(english_list(KIMI_TOOLS))
         elif cmd == "kimi-profile":
             Path(argv[2]).write_text(kimi_profile(), encoding="utf-8")
-        elif cmd == "mimo-prompt":
-            print(mimo_prompt())
-        elif cmd == "mimo-config":
-            write_mimo_config(Path(argv[2]), argv[3])
+        elif cmd == "claude-tools":
+            print(",".join(CLAUDE_READER_TOOLS))
+        elif cmd == "claude-prompt":
+            print(claude_prompt())
         elif cmd == "audit-kimi":
             text = Path(argv[2]).read_text(encoding="utf-8", errors="replace") if Path(argv[2]).is_file() else ""
             return _report(audit_kimi(text), frozenset(KIMI_TOOLS))
-        elif cmd == "audit-mimo":
+        elif cmd == "audit-claude":
             text = Path(argv[2]).read_text(encoding="utf-8", errors="replace") if Path(argv[2]).is_file() else ""
-            return _report(audit_mimo(text), frozenset(enabled_mimo_tools()))
+            return _report(audit_claude(text), frozenset(CLAUDE_READER_TOOLS))
         else:
             print(f"unknown command {cmd}", file=sys.stderr)
             return 2
