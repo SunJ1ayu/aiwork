@@ -1561,6 +1561,7 @@ grep -q -F -- "$3" "$clone/$4"
             tool = root / "tool"
             tool.mkdir()
             shutil.copytree(ROOT / "bin", tool / "bin", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            write_platform_probe(tool / "bin")
             shutil.copy2(ROOT / ".gitignore", tool / ".gitignore")
             git(tool, "init", "-q", "-b", "main")
             git(tool, "add", "bin", ".gitignore")
