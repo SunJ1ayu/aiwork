@@ -153,9 +153,22 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, required=True, help="repository whose current main is snapshotted")
     parser.add_argument("--leg", action="append", required=True, dest="legs", help="leg command, repeatable")
     args = parser.parse_args()
+    selected = []
+    failures: list[LegFailure] = []
+    for leg in args.legs:
+        try:
+            _leg_session.check_leg_platform(leg, BIN)
+        except ReviewError as exc:
+            failures.append(LegFailure(leg, str(exc)))
+        else:
+            selected.append(leg)
+    if not selected:
+        for failure in failures:
+            print(f"explore: {failure.leg} failed: {failure.reason}", file=sys.stderr)
+        return 1
     try:
         data_dir()
-        for leg in args.legs:
+        for leg in selected:
             check_programs(leg)
     except ConfigError as exc:
         print(f"explore: {exc}", file=sys.stderr)
@@ -179,8 +192,7 @@ def main() -> int:
         print(f"explore: {exc}", file=sys.stderr)
         return 1
     jobs = []
-    failures: list[LegFailure] = []
-    for name in args.legs:
+    for name in selected:
         try:
             family, frozen = _leg_session.choose_leg(name, BIN)
         except ReviewError as exc:

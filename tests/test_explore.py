@@ -21,7 +21,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 import io
 
-from _test_settings import write_programs, write_settings, write_kimi_config
+from _test_settings import write_programs, write_settings, write_kimi_config, write_platform_probe
 from _test_retention import extreme_mtime
 
 
@@ -90,6 +90,7 @@ class ExploreTests(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
+        write_platform_probe(self.bin)
         shutil.copy2(ROOT / "bin" / "_review_result.py", self.bin / "_review_result.py")
         stub = self.bin / "leg-stub"
         stub.write_text(STUB, encoding="utf-8")

@@ -5,7 +5,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
-from _test_settings import write_kimi_config
+from _test_settings import write_kimi_config, write_platform_probe
 
 from contextlib import redirect_stderr, redirect_stdout
 import http.server
@@ -93,6 +93,7 @@ class ReliabilityTests(unittest.TestCase):
             self.run_count += 1
             bin_dir = self.directory / f'bin-{self.run_count}'
             bin_dir.mkdir()
+            write_platform_probe(bin_dir)
             for adapter in BIN.glob('sub*'):
                 name = adapter.name
                 if missing_agent and name == leg + '-agent':

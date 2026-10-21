@@ -122,7 +122,8 @@ mimo                      # or: mimo providers login / list
 入口在启动时校验 Python 和本次所需程序；依赖表见 `bin/_programs.sh`，
 可用下述 `check-programs` 命令预检，不在文档中另抄一份依赖表。
 不使用某条腿时可以不登记它（例如尚未开放的 Mac DeepSeek / Cursor）；
-现有平台拒跑仍在读取设置之前。设置缺项、断链、非文件、不能执行或 Python 版本不够时，
+直接入口、`review-pr` 和 `explore` 都先检查所选腿的平台支持，再读取该腿的设置；
+`explore` 的一条腿被平台拒跑时，其他腿照常运行。设置缺项、断链、非文件、不能执行或 Python 版本不够时，
 打印 `programs/项名` 与设置路径并退出，不查 PATH 补缺。`CODEX_BIN` 不再覆盖本机登记。
 Python 自举和版本检查共用 `bin/_python`、`bin/_programs.sh`；
 实际调用用登记路径，供应商的 `env node` / `env python3` shebang 也先看到登记目录。
@@ -132,6 +133,7 @@ Kimi 自动生成的 hook 使用登记的 node 路径；自管 `KIMI_REVIEW_HOME
 
 换机器时把整个目录复制过去并保持权限。`bin/aiwork-config` 是统一读取入口；
 `AIWORK_CONFIG_DIR` 可指定其他设置目录，测试只指向临时目录。
+设置目录的默认位置和路径解释见 `bin/_programs.sh` 的 `aiwork_config_dir`；Python 读取也向它查询。
 `AIWORK_APPS_DIR` 仍可单独覆盖 App 配置目录。
 `models.env` 必须完整，包含每条腿的模型行；原有模型单次覆盖参数只是在完整设置的基础上换一次，不能代替文件或补缺行。
 缺少 `models.env` 或所需腿的模型行时明确报错并停止，不调用模型。

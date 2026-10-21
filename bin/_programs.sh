@@ -10,7 +10,7 @@ aiwork_program() {
   printf '%s\n' "$local_path"
 }
 
-aiwork_init() {
+aiwork_config_dir() {
   aiwork_config="${AIWORK_CONFIG_DIR:-$HOME/.config/aiwork}"
   case "$aiwork_config" in
     '~') aiwork_config="$HOME" ;;
@@ -21,6 +21,11 @@ aiwork_init() {
     /*) ;;
     *) aiwork_config="$(pwd)/$aiwork_config" ;;
   esac
+  printf '%s\n' "$aiwork_config"
+}
+
+aiwork_init() {
+  aiwork_config="$(aiwork_config_dir)" || return 78
   AIWORK_CONFIG_DIR="$aiwork_config"
   AIWORK_PROGRAMS="$aiwork_config/programs"
   export AIWORK_CONFIG_DIR

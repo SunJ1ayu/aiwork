@@ -404,6 +404,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         drop_inherited_git_env()
+        _leg_session.check_leg_platform(args.leg, BIN)
         data_dir()
         check_programs(args.leg)
         main_sha = aiwork_main_commit()

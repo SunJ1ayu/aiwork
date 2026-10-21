@@ -21,7 +21,7 @@ import unittest
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
-from _test_settings import write_settings
+from _test_settings import write_settings, write_platform_probe
 from _test_retention import extreme_mtime
 
 
@@ -582,6 +582,7 @@ class ReviewPrTests(unittest.TestCase):
             workspace = Path(temporary)
             bin_dir = workspace / "bin"
             bin_dir.mkdir()
+            write_platform_probe(bin_dir)
             for name in ('privacy-check', '_python', '_programs.sh', 'aiwork-config', '_aiwork_config.py',
                          '_secret_shapes.py', '_secret-shapes'):
                 shutil.copy2(ROOT / 'bin' / name, bin_dir / name)
@@ -1363,6 +1364,7 @@ grep -q -F -- "$3" "$clone/$4"
             workspace = Path(temporary)
             bin_dir = workspace / 'bin'
             bin_dir.mkdir()
+            write_platform_probe(bin_dir)
             (bin_dir / 'subcursor').touch()
             config = workspace / 'settings'
             write_settings(config)
@@ -1413,6 +1415,7 @@ grep -q -F -- "$3" "$clone/$4"
             data.mkdir()
             bin_dir = workspace / 'bin'
             bin_dir.mkdir()
+            write_platform_probe(bin_dir)
             (bin_dir / 'subcursor').touch()
             config = workspace / 'settings'
             write_settings(config)

@@ -34,6 +34,15 @@ class Change(NamedTuple):
     removed: int | None
 
 
+def check_leg_platform(name: str, bin_dir: Path) -> None:
+    """Ask the wrappers' platform authority before reading any leg settings."""
+    result = subprocess.run(['/bin/bash', '-c', '. "$1"; review_platform_check "$2"',
+                             'aiwork-leg-platform', str(bin_dir / '_review-platform.sh'), name],
+                            capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise ReviewError(result.stderr.strip() or f'platform check exited {result.returncode}')
+
+
 def choose_leg(name: str, bin_dir: Path) -> tuple[str, str | None]:
     """The family this review is published under, and the model frozen for this run.
 
