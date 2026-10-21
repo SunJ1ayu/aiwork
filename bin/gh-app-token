@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
+aiwork_init "${0##*/}" || exit 78
 # gh-app-token <角色> [--grant] [--repo owner/name]
 #   用这个角色的 GitHub App 私钥换一个 1 小时有效的 installation token,标准输出只打印 token 本身。
 #   --grant:不打印 token,只打印 GitHub 实际给的权限、仓库和到期时间(验收用)。
@@ -35,7 +37,7 @@ while [ $# -gt 0 ]; do
     *) echo 'gh-app-token: 不认识的参数' >&2; exit 2 ;;
   esac
 done
-BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+BIN_DIR="$("$AIWORK_PROGRAMS/python3" -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
 conf="$("$BIN_DIR/aiwork-config" path apps)/$role.env"
 [ -r "$conf" ] || { echo "gh-app-token: 读不到角色配置 $conf" >&2; exit 2; }
 APP_ID= INSTALLATION_ID= KEY= REPOS= PERMISSIONS=

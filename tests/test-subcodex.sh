@@ -31,7 +31,7 @@ check(){ if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi; }
 echo "=== subcodex oracle ==="
 d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/bin" "$d/fake" "$d/ws" "$d/cap"
-for f in _review-platform.sh subcodex aiwork-config _aiwork_config.py ro-repo-exec aiwork-timeout _review-workspace.sh _paths.py _review_result.py _review-home-guard.sh; do
+for f in _python _programs.sh _review-platform.sh subcodex aiwork-config _aiwork_config.py ro-repo-exec aiwork-timeout _review-workspace.sh _paths.py _review_result.py _review-home-guard.sh; do
   [[ -e "$ROOT/bin/$f" ]] && cp "$ROOT/bin/$f" "$d/bin/"
 done
 check "C0: bin/subcodex 与本机设置读取入口都在" \
@@ -142,7 +142,7 @@ sc() {  # sc <capture-name> <subcodex args...>  (env 由调用者前缀)
   CODEX_TEST_CAPTURE="$d/cap/$name" CODEX_TEST_SOURCE="$d/repo" PATH="$d/fake:$PATH" \
     REVIEW_WORKSPACE_BASE="$d/ws" AIWORK_REVIEW_RESULT_BIN="$d/bin/_review_result.py" \
     AIWORK_REVIEW_FACTS_PATH="$d/cap/$name.facts.json" \
-    bash "${SC_BIN:-$d/bin}/subcodex" "$@"
+    python3 "$_test_settings_py" run-with-programs bash "${SC_BIN:-$d/bin}/subcodex" "$@"
 }
 argv_has() { grep -qxF -- "$2" "$d/cap/$1.argv" 2>/dev/null; }
 argv_pair() {  # argv_pair <cap> <flag> <value>
@@ -380,5 +380,12 @@ raise SystemExit(0 if got == want and "## 过程" not in got and "pending ? null
 PY
 check "C7: review-pr 发布的正文就是最后一条消息" $?
 
+if [[ "$FAIL" -ne 0 && -f "$d/c1.err" ]]; then
+  python3 - "$d/c1.err" <<'PY'
+from pathlib import Path
+import sys
+print('FAIL diagnostic C1 stderr: ' + repr(Path(sys.argv[1]).read_text()[-4000:]))
+PY
+fi
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

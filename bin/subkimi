@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
 set -euo pipefail
 
-BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+BIN_DIR="$(/usr/bin/dirname "$(/bin/realpath "$0")")" || exit 78
 
 . "$BIN_DIR/_review-platform.sh" || exit 78
 review_platform_check subkimi || exit 78
+aiwork_init subkimi || exit 78
 
 # Kimi reviews/explores with a CLI agent profile containing only file readers.
 # The PreToolUse hook is a second layer; preflight failures refuse dispatch.
@@ -90,15 +92,13 @@ fi
 
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
-command -v kimi >/dev/null 2>&1 || die "kimi CLI not found on PATH (npm i -g @moonshot-ai/kimi-code)"
-command -v node >/dev/null 2>&1 || config_die "node not found on PATH (guard hook needs it; without it the hook fails OPEN)"
 
 _RW="$BIN_DIR/_review-workspace.sh"
 [ -f "$_RW" ] || die '找不到 _review-workspace.sh ⇒ 拒绝派发(fail-closed)'
 # shellcheck source=_review-workspace.sh
 . "$_RW"
 # Absolute log path: the agent runs with cwd = REPO_DIR.
-LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subkimi: canonicalize helper 失败' >&2; exit 78; }
+LOG_FILE="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subkimi: canonicalize helper 失败' >&2; exit 78; }
 review_workspace_reset_report || exit 78
 if ! review_workspace_prepare "$SOURCE_REPO" subkimi; then
   die 'review workspace 准备失败 ⇒ 模型未启动'
@@ -137,14 +137,14 @@ if [[ -z "${KIMI_REVIEW_HOME:-}" ]]; then
   mkdir -p "$REVIEW_HOME/hooks" || config_die 'cannot create review hook directory'
   cp -f "$KIMI_SEED_HOME/hooks/guard.mjs" "$REVIEW_HOME/hooks/guard.mjs" || config_die 'cannot sync review guard'
   # 种子只声明占位符；命令渲染为运行期 home 自己那份 guard。
-  KIMI_RUNTIME_HOME="$REVIEW_HOME" python3 - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || config_die 'cannot render review config'
+  KIMI_RUNTIME_HOME="$REVIEW_HOME" "$AIWORK_PROGRAMS/python3" - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || config_die 'cannot render review config'
 import json, os, shlex, sys
 home = os.environ["KIMI_RUNTIME_HOME"].rstrip("/")
 model = sys.argv[2]
 p = home + "/config.toml"
 s = open(sys.argv[1]).read()
 s = s.replace("__KIMI_MODEL_ALIAS__", model).replace("__KIMI_MODEL_ID__", model.split("/", 1)[1])
-s2 = s.replace('"__KIMI_GUARD_COMMAND__"', json.dumps('node ' + shlex.quote(home + '/hooks/guard.mjs')))
+s2 = s.replace('"__KIMI_GUARD_COMMAND__"', json.dumps(shlex.quote(os.environ['AIWORK_PROGRAMS'] + '/node') + ' ' + shlex.quote(home + '/hooks/guard.mjs')))
 tmp = p + ".tmp." + str(os.getpid())
 with open(tmp, "w") as fh:
     fh.write(s2)
@@ -158,8 +158,8 @@ GUARD="$REVIEW_HOME/hooks/guard.mjs"
 [[ -f "$REVIEW_HOME/credentials/kimi-code.json" ]] || die "Kimi 凭证缺少 kimi-code.json；先用 kimi 登录"
 
 # A working hook file is useless if the CLI configuration does not attach it.
-python3 - "$REVIEW_HOME/config.toml" "$GUARD" <<'PYCHECK' || config_die 'invalid review hook configuration'
-import shlex, sys, tomllib
+"$AIWORK_PROGRAMS/python3" - "$REVIEW_HOME/config.toml" "$GUARD" <<'PYCHECK' || config_die 'invalid review hook configuration'
+import os, shlex, sys, tomllib
 with open(sys.argv[1], "rb") as fh:
     config = tomllib.load(fh)
 hooks = config.get("hooks", [])
@@ -167,7 +167,7 @@ if len(hooks) != 1:
     raise ValueError("expected exactly one review guard")
 hook = hooks[0]
 if (hook["event"] != "PreToolUse" or hook["matcher"] != ".*"
-        or shlex.split(hook["command"]) != ["node", sys.argv[2]]
+        or shlex.split(hook["command"]) != [os.environ["AIWORK_PROGRAMS"] + "/node", sys.argv[2]]
         or hook.get("timeout", 0) <= 0):
     raise ValueError("review guard is not attached to every tool")
 PYCHECK
@@ -175,16 +175,16 @@ PYCHECK
 # kimi-code fails open on hook errors. Both canaries must be denied before launch.
 for CANARY in Write Bash; do
   GUARD_RC=0
-  printf '{"tool_name":"%s","tool_input":{}}\n' "$CANARY" | node "$GUARD" >/dev/null 2>&1 || GUARD_RC=$?
+  printf '{"tool_name":"%s","tool_input":{}}\n' "$CANARY" | "$AIWORK_PROGRAMS/node" "$GUARD" >/dev/null 2>&1 || GUARD_RC=$?
   [[ $GUARD_RC -eq 2 ]] || config_die "guard $CANARY preflight failed (rc=$GUARD_RC, want 2)"
 done
 
 # --agent-file is the CLI's native tool configuration (both engine versions).
 # The allowlist is bin/_reader_tools.py, the same list the post-run check uses.
 AGENT_FILE="$REVIEW_HOME/aiwork-review.md"
-python3 "$BIN_DIR/_reader_tools.py" kimi-profile "$AGENT_FILE" \
+"$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" kimi-profile "$AGENT_FILE" \
   || config_die 'cannot write read-only agent profile'
-READER_TOOLS="$(python3 "$BIN_DIR/_reader_tools.py" kimi-tools)" \
+READER_TOOLS="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" kimi-tools)" \
   || config_die 'cannot read reader tool list'
 
 review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
@@ -224,10 +224,10 @@ STREAM="${LOG_FILE}.stream.jsonl"
   cd "$REPO_DIR"
   KIMI_CODE_HOME="$REVIEW_HOME" \
   KIMI_CODE_NO_AUTO_UPDATE=1 \
-    ${RO_EXEC[@]+"${RO_EXEC[@]}"} "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" kimi --agent-file "$AGENT_FILE" --output-format stream-json -m "$MODEL" -p "$PROMPT"
+    ${RO_EXEC[@]+"${RO_EXEC[@]}"} "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" "$AIWORK_PROGRAMS/kimi" --agent-file "$AGENT_FILE" --output-format stream-json -m "$MODEL" -p "$PROMPT"
 ) > "$STREAM" 2>>"$LOG_FILE" || RC=$?
 if [[ -s "$STREAM" ]]; then cat "$STREAM" >> "$LOG_FILE"; fi
-python3 - "$STREAM" "$REPORT" <<'PY'
+"$AIWORK_PROGRAMS/python3" - "$STREAM" "$REPORT" <<'PY'
 import json, pathlib, sys
 stream, dest = sys.argv[1:]
 last = None

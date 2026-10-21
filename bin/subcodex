@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
 set -uo pipefail
 
 # subcodex —— GPT(codex CLI)评审命令:review / explore。
@@ -13,10 +14,11 @@ set -uo pipefail
 #     **第一版的 `--disable multi_agent` 被真跑证伪过**;
 #   · 任务书走 stdin(argv 单参数上限 128KiB,delegate-codex 为此踩过 E2BIG)。
 
-BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+BIN_DIR="$(/usr/bin/dirname "$(/bin/realpath "$0")")" || exit 78
 
 . "$BIN_DIR/_review-platform.sh" || exit 78
 review_platform_check subcodex || exit 78
+aiwork_init subcodex || exit 78
 die() { echo "subcodex: $*" >&2; exit 1; }
 usage() {
   cat >&2 <<'EOF'
@@ -32,7 +34,6 @@ Environment:
   SUBCODEX_MODEL    exact gpt-<model-id> (default: ~/.config/aiwork/models.env)
   SUBCODEX_EFFORT   model_reasoning_effort (default: high)
   SUBCODEX_TIMEOUT  wall-clock seconds (default: 1500)
-  CODEX_BIN         codex executable (default: codex on PATH)
 
 Logs: LOG_FILE = header + codex's final message; <log>.stream.jsonl = --json events;
 <log>.stderr = codex stderr.
@@ -51,7 +52,7 @@ MODE="$1"; TASK_FILE="$2"; LOG_FILE="$3"; SOURCE_REPO="${4:-$PWD}"
 [[ "$MODE" == review || "$MODE" == explore ]] || { usage; exit 2; }
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 TASK_FILE="$(realpath "$TASK_FILE")"
-LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subcodex: canonicalize helper 失败' >&2; exit 78; }
+LOG_FILE="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subcodex: canonicalize helper 失败' >&2; exit 78; }
 SOURCE_REPO="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" || die 'needs a Git worktree with HEAD'
 SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 
@@ -66,8 +67,7 @@ EFFORT="${SUBCODEX_EFFORT:-high}"
 [[ "$EFFORT" =~ ^[a-z]+$ ]] || die "SUBCODEX_EFFORT must be a lowercase word, got '$EFFORT'"
 TIMEOUT_SECONDS="${SUBCODEX_TIMEOUT:-1500}"
 [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die 'SUBCODEX_TIMEOUT must be a positive integer'
-CODEX="${CODEX_BIN:-codex}"
-command -v "$CODEX" >/dev/null 2>&1 || die "codex CLI not found ($CODEX)"
+CODEX="$AIWORK_PROGRAMS/codex"
 review_platform_ro_exec "$SOURCE_REPO" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
@@ -89,7 +89,7 @@ REPO_DIR="$(review_workspace_repo)" || exit 78
 # CLI files must stay outside the model-writable tree: the CLI and wrapper
 # follow symlinks when writing/reading the final message.
 CODEX_TMP_DIR="$(review_workspace_home codex-tmp)" || exit 78
-COMMAND_TMP_DIR="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$REPO_DIR")" || exit 78
+COMMAND_TMP_DIR="$("$AIWORK_PROGRAMS/python3" -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$REPO_DIR")" || exit 78
 
 # ── 腿身上不许有子 agent、不许联网(2026-09-13 真跑实测后改)───────────────────────
 # 第一版只带 `--disable multi_agent --disable multi_agent_v2`,真跑一次就被证伪:gpt-6-astra 身上
@@ -124,7 +124,7 @@ CODEX_CFG=(
   --disable memories --disable hooks
 )
 CATALOG="$REVIEW_WORKSPACE_DIR/model-catalog.json"
-MA_DECLARED="$( ( cd "$REPO_DIR" && TMPDIR="$CODEX_TMP_DIR" "$CODEX" debug models ) 2>/dev/null | python3 -c '
+MA_DECLARED="$( ( cd "$REPO_DIR" && TMPDIR="$CODEX_TMP_DIR" "$CODEX" debug models ) 2>/dev/null | "$AIWORK_PROGRAMS/python3" -c '
 import json, sys
 model, out = sys.argv[1], sys.argv[2]
 data = json.load(sys.stdin)
@@ -213,7 +213,7 @@ else
 fi
 
 # 事件流里**自己报出来**的模型:只看结构字段,跳过模型写的正文/工具输出(那里面出现 "model" 不算数)。
-REPORTED="$(python3 - "$STREAM" <<'PY' 2>/dev/null
+REPORTED="$("$AIWORK_PROGRAMS/python3" - "$STREAM" <<'PY' 2>/dev/null
 import json, sys
 SKIP = {"arguments", "output", "content", "text", "message", "delta", "item", "items", "result", "stdout", "stderr"}
 def find(value, depth=0):
@@ -245,7 +245,7 @@ PY
 # error.message，再加上 codex 自己的 stderr。两处往往是同一句，相同的只抄一次。
 # 不在事件流里搜词。
 if [[ "$RC" -ne 0 ]]; then
-  python3 - "$STREAM" <<'PY' >&2
+  "$AIWORK_PROGRAMS/python3" - "$STREAM" <<'PY' >&2
 import json, sys
 seen = set()
 

@@ -4,6 +4,7 @@
 # prepare a workspace.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/_no-egress.sh" || exit 78
+_test_settings_py="$(realpath "$_test_settings_py")"
 
 BIN="${TEST_REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
 . "$BIN/_review-platform.sh" || exit 78
@@ -243,7 +244,7 @@ test_wrapper_helper_failure() {
   echo '[RW6] no wrapper invokes a model when workspace preparation fails'
   local d b repo rc mimo_rc deepseek_rc kimi_rc
   d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
-  cp "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$BIN/subdeepseek-agent" \
      "$BIN/subkimi" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
 review_workspace_reset_report() { return 0; }
@@ -281,7 +282,7 @@ MODEL_STUB
   : > "$d/prepare-mark"
   env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" PREPARE_MARK="$d/prepare-mark" \
     MIMO_REVIEW_HOME="$d/mimo-home" \
-    bash "$b/submimo" review "$d/task.md" "$d/out.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/task.md" "$d/out.log" "$repo" >/dev/null 2>&1
   mimo_rc=$?
   [[ $mimo_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: submimo helper failure is nonzero with zero model calls' $?
@@ -290,7 +291,7 @@ MODEL_STUB
 
   env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" PREPARE_MARK="$d/prepare-mark" \
     DEEPSEEK_API_KEY=test \
-    bash "$b/subdeepseek-agent" review "$d/task.md" "$d/deepseek.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" review "$d/task.md" "$d/deepseek.log" "$repo" >/dev/null 2>&1
   deepseek_rc=$?
   [[ $deepseek_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: Claude-base helper failure is nonzero with zero model calls' $?
@@ -308,7 +309,7 @@ MODEL_STUB
   printf '{}\n' > "$d/kimi-home/credentials/kimi-code.json"
   env PATH="$b:$PATH" MODEL_COUNT="$d/model-called" PREPARE_MARK="$d/prepare-mark" \
     KIMI_REVIEW_HOME="$d/kimi-home" \
-    bash "$b/subkimi" review "$d/task.md" "$d/kimi.log" "$repo" >/dev/null 2>&1
+    python3 "$_test_settings_py" run-with-programs bash "$b/subkimi" review "$d/task.md" "$d/kimi.log" "$repo" >/dev/null 2>&1
   kimi_rc=$?
   [[ $kimi_rc -ne 0 && ! -e "$d/model-called" ]]
   check 'RW6: Kimi helper failure is nonzero with zero model calls' $?
@@ -474,7 +475,7 @@ test_mutation_sensitivity() {
   # Mutation 1: preparation appears successful but reports SOURCE as the model
   # repo. RW2 must reject it because the "work" write is blocked together with
   # the source write.
-  cp "$BIN/_paths.py" "$d/_paths.py"
+  cp "$BIN/_paths.py" "$BIN/_python" "$BIN/_programs.sh" "$d/"
   sed '/^  REVIEW_SNAPSHOT_TREE="\$tree1"$/a\
   REVIEW_WORK_REPO="$REVIEW_SOURCE_REPO"
 ' \

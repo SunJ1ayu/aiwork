@@ -20,7 +20,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from _test_settings import write_kimi_config, write_settings
+from _test_settings import write_kimi_config, write_settings, write_programs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -154,7 +154,7 @@ class ReaderToolAuditTests(unittest.TestCase):
         (self.home / "hooks" / "guard.mjs").write_text("process.exit(2)\n", encoding="utf-8")
         (self.home / "credentials").mkdir()
         (self.home / "credentials" / "kimi-code.json").write_text("{}\n", encoding="utf-8")
-        write_kimi_config(self.home)
+        write_kimi_config(self.home, self.config)
 
     def _stub(self, name, body):
         path = self.fake / name
@@ -162,6 +162,7 @@ class ReaderToolAuditTests(unittest.TestCase):
         path.chmod(0o755)
 
     def _env(self, **extra):
+        write_programs(self.config, self.fake)
         env = dict(os.environ)
         env.update(
             PATH=str(self.fake) + os.pathsep + env.get("PATH", ""),

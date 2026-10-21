@@ -3,6 +3,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
+from _test_settings import write_programs
 
 from pathlib import Path
 import re
@@ -22,6 +23,7 @@ class PrivacyTests(unittest.TestCase):
         self.repo.mkdir()
         self.config = Path(self.temp.name) / 'settings'
         self.config.mkdir()
+        write_programs(self.config)
         self.env = dict(os.environ, AIWORK_CONFIG_DIR=str(self.config))
         self.git('init', '-q')
         self.git('config', 'user.name', 'fixture')

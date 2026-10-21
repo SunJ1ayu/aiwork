@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from _test_settings import write_settings, write_kimi_config
+from _test_settings import write_settings, write_kimi_config, write_programs
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ("timeout", "nonzero", "blank", "no_verdict", "pass",
@@ -27,7 +27,7 @@ class LegFinish(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="leg-finish-")).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
+        for name in ("_python", "_programs.sh", "aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
                      "_paths.py", "_review-platform.sh",
                      "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_reader_tools.py", "_cursor-stream.py",
                      "ro-repo-exec",
@@ -52,6 +52,7 @@ class LegFinish(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def _env(self):
+        write_programs(self.root / "settings", self.bin)
         env = os.environ.copy()
         env["PATH"] = f"{self.bin}:{env.get('PATH', '')}"
         env["AIWORK_CONFIG_DIR"] = str(self.root / "settings")
@@ -96,7 +97,7 @@ print('{"type":"result","result":' + __import__("json").dumps(text) + "}")
         (home / "credentials").mkdir()
         (home / "hooks" / "guard.mjs").write_text("process.exit(2)\n")
         (home / "credentials" / "kimi-code.json").write_text("{}\n")
-        write_kimi_config(home)
+        write_kimi_config(home, self.root / "settings")
         self._write("kimi", """#!/usr/bin/env python3
 import json, os, sys, time
 case = os.environ["FINISH_CASE"]

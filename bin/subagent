@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
 set -uo pipefail
 
-BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+BIN_DIR="$(/usr/bin/dirname "$(/bin/realpath "$0")")" || exit 78
 
 . "$BIN_DIR/_review-platform.sh" || exit 78
 review_platform_check subagent || exit 78
+aiwork_init subagent || exit 78
 
 # subagent - DeepSeek 评审命令的躯干:把 Claude Code headless(`claude -p`)指向
 # DeepSeek 的 Anthropic 兼容端点,让模型自己读仓库并在 review 的可写副本里跑本地检查。
@@ -108,7 +110,6 @@ fi
 
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]]  || die "repo dir not found: $REPO_DIR"
-command -v claude >/dev/null 2>&1 || die "claude CLI not found on PATH"
 
 if [[ -z "$API_KEY" ]]; then
   if ! API_KEY="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" "$SETTINGS_VAR")"; then
@@ -125,7 +126,7 @@ fi
 
 # 绝对日志路径:agent 以 cwd = REPO_DIR 运行
 "$BIN_DIR/aiwork-config" data-path >/dev/null || exit 78
-LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subagent: canonicalize helper 失败' >&2; exit 78; }
+LOG_FILE="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'subagent: canonicalize helper 失败' >&2; exit 78; }
 mkdir -p "$(dirname "$LOG_FILE")"
 
 # 能力清单按底座给:**不许宣称一个它没有的工具,也不许瞒着它有的**。
@@ -259,7 +260,7 @@ fi
     ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \
     ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
-    "${RO_EXEC[@]}" "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" claude -p \
+    "${RO_EXEC[@]}" "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" "$AIWORK_PROGRAMS/claude" -p \
       --model sonnet \
       --no-session-persistence \
       --setting-sources project \
@@ -271,7 +272,7 @@ fi
 
 # 渲染:把 stream-json 还原成人能读的日志。**撞上限/超时也要渲染** —— 那正是这条
 # 改动的全部意义:护栏可以打断工作,不许没收工作。
-python3 - "$STREAM_FILE" "$LOG_FILE" "$MAX_TURNS" "$RC" "$ERR_FILE" <<'PY'
+"$AIWORK_PROGRAMS/python3" - "$STREAM_FILE" "$LOG_FILE" "$MAX_TURNS" "$RC" "$ERR_FILE" <<'PY'
 import json, sys, pathlib
 
 stream, log, cap, rc, errfile = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
@@ -315,7 +316,7 @@ with open(log, "a", encoding="utf-8") as fh:
 PY
 
 # 最后一条消息是 stream-json 的 result.result，不是渲染进日志的过程。
-python3 - "$STREAM_FILE" "$REPORT" <<'PY'
+"$AIWORK_PROGRAMS/python3" - "$STREAM_FILE" "$REPORT" <<'PY'
 import json, pathlib, sys
 stream, dest = sys.argv[1:]
 last = None

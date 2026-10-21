@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
+aiwork_init "${0##*/}" || exit 78
 # 把 Git 内的工作流唯一源部署到 Claude Code 使用现场。
 set -uo pipefail
 
@@ -31,7 +33,7 @@ done
   echo "sync-workflow-docs: target root must be a real directory: $TARGET_ROOT" >&2; exit 2; }
 TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd -P)" || exit 2
 
-ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
+ROOT="$(dirname "$(/usr/bin/dirname "$(/bin/realpath "$0")")")"
 SOURCE="$ROOT/workflow"
 workflow_mappings() {
   local skill name
@@ -90,7 +92,7 @@ for spec in "${MAPPINGS[@]}"; do
   cmp -s "$src" "$dst" 2>/dev/null && continue
   parent="$(dirname "$dst")"; mkdir -p "$parent" || exit 1
   tmp="$parent/.workflow-sync.$$.tmp"
-  if ! install -m 0644 "$src" "$tmp" || ! python3 -c \
+  if ! install -m 0644 "$src" "$tmp" || ! "$AIWORK_PROGRAMS/python3" -c \
     'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$tmp" "$dst"; then
     rm -f "$tmp"; exit 1
   fi

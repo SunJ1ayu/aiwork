@@ -5,7 +5,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
-from _test_settings import write_kimi_config
+from _test_settings import write_kimi_config, write_platform_probe
 
 from contextlib import redirect_stderr, redirect_stdout
 import http.server
@@ -93,12 +93,14 @@ class ReliabilityTests(unittest.TestCase):
             self.run_count += 1
             bin_dir = self.directory / f'bin-{self.run_count}'
             bin_dir.mkdir()
+            write_platform_probe(bin_dir)
             for adapter in BIN.glob('sub*'):
                 name = adapter.name
                 if missing_agent and name == leg + '-agent':
                     continue
                 (bin_dir / name).touch()
-            shutil.copy2(BIN / '_review_result.py', bin_dir / '_review_result.py')
+            for helper in ('_python', '_programs.sh', '_review_result.py'):
+                shutil.copy2(BIN / helper, bin_dir / helper)
             (bin_dir / 'privacy-check').symlink_to(BIN / 'privacy-check')
 
         def invoke(command, **kwargs):
@@ -527,7 +529,7 @@ class ReaderFailureClassificationTests(LegCase):
         home = self.d / 'kimi-home'
         (home / 'hooks').mkdir(parents=True)
         (home / 'credentials').mkdir()
-        write_kimi_config(home)
+        write_kimi_config(home, self.config)
         (home / 'hooks/guard.mjs').write_text('process.exit(2); // offline deny fixture\n')
         (home / 'credentials/kimi-code.json').write_text('{}')
         for leg in ('subdeepseek-agent', 'subkimi'):

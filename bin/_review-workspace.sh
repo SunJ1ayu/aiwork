@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
+aiwork_init "${0##*/}" || exit 78
 # Per-leg writable review workspace.
 #
 # Source this file, then:
@@ -16,7 +18,7 @@
 # the worktree/untracked view. Two complete scans must produce the same pair.
 
 # This file is sourced. Helpers beside it live in this directory.
-REVIEW_WORKSPACE_BIN="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "${BASH_SOURCE[0]}")" || exit 1
+REVIEW_WORKSPACE_BIN="$("$AIWORK_PROGRAMS/python3" -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "${BASH_SOURCE[0]}")" || exit 1
 
 review_workspace__say() {
   printf 'review-workspace: %s\n' "$*" >&2
@@ -87,7 +89,7 @@ review_workspace__scan_view() { # path-prefix
 # job; this only keeps the separate "not /" rule and the refusal message.
 review_workspace__outside_source() { # path
   local path="$1" abs rc rel
-  abs="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$path")" || {
+  abs="$("$AIWORK_PROGRAMS/python3" "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$path")" || {
     review_workspace__say "canonicalize helper 失败:$path"
     return 78
   }
@@ -96,7 +98,7 @@ review_workspace__outside_source() { # path
     return 78
   fi
   rc=0
-  rel="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$REVIEW_SOURCE_REPO" "$path")" || rc=$?
+  rel="$("$AIWORK_PROGRAMS/python3" "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$REVIEW_SOURCE_REPO" "$path")" || rc=$?
   if [[ $rc -ne 0 && $rc -ne 1 ]]; then
     review_workspace__say "canonicalize helper 失败:$path"
     return 78
@@ -130,8 +132,6 @@ review_workspace_prepare() { # source-repo leg-name
     || { review_workspace__say '找不到 git，建不了 review 副本'; return 78; }
   command -v mktemp >/dev/null 2>&1 \
     || { review_workspace__say '找不到 mktemp，建不了受控临时目录'; return 78; }
-  command -v python3 >/dev/null 2>&1 \
-    || { review_workspace__say '找不到 python3，无法在写入前校验 workspace 根'; return 78; }
 
   top="$(git -C "$source" rev-parse --show-toplevel 2>/dev/null)" \
     || { review_workspace__say "不是 Git 工作树:$source"; return 78; }
@@ -338,7 +338,7 @@ review_workspace_write_facts() { # requested-model invoked-model [billing-mode [
   # 供应商事件流里**自己报出来**的模型(subcodex 读 --json 流)。空 = 没报,记 null;
   # 报了而与请求不符时照实写,让 eligibility 出 model_report_mismatch,不许拿请求值盖掉。
   [[ -z "$reported" ]] || outcome+=(--reported-model "$reported")
-  python3 "$helper" facts --output "$output" \
+  "$AIWORK_PROGRAMS/python3" "$helper" facts --output "$output" \
     --requested-model "$requested" --invoked-model "$invoked" \
     --git-object-format "$REVIEW_SNAPSHOT_OBJECT_FORMAT" \
     --head-oid "$REVIEW_SNAPSHOT_HEAD" --index-tree-oid "$REVIEW_SNAPSHOT_INDEX_TREE" \
@@ -362,7 +362,7 @@ review_workspace_reader_audit() { # audit-kimi|audit-mimo stream-file
   local kind="${1:-}" stream="${2:-}" helper out rc=0
   helper="$REVIEW_WORKSPACE_BIN/_reader_tools.py"
   [[ -f "$helper" ]] || { printf '%s\n' '少了 _reader_tools.py ⇒ 拒绝派发'; return 78; }
-  out="$(python3 "$helper" "$kind" "$stream" 2>&1)" || rc=$?
+  out="$("$AIWORK_PROGRAMS/python3" "$helper" "$kind" "$stream" 2>&1)" || rc=$?
   printf '%s\n' "$out"
   if [[ "$rc" -eq 0 || "$rc" -eq 1 ]]; then
     return "$rc"
@@ -387,7 +387,7 @@ review_workspace_finish() { # leg rc mode model billing reported degraded [audit
     else
       local norm_err reason
       norm_err="$(mktemp)"
-      if ! verdict="$(python3 "$helper" normalize "$REPORT" 2>"$norm_err")"; then
+      if ! verdict="$("$AIWORK_PROGRAMS/python3" "$helper" normalize "$REPORT" 2>"$norm_err")"; then
         reason="$(tr '\n' ' ' < "$norm_err" | sed 's/[[:space:]]*$//')"
         rm -f "$norm_err"
         if [[ -n "$reason" ]]; then
@@ -452,16 +452,16 @@ review_workspace_cleanup() {
   local target="${REVIEW_WORKSPACE_DIR:-}" base="${REVIEW_WORKSPACE_BASE_REAL:-}"
   local marker rel source
   [[ -n "$target" && -n "$base" ]] || return 0
-  target="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$target")" || return 78
+  target="$("$AIWORK_PROGRAMS/python3" "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$target")" || return 78
   source="${REVIEW_SOURCE_REPO:-}"
   if [[ -n "$source" ]]; then
-    source="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$source")" || return 78
+    source="$("$AIWORK_PROGRAMS/python3" "$REVIEW_WORKSPACE_BIN/_paths.py" canon -- "$source")" || return 78
   fi
   [[ "$target" != / && "$target" != "$source" ]] || {
     review_workspace__say "拒绝清理不安全路径:$target"
     return 78
   }
-  rel="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$base" "$target")" && [[ -n "$rel" ]] || {
+  rel="$("$AIWORK_PROGRAMS/python3" "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$base" "$target")" && [[ -n "$rel" ]] || {
     review_workspace__say "拒绝清理受控根之外的路径:$target"; return 78;
   }
   target="$(cd "$target" 2>/dev/null && pwd -P)" || {
@@ -470,7 +470,7 @@ review_workspace_cleanup() {
     review_workspace__say "cleanup 目标解析失败:${REVIEW_WORKSPACE_DIR:-}"
     return 78
   }
-  rel="$(python3 "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$base" "$target")" && [[ -n "$rel" ]] || {
+  rel="$("$AIWORK_PROGRAMS/python3" "$REVIEW_WORKSPACE_BIN/_paths.py" inside -- "$base" "$target")" && [[ -n "$rel" ]] || {
     review_workspace__say "cleanup 真路径逃出受控根:$target"; return 78;
   }
   marker="$target/.aiwork-review-workspace"

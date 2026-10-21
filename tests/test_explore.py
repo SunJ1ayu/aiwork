@@ -21,7 +21,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 import io
 
-from _test_settings import write_settings, write_kimi_config
+from _test_settings import write_programs, write_settings, write_kimi_config, write_platform_probe
 from _test_retention import extreme_mtime
 
 
@@ -90,6 +90,7 @@ class ExploreTests(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
+        write_platform_probe(self.bin)
         shutil.copy2(ROOT / "bin" / "_review_result.py", self.bin / "_review_result.py")
         stub = self.bin / "leg-stub"
         stub.write_text(STUB, encoding="utf-8")
@@ -541,6 +542,7 @@ class MimoExploreTests(unittest.TestCase):
             sys.stdout.write(pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8"))
         '''), encoding="utf-8")
         (fake / "mimo").chmod(0o755)
+        write_programs(config, fake)
         task = root / "task.md"
         task.write_text("# brief\n", encoding="utf-8")
         report = root / "report.md"
@@ -633,6 +635,7 @@ class ExploreLegContractTests(unittest.TestCase):
         self.facts = self.root / "facts.json"
 
     def _env(self, **extra):
+        write_programs(self.config, self.fake)
         env = dict(os.environ)
         env.update(
             PATH=str(self.fake) + os.pathsep + env.get("PATH", ""),
@@ -655,7 +658,7 @@ class ExploreLegContractTests(unittest.TestCase):
         (home / "hooks" / "guard.mjs").write_text("process.exit(2)\n", encoding="utf-8")
         (home / "credentials").mkdir()
         (home / "credentials" / "kimi-code.json").write_text("{}\n", encoding="utf-8")
-        write_kimi_config(home)
+        write_kimi_config(home, self.config)
         return home
 
     def _run(self, argv, env):

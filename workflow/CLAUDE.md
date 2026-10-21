@@ -44,4 +44,5 @@
 统一入口是 `bin/aiwork-config`；评审运行目录见 README「评审运行目录」。
 
 可用通道包括 Codex、Cursor、DeepSeek、Kimi、MiMo。每个通道都能写代码也能评审；同一个 PR 的评审要换一家，由关卡判断。默认模型读取本机设置。
+`review-pr` 的运行前提包括 node（CI 选择器使用），以及所选腿的程序路径和 Python 版本；配置与预检方法见 README「本机设置」。
 正式评审入口是 `review-pr`。要多家评审就并行跑几次 `review-pr`。

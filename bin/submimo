@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
 set -euo pipefail
 
-BIN_DIR="$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+BIN_DIR="$(/usr/bin/dirname "$(/bin/realpath "$0")")" || exit 78
 
 . "$BIN_DIR/_review-platform.sh" || exit 78
 review_platform_check submimo || exit 78
+aiwork_init submimo || exit 78
 
 # 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
 # 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
@@ -66,7 +68,7 @@ fi
 [[ "$MODE" == "review" || "$MODE" == "explore" ]] || { usage; exit 2; }
 TASK_FILE="$2"
 LOG_FILE="$3"
-LOG_FILE="$(python3 "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'submimo: canonicalize helper 失败' >&2; exit 78; }
+LOG_FILE="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_paths.py" canon -- "$LOG_FILE")" || { echo 'submimo: canonicalize helper 失败' >&2; exit 78; }
 REPO_DIR="${4:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
 TIMEOUT_SECONDS="${MIMO_CLI_TIMEOUT:-900}"
@@ -95,7 +97,6 @@ fi
 review_platform_ro_exec "$SOURCE_REPO" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 
-command -v mimo >/dev/null 2>&1 || die "missing official MiMoCode CLI command: mimo"
 [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
 [[ -d "$REPO_DIR" ]] || die "repo dir not found: $REPO_DIR"
 
@@ -156,13 +157,13 @@ mkdir -p "$MIMO_CFG_HOME/mimocode" || { echo "submimo: cannot create config ⇒ 
   # Tools and permissions come from bin/_reader_tools.py. The same map is
   # the post-run allowlist. Atomic replace lives in that module: a half-written
   # config can make mimo fall back to the built-in plan agent (bash and write on).
-  python3 "$BIN_DIR/_reader_tools.py" mimo-config \
+  "$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" mimo-config \
     "$MIMO_CFG_HOME/mimocode/mimocode.json" "$REVIEW_AGENT" \
     || { echo "submimo: invalid reader config ⇒ 拒绝派发" >&2; exit 78; }
 chmod 600 "$MIMO_CFG_HOME/mimocode/mimocode.json" || exit 78
 # Inline config is loaded after project config; keep the reader lock there too.
 # Otherwise a repository's agent section could turn command tools back on.
-MIMO_CONFIG_CONTENT="$(python3 - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$MIMO_MODEL_CFG" "$BIN_DIR" <<'PYMERGE'
+MIMO_CONFIG_CONTENT="$("$AIWORK_PROGRAMS/python3" - "$MIMO_CFG_HOME/mimocode/mimocode.json" "$MIMO_MODEL_CFG" "$BIN_DIR" <<'PYMERGE'
 import json, sys
 sys.path.insert(0, sys.argv[3])
 from _reader_tools import MIMO_PERMISSION, MIMO_TOOLS
@@ -174,7 +175,7 @@ config.update(json.loads(sys.argv[2] or "{}"))
 print(json.dumps(config))
 PYMERGE
 )" || { echo 'submimo: invalid reader config ⇒ 拒绝派发' >&2; exit 78; }
-MESSAGE="$(python3 "$BIN_DIR/_reader_tools.py" mimo-prompt)" \
+MESSAGE="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" mimo-prompt)" \
   || { echo 'submimo: invalid reader config ⇒ 拒绝派发' >&2; exit 78; }
 _READER_CONTEXT="$BIN_DIR/_review-reader-context.sh"
 [[ -f "$_READER_CONTEXT" ]] || { echo 'submimo: missing reader context helper ⇒ 拒绝派发' >&2; exit 78; }
@@ -189,7 +190,7 @@ review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 REPO_REAL="$(realpath "$REPO_DIR")"
 TASK_REAL="$(realpath "$TASK_FILE")"
 _task_rc=0
-python3 "$BIN_DIR/_paths.py" inside -- "$REPO_REAL" "$TASK_REAL" >/dev/null || _task_rc=$?
+"$AIWORK_PROGRAMS/python3" "$BIN_DIR/_paths.py" inside -- "$REPO_REAL" "$TASK_REAL" >/dev/null || _task_rc=$?
 case "$_task_rc" in
   0) : ;;
   1)
@@ -200,7 +201,7 @@ case "$_task_rc" in
   *) echo 'submimo: task 路径检查失败 ⇒ 拒绝派发' >&2; exit 78 ;;
 esac
 
-CMD=(mimo run --pure --agent "$AGENT" --dir "$REPO_DIR" --format json -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
+CMD=("$AIWORK_PROGRAMS/mimo" run --pure --agent "$AGENT" --dir "$REPO_DIR" --format json -m "$MODEL" "$MESSAGE" --file "$TASK_FILE")
 CMD=(env MIMOCODE_DISABLE_PROJECT_CONFIG=1 "MIMOCODE_CONFIG_CONTENT=$MIMO_CONFIG_CONTENT" "${CMD[@]}")
 CMD=(env "XDG_CONFIG_HOME=$MIMO_CFG_HOME" "${CMD[@]}")
 
@@ -230,7 +231,7 @@ run_mimo_once() {
 
 : > "$LOG_FILE"
 mimo_rc=0; run_mimo_once || mimo_rc=$?
-python3 - "$LOG_FILE" "$REPORT" <<'PY'
+"$AIWORK_PROGRAMS/python3" - "$LOG_FILE" "$REPORT" <<'PY'
 import json, pathlib, sys
 log, dest = sys.argv[1:]
 # `mimo run --format json` emits step_start / text / tool_use / step_finish.
@@ -266,7 +267,7 @@ PY
 # mimo --format json 把模型正文和工具结果放在 JSON 事件里。非零退出时只抄
 # MIMO_RAW 里不是 JSON 事件的行。日志头不在那份文件里。
 if [[ "$mimo_rc" -ne 0 ]]; then
-  python3 - "$MIMO_RAW" <<'PY' >&2
+  "$AIWORK_PROGRAMS/python3" - "$MIMO_RAW" <<'PY' >&2
 import json, sys
 for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
     line = raw.rstrip("\n")

@@ -16,7 +16,36 @@ class ConfigError(ValueError):
 
 
 def config_dir() -> Path:
-    return Path(os.environ.get('AIWORK_CONFIG_DIR') or Path.home() / '.config/aiwork').expanduser()
+    import subprocess
+    helper = Path(__file__).resolve().with_name('_programs.sh')
+    try:
+        result = subprocess.run(['/bin/sh', '-c', '. "$1"; aiwork_config_dir',
+                                 'aiwork-config-dir', str(helper)], capture_output=True, text=True)
+    except OSError as exc:
+        raise ConfigError(f'设置目录读取入口不可用: {exc}') from exc
+    if result.returncode:
+        raise ConfigError(result.stderr.strip())
+    return Path(result.stdout.rstrip('\n'))
+
+
+def _program_query(option: str, value: str) -> str:
+    import subprocess
+    try:
+        result = subprocess.run([str(Path(__file__).resolve().with_name('_python')), option, value],
+                                capture_output=True, text=True)
+    except OSError as exc:
+        raise ConfigError(f'程序路径读取入口不可用: {exc}') from exc
+    if result.returncode:
+        raise ConfigError(result.stderr.strip())
+    return result.stdout.strip()
+
+
+def program(name: str) -> Path:
+    return Path(_program_query('--path', name))
+
+
+def check_programs(entry: str) -> None:
+    _program_query('--check', entry)
 
 
 def data_dir() -> Path:

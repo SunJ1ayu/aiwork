@@ -1,3 +1,5 @@
+. "$(/usr/bin/dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/_programs.sh" || exit 78
+aiwork_init "${0##*/}" || exit 78
 # shellcheck shell=bash
 # 「运行期 home 不许落在**被评审的仓**里」的**共享实现**
 # (2026-08-19,track repo-write-audit 第二轮)。被 subkimi / submimo / subagent source。
@@ -20,8 +22,8 @@
 review_home_guard() {  # review_home_guard <腿名> <运行期 home> <被评审的仓> <环境变量名>
   local leg="$1" home="$2" repo="$3" var="${4:-REVIEW_HOME}"
   local helper rc=0
-  helper="$(python3 -c 'import os,sys; print(os.path.join(os.path.dirname(os.path.realpath(sys.argv[1])), "_paths.py"))' "${BASH_SOURCE[0]}")" || return 78
-  python3 "$helper" inside -- "$repo" "$home" >/dev/null || rc=$?
+  helper="$("$AIWORK_PROGRAMS/python3" -c 'import os,sys; print(os.path.join(os.path.dirname(os.path.realpath(sys.argv[1])), "_paths.py"))' "${BASH_SOURCE[0]}")" || return 78
+  "$AIWORK_PROGRAMS/python3" "$helper" inside -- "$repo" "$home" >/dev/null || rc=$?
   [[ $rc -eq 1 ]] && return 0
   [[ $rc -eq 0 ]] || return 78
   printf '%s: 运行期 home 在**被评审的仓内**(%s)⇒ 拒跑。\n' "$leg" "$home" >&2

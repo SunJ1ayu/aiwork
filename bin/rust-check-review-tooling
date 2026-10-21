@@ -10,7 +10,7 @@
 # 是同一种病:病根不是缺哪条检查,是缺一个把它们全串起来的入口。
 # **新增判据套件 = 往下面这张表里加一行。**
 set -uo pipefail
-ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
+ROOT="$(dirname "$(/usr/bin/dirname "$(/bin/realpath "$0")")")"
 
 SUITES=(
   "privacy-check|python3|$ROOT/tests/test_privacy_check.py"
@@ -20,6 +20,7 @@ SUITES=(
   "data-dir-mention|python3|$ROOT/tests/test_data_dir_mention.py"
   "data-dir-registry|python3|$ROOT/tests/test_data_dir_registry.py"
   "data-retention|python3|$ROOT/tests/test_data_retention.py"
+  "program-paths|python3|$ROOT/tests/test_program_paths.py"
   "local-settings|python3|$ROOT/tests/test_local_settings.py"
   "review-pr|python3|$ROOT/tests/test_review_pr.py"
   "explore|python3|$ROOT/tests/test_explore.py"
@@ -65,6 +66,12 @@ if [[ "${1:-}" == "--coverage-only" ]]; then
 fi
 
 [[ -x "$ROOT/bin/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$ROOT/bin/aiwork-timeout" >&2; exit 78; }
+
+# Provision fixtures even if the caller exported their real machine settings.
+# Missing-component/coverage checks above remain usable in minimal deployments.
+if [[ "${AIWORK_TEST_RUNNER_READY:-}" != 1 ]]; then
+  exec python3 "$(dirname "${BASH_SOURCE[0]}")/../tests/_test_settings.py" --isolated bash "$0" "$@"
+fi
 
 names=(); rcs=(); summaries=(); outs=()
 for entry in "${SUITES[@]}"; do
