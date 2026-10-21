@@ -30,6 +30,8 @@
     "bin/aiwork-timeout",
     "bin/_review_result.py",
     "bin/_review-platform.sh",
+    "bin/_python",
+    "bin/_programs.sh",
     "tests/_*",
     "tests/test_aiwork_gate*.mjs",
     "tests/test-aiwork-gate.sh",
