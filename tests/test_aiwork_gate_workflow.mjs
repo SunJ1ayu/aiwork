@@ -12,8 +12,8 @@ const read = (path) => readFileSync(new URL(path, ROOT), "utf8");
 const exists = (path) => existsSync(new URL(path, ROOT));
 const policy = () => JSON.parse(read(".aiwork/policy.json"));
 
-// 判卷框架包括 CI 点名的总跑入口和 tests/_*，及它们字面引用的 bin/ 工具；
-// 不靠解析 source/exec/import。
+// 从 CI 总跑入口、tests/_* 和已保护的 bin 文件追踪框架依赖；
+// 普通套件不作为入口，传给框架执行的被测命令也不展开。
 // tests/ 里其余文件只能是总跑登记的套件、套件用 node --test 点名要跑的判据、fixtures/、mutation-*.sh。
 function tracked(prefix) {
   return execFileSync("git", ["ls-files", "-z", "--", prefix], { cwd: new URL(".", ROOT) })
@@ -76,12 +76,45 @@ function judgingFramework() {
   return framework.sort();
 }
 
-function binCalledByFramework(framework) {
+function frameworkRoots(current = policy()) {
+  return [...new Set([
+    ...judgingFramework(), ...ciRunners(),
+    ...tracked("bin").filter((path) => matchAny(current.judging_surface, path)),
+  ])].sort();
+}
+
+function sameDirectoryCalls(file, code) {
+  const found = [];
+  // Shell/Python shared launchers spell exec as """exec". A command or
+  // source operand is an edge; an array, diagnostic or fixture string is not.
+  const calls = /^\s*(?:(?:"""exec"|exec|source|\.)\s+)?(["'])(\$\([^\n]+?\)|\$(?:\{(?:BIN|BIN_DIR)\}|(?:BIN|BIN_DIR)))\/([A-Za-z0-9_.-]+)\1(?=\s|$)/gm;
+  for (const match of code.matchAll(calls)) {
+    const directory = match[2];
+    if (directory.startsWith("$(") &&
+        (!/\bdirname\b/.test(directory) || !/\$0|\$\{?BASH_SOURCE/.test(directory) ||
+         [...directory.matchAll(/\bdirname\b/g)].length !== 1)) continue;
+    found.push(file.slice(0, file.lastIndexOf("/") + 1) + match[3]);
+  }
+  return found;
+}
+
+function binCalledByFramework(framework, readSource = read) {
   const found = new Set();
-  for (const file of framework) {
-    const code = read(file).replace(/#.*$/gm, "");
-    for (const match of code.matchAll(/\bbin\/[A-Za-z0-9_.-]+/g)) {
-      if (exists(match[0]) && statSync(new URL(match[0], ROOT)).isFile()) found.add(match[0]);
+  const visited = new Set(framework);
+  const pending = [...framework];
+  for (const file of pending) {
+    const code = readSource(file).replace(/#.*$/gm, "");
+    const references = [
+      ...[...code.matchAll(/\bbin\/[A-Za-z0-9_.-]+/g)].map((match) => match[0]),
+      ...sameDirectoryCalls(file, code),
+    ];
+    for (const path of references) {
+      if (!exists(path) || !statSync(new URL(path, ROOT)).isFile()) continue;
+      if (path.startsWith("bin/")) found.add(path);
+      if (!visited.has(path)) {
+        visited.add(path);
+        pending.push(path);
+      }
     }
   }
   return [...found].sort();
@@ -214,16 +247,37 @@ test("关卡自己的测试在判卷面", () => {
   assert.equal(matchAny(current.judging_surface, "tests/test_review_pr.py"), false, "普通测试文件不算判卷面");
 });
 
-test("判卷框架及 CI 总跑入口调用的工具都在判卷面", () => {
+test("判卷框架及 CI 总跑入口调用的工具都在判卷面", (t) => {
   const current = policy();
-  const framework = judgingFramework();
-  const roots = [...framework, ...ciRunners()];
+  const roots = frameworkRoots(current);
   const required = [...roots, ...binCalledByFramework(roots)];
+  t.diagnostic(`框架依赖:${[...new Set(required)].sort().join("、")}`);
   const missing = required.filter((path) => !matchAny(current.judging_surface, path));
   assert.deepEqual(missing, [], `这些框架文件改了不用业主批准:${missing.join("、")}`);
   assert.equal(matchAny(current.judging_surface, "tests/_future_harness.sh"), true, "tests/_* 是一条 glob，新框架文件也要罩住");
   assert.equal(matchAny(current.judging_surface, "tests/test_foo.py"), false, "普通测试文件不算判卷面");
   assert.equal(matchAny(current.judging_surface, "bin/subcodex"), false, "被测代码不进判卷面");
+});
+
+test("框架调用推导沿启动链找到解释器辅助，不纳入普通套件的被测代码", () => {
+  const called = binCalledByFramework(frameworkRoots());
+  for (const path of ["bin/_python", "bin/_programs.sh"]) {
+    assert.ok(called.includes(path), `启动链必须推导到 ${path}`);
+  }
+  assert.equal(called.includes("bin/subcodex"), false, "套件调用的被测代码不是框架依赖");
+});
+
+test("同目录调用按执行位置追踪，递归遇环终止，不把命令数组当作已执行", () => {
+  const sources = new Map([
+    ["bin/aiwork-timeout", '"""exec" "$(dirname "$(realpath "$0")")/_python" "$0" "$@"\n' +
+      'COMMAND=("$BIN/subcodex" "$@")\n# exec "$BIN/subcodex"\n'],
+    ["bin/_python", 'source "${BIN_DIR}/_programs.sh"\n'],
+    ["bin/_programs.sh", '. "$BIN/_python"\n'],
+  ]);
+  assert.deepEqual(binCalledByFramework(["bin/aiwork-timeout"], (file) => sources.get(file)),
+    ["bin/_programs.sh", "bin/_python"]);
+  assert.deepEqual(sameDirectoryCalls("bin/_python", 'exec "$BIN_DIR/_programs.sh"\n'),
+    ["bin/_programs.sh"]);
 });
 
 test("决定评审归属和家族的代码在判卷面或 high", () => {
