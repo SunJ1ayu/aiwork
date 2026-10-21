@@ -86,7 +86,11 @@ def run_with_programs(command):
             search = os.pathsep.join(p for p in os.environ['PATH'].split(os.pathsep)
                                     if Path(p).resolve() != programs.resolve())
             target = shutil.which(name, path=search)
-            if target and Path(target).resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
+            if target:
+                try:
+                    fixture_directory(target)
+                except ValueError:
+                    continue
                 (programs / name).unlink(missing_ok=True)
                 (programs / name).symlink_to(target)
         return subprocess.call(command)
