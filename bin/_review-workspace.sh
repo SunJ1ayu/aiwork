@@ -362,7 +362,7 @@ review_workspace_reader_audit() { # audit-kimi|audit-claude stream-file
   local kind="${1:-}" stream="${2:-}" helper out rc=0
   helper="$REVIEW_WORKSPACE_BIN/_reader_tools.py"
   [[ -f "$helper" ]] || { printf '%s\n' '少了 _reader_tools.py ⇒ 拒绝派发'; return 78; }
-  out="$("$AIWORK_PROGRAMS/python3" "$helper" "$kind" "$stream" 2>&1)" || rc=$?
+  out="$("$AIWORK_PROGRAMS/python3" "$helper" "$kind" "$stream" "$REPO_DIR" 2>&1)" || rc=$?
   printf '%s\n' "$out"
   if [[ "$rc" -eq 0 || "$rc" -eq 1 ]]; then
     return "$rc"

@@ -7,8 +7,11 @@ look successful.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
+
+from _paths import inside
 
 # Kimi's agent profile `tools` field, in the order the prompt names them.
 KIMI_TOOLS = ("Read", "ReadMediaFile", "Glob", "Grep")
@@ -20,6 +23,60 @@ KIMI_ROLES = frozenset({"meta", "assistant", "tool"})
 
 OUTSIDE = "这次调用了只读清单以外的工具: {names} ⇒ 不发评审"
 UNREADABLE = "输出里看不出这次调用了哪些工具 ⇒ 不发评审"
+
+
+class ReaderScopeError(ValueError):
+    pass
+
+
+def check_reader_path(name, arguments, repo, read_key):
+    """Prove the complete read scope, including search patterns and symlinks.
+
+    A directory search can follow links below its root. Conservatively reject
+    that search if any reachable link escapes, even if a filter might skip it.
+    """
+    if name not in KIMI_TOOLS and name not in CLAUDE_READER_TOOLS:
+        return
+    key = read_key if name == "Read" else "path"
+    path = arguments.get(key, "." if name in {"Glob", "Grep"} else None)
+    if not isinstance(path, str) or not path or "\0" in path:
+        raise ReaderScopeError(name)
+
+    def check(target):
+        if inside(str(repo), str(target), literal=False)[0] != 0:
+            raise ReaderScopeError(name)
+
+    try:
+        target = Path(repo) / Path(path).expanduser()
+        check(target)
+        if name == "Glob":
+            pattern = arguments.get("pattern")
+            # Glob traversal and brace alternatives cannot widen the root.
+            if not isinstance(pattern, str) or not pattern or "\0" in pattern or ".." in pattern:
+                raise ReaderScopeError(name)
+            check(target / Path(pattern).expanduser())
+        # An absolute Glob pattern can select a different in-repo subtree
+        # from path, and wildcard components can select symlinks there.
+        search_root = Path(repo) if name == "Glob" else target
+        if name in {"Glob", "Grep"} and search_root.is_dir():
+            seen = set()
+
+            def unreadable(_error):
+                raise ReaderScopeError(name)
+
+            for directory, dirs, files in os.walk(search_root, followlinks=True, onerror=unreadable):
+                stat = os.stat(directory)
+                ident = (stat.st_dev, stat.st_ino)
+                if ident in seen:
+                    dirs.clear()
+                    continue
+                seen.add(ident)
+                for entry in dirs + files:
+                    child = Path(directory) / entry
+                    if child.is_symlink():
+                        check(child)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ReaderScopeError(name) from exc
 
 
 def english_list(names):
@@ -81,7 +138,7 @@ def _events(text):
     return events or None
 
 
-def audit_kimi(text):
+def audit_kimi(text, repo):
     """Tool names in order, or None when the stream is not the known shape."""
     events = _events(text)
     if events is None:
@@ -111,11 +168,18 @@ def audit_kimi(text):
             name = function.get("name") if isinstance(function, dict) else None
             if not isinstance(name, str) or not name:
                 return None
+            try:
+                arguments = json.loads(function.get("arguments", ""))
+            except (json.JSONDecodeError, TypeError):
+                return None
+            if not isinstance(arguments, dict):
+                return None
+            check_reader_path(name, arguments, repo, "path")
             tools.append(name)
     return tools
 
 
-def audit_claude(text):
+def audit_claude(text, repo):
     """Require a complete Claude stream with its tool inventory and every call.
 
     Shapes are from Claude Code 2.1.301 against Xiaomi's Anthropic API.
@@ -158,6 +222,7 @@ def audit_claude(text):
                         return None
                     if not isinstance(block.get("input"), dict) or ident in calls:
                         return None
+                    check_reader_path(name, block["input"], repo, "file_path")
                     calls[ident] = name
                     tools.append(name)
                 elif typ not in {"text", "thinking", "redacted_thinking"}:
@@ -213,13 +278,16 @@ def main(argv):
             print(claude_prompt())
         elif cmd == "audit-kimi":
             text = Path(argv[2]).read_text(encoding="utf-8", errors="replace") if Path(argv[2]).is_file() else ""
-            return _report(audit_kimi(text), frozenset(KIMI_TOOLS))
+            return _report(audit_kimi(text, Path(argv[3])), frozenset(KIMI_TOOLS))
         elif cmd == "audit-claude":
             text = Path(argv[2]).read_text(encoding="utf-8", errors="replace") if Path(argv[2]).is_file() else ""
-            return _report(audit_claude(text), frozenset(CLAUDE_READER_TOOLS))
+            return _report(audit_claude(text, Path(argv[3])), frozenset(CLAUDE_READER_TOOLS))
         else:
             print(f"unknown command {cmd}", file=sys.stderr)
             return 2
+    except ReaderScopeError as exc:
+        print(f"这次读工具的路径越界或无法核实在工作目录内: {exc} ⇒ 不发评审")
+        return 1
     except (OSError, IndexError, KeyError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

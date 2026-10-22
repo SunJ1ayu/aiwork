@@ -39,7 +39,7 @@ KIMI_WRITE_TOOL_ONLY = (
 
 KIMI_READ = textwrap.dedent("""\
     {"role":"meta","type":"system.version","version":"0.36.1"}
-    {"role":"assistant","content":"","tool_calls":[{"type":"function","id":"tool_read","function":{"name":"Read","arguments":"{}"}}]}
+    {"role":"assistant","content":"","tool_calls":[{"type":"function","id":"tool_read","function":{"name":"Read","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}
     {"role":"tool","tool_call_id":"tool_read","content":"file"}
     {"role":"assistant","content":"Conclusion: PASS\\n"}
     """)
@@ -51,7 +51,7 @@ KIMI_READ = textwrap.dedent("""\
 KIMI_TOOL_ONLY = (
     '{"role":"meta","type":"system.version","version":"0.36.1"}\n'
     '{"role":"assistant","tool_calls":[{"type":"function","id":"tool_read",'
-    '"function":{"name":"Read","arguments":"{}"}}]}\n'
+    '"function":{"name":"Read","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}\n'
     '{"role":"tool","tool_call_id":"tool_read","content":"file"}\n'
     '{"role":"assistant","content":"Conclusion: PASS\\n"}\n'
 )
@@ -66,7 +66,7 @@ def kimi_line_separator(separator):
     return (
         '{"role":"meta","type":"system.version","version":"0.36.1"}\n'
         '{"role":"assistant","content":"","tool_calls":[{"type":"function","id":"tool_read",'
-        '"function":{"name":"Read","arguments":"{}"}}]}\n'
+        '"function":{"name":"Read","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}\n'
         '{"role":"tool","tool_call_id":"tool_read","content":"a' + separator + 'b"}\n'
         '{"role":"assistant","content":"Conclusion: PASS\\n"}\n'
     )
@@ -74,7 +74,7 @@ def kimi_line_separator(separator):
 
 KIMI_BAD_CONTENT = (
     '{"role":"assistant","content":["not a string"],"tool_calls":[{"type":"function",'
-    '"id":"tool_read","function":{"name":"Read","arguments":"{}"}}]}\n'
+    '"id":"tool_read","function":{"name":"Read","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}\n'
     '{"role":"assistant","content":"Conclusion: PASS\\n"}\n'
 )
 
@@ -115,10 +115,81 @@ def _load(name):
 
 # Claude Code 2.1.301 / Xiaomi live probe, 2026-10-21. Content trimmed;
 # event types, tool block and tool-result shapes retained from the real stream.
-MIMO_CLAUDE_READ = '{"type": "system", "subtype": "init", "tools": ["Glob", "Grep", "Read"], "model": "mimo-v2.6-flash"}\n{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "call_06f378455dc747049614438c", "name": "Read", "input": {"file_path": "/tmp/aiwork-mimo-claude-probe-hsqedqip/repo/README.md"}}]}}\n{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "call_06f378455dc747049614438c", "type": "tool_result", "content": "1\\tSynthetic read-only probe.\\n2\\t"}]}}\n{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Conclusion: PASS\\n"}]}}\n{"type": "result", "subtype": "success", "is_error": false, "result": "Conclusion: PASS\\n"}\n'
+MIMO_CLAUDE_READ = '{"type": "system", "subtype": "init", "tools": ["Glob", "Grep", "Read"], "model": "mimo-v2.6-flash"}\n{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "call_06f378455dc747049614438c", "name": "Read", "input": {"file_path": "README.md"}}]}}\n{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "call_06f378455dc747049614438c", "type": "tool_result", "content": "1\\tSynthetic read-only probe.\\n2\\t"}]}}\n{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Conclusion: PASS\\n"}]}}\n{"type": "result", "subtype": "success", "is_error": false, "result": "Conclusion: PASS\\n"}\n'
 
 
 class ReaderToolAuditTests(unittest.TestCase):
+    def _reader_stream(self, leg, name, arguments):
+        events = [json.loads(line) for line in (KIMI_READ if leg == "subkimi" else MIMO_READ).split("\n") if line]
+        for event in events:
+            if leg == "subkimi" and event.get("tool_calls"):
+                event["tool_calls"][0]["function"] = {"name": name, "arguments": json.dumps(arguments)}
+            elif leg == "submimo" and event.get("type") == "assistant":
+                for block in event["message"]["content"]:
+                    if block["type"] == "tool_use":
+                        block.update(name=name, input=arguments)
+        return "\n".join(json.dumps(event) for event in events) + "\n"
+
+    def test_external_read_fails_and_cannot_publish_for_both_readers(self):
+        for leg, family, key in (("submimo", "xiaomi", "file_path"), ("subkimi", "moonshot", "path")):
+            with self.subTest(leg=leg):
+                stream = self._reader_stream(leg, "Read", {key: str(self.root / "outside.txt")})
+                result, _body, facts, _log, slot = self._run_leg(leg, stream)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(facts["failure_kind"], "readonly_tools")
+                emitted = self._emit(leg, family, result, slot / "facts.json", slot / "report.md", slot / "leg.log")
+                review = _load("review-pr")
+                with self.assertRaises(review.ReviewError):
+                    review.publishable_model(emitted)
+
+    def test_every_reader_accepts_working_directory_paths(self):
+        (self.repo / "inner").mkdir()
+        (self.repo / "alias").symlink_to("inner", target_is_directory=True)
+        (self.repo / "inner" / "back").symlink_to("..", target_is_directory=True)
+        for leg in ("submimo", "subkimi"):
+            key = "file_path" if leg == "submimo" else "path"
+            calls = [("Read", {key: "a.txt"}), ("Read", {key: "__REVIEW_CWD__/a.txt"}),
+                     ("Glob", {"pattern": "**/*.txt"}), ("Grep", {"pattern": "a"}),
+                     ("Read", {key: "alias/../a.txt"})]
+            if leg == "subkimi":
+                calls.append(("ReadMediaFile", {"path": "image.png"}))
+            for name, arguments in calls:
+                with self.subTest(leg=leg, name=name, arguments=arguments):
+                    result, body, facts, _log, _slot = self._run_leg(leg, self._reader_stream(leg, name, arguments))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("Conclusion: PASS", body)
+                    self.assertIsNone(facts["failure_kind"])
+
+    def test_glob_absolute_pattern_cannot_expand_outside_its_path(self):
+        (self.repo / "empty").mkdir()
+        (self.repo / "escape").symlink_to(self.root, target_is_directory=True)
+        for leg in ("submimo", "subkimi"):
+            with self.subTest(leg=leg):
+                stream = self._reader_stream(leg, "Glob", {"path": "empty", "pattern": "__REVIEW_CWD__/*/*"})
+                result, _body, facts, _log, _slot = self._run_leg(leg, stream)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(facts["failure_kind"], "readonly_tools")
+
+    def test_reader_path_escape_and_unprovable_inputs_fail_in_both_modes(self):
+        (self.repo / "escape").symlink_to(self.root, target_is_directory=True)
+        for leg in ("submimo", "subkimi"):
+            key = "file_path" if leg == "submimo" else "path"
+            calls = [("Read", {key: p}) for p in ("../outside.txt", "~/.config/aiwork/mimo.env",
+                     "/proc/self/environ", "escape/outside.txt", "__REVIEW_CWD__-sibling/file")]
+            calls += [("Read", args) for args in ({}, {key: None}, {key: []}, {key: ""}, {key: "a\0b"})]
+            calls += [(name, {"path": "../", "pattern": "*"}) for name in ("Glob", "Grep")]
+            calls += [("Glob", {"pattern": "../*"}), ("Glob", {"pattern": str(self.root / "*")}),
+                      ("Grep", {"path": ".", "pattern": "secret"})]
+            if leg == "subkimi":
+                calls.append(("ReadMediaFile", {"path": "../outside.png"}))
+            for mode in ("review", "explore"):
+                for name, arguments in calls:
+                    with self.subTest(leg=leg, mode=mode, name=name, arguments=arguments):
+                        result, _body, facts, _log, _slot = self._run_leg(
+                            leg, self._reader_stream(leg, name, arguments), mode=mode)
+                        self.assertNotEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(facts["failure_kind"], "readonly_tools")
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -175,7 +246,7 @@ class ReaderToolAuditTests(unittest.TestCase):
             self._stub("kimi", textwrap.dedent(f"""\
                 #!/usr/bin/env python3
                 import os, pathlib, sys
-                sys.stdout.write(pathlib.Path(os.environ["KIMI_STREAM_FIXTURE"]).read_text(encoding="utf-8"))
+                sys.stdout.write(pathlib.Path(os.environ["KIMI_STREAM_FIXTURE"]).read_text(encoding="utf-8").replace("__REVIEW_CWD__", os.getcwd()))
                 raise SystemExit({exit_code})
                 """))
         else:
@@ -184,7 +255,7 @@ class ReaderToolAuditTests(unittest.TestCase):
                 import os, pathlib, sys
                 if "--output-format" not in sys.argv or sys.argv[sys.argv.index("--output-format") + 1] != "stream-json":
                     raise SystemExit("review must request --output-format stream-json")
-                (sys.stderr if {exit_code} else sys.stdout).write(pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8"))
+                (sys.stderr if {exit_code} else sys.stdout).write(pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8").replace("__REVIEW_CWD__", os.getcwd()))
                 raise SystemExit({exit_code})
                 """))
         fixture_env = {"KIMI_STREAM_FIXTURE": str(fixture)} if leg == "subkimi" else {"MIMO_JSON_FIXTURE": str(fixture)}
