@@ -364,12 +364,12 @@ review_workspace_reader_audit() { # audit-kimi|audit-claude stream-file
   [[ -f "$helper" ]] || { printf '%s\n' '少了 _reader_tools.py ⇒ 拒绝派发'; return 78; }
   out="$("$AIWORK_PROGRAMS/python3" "$helper" "$kind" "$stream" "$REPO_DIR" 2>&1)" || rc=$?
   printf '%s\n' "$out"
-  if [[ "$rc" -eq 0 || "$rc" -eq 1 ]]; then
+  if [[ "$rc" -eq 0 || "$rc" -eq 1 || "$rc" -eq 3 ]]; then
     return "$rc"
   fi
   return 78
 }
-review_workspace_finish() { # leg rc mode model billing reported degraded [audit-message]
+review_workspace_finish() { # leg rc mode model billing reported degraded [audit-message] [audit-rc]
   local leg="${1:-}" rc="${2:-0}" mode="${3:-}" model="${4:-}"
   [[ -n "$leg" ]] || { review_workspace__say 'finish 缺腿名'; exit 78; }
   local billing="${5:-subscription}" reported="${6:-}" degraded="${7:-}"
@@ -400,6 +400,12 @@ review_workspace_finish() { # leg rc mode model billing reported degraded [audit
       rm -f "$norm_err"
       [[ -n "$verdict" ]] || verdict=UNKNOWN
     fi
+  fi
+  if [[ "${9:-0}" == 3 ]]; then
+    printf '%s: %s\n' "$leg" "$audit_msg" >&2
+    review_workspace_write_facts "$model" "$model" "$billing" \
+      exited partial readonly_tools "$verdict" "$degraded" "$reported" || exit 78
+    exit 1
   fi
   if [[ "$rc" == 124 ]]; then
     review_workspace_write_facts "$model" "$model" "$billing" \

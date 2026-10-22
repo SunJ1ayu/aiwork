@@ -160,15 +160,55 @@ class ReaderToolAuditTests(unittest.TestCase):
                     self.assertIn("Conclusion: PASS", body)
                     self.assertIsNone(facts["failure_kind"])
 
-    def test_glob_absolute_pattern_cannot_expand_outside_its_path(self):
-        (self.repo / "empty").mkdir()
-        (self.repo / "escape").symlink_to(self.root, target_is_directory=True)
-        for leg in ("submimo", "subkimi"):
-            with self.subTest(leg=leg):
-                stream = self._reader_stream(leg, "Glob", {"path": "empty", "pattern": "__REVIEW_CWD__/*/*"})
-                result, _body, facts, _log, _slot = self._run_leg(leg, stream)
-                self.assertNotEqual(result.returncode, 0, result.stderr)
+    def test_denied_mimo_read_still_prevents_publication(self):
+        # Claude Code 2.1.301 live rejection, 2026-10-22. Public synthetic
+        # paths/prose only; tool_result_meta and permission_denials retained.
+        stream = (ROOT / "tests/fixtures/claude-mimo-denied-stream.jsonl").read_text()
+        for recorded in (stream, "\n".join(line for line in stream.split("\n")
+                                         if '"type": "assistant"' not in line)):
+            with self.subTest(assistant_call_present=recorded == stream):
+                result, _body, facts, _log, slot = self._run_leg("submimo", recorded)
                 self.assertEqual(facts["failure_kind"], "readonly_tools")
+                self.assertIn("路径越界", result.stderr)
+                emitted = self._emit("submimo", "xiaomi", result, slot / "facts.json",
+                                     slot / "report.md", slot / "leg.log")
+                review = _load("review-pr")
+                with self.assertRaises(review.ReviewError):
+                    review.publishable_model(emitted)
+
+    def test_external_read_remains_readonly_failure_without_successful_finish(self):
+        for leg in ("submimo", "subkimi"):
+            key = "file_path" if leg == "submimo" else "path"
+            stream = self._reader_stream(leg, "Read", {key: str(self.root / "outside.txt")})
+            events = [json.loads(line) for line in stream.split("\n") if line]
+            if leg == "submimo":
+                events = [e for e in events if e.get("type") != "result"]
+            else:
+                events = [e for e in events if e.get("tool_calls") or e.get("role") != "assistant"]
+            incomplete = "\n".join(json.dumps(e) for e in events) + "\n"
+            for exit_code in (0, 1, 124):
+                with self.subTest(leg=leg, exit_code=exit_code):
+                    result, _body, facts, _log, slot = self._run_leg(
+                        leg, incomplete, exit_code=exit_code)
+                    self.assertEqual(facts["failure_kind"], "readonly_tools", result.stderr)
+                    emitted = self._emit(leg, "xiaomi" if leg == "submimo" else "moonshot",
+                                         result, slot / "facts.json", slot / "report.md", slot / "leg.log")
+                    review = _load("review-pr")
+                    with self.assertRaises(review.ReviewError):
+                        review.publishable_model(emitted)
+
+    def test_subdirectory_search_ignores_unrelated_external_symlink(self):
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs" / "guide.md").write_text("public guide\n")
+        (self.repo / "external-data").symlink_to(self.root, target_is_directory=True)
+        for leg in ("submimo", "subkimi"):
+            for name in ("Glob", "Grep"):
+                with self.subTest(leg=leg, name=name):
+                    stream = self._reader_stream(leg, name, {"path": "docs", "pattern": "*.md"})
+                    result, body, facts, _log, _slot = self._run_leg(leg, stream)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("Conclusion: PASS", body)
+                    self.assertIsNone(facts["failure_kind"])
 
     def test_reader_path_escape_and_unprovable_inputs_fail_in_both_modes(self):
         (self.repo / "escape").symlink_to(self.root, target_is_directory=True)
@@ -178,8 +218,7 @@ class ReaderToolAuditTests(unittest.TestCase):
                      "/proc/self/environ", "escape/outside.txt", "__REVIEW_CWD__-sibling/file")]
             calls += [("Read", args) for args in ({}, {key: None}, {key: []}, {key: ""}, {key: "a\0b"})]
             calls += [(name, {"path": "../", "pattern": "*"}) for name in ("Glob", "Grep")]
-            calls += [("Glob", {"pattern": "../*"}), ("Glob", {"pattern": str(self.root / "*")}),
-                      ("Grep", {"path": ".", "pattern": "secret"})]
+            calls += [("Glob", {"pattern": "../*"}), ("Glob", {"pattern": str(self.root / "*")})]
             if leg == "subkimi":
                 calls.append(("ReadMediaFile", {"path": "../outside.png"}))
             for mode in ("review", "explore"):
@@ -235,7 +274,7 @@ class ReaderToolAuditTests(unittest.TestCase):
         return env
 
     def _run_leg(self, leg, stream, *, exit_code=0, mode="review"):
-        slot = self.root / f"{leg}-{mode}-{hashlib.sha256(stream.encode()).hexdigest()[:8]}"
+        slot = self.root / f"{leg}-{mode}-{exit_code}-{hashlib.sha256(stream.encode()).hexdigest()[:8]}"
         slot.mkdir()
         log = slot / "leg.log"
         report = slot / "report.md"
@@ -255,7 +294,8 @@ class ReaderToolAuditTests(unittest.TestCase):
                 import os, pathlib, sys
                 if "--output-format" not in sys.argv or sys.argv[sys.argv.index("--output-format") + 1] != "stream-json":
                     raise SystemExit("review must request --output-format stream-json")
-                (sys.stderr if {exit_code} else sys.stdout).write(pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8").replace("__REVIEW_CWD__", os.getcwd()))
+                content = pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8").replace("__REVIEW_CWD__", os.getcwd())
+                (sys.stdout if content.lstrip().startswith("{{") else sys.stderr).write(content)
                 raise SystemExit({exit_code})
                 """))
         fixture_env = {"KIMI_STREAM_FIXTURE": str(fixture)} if leg == "subkimi" else {"MIMO_JSON_FIXTURE": str(fixture)}
@@ -449,6 +489,7 @@ pathlib.Path(os.environ['CLAUDE_CAPTURE']).write_text(json.dumps({
     'argv': sys.argv[1:], 'base_url': os.environ.get('ANTHROPIC_BASE_URL'),
     'model': os.environ.get('ANTHROPIC_DEFAULT_SONNET_MODEL'),
     'authenticated': os.environ.get('ANTHROPIC_AUTH_TOKEN') == 'fixture-mimo-secret',
+    'settings': json.loads(pathlib.Path(sys.argv[sys.argv.index('--settings')+1]).read_text()) if '--settings' in sys.argv else None,
     'prompt': sys.stdin.read()}))
 sys.stdout.write(pathlib.Path(os.environ['CLAUDE_STREAM']).read_text())
 """)
@@ -486,6 +527,25 @@ sys.stdout.write(pathlib.Path(os.environ['CLAUDE_STREAM']).read_text())
                 self.assertIn('Shell and write tools are unavailable',call['prompt'])
                 self.assertIn('核实工具: Read',(self.root/'leg.log').read_text())
                 self.assertNotIn('fixture-mimo-secret',result.stdout+result.stderr+(self.root/'leg.log').read_text())
+
+    def test_mimo_supplies_private_read_boundary_settings_without_project_sources(self):
+        settings = self.fixture.repo / '.claude'
+        settings.mkdir()
+        for name in ('settings.json', 'settings.local.json'):
+            (settings / name).write_text(json.dumps({'permissions': {
+                'blockReadsOutsideWorkingDirectories': False, 'additionalDirectories': ['/']}}))
+        for mode in ('review', 'explore'):
+            with self.subTest(mode=mode):
+                result = self.run_leg(mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                call = json.loads(self.capture.read_text())
+                self.assertIsNotNone(call['settings'], 'aiwork must supply its own settings file')
+                self.assertIs(call['settings']['permissions']['blockReadsOutsideWorkingDirectories'], True)
+                args = call['argv']
+                self.assertEqual(args[args.index('--setting-sources') + 1], '')
+                self.assertEqual(args[args.index('--permission-prompts') + 1], 'none')
+                self.assertNotIn('--add-dir', args)
+                self.assertFalse(Path(args[args.index('--settings') + 1]).is_relative_to(self.fixture.repo))
 
     def test_mimo_refuses_nonreader_or_unprovable_stream_in_both_modes(self):
         for stream in (MIMO_CLAUDE_READ.replace('"name": "Read"','"name": "Bash"'),

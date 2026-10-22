@@ -7,7 +7,6 @@ look successful.
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -30,10 +29,10 @@ class ReaderScopeError(ValueError):
 
 
 def check_reader_path(name, arguments, repo, read_key):
-    """Prove the complete read scope, including search patterns and symlinks.
+    """Audit the paths recorded in this call, without enumerating the repository.
 
-    A directory search can follow links below its root. Conservatively reject
-    that search if any reachable link escapes, even if a filter might skip it.
+    Execution-time protection owns search traversal; a post-run scan cannot
+    undo reads and rejects unrelated links that the tool never visits.
     """
     if name not in KIMI_TOOLS and name not in CLAUDE_READER_TOOLS:
         return
@@ -51,30 +50,9 @@ def check_reader_path(name, arguments, repo, read_key):
         check(target)
         if name == "Glob":
             pattern = arguments.get("pattern")
-            # Glob traversal and brace alternatives cannot widen the root.
-            if not isinstance(pattern, str) or not pattern or "\0" in pattern or ".." in pattern:
+            if not isinstance(pattern, str) or not pattern or "\0" in pattern:
                 raise ReaderScopeError(name)
             check(target / Path(pattern).expanduser())
-        # An absolute Glob pattern can select a different in-repo subtree
-        # from path, and wildcard components can select symlinks there.
-        search_root = Path(repo) if name == "Glob" else target
-        if name in {"Glob", "Grep"} and search_root.is_dir():
-            seen = set()
-
-            def unreadable(_error):
-                raise ReaderScopeError(name)
-
-            for directory, dirs, files in os.walk(search_root, followlinks=True, onerror=unreadable):
-                stat = os.stat(directory)
-                ident = (stat.st_dev, stat.st_ino)
-                if ident in seen:
-                    dirs.clear()
-                    continue
-                seen.add(ident)
-                for entry in dirs + files:
-                    child = Path(directory) / entry
-                    if child.is_symlink():
-                        check(child)
     except (OSError, RuntimeError, ValueError) as exc:
         raise ReaderScopeError(name) from exc
 
@@ -138,8 +116,48 @@ def _events(text):
     return events or None
 
 
+def check_recorded_paths(text, repo, *, claude):
+    """Check known calls even if the CLI subsequently fails or truncates output.
+
+    This cannot prove the stream complete; the strict audit below still must
+    do that. A known violation, including a native permission denial, is enough
+    to reject the run regardless of its final verdict or process status.
+    """
+    for line in text.split("\n"):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if claude:
+            message = event.get("message")
+            blocks = message.get("content", []) if isinstance(message, dict) else []
+            if event.get("type") == "assistant" and isinstance(blocks, list):
+                for block in blocks:
+                    if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
+                        check_reader_path(block.get("name"), block["input"], repo, "file_path")
+            denials = event.get("permission_denials", [])
+            if event.get("type") == "result" and isinstance(denials, list):
+                for denial in denials:
+                    if isinstance(denial, dict) and isinstance(denial.get("tool_input"), dict):
+                        check_reader_path(denial.get("tool_name"), denial["tool_input"], repo, "file_path")
+        elif event.get("role") == "assistant" and isinstance(event.get("tool_calls"), list):
+            for call in event["tool_calls"]:
+                function = call.get("function") if isinstance(call, dict) else None
+                if not isinstance(function, dict):
+                    continue
+                try:
+                    arguments = json.loads(function.get("arguments", ""))
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if isinstance(arguments, dict):
+                    check_reader_path(function.get("name"), arguments, repo, "path")
+
+
 def audit_kimi(text, repo):
     """Tool names in order, or None when the stream is not the known shape."""
+    check_recorded_paths(text, repo, claude=False)
     events = _events(text)
     if events is None:
         return None
@@ -174,7 +192,6 @@ def audit_kimi(text, repo):
                 return None
             if not isinstance(arguments, dict):
                 return None
-            check_reader_path(name, arguments, repo, "path")
             tools.append(name)
     return tools
 
@@ -185,6 +202,7 @@ def audit_claude(text, repo):
     Shapes are from Claude Code 2.1.301 against Xiaomi's Anthropic API.
     Unknown records are evidence we cannot audit, never proof of no tools.
     """
+    check_recorded_paths(text, repo, claude=True)
     events = _events(text)
     if events is None:
         return None
@@ -222,7 +240,6 @@ def audit_claude(text, repo):
                         return None
                     if not isinstance(block.get("input"), dict) or ident in calls:
                         return None
-                    check_reader_path(name, block["input"], repo, "file_path")
                     calls[ident] = name
                     tools.append(name)
                 elif typ not in {"text", "thinking", "redacted_thinking"}:
@@ -276,6 +293,9 @@ def main(argv):
             print(",".join(CLAUDE_READER_TOOLS))
         elif cmd == "claude-prompt":
             print(claude_prompt())
+        elif cmd == "claude-settings":
+            Path(argv[2]).write_text(json.dumps({"permissions": {
+                "blockReadsOutsideWorkingDirectories": True}}) + "\n", encoding="utf-8")
         elif cmd == "audit-kimi":
             text = Path(argv[2]).read_text(encoding="utf-8", errors="replace") if Path(argv[2]).is_file() else ""
             return _report(audit_kimi(text, Path(argv[3])), frozenset(KIMI_TOOLS))
@@ -287,7 +307,8 @@ def main(argv):
             return 2
     except ReaderScopeError as exc:
         print(f"这次读工具的路径越界或无法核实在工作目录内: {exc} ⇒ 不发评审")
-        return 1
+        # Distinguish observed scope violations from incomplete/unknown streams.
+        return 3
     except (OSError, IndexError, KeyError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

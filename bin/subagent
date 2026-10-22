@@ -235,8 +235,10 @@ EXEC_NAME="$(basename "$0")"
 review_platform_ro_exec "$SOURCE_REPO" "$EXEC_NAME" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$EXEC_NAME" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 if [[ "$READ_ONLY" == 1 ]]; then
+  READER_SETTINGS="$RUNTIME_HOME/reader-settings.json"
+  "$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" claude-settings "$READER_SETTINGS" || exit 78
   IFS=, read -r -a CLAUDE_TOOLS <<< "$READER_TOOLS"
-  CLAUDE_OPTIONS=(--setting-sources "" --tools "$READER_TOOLS"
+  CLAUDE_OPTIONS=(--setting-sources "" --settings "$READER_SETTINGS" --permission-prompts none --tools "$READER_TOOLS"
     --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands
     --allowedTools "${CLAUDE_TOOLS[@]}")
 elif [[ "$MODE" == "review" ]]; then
@@ -337,12 +339,12 @@ if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
 
 AUDIT_MESSAGE=""
-if [[ "$READ_ONLY" == 1 && "$RC" == 0 ]]; then
-  audit_rc=0
+audit_rc=0
+if [[ "$READ_ONLY" == 1 ]]; then
   audit="$(review_workspace_reader_audit audit-claude "$STREAM_FILE")" || audit_rc=$?
   if [[ "$audit_rc" == 0 ]]; then
     printf '\n核实工具: %s\n' "$audit" >> "$LOG_FILE"
-  elif [[ "$audit_rc" == 1 ]]; then
+  elif [[ "$audit_rc" == 1 || "$audit_rc" == 3 ]]; then
     AUDIT_MESSAGE="$audit"
     printf '\n%s\n' "$audit" >> "$LOG_FILE"
   else
@@ -351,4 +353,4 @@ if [[ "$READ_ONLY" == 1 && "$RC" == 0 ]]; then
   fi
 fi
 review_workspace_finish "${LABEL:-subagent}" "$RC" "$MODE" \
-  "$FACT_MODEL" "$BILLING_MODE" "" "" "$AUDIT_MESSAGE"
+  "$FACT_MODEL" "$BILLING_MODE" "" "" "$AUDIT_MESSAGE" "$audit_rc"
