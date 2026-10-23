@@ -113,6 +113,14 @@ MIMO_CLAUDE_READ = '{"type": "system", "subtype": "init", "tools": ["Glob", "Gre
 
 
 class ReaderToolAuditTests(unittest.TestCase):
+    def _claude_model_process_ran(self, leg, process):
+        if sys.platform == "darwin" and leg == "subdeepseek-agent":
+            self.assertEqual(process.returncode, 78, process.stderr)
+            self.assertIn("Mac 上暂不运行", process.stderr)
+            return False
+        self.assertEqual(process.returncode, 0, process.stderr)
+        return True
+
     def test_claude_reported_models_reach_publication_checks(self):
         # Captured from the real Claude Code MiMo/DeepSeek reviews; only
         # prose, file content, and session/accounting metadata were trimmed.
@@ -125,7 +133,8 @@ class ReaderToolAuditTests(unittest.TestCase):
             for requested in (actual, "mimo-v2.6-pro" if provider == "mimo" else "deepseek-pro"):
                 with self.subTest(leg=leg, requested=requested):
                     process, _body, facts, _log, slot = self._run_leg(leg, stream, model=requested)
-                    self.assertEqual(process.returncode, 0, process.stderr)
+                    if not self._claude_model_process_ran(leg, process):
+                        continue
                     emitted = self._emit(leg, family, process, slot / "facts.json",
                                          slot / "report.md", slot / "leg.log")
                     self.assertEqual(facts["model"]["reported"], actual)
@@ -156,7 +165,8 @@ class ReaderToolAuditTests(unittest.TestCase):
                 stream = "\n".join(json.dumps(event) for event in events) + "\n"
                 with self.subTest(leg=leg, source=source):
                     process, _body, facts, _log, slot = self._run_leg(leg, stream, model=actual)
-                    self.assertEqual(process.returncode, 0, process.stderr)
+                    if not self._claude_model_process_ran(leg, process):
+                        continue
                     self.assertEqual(facts["model"]["reported"], different)
                     emitted = self._emit(leg, family, process, slot / "facts.json",
                                          slot / "report.md", slot / "leg.log")
@@ -183,7 +193,8 @@ class ReaderToolAuditTests(unittest.TestCase):
             stream = "\n".join(json.dumps(event) for event in events) + "\n"
             with self.subTest(leg=leg):
                 process, _body, facts, _log, slot = self._run_leg(leg, stream, model=actual)
-                self.assertEqual(process.returncode, 0, process.stderr)
+                if not self._claude_model_process_ran(leg, process):
+                    continue
                 self.assertIsNone(facts["model"]["reported"])
                 emitted = self._emit(leg, family, process, slot / "facts.json",
                                      slot / "report.md", slot / "leg.log")
