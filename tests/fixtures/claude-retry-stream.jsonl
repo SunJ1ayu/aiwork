@@ -1,0 +1,7 @@
+{"type": "system", "subtype": "init", "tools": ["Glob", "Grep", "Read"], "claude_code_version": "2.1.301"}
+{"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 10, "retry_delay_ms": 502, "error_status": 429, "error": "rate_limit"}
+{"type": "assistant", "message": {"id": "msg_synthetic_2", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5", "content": [{"type": "tool_use", "id": "toolu_synthetic_read", "name": "Read", "input": {"file_path": "README.md"}}], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 0}, "context_management": null}}
+{"type": "system", "subtype": "informational"}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "toolu_synthetic_read", "type": "tool_result", "content": "1\tPublic synthetic scope probe.\n2\t"}]}}
+{"type": "assistant", "message": {"id": "msg_synthetic_3", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5", "content": [{"type": "text", "text": "Synthetic repository reviewed.\nConclusion: PASS"}], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 0}, "context_management": null}}
+{"permission_denials": [], "is_error": false, "subtype": "success", "result": "Synthetic repository reviewed.\nConclusion: PASS", "type": "result"}

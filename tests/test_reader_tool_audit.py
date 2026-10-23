@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """跑完以后核 Kimi / MiMo 这次实际调用的工具。
 
-配置只读工具之外，还须核实实际记录；未知格式和清单外调用都不能当成成功。
+配置只读工具之外，还须核实实际调用；无法核实或清单外调用都不能当成成功。
 """
 import os
 import sys
@@ -83,11 +83,6 @@ KIMI_NOT_JSON = (
     'not json\n'
 )
 
-KIMI_UNKNOWN = textwrap.dedent("""\
-    {"role":"assistant","content":"Conclusion: PASS\\n"}
-    {"event":"tool","name":"Write"}
-    """)
-
 KIMI_WRITE_NO_VERDICT = textwrap.dedent("""\
     {"role":"assistant","content":"Review has evidence but no decision.\\n","tool_calls":[{"type":"function","id":"tool_write","function":{"name":"Write","arguments":"{}"}}]}
     """)
@@ -100,7 +95,6 @@ KIMI_LIMIT = (
 # Claude Code 2.1.301 / Xiaomi live probe; synthetic review prose.
 MIMO_READ = (ROOT / "tests/fixtures/claude-mimo-stream.jsonl").read_text()
 MIMO_BASH = MIMO_READ.replace('"name": "Read"', '"name": "Bash"')
-MIMO_UNKNOWN = MIMO_READ + '{"event":"tool","name":"Bash"}\n'
 MIMO_PROVIDER = "provider error line\n"
 MIMO_CLAUDE_READ = MIMO_READ
 
@@ -159,6 +153,80 @@ class ReaderToolAuditTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn("Conclusion: PASS", body)
                     self.assertIsNone(facts["failure_kind"])
+
+    def test_retry_and_new_records_preserve_publishable_reviews(self):
+        for fixture in ("claude-retry-stream.jsonl", "claude-new-records-stream.jsonl"):
+            stream = (ROOT / "tests/fixtures" / fixture).read_text()
+            events = [json.loads(line) for line in stream.split("\n") if line]
+            # Move a captured status record before init and after result too:
+            # lifecycle position must not turn a non-tool record into a failure.
+            status = next(e for e in events if e.get("subtype") in ("status", "api_retry"))
+            text_delta = next((e for e in events if
+                               e.get("event", {}).get("delta", {}).get("type") == "text_delta"), status)
+            for before_init in (False, True):
+                recorded = ([status, text_delta] + events + [status, text_delta]) if before_init else events
+                for mode in ("review", "explore"):
+                    with self.subTest(fixture=fixture, before_init=before_init, mode=mode):
+                        result, body, facts, log, slot = self._run_leg(
+                            "submimo", "\n".join(json.dumps(e) for e in recorded), mode=mode)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn("Conclusion: PASS", body)
+                        self.assertIn("核实工具: Read", log)
+                        emitted = self._emit("submimo", "xiaomi", result, slot / "facts.json",
+                                             slot / "report.md", slot / "leg.log")
+                        self.assertTrue(_load("review-pr").publishable_model(emitted))
+
+    def test_calls_in_new_records_still_prevent_publication(self):
+        base = [json.loads(line) for line in MIMO_READ.split("\n") if line]
+        call = next(e["message"]["content"][0] for e in base
+                    if e.get("type") == "assistant" and e["message"]["content"][0]["type"] == "tool_use")
+        for where in (0, 1, len(base)):
+            for name, arguments in (("Read", {"file_path": "../outside.txt"}),
+                                    ("Read", {}), ("Bash", {"command": "true"})):
+                # The outer record is opaque; the enclosed API call is not.
+                injected = {"type": "new_record", "payload": dict(call, id="toolu_extra", name=name, input=arguments)}
+                events = base[:where] + [injected] + base[where:]
+                with self.subTest(where=where, name=name, arguments=arguments):
+                    result, _body, facts, _log, slot = self._run_leg(
+                        "submimo", "\n".join(json.dumps(e) for e in events))
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(facts["failure_kind"], "readonly_tools")
+                    emitted = self._emit("submimo", "xiaomi", result, slot / "facts.json",
+                                         slot / "report.md", slot / "leg.log")
+                    review = _load("review-pr")
+                    with self.assertRaises(review.ReviewError):
+                        review.publishable_model(emitted)
+
+    def test_api_calls_can_use_new_envelopes(self):
+        events = [json.loads(line) for line in MIMO_READ.split("\n") if line]
+        for event in events:
+            if event.get("type") in ("assistant", "user"):
+                event["type"] = "new_record"
+                event["payload"] = event.pop("message")
+        result, _body, _facts, _log, slot = self._run_leg(
+            "submimo", "\n".join(json.dumps(e) for e in events))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        emitted = self._emit("submimo", "xiaomi", result, slot / "facts.json",
+                             slot / "report.md", slot / "leg.log")
+        self.assertTrue(_load("review-pr").publishable_model(emitted))
+
+    def test_incomplete_or_inconsistent_tool_evidence_still_fails(self):
+        events = [json.loads(line) for line in
+                  (ROOT / "tests/fixtures/claude-new-records-stream.jsonl").read_text().split("\n") if line]
+        variants = [events[:-1], [e for e in events if e.get("type") != "user"],
+                    [dict(e, tools=["Read", "Bash"]) if e.get("subtype") == "init" else e for e in events],
+                    [dict(e, event=dict(e["event"], delta={"type": "input_json_delta", "partial_json": "{"}))
+                     if e.get("event", {}).get("delta", {}).get("type") == "input_json_delta" else e for e in events]]
+        for index, recorded in enumerate(variants):
+            with self.subTest(index=index):
+                result, _body, facts, _log, slot = self._run_leg(
+                    "submimo", "\n".join(json.dumps(e) for e in recorded))
+                self.assertNotEqual(result.returncode, 0)
+                emitted = self._emit("submimo", "xiaomi", result, slot / "facts.json",
+                                     slot / "report.md", slot / "leg.log")
+                review = _load("review-pr")
+                with self.assertRaises(review.ReviewError):
+                    review.publishable_model(emitted)
 
     def test_denied_mimo_read_still_prevents_publication(self):
         # Claude Code 2.1.301 live rejection, 2026-10-22. Public synthetic
@@ -365,8 +433,8 @@ class ReaderToolAuditTests(unittest.TestCase):
 
     def test_unrecognized_output_is_not_a_successful_review(self):
         cases = (
-            ("subkimi", KIMI_UNKNOWN, "moonshot"),
-            ("submimo", MIMO_UNKNOWN, "xiaomi"),
+            ("subkimi", KIMI_NOT_JSON, "moonshot"),
+            ("submimo", MIMO_READ + 'not json\n', "xiaomi"),
         )
         for leg, stream, family in cases:
             with self.subTest(leg=leg):
@@ -382,6 +450,18 @@ class ReaderToolAuditTests(unittest.TestCase):
                 with self.assertRaises(review.ReviewError) as caught:
                     review.publishable_model(emitted)
                 self.assertIn("readonly_tools", str(caught.exception))
+
+    def test_kimi_auxiliary_records_do_not_hide_tool_calls(self):
+        for tool in (None, "Read", "Write"):
+            record = {"role": "new_status", "status": "ready"}
+            if tool:
+                record["tool_calls"] = [{"type": "function", "id": "extra", "function": {
+                    "name": tool, "arguments": json.dumps({"path": "../outside.txt"})}}]
+            stream = json.dumps(record) + "\n" + KIMI_READ
+            result, _body, facts, _log, _slot = self._run_leg("subkimi", stream)
+            self.assertEqual(result.returncode == 0, tool is None, result.stderr)
+            if tool:
+                self.assertEqual(facts["failure_kind"], "readonly_tools")
 
     def test_reader_tools_stay_successful_and_are_listed(self):
         cases = (

@@ -18,8 +18,6 @@ KIMI_TOOLS = ("Read", "ReadMediaFile", "Glob", "Grep")
 # Claude Code's exact built-in tool selection and post-run allowlist.
 CLAUDE_READER_TOOLS = ("Read", "Glob", "Grep")
 
-KIMI_ROLES = frozenset({"meta", "assistant", "tool"})
-
 OUTSIDE = "这次调用了只读清单以外的工具: {names} ⇒ 不发评审"
 UNREADABLE = "输出里看不出这次调用了哪些工具 ⇒ 不发评审"
 
@@ -131,18 +129,10 @@ def check_recorded_paths(text, repo, *, claude):
         if not isinstance(event, dict):
             continue
         if claude:
-            message = event.get("message")
-            blocks = message.get("content", []) if isinstance(message, dict) else []
-            if event.get("type") == "assistant" and isinstance(blocks, list):
-                for block in blocks:
-                    if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
-                        check_reader_path(block.get("name"), block["input"], repo, "file_path")
-            denials = event.get("permission_denials", [])
-            if event.get("type") == "result" and isinstance(denials, list):
-                for denial in denials:
-                    if isinstance(denial, dict) and isinstance(denial.get("tool_input"), dict):
-                        check_reader_path(denial.get("tool_name"), denial["tool_input"], repo, "file_path")
-        elif event.get("role") == "assistant" and isinstance(event.get("tool_calls"), list):
+            for block in claude_records(event):
+                if block.get("type") in ("tool_use", "permission_denial") and isinstance(block.get("input"), dict):
+                    check_reader_path(block.get("name"), block["input"], repo, "file_path")
+        elif isinstance(event.get("tool_calls"), list):
             for call in event["tool_calls"]:
                 function = call.get("function") if isinstance(call, dict) else None
                 if not isinstance(function, dict):
@@ -156,7 +146,7 @@ def check_recorded_paths(text, repo, *, claude):
 
 
 def audit_kimi(text, repo):
-    """Tool names in order, or None when the stream is not the known shape."""
+    """Tool names in order, or None when recorded calls cannot be audited."""
     check_recorded_paths(text, repo, claude=False)
     events = _events(text)
     if events is None:
@@ -164,15 +154,11 @@ def audit_kimi(text, repo):
     tools = []
     for event in events:
         role = event.get("role")
-        if role not in KIMI_ROLES:
-            return None
-        if role != "assistant":
-            continue
         # flushAssistant omits content when the turn is only tool calls:
         # the value is undefined, and JSON.stringify drops the key.
-        if "content" in event and not isinstance(event["content"], str):
+        if role == "assistant" and "content" in event and not isinstance(event["content"], str):
             return None
-        if "content" not in event and "tool_calls" not in event:
+        if role == "assistant" and "content" not in event and "tool_calls" not in event:
             return None
         if "tool_calls" not in event:
             continue
@@ -196,68 +182,126 @@ def audit_kimi(text, repo):
     return tools
 
 
-def audit_claude(text, repo):
-    """Require a complete Claude stream with its tool inventory and every call.
+def claude_records(value):
+    """Find API tool records independently of the CLI's enclosing event types.
 
-    Shapes are from Claude Code 2.1.301 against Xiaomi's Anthropic API.
-    Unknown records are evidence we cannot audit, never proof of no tools.
+    Streaming content blocks must be assembled before checking their inputs.
+    Tool inputs and results are payloads, not more invocation records.
     """
+    if isinstance(value, list):
+        for item in value:
+            yield from claude_records(item)
+    elif isinstance(value, dict):
+        kind = value.get("type")
+        if kind in ("tool_use", "tool_result", "server_tool_use",
+                    "content_block_start", "content_block_delta", "content_block_stop"):
+            yield value
+            return
+        for key, child in value.items():
+            if key == "permission_denials":
+                if not isinstance(child, list):
+                    yield {"type": "permission_denial"}  # Unprovable denial record.
+                else:
+                    for denial in child:
+                        yield dict(type="permission_denial",
+                                   name=denial.get("tool_name") if isinstance(denial, dict) else None,
+                                   input=denial.get("tool_input") if isinstance(denial, dict) else None)
+            else:
+                yield from claude_records(child)
+
+
+def audit_claude(text, repo):
+    """Audit API calls, inventory and completion; other CLI records are opaque."""
     check_recorded_paths(text, repo, claude=True)
     events = _events(text)
     if events is None:
         return None
     initialized = finished = False
-    calls = {}
+    calls, results, streaming = {}, set(), {}
     tools = []
+
+    def result(block):
+        ident = block.get("tool_use_id")
+        if not isinstance(ident, str) or ident not in calls:
+            raise ValueError
+        results.add(ident)
+
+    def call(block, source):
+        name, ident, arguments = block.get("name"), block.get("id"), block.get("input")
+        if not isinstance(name, str) or not name or not isinstance(arguments, dict):
+            raise ValueError
+        check_reader_path(name, arguments, repo, "file_path")
+        tools.append(name)
+        if source == "denial":
+            return
+        if not isinstance(ident, str) or not ident:
+            raise ValueError
+        if ident in calls:
+            old, sources = calls[ident]
+            if old != (name, arguments) or source in sources:
+                raise ValueError
+            sources.add(source)
+        else:
+            calls[ident] = ((name, arguments), {source})
+
     for event in events:
-        if finished:
-            return None
         kind = event.get("type")
-        if kind == "system":
-            subtype = event.get("subtype")
-            if subtype == "init":
-                inventory = event.get("tools")
-                if initialized or not isinstance(inventory, list) or any(not isinstance(t, str) for t in inventory):
-                    return None
-                if set(inventory) != set(CLAUDE_READER_TOOLS):
-                    return None
-                initialized = True
-            elif not initialized or subtype not in {"thinking_tokens", "informational"}:
+        if kind == "system" and event.get("subtype") == "init":
+            inventory = event.get("tools")
+            if initialized or finished or not isinstance(inventory, list) or any(not isinstance(t, str) for t in inventory):
                 return None
-        elif not initialized:
-            return None
-        elif kind == "assistant":
-            message = event.get("message")
-            if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+            if set(inventory) != set(CLAUDE_READER_TOOLS):
                 return None
-            for block in message["content"]:
-                if not isinstance(block, dict):
-                    return None
-                typ = block.get("type")
-                if typ == "tool_use":
-                    name, ident = block.get("name"), block.get("id")
-                    if not isinstance(name, str) or not name or not isinstance(ident, str) or not ident:
-                        return None
-                    if not isinstance(block.get("input"), dict) or ident in calls:
-                        return None
-                    calls[ident] = name
-                    tools.append(name)
-                elif typ not in {"text", "thinking", "redacted_thinking"}:
-                    return None
-        elif kind == "user":
-            message = event.get("message")
-            if not isinstance(message, dict) or not isinstance(message.get("content"), list):
-                return None
-            for block in message["content"]:
-                if not isinstance(block, dict) or block.get("type") != "tool_result" or block.get("tool_use_id") not in calls:
-                    return None
+            initialized = True
         elif kind == "result":
-            if event.get("subtype") != "success" or event.get("is_error") is not False or not isinstance(event.get("result"), str):
+            if not initialized or finished or streaming or event.get("subtype") != "success" or event.get("is_error") is not False or not isinstance(event.get("result"), str):
                 return None
             finished = True
-        else:
+
+        try:
+            for block in claude_records(event):
+                typ = block.get("type")
+                if finished and typ in ("tool_use", "tool_result", "server_tool_use"):
+                    return None
+                if typ == "tool_use":
+                    call(block, "complete")
+                elif typ == "permission_denial":
+                    call(block, "denial")
+                elif typ == "tool_result":
+                    result(block)
+                elif typ == "content_block_start":
+                    index, content = block.get("index"), block.get("content_block")
+                    if isinstance(content, dict) and content.get("type") == "tool_use":
+                        if finished or not isinstance(index, int) or index in streaming:
+                            return None
+                        streaming[index] = (content, [])
+                    elif isinstance(content, dict) and content.get("type") == "tool_result":
+                        if finished:
+                            return None
+                        result(content)
+                    elif isinstance(content, dict) and content.get("type") == "server_tool_use":
+                        return None
+                elif typ == "content_block_delta":
+                    index, delta = block.get("index"), block.get("delta")
+                    if isinstance(delta, dict) and delta.get("type") == "input_json_delta":
+                        if not isinstance(index, int) or index not in streaming or not isinstance(delta.get("partial_json"), str):
+                            return None
+                        streaming[index][1].append(delta["partial_json"])
+                elif typ == "content_block_stop":
+                    index = block.get("index")
+                    if not isinstance(index, int) or index not in streaming:
+                        continue
+                    content, fragments = streaming.pop(index)
+                    if fragments:
+                        content = dict(content, input=json.loads("".join(fragments)))
+                    call(content, "stream")
+                else:
+                    return None
+        except ReaderScopeError:
+            raise
+        except (ValueError, TypeError):
             return None
-    return tools if initialized and finished else None
+    return tools if initialized and finished and not streaming and results == calls.keys() else None
 
 
 def _report(found, allowed):
