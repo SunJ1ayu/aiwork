@@ -315,11 +315,12 @@ with open(log, "a", encoding="utf-8") as fh:
     fh.write(body + "\n" + "\n".join(footer) + "\n")
 PY
 
-# 最后一条消息是 stream-json 的 result.result，不是渲染进日志的过程。
-"$AIWORK_PROGRAMS/python3" - "$STREAM_FILE" "$REPORT" <<'PY'
+# 最后一条消息和自报模型只取 CLI 结构字段，不从正文或工具返回值里猜。
+REPORTED="$("$AIWORK_PROGRAMS/python3" - "$STREAM_FILE" "$REPORT" "$FACT_MODEL" <<'PY'
 import json, pathlib, sys
-stream, dest = sys.argv[1:]
+stream, dest, requested = sys.argv[1:]
 last = None
+models = []
 for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").split("\n"):
     line = line.strip()
     if not line.startswith("{"):
@@ -328,12 +329,26 @@ for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").s
         event = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
-        last = event["result"]
-if not isinstance(last, str):
-    raise SystemExit(0)
-pathlib.Path(dest).write_text(last)
+    if not isinstance(event, dict):
+        continue
+    kind = event.get("type")
+    reported = []
+    if kind == "system" and event.get("subtype") == "init":
+        reported.append(event.get("model"))
+    elif kind == "assistant" and isinstance(event.get("message"), dict):
+        reported.append(event["message"].get("model"))
+    elif kind == "result":
+        if isinstance(event.get("result"), str):
+            last = event["result"]
+        if isinstance(event.get("modelUsage"), dict):
+            reported.extend(event["modelUsage"])
+    models.extend(model for model in reported if isinstance(model, str) and model.strip())
+if isinstance(last, str):
+    pathlib.Path(dest).write_text(last)
+# 多处自报不一致时保留不符的原值，让现有发布检查拒发，不能被 init 的请求值盖掉。
+print(next((model for model in models if model != requested), models[0] if models else ""))
 PY
+)" || exit 78
 
 if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
@@ -353,4 +368,4 @@ if [[ "$READ_ONLY" == 1 ]]; then
   fi
 fi
 review_workspace_finish "${LABEL:-subagent}" "$RC" "$MODE" \
-  "$FACT_MODEL" "$BILLING_MODE" "" "" "$AUDIT_MESSAGE" "$audit_rc"
+  "$FACT_MODEL" "$BILLING_MODE" "$REPORTED" "" "$AUDIT_MESSAGE" "$audit_rc"

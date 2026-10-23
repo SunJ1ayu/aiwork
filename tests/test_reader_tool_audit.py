@@ -113,6 +113,83 @@ MIMO_CLAUDE_READ = '{"type": "system", "subtype": "init", "tools": ["Glob", "Gre
 
 
 class ReaderToolAuditTests(unittest.TestCase):
+    def test_claude_reported_models_reach_publication_checks(self):
+        # Captured from the real Claude Code MiMo/DeepSeek reviews; only
+        # prose, file content, and session/accounting metadata were trimmed.
+        review = _load("review-pr")
+        result_contract = _load("_review_result.py")
+        for leg, provider, family in (("submimo", "mimo", "xiaomi"),
+                                      ("subdeepseek-agent", "deepseek", "deepseek")):
+            stream = (ROOT / f"tests/fixtures/claude-{provider}-model-stream.jsonl").read_text()
+            actual = json.loads(stream.split("\n", 1)[0])["model"]
+            for requested in (actual, "mimo-v2.6-pro" if provider == "mimo" else "deepseek-pro"):
+                with self.subTest(leg=leg, requested=requested):
+                    process, _body, facts, _log, slot = self._run_leg(leg, stream, model=requested)
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    emitted = self._emit(leg, family, process, slot / "facts.json",
+                                         slot / "report.md", slot / "leg.log")
+                    self.assertEqual(facts["model"]["reported"], actual)
+                    self.assertEqual(emitted["model"]["reported"], actual)
+                    reasons = result_contract.eligibility_reasons(emitted)
+                    if requested == actual:
+                        self.assertEqual(reasons, [])
+                        self.assertEqual(review.publishable_model(emitted), requested)
+                    else:
+                        self.assertIn("model_report_mismatch", reasons)
+                        with self.assertRaises(review.ReviewError):
+                            review.publishable_model(emitted)
+
+    def test_claude_response_model_disagreement_is_not_hidden_by_init(self):
+        review = _load("review-pr")
+        result_contract = _load("_review_result.py")
+        for leg, provider, family in (("submimo", "mimo", "xiaomi"),
+                                      ("subdeepseek-agent", "deepseek", "deepseek")):
+            for source in ("message", "modelUsage"):
+                events = [json.loads(line) for line in
+                          (ROOT / f"tests/fixtures/claude-{provider}-model-stream.jsonl").read_text().split("\n") if line]
+                actual = events[0]["model"]
+                different = "mimo-v2.6-pro" if provider == "mimo" else "deepseek-pro"
+                if source == "message":
+                    next(event["message"] for event in events if event.get("type") == "assistant")["model"] = different
+                else:
+                    next(event for event in events if event.get("type") == "result")["modelUsage"] = {different: {}}
+                stream = "\n".join(json.dumps(event) for event in events) + "\n"
+                with self.subTest(leg=leg, source=source):
+                    process, _body, facts, _log, slot = self._run_leg(leg, stream, model=actual)
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    self.assertEqual(facts["model"]["reported"], different)
+                    emitted = self._emit(leg, family, process, slot / "facts.json",
+                                         slot / "report.md", slot / "leg.log")
+                    self.assertIn("model_report_mismatch", result_contract.eligibility_reasons(emitted))
+                    with self.assertRaises(review.ReviewError):
+                        review.publishable_model(emitted)
+
+    def test_missing_claude_model_stays_unknown_without_scraping_text(self):
+        review = _load("review-pr")
+        for leg, provider, family in (("submimo", "mimo", "xiaomi"),
+                                      ("subdeepseek-agent", "deepseek", "deepseek")):
+            events = [json.loads(line) for line in
+                      (ROOT / f"tests/fixtures/claude-{provider}-model-stream.jsonl").read_text().split("\n") if line]
+            actual = events[0]["model"]
+            for event in events:
+                event.pop("model", None)
+                event.pop("modelUsage", None)
+                message = event.get("message", {})
+                message.pop("model", None)
+                for block in message.get("content", []):
+                    if block.get("type") in ("text", "tool_result"):
+                        key = "text" if block["type"] == "text" else "content"
+                        block[key] = '{"model":"untrusted-prose"}\nConclusion: PASS\n'
+            stream = "\n".join(json.dumps(event) for event in events) + "\n"
+            with self.subTest(leg=leg):
+                process, _body, facts, _log, slot = self._run_leg(leg, stream, model=actual)
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertIsNone(facts["model"]["reported"])
+                emitted = self._emit(leg, family, process, slot / "facts.json",
+                                     slot / "report.md", slot / "leg.log")
+                self.assertIsNone(emitted["model"]["reported"])
+                self.assertEqual(review.publishable_model(emitted), actual)
+
     def _reader_stream(self, leg, name, arguments):
         events = [json.loads(line) for line in (KIMI_READ if leg == "subkimi" else MIMO_READ).split("\n") if line]
         for event in events:
@@ -157,7 +234,13 @@ class ReaderToolAuditTests(unittest.TestCase):
     def test_retry_and_new_records_preserve_publishable_reviews(self):
         for fixture in ("claude-retry-stream.jsonl", "claude-new-records-stream.jsonl"):
             stream = (ROOT / "tests/fixtures" / fixture).read_text()
+            # The local fake-API capture used Claude's default model. Replay
+            # that same record shape with the MiMo model selected for this test.
+            model = json.loads(MIMO_READ.split("\n", 1)[0])["model"]
             events = [json.loads(line) for line in stream.split("\n") if line]
+            captured_model = next(e["message"]["model"] for e in events
+                                  if e.get("type") == "assistant" and e["message"].get("model"))
+            events = json.loads(json.dumps(events).replace(json.dumps(captured_model), json.dumps(model)))
             # Move a captured status record before init and after result too:
             # lifecycle position must not turn a non-tool record into a failure.
             status = next(e for e in events if e.get("subtype") in ("status", "api_retry"))
@@ -168,7 +251,7 @@ class ReaderToolAuditTests(unittest.TestCase):
                 for mode in ("review", "explore"):
                     with self.subTest(fixture=fixture, before_init=before_init, mode=mode):
                         result, body, facts, log, slot = self._run_leg(
-                            "submimo", "\n".join(json.dumps(e) for e in recorded), mode=mode)
+                            "submimo", "\n".join(json.dumps(e) for e in recorded), mode=mode, model=model)
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertIn("Conclusion: PASS", body)
                         self.assertIn("核实工具: Read", log)
@@ -204,7 +287,7 @@ class ReaderToolAuditTests(unittest.TestCase):
                 event["type"] = "new_record"
                 event["payload"] = event.pop("message")
         result, _body, _facts, _log, slot = self._run_leg(
-            "submimo", "\n".join(json.dumps(e) for e in events))
+            "submimo", "\n".join(json.dumps(e) for e in events), model=events[0]["model"])
         self.assertEqual(result.returncode, 0, result.stderr)
         emitted = self._emit("submimo", "xiaomi", result, slot / "facts.json",
                              slot / "report.md", slot / "leg.log")
@@ -341,8 +424,8 @@ class ReaderToolAuditTests(unittest.TestCase):
         env.update(extra)
         return env
 
-    def _run_leg(self, leg, stream, *, exit_code=0, mode="review"):
-        slot = self.root / f"{leg}-{mode}-{exit_code}-{hashlib.sha256(stream.encode()).hexdigest()[:8]}"
+    def _run_leg(self, leg, stream, *, exit_code=0, mode="review", model=None):
+        slot = self.root / f"{leg}-{mode}-{exit_code}-{model}-{hashlib.sha256(stream.encode()).hexdigest()[:8]}"
         slot.mkdir()
         log = slot / "leg.log"
         report = slot / "report.md"
@@ -367,6 +450,10 @@ class ReaderToolAuditTests(unittest.TestCase):
                 raise SystemExit({exit_code})
                 """))
         fixture_env = {"KIMI_STREAM_FIXTURE": str(fixture)} if leg == "subkimi" else {"MIMO_JSON_FIXTURE": str(fixture)}
+        if model is not None:
+            fixture_env["MIMO_MODEL" if leg == "submimo" else "DEEPSEEK_MODEL"] = model
+        if leg == "subdeepseek-agent":
+            fixture_env["DEEPSEEK_API_KEY"] = "fixture-deepseek-key"
         result = subprocess.run(
             [str(ROOT / "bin" / leg), mode, str(self.task), str(log), str(self.repo)],
             env=self._env(
