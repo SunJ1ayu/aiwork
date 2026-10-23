@@ -114,7 +114,11 @@ MIMO_CLAUDE_READ = '{"type": "system", "subtype": "init", "tools": ["Glob", "Gre
 
 class ReaderToolAuditTests(unittest.TestCase):
     def _claude_model_process_ran(self, leg, process):
-        if sys.platform == "darwin" and leg == "subdeepseek-agent":
+        macos = subprocess.run(
+            ["bash", "-c", '. "$1"; review_platform_is_macos',
+             "_", str(ROOT / "bin/_review-platform.sh")],
+            env=self._env(), capture_output=True).returncode == 0
+        if macos and leg == "subdeepseek-agent":
             self.assertEqual(process.returncode, 78, process.stderr)
             self.assertIn("Mac 上暂不运行", process.stderr)
             return False
