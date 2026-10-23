@@ -12,6 +12,7 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -113,6 +114,49 @@ MIMO_CLAUDE_READ = '{"type": "system", "subtype": "init", "tools": ["Glob", "Gre
 
 
 class ReaderToolAuditTests(unittest.TestCase):
+    def test_kimi_reader_arguments_match_published_input_schemas(self):
+        # Verbatim npm input definitions; provenance and extraction are beside
+        # the excerpt. Derive keys here instead of restating the CLI contract.
+        source = (ROOT / "tests/fixtures/kimi-code-0.36.1/reader-inputs.mjs").read_text()
+        schemas = re.findall(r"^\t(\w+)InputSchema\$1 = object\(\{\n(.*?)^\t\}\);",
+                             source, re.M | re.S)
+        profile = self.root / "kimi-profile.md"
+        subprocess.run([sys.executable, str(ROOT / "bin/_reader_tools.py"),
+                        "kimi-profile", str(profile)], check=True)
+        tools = json.loads(next(line.removeprefix("tools: ") for line in
+                                profile.read_text().splitlines() if line.startswith("tools: ")))
+        self.assertCountEqual([name for name, _ in schemas], tools)
+
+        def audit(name, arguments, expected):
+            stream = self.root / "schema-stream.jsonl"
+            stream.write_text(self._reader_stream("subkimi", name, arguments))
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "bin/_reader_tools.py"),
+                 "audit-kimi", str(stream), str(self.repo)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, expected,
+                             f"{name} {arguments}: {result.stdout}{result.stderr}")
+
+        for name, body in schemas:
+            with self.subTest(tool=name):
+                fields = [(key, ".optional()" in modifiers, json.loads(description))
+                          for key, modifiers, description in re.findall(
+                              r'^\t\t(\w+): string\(\)(.*?)\.describe\((".*")\),?$', body, re.M)]
+                path_fields = [(key, optional) for key, optional, description in fields
+                               if description.startswith(("Path to ", "Directory to search.",
+                                                          "File or directory to search."))]
+                self.assertEqual(len(path_fields), 1, name)
+                path_key, optional = path_fields[0]
+                arguments = {key: "a.txt" for key, is_optional, _ in fields if not is_optional}
+                audit(name, dict(arguments, **{path_key: "a.txt"}), 0)
+                audit(name, dict(arguments, **{path_key: "../outside.txt"}), 3)
+                without_path = {key: value for key, value in arguments.items() if key != path_key}
+                audit(name, without_path, 0 if optional else 3)
+                # A Glob pattern is itself a path; a Grep regex is not. Derive
+                # the former's key from the upstream field description too.
+                for key, _, description in fields:
+                    if description.startswith("Glob pattern to match files."):
+                        audit(name, dict(arguments, **{key: "../outside.txt"}), 3)
+
     def _claude_model_process_ran(self, leg, process):
         macos = subprocess.run(
             ["bash", "-c", '. "$1"; review_platform_is_macos',
