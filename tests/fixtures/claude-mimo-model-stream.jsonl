@@ -1,0 +1,7 @@
+{"type": "system", "subtype": "init", "tools": ["Glob", "Grep", "Read"], "model": "mimo-v2.6-flash"}
+{"type": "assistant", "message": {"role": "assistant", "model": "mimo-v2.6-flash", "content": [{"type": "tool_use", "id": "call_2feece7fbdb442818f0cc408", "name": "Glob", "input": {"path": "docs", "pattern": "*.md"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "call_2feece7fbdb442818f0cc408", "type": "tool_result", "content": "Public synthetic file.\n"}]}}
+{"type": "assistant", "message": {"role": "assistant", "model": "mimo-v2.6-flash", "content": [{"type": "tool_use", "id": "call_025efa0bae5047a096bde201", "name": "Read", "input": {"file_path": "docs/guide.md", "limit": 20}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "call_025efa0bae5047a096bde201", "type": "tool_result", "content": "Public synthetic file.\n"}]}}
+{"type": "assistant", "message": {"role": "assistant", "model": "mimo-v2.6-flash", "content": [{"type": "text", "text": "Conclusion: PASS\n"}]}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "Conclusion: PASS\n", "modelUsage": {"mimo-v2.6-flash": {}}}

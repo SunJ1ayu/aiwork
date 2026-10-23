@@ -1,6 +1,6 @@
 # Shared program bindings. Symlinks in programs/ are the machine's only choices.
 aiwork_program() {
-  case "$1" in python3|codex|cursor-agent|kimi|mimo|claude|node) ;; *)
+  case "$1" in python3|codex|cursor-agent|kimi|claude|node) ;; *)
     printf 'aiwork: 未登记的程序 %s\n' "$1" >&2; return 78;; esac
   local_path="$AIWORK_PROGRAMS/$1"
   if [ ! -f "$local_path" ] || [ ! -x "$local_path" ]; then
@@ -52,7 +52,7 @@ print("aiwork-python-ok:" + str(Path(sys.argv[-1])))' "$aiwork_config")" || {
   case "$1" in
     subcodex) aiwork_needed='codex node' ;;
     subkimi) aiwork_needed='kimi node' ;;
-    submimo) aiwork_needed='mimo node' ;;
+    submimo) aiwork_needed='claude node' ;;
     subcursor) aiwork_needed='cursor-agent node' ;;
     subagent|subdeepseek-agent) aiwork_needed='claude node' ;;
     review-pr) aiwork_needed=node ;;

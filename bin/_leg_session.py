@@ -16,7 +16,7 @@ from _review_result import load_result, sha256_file
 READER_TIMEOUT_ENV = {
     "subdeepseek-agent": "DEEPSEEK_TIMEOUT",
     "subcodex": "SUBCODEX_TIMEOUT", "subcursor": "CURSOR_TIMEOUT",
-    "submimo": "MIMO_CLI_TIMEOUT", "subkimi": "KIMI_TIMEOUT",
+    "submimo": "MIMO_TIMEOUT", "subkimi": "KIMI_TIMEOUT",
 }
 READER_TIMEOUT_SECONDS = "2400"
 SHA = re.compile(r"^[0-9a-f]{40}$")

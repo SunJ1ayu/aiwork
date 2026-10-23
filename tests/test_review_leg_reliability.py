@@ -116,7 +116,7 @@ class ReliabilityTests(unittest.TestCase):
             attempt = fake_attempts[min(len(self.leg_calls) - 1, len(fake_attempts) - 1)]
             model = {'subdeepseek-agent': 'deepseek-flash',
                      'subcursor': 'gpt-6-sol', 'subcodex': 'gpt-6-sol',
-                     'submimo': 'xiaomi/mimo-v2.6-pro', 'subkimi': 'kimi-code/kimi-for-coding'}[name]
+                     'submimo': 'mimo-v2.6-pro', 'subkimi': 'kimi-code/kimi-for-coding'}[name]
             report_text = attempt.get('report', 'Conclusion: PASS')
             log_text = attempt.get('log')
             if log_text is None:
@@ -259,7 +259,7 @@ class ReliabilityTests(unittest.TestCase):
     def test_all_repository_readers_get_2400_seconds_unless_caller_overrides(self):
         timeouts = {'subdeepseek-agent': 'DEEPSEEK_TIMEOUT',
                     'subcodex': 'SUBCODEX_TIMEOUT', 'subcursor': 'CURSOR_TIMEOUT',
-                    'submimo': 'MIMO_CLI_TIMEOUT', 'subkimi': 'KIMI_TIMEOUT'}
+                    'submimo': 'MIMO_TIMEOUT', 'subkimi': 'KIMI_TIMEOUT'}
         for leg, variable in timeouts.items():
             for override in (None, '', '317'):
                 with self.subTest(leg=leg, override=override):

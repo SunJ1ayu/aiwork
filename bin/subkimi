@@ -253,16 +253,14 @@ if [[ $RC -ne 0 ]]; then
   { grep -a -E '^error: failed to run prompt:' "$LOG_FILE" || true; } | tail -n 3 >&2
 fi
 AUDIT_MSG=""
-if [[ "$RC" -eq 0 ]]; then
-  AUDIT_RC=0
-  AUDIT_OUT="$(review_workspace_reader_audit audit-kimi "$STREAM")" || AUDIT_RC=$?
-  if [[ "$AUDIT_RC" -eq 0 ]]; then
-    printf '核实工具: %s\n' "$AUDIT_OUT" >> "$LOG_FILE"
-  elif [[ "$AUDIT_RC" -eq 1 ]]; then
-    AUDIT_MSG="$AUDIT_OUT"
-  else
-    printf 'subkimi: %s\n' "$AUDIT_OUT" >&2
-    exit 78
-  fi
+AUDIT_RC=0
+AUDIT_OUT="$(review_workspace_reader_audit audit-kimi "$STREAM")" || AUDIT_RC=$?
+if [[ "$AUDIT_RC" -eq 0 ]]; then
+  printf '核实工具: %s\n' "$AUDIT_OUT" >> "$LOG_FILE"
+elif [[ "$AUDIT_RC" -eq 1 || "$AUDIT_RC" -eq 3 ]]; then
+  AUDIT_MSG="$AUDIT_OUT"
+else
+  printf 'subkimi: %s\n' "$AUDIT_OUT" >&2
+  exit 78
 fi
-review_workspace_finish subkimi "$RC" "$MODE" "$MODEL" subscription "" "" "$AUDIT_MSG"
+review_workspace_finish subkimi "$RC" "$MODE" "$MODEL" subscription "" "" "$AUDIT_MSG" "$AUDIT_RC"

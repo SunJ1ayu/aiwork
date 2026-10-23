@@ -44,7 +44,6 @@ class LegFinish(unittest.TestCase):
         write_settings(self.root / "settings")
         self._claude()
         self._kimi()
-        self._mimo()
         self._codex()
         self._cursor()
 
@@ -59,12 +58,11 @@ class LegFinish(unittest.TestCase):
         env["HOME"] = str(self.root / "home")
         env["DEEPSEEK_TIMEOUT"] = "1"
         env["KIMI_TIMEOUT"] = "1"
-        env["MIMO_CLI_TIMEOUT"] = "1"
+        env["MIMO_TIMEOUT"] = "1"
         env["SUBCODEX_TIMEOUT"] = "1"
         env["CURSOR_TIMEOUT"] = "1"
         env["DEEPSEEK_API_KEY"] = "test-key"
         env["KIMI_REVIEW_HOME"] = str(self.root / "kimi-home")
-        env["MIMO_REVIEW_HOME"] = str(self.root / "mimo-home")
         env["CURSOR_AUTH_FILE"] = str(self.root / "home" / ".config" / "cursor" / "auth.json")
         env.pop("CURSOR_API_KEY", None)
         env.pop("XDG_CONFIG_HOME", None)
@@ -88,7 +86,8 @@ if case in ("nonzero", "review_nonzero"):
     raise SystemExit(1)
 text = {"blank": " \\t\\n", "no_verdict": "Review has evidence but no decision.\\n",
         "pass": "Conclusion: PASS\\n", "explore_ok": "Conclusion: PASS\\n"}[case]
-print('{"type":"result","result":' + __import__("json").dumps(text) + "}")
+print('{"type":"system","subtype":"init","tools":["Read","Glob","Grep"]}')
+print('{"type":"result","subtype":"success","is_error":false,"result":' + __import__("json").dumps(text) + "}")
 """)
 
     def _kimi(self):
@@ -110,22 +109,6 @@ if case in ("nonzero", "review_nonzero"):
 text = {"blank": " \\t\\n", "no_verdict": "Review has evidence but no decision.\\n",
         "pass": "Conclusion: PASS\\n", "explore_ok": "Conclusion: PASS\\n"}[case]
 print(json.dumps({"role": "assistant", "content": text}))
-""")
-
-    def _mimo(self):
-        (self.root / "mimo-home").mkdir()
-        self._write("mimo", """#!/usr/bin/env python3
-import json, os, sys, time
-case = os.environ["FINISH_CASE"]
-if case in ("timeout", "review_timeout"):
-    time.sleep(30)
-if case == "killed":
-    raise SystemExit(137)
-if case in ("nonzero", "review_nonzero"):
-    raise SystemExit(1)
-text = {"blank": " \\t\\n", "no_verdict": "Review has evidence but no decision.\\n",
-        "pass": "Conclusion: PASS\\n", "explore_ok": "Conclusion: PASS\\n"}[case]
-print(json.dumps({"type": "text", "part": {"id": "p", "messageID": "m", "text": text}}))
 """)
 
     def _codex(self):
@@ -297,7 +280,7 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             ['bash', '-c', '. "$1"; review_platform_is_macos',
              'bash', str(self.bin / '_review-platform.sh')]).returncode == 0
         marker = self.root / "cli-ran"
-        for name in ("claude", "kimi", "mimo", "codex", "cursor-agent"):
+        for name in ("claude", "kimi", "codex", "cursor-agent"):
             path = self.bin / name
             shebang, body = path.read_text().split("\n", 1)
             path.write_text(shebang + "\nimport pathlib\npathlib.Path(%r).touch()\n" % str(marker) + body)
@@ -393,33 +376,6 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
         self.assertEqual(result.returncode, 78, result.stderr)
         self.assertIn("normalize boom", result.stderr)
 
-    def test_submimo_copies_real_erofs_lines_for_emit(self):
-        sample = (ROOT / "tests/fixtures/mimo-erofs.txt").read_text(encoding="utf-8")
-        self._write("mimo", """#!/usr/bin/env python3
-import os, sys
-sys.stdout.write(open(os.environ["MIMO_SAMPLE"], encoding="utf-8").read())
-raise SystemExit(1)
-""")
-        env = self._env()
-        env["FINISH_CASE"] = "nonzero"
-        env["MIMO_SAMPLE"] = str(ROOT / "tests/fixtures/mimo-erofs.txt")
-        log = self.root / "erofs.log"
-        report = self.root / "erofs.report"
-        facts = self.root / "erofs.facts.json"
-        env["AIWORK_REVIEW_REPORT_PATH"] = str(report)
-        env["AIWORK_REVIEW_FACTS_PATH"] = str(facts)
-        env["AIWORK_REVIEW_RESULT_BIN"] = str(self.bin / "_review_result.py")
-        result = subprocess.run(
-            [str(self.bin / "submimo"), "explore",
-             str(self.root / "task.md"), str(log), str(self.repo)],
-            capture_output=True, text=True, env=env, timeout=40)
-        self.assertNotEqual(result.returncode, 0, result.stderr)
-        for line in sample.splitlines():
-            if line.strip():
-                self.assertIn(line, result.stderr)
-        recorded = self._emit(result, facts, report, log, "submimo", "xiaomi")
-        self.assertEqual(recorded["failure_kind"], "runtime")
-
     def test_subcodex_copies_real_usage_limit_events_for_emit(self):
         sample = (ROOT / "tests/fixtures/codex-usage-limit.jsonl").read_text(encoding="utf-8")
         sentence = json.loads(sample.splitlines()[0])["message"]
@@ -485,16 +441,16 @@ raise SystemExit(1)
         self.assertIsNone(json.loads(facts.read_text())["failure_kind"])
 
     def test_extra_mimo_header_line_stays_out_of_stderr(self):
-        script = self.bin / "submimo"
+        script = self.bin / "subagent"
         original = script.read_text(encoding="utf-8")
-        needle = '    echo "model: $MODEL"\n    echo\n'
+        needle = '  echo "model: $MODEL"\n'
         self.assertIn(needle, original)
         script.write_text(original.replace(
-            needle, '    echo "model: $MODEL"\n    echo "source_repo: HEADER_SENTINEL"\n    echo\n', 1),
+            needle, needle + '  echo "source_repo: HEADER_SENTINEL"\n', 1),
             encoding="utf-8")
-        self._write("mimo", """#!/usr/bin/env python3
+        self._write("claude", """#!/usr/bin/env python3
 import sys
-sys.stdout.write("provider error line\\n")
+sys.stderr.write("provider error line\\n")
 raise SystemExit(1)
 """)
         env = self._env()
@@ -512,13 +468,12 @@ raise SystemExit(1)
         self.assertIn("provider error line", result.stderr)
 
     def test_mimo_json_events_and_log_header_stay_out_of_stderr(self):
-        self._write("mimo", """#!/usr/bin/env python3
+        self._write("claude", """#!/usr/bin/env python3
 import json, sys
-print(json.dumps({"type": "text", "part": {
-    "id": "p", "messageID": "m", "text": "MODEL_BODY_SENTINEL"}}))
-print(json.dumps({"type": "tool_use", "part": {
-    "tool": "bash", "output": "TOOL_OUTPUT_SENTINEL"}}))
-sys.stdout.write("provider error line\\n")
+print(json.dumps({"type":"assistant","message":{"content":[
+    {"type":"text","text":"MODEL_BODY_SENTINEL"},
+    {"type":"tool_use","name":"Bash","input":{"command":"TOOL_OUTPUT_SENTINEL"}}]}}))
+sys.stderr.write("provider error line\\n")
 raise SystemExit(1)
 """)
         env = self._env()

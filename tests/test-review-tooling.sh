@@ -5,14 +5,6 @@ set -uo pipefail
 _test_settings_py="$(realpath "$_test_settings_py")"
 unset DEEPSEEK_INCLUDE
 export CURSOR_MODEL=composer-2.5
-_MIMO_FLOOR="$(mktemp -d)"
-cat > "$_MIMO_FLOOR/mimo" <<'MIMOFLOOR'
-#!/usr/bin/env bash
-echo "判据里调到了真的 mimo 底座:$*" >&2
-exit 97
-MIMOFLOOR
-chmod +x "$_MIMO_FLOOR/mimo"
-export PATH="$_MIMO_FLOOR:$PATH"
 # 写死路径会让判据仍去测主仓的文件 = 改了也永远红(2026-08-01 派活前发现)。
 # 可用 TEST_REVIEW_BIN 覆盖。
 BIN="${TEST_REVIEW_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)}"
@@ -36,7 +28,7 @@ check(){ # check "desc" COND_RC   (0 => pass)
 OWNER_CRED_DIR="/root/.kimi-code/credentials"
 # Legacy homes are read-only fingerprint targets until the separate migration.
 OWNER_KIMI_HOME="$("$BIN/aiwork-config" data-path)/kimi-review-home"
-OWNER_MIMO_CFG="$("$BIN/aiwork-config" data-path)/mimo-review-home/mimocode/mimocode.json"
+OWNER_MIMO_CFG="$("$BIN/aiwork-config" path mimo.env)"
 _fp1() {   # Read identity and content together; failed observations are errors.
   python3 - "$1" <<'PY'
 import hashlib, json, os, stat, sys
@@ -539,194 +531,6 @@ v24_coverage_report() {
   rm -rf "$d"
 }
 
-v33_submimo_review_leg_is_read_only() {
-  echo "[V33] submimo 仅保留读文件工具,fix 被拒绝"
-  local d b rc leftovers; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
-  mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
-  cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
-  printf '# t\n' > "$d/t.md"
-  local repo="$d/repo"; mkdir -p "$repo"
-  ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
-    && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
-
-  # stub mimo:只落 argv(查它到底用哪个档),不碰真底座
-  # stub 要落**自己的环境**,不只是 argv —— `env HOME=x cmd` 的赋值进的是子进程环境,
-  # **永远不进 cmd 的 argv**。第一版我查 argv 里有没有 `HOME=`,于是那条断言
-  # 即使实现真换了 HOME 也照样绿(结构上永远绿,是评审抓到的)。
-  cat > "$b/mimo" <<'EOF'
-#!/usr/bin/env bash
-python3 -c "
-import os,sys,json
-json.dump({'argv':sys.argv[1:],
-           'HOME':os.environ.get('HOME'),
-           'XDG_CONFIG_HOME':os.environ.get('XDG_CONFIG_HOME')},
-          open(os.environ['CAPTURE'],'w'))" "$@"
-echo "stub review output"; echo "Conclusion: PASS"
-EOF
-  chmod +x "$b/mimo"
-  local agent_of; agent_of() {
-    python3 -c "
-import json,sys
-a=json.load(open(sys.argv[1]))['argv']
-print(a[a.index('--agent')+1] if '--agent' in a else '')" "$1"
-  }
-
-  local mhome="$d/mimohome"
-
-  # 内置 plan 档是否名不副实,问的是这台机器装的 mimo,不在仓库判据里。
-  # 下面只钉仓库自己写出的档:不用 plan、写口和命令工具全关。
-
-  # ── ① review 不许再用内置 plan 档
-  rm -f "$d/c_review"
-  env PATH="$b:$PATH" CAPTURE="$d/c_review" MIMO_REVIEW_HOME="$mhome" \
-    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$d/r.log" "$repo" >/dev/null 2>&1
-  if [[ -f "$d/c_review" ]]; then
-    local ag; ag="$(agent_of "$d/c_review")"
-    [[ "$ag" != "plan" && -n "$ag" ]]
-    check "V33: review 模式不许再用内置 plan 档(实际用的是 '$ag')" $?
-  else
-    bad "V33: review 模式不许再用内置 plan 档"
-    echo "    (stub 没被调起 ⇒ 测空气)"
-  fi
-
-  # ── ② explore 同样(它的指令还写着"不许用任何工具",更不该有 shell)
-  rm -f "$d/c_explore"
-  env PATH="$b:$PATH" CAPTURE="$d/c_explore" MIMO_REVIEW_HOME="$mhome" \
-    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" explore "$d/t.md" "$d/e.log" "$repo" >/dev/null 2>&1
-  if [[ -f "$d/c_explore" ]]; then
-    local ag2; ag2="$(agent_of "$d/c_explore")"
-    [[ "$ag2" != "plan" && -n "$ag2" ]]
-    check "V33: explore 模式不许再用内置 plan 档(实际用的是 '$ag2')" $?
-  else
-    bad "V33: explore 模式不许再用内置 plan 档"
-  fi
-
-  # ── ③ fix 不是这条命令的模式。传 fix 必须拒绝，并且一次都不调起 mimo。
-  rm -f "$d/c_fix"
-  env PATH="$b:$PATH" CAPTURE="$d/c_fix" MIMO_REVIEW_HOME="$mhome" \
-    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" fix "$d/t.md" "$d/f.log" "$repo" >"$d/fix.out" 2>"$d/fix.err"
-  local fix_rc=$?
-  [[ "$fix_rc" -ne 0 ]] && grep -q 'fix is not supported on this command. Change code in your own worktree.' "$d/fix.err" \
-    && [[ ! -f "$d/c_fix" ]]
-  check "V33: fix 被拒绝，mimo 一次都不启动" $?
-
-  # review 和 explore 必须使用同一份无命令工具配置。
-  # 再跑一次 review，让下面检查 review 最终写下的配置。
-  env PATH="$b:$PATH" CAPTURE="$d/c_review_config" MIMO_REVIEW_HOME="$mhome" \
-    python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$d/r-config.log" "$repo" >/dev/null 2>&1
-
-  # ── ④ 锁写在仓库生成的配置里。mimo 装好的那一版是否照这份 JSON 解析,
-  #    是本机体检;这里只读我们写下的文件,缺文件就红,不许跳过。
-  local mcfg="$mhome/mimocode/mimocode.json"
-  if [[ -f "$mcfg" ]]; then
-    ok "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染调用者的 mimocode)"
-    local v33json
-    v33json="$(python3 - "$mcfg" <<'PYV33'
-import json, sys
-c = json.load(open(sys.argv[1]))
-ag = c.get("agent", {}).get("aiwork-review", {})
-tools = ag.get("tools") or {}
-perm = ag.get("permission") or {}
-closed = [k for k in ("write", "edit", "patch", "task", "webfetch", "skill") if tools.get(k) is not False]
-print("CLOSED" if not closed else "OPEN:" + ",".join(closed))
-print("BASH_OFF" if tools.get("bash") is False else "BASH_ON")
-print("DENY" if perm.get("bash") == "deny" else "NOT_DENY")
-print("KEEP" if all(tools.get(k) is True for k in ("read", "glob", "grep")) else "MISSING")
-PYV33
-)"
-    grep -qx "CLOSED" <<< "$v33json"
-    check "V33: 配置里写口全关 —— write/edit/patch/task/webfetch/skill" $?
-    grep -qx "BASH_OFF" <<< "$v33json"
-    check "V33: 配置里 bash 工具关闭" $?
-    grep -qx "DENY" <<< "$v33json"
-    check "V33: 配置里 Bash permission 是 deny" $?
-    grep -qx "KEEP" <<< "$v33json"
-    check "V33: 配置里 read/glob/grep 还在" $?
-  else
-    bad "V33: 只读 agent 的配置生成在隔离目录(XDG_CONFIG_HOME,没污染调用者的 mimocode)"
-    bad "V33: 配置里写口全关 —— write/edit/patch/task/webfetch/skill"
-    bad "V33: 配置里 bash 工具关闭"
-    bad "V33: 配置里 Bash permission 是 deny"
-    bad "V33: 配置里 read/glob/grep 还在"
-  fi
-
-  # ── ④b 隔离必须用 XDG_CONFIG_HOME,**不许用 HOME**。
-  #    实测:mimo 的 data 路径(含 auth.json 凭证)只跟 HOME 走 —— 换 HOME 会把凭证
-  #    一起换掉,腿当场没法认证,而失败形态是"模型没回话",查起来像模型问题。
-  #    这条钉的是"隔离别把腿弄死"。
-  if [[ -f "$d/c_review" ]]; then
-    # 查腿进程**实际拿到的** HOME —— 必须还是调用者的 HOME。
-    HOME_NOW="$HOME" python3 -c "
-import json,os,sys
-o=json.load(open(sys.argv[1]))
-sys.exit(0 if o.get('HOME')==os.environ['HOME_NOW'] else 1)" "$d/c_review" 2>/dev/null
-    check "V33: 隔离不许换 HOME(换了会把 mimo 的凭证一起带走 ⇒ 腿只会'没回话')" $?
-    # 正面:配置隔离必须真的发生(否则上一条用"什么都不隔离"也能绿)
-    # 断言腿拿到的 XDG_CONFIG_HOME 就是我们指定的隔离目录。
-    # (第一版这里漏了 `import os` ⇒ 红在 NameError 上 —— "红在 TypeError 上
-    #  等于没红检过",本仓记过的形状,我又犯一次。)
-    WANT="$mhome" python3 -c "
-import json,os,sys
-o=json.load(open(sys.argv[1]))
-sys.exit(0 if o.get('XDG_CONFIG_HOME')==os.environ['WANT'] else 1)" "$d/c_review" 2>/dev/null
-    check "V33: 配置确实被隔离到我们指定的 XDG_CONFIG_HOME(不是什么都没做)" $?
-  else
-    bad "V33: 隔离不许换 HOME(换了会把 mimo 的凭证一起带走 ⇒ 腿只会'没回话')"
-    bad "V33: 配置确实被隔离到 XDG_CONFIG_HOME(不是什么都没做)"
-  fi
-
-  # ── ⑤ 配置每次重写(它就是锁本身,不许留隔夜残留)
-  if [[ -f "$mhome/mimocode/mimocode.json" ]]; then
-    # 用一个**实现绝不会写**的标记键来验"被重写了"。
-    # 第一版我拿 `"bash": true` 当标记 —— 而转向后实现本来就写 bash:true,
-    # 这条断言于是永远红。标记必须选实现不可能产出的东西。
-    printf '{"__stale_marker__":true,"agent":{"aiwork-review":{"tools":{"bash":true}}}}' > "$mhome/mimocode/mimocode.json"
-    rm -f "$d/c_rewrite"
-    env PATH="$b:$PATH" CAPTURE="$d/c_rewrite" MIMO_REVIEW_HOME="$mhome" \
-      python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$d/r2.log" "$repo" >/dev/null 2>&1
-    grep -q '__stale_marker__' "$mhome/mimocode/mimocode.json"
-    check "V33: 配置每次重写(被人改过也会被覆盖回去)" $([[ $? -ne 0 ]]; echo $?)
-  else
-    bad "V33: 配置每次重写(被人改松了也会被覆盖回去)"
-  fi
-
-  # ── ⑥ 配置必须**原子落盘**(2026-08-19,第三轮四审 subkimi 挂掉前留下的发现)。
-  #    洞:`json.dump(cfg, open(cfgpath,"w"))` 是 truncate 之后逐步写。两个 agent
-  #    并发跑 review 时共享同一份配置(`MIMO_REVIEW_HOME` 没设时都落在
-  #    `$HOME/.cache/aiwork/mimo-review-home`)⇒ 另一边可能读到半截 JSON。
-  #    **失败形态我没验过**:mimo 解析不了这份配置会不会回退到内置 `plan` 档
-  #    (写口全开、本单整单就是在推翻它)—— 不去猜它,把窗口关掉即可。
-  #
-  #    下面三条里,前两条是**看得见的**(权限、无残留),第三条是**字面断言**:
-  #    原子性没法从结果观察(窗口只在写的那一瞬间),只能查写法。
-  #    配置内容由上面读落盘 JSON 的检查钉住。这一条查的是写入机制,机制不在产物里。
-  #    它挡的是"未来改回直写",证明不了原子性本身。
-  if [[ -f "$mhome/mimocode/mimocode.json" ]]; then
-    python3 -c 'import os, stat, sys; sys.exit(stat.S_IMODE(os.stat(sys.argv[1]).st_mode) != 0o600)' \
-      "$mhome/mimocode/mimocode.json"
-    check "V33: 配置文件权限 600(凭证级别的东西,别人读不到)" $?
-    leftovers="$(find "$mhome/mimocode" -name '*.tmp*' -o -name '.*tmp*')" && [[ -z "$leftovers" ]]
-    check "V33: 原子写不许留下 tmp 残留(留了说明 replace 那步没走到)" $?
-  else
-    bad "V33: 配置文件权限 600(凭证级别的东西,别人读不到)"
-    bad "V33: 原子写不许留下 tmp 残留(留了说明 replace 那步没走到)"
-  fi
-  # 字面断言:必须 tmp + os.replace,不许把 open(...,"w") 直接喂给 json.dump。
-  # 写入在 _reader_tools.py:配置和跑完核对共用那一份,submimo 不再内联第二份。
-  python3 - "$BIN/submimo" "$BIN/_reader_tools.py" <<'PYATOM'
-import re, sys
-wrapper, writer = (open(p).read() for p in sys.argv[1:])
-direct = re.search(r'json\.dump\([^)]*open\(', wrapper) or re.search(r'json\.dump\([^)]*open\(', writer)
-atomic = 'os.replace(' in writer and 'os.getpid()' in writer
-calls = 'mimo-config' in wrapper
-sys.exit(0 if (atomic and calls and not direct) else 1)
-PYATOM
-  check "V33: 配置走每进程唯一 tmp + os.replace 原子落盘" $?
-
-  rm -rf "$d"
-}
-
 # ---------------------------------------------------------------- V35
 # 评审腿在**只读的仓**里跑(track repo-write-audit,2026-08-19)。
 #
@@ -916,31 +720,21 @@ touch "$target/PWNED_IN_WORKSPACE" 2>/dev/null && work=WROTE
 touch "$PWN_REPO/PWNED_IN_SOURCE" 2>/dev/null && source=WROTE
 printf 'repo=%s\ncwd=%s\nwork=%s\nsource=%s\n' "$target" "$PWD" "$work" "$source" > "$PWN_OUT"
 printf 'model=%s\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" >> "$PWN_OUT"
-printf 'mimocfg=%s\n' "${MIMOCODE_CONFIG_CONTENT:-}" >> "$PWN_OUT"
 # 每条腿只认自己命令行的最后一条消息。claude 是 result 事件，kimi 是 role=assistant，
-# mimo review 是 --format json 里最后一条 text 事件所属消息的正文。
 case "$(basename "$0")" in
   claude)
+    echo '{"type":"system","subtype":"init","tools":["Read","Glob","Grep"]}'
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
     echo '{"type":"result","subtype":"success","is_error":false,"result":"stub\nConclusion: PASS"}'
     ;;
   kimi)
     echo '{"role":"assistant","content":"stub\nConclusion: PASS"}'
     ;;
-  *)
-    if [[ " $* " == *" json "* ]]; then
-      echo '{"type":"step_start","timestamp":1,"sessionID":"ses_fixture","part":{"id":"prt_fixture_start","messageID":"msg_fixture","sessionID":"ses_fixture","snapshot":"fixture-snapshot","type":"step-start"}}'
-      echo '{"type":"text","timestamp":2,"sessionID":"ses_fixture","part":{"id":"prt_fixture_text","messageID":"msg_fixture","sessionID":"ses_fixture","type":"text","text":"stub\nConclusion: PASS","time":{"start":1,"end":2}}}'
-      echo '{"type":"step_finish","timestamp":3,"sessionID":"ses_fixture","part":{"id":"prt_fixture_finish","reason":"stop","snapshot":"fixture-snapshot","messageID":"msg_fixture","sessionID":"ses_fixture","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}'
-    else
-      echo "Conclusion: PASS"
-    fi
-    ;;
 esac
 PWN
     chmod +x "$1"
   }
-  _mk_pwn_stub "$b/claude"; _mk_pwn_stub "$b/mimo"; _mk_pwn_stub "$b/kimi"
+  _mk_pwn_stub "$b/claude"; _mk_pwn_stub "$b/kimi"
 
   test_model_set deepseek deepseek-fixture-next
   [[ "$(python3 "$_test_settings_py" run-with-programs bash "$b/subdeepseek-agent" --help 2>&1)" == *"DeepSeek default model: deepseek-fixture-next"* ]]
@@ -975,11 +769,8 @@ PY
 
   # ── ② submimo review
   rm -f "$d/o2" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
-  # ⚠️ MIMO_REVIEW_HOME 必须指进夹具:①b/③ 都设了,唯独这条没设 ⇒ submimo 会去写
-  #    **业主真实的** ~/.cache/aiwork/mimo-review-home(判据每跑一次重写一次它的配置)。
   #    同族第三处,2026-08-25 panel 抓到、V45 当场红过。
-  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" \
-    MIMO_REVIEW_HOME="$d/mimo-home-v36" AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" \
+  env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o2" AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" \
     AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py" \
     python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$repo/logs/l2.log" "$repo" >/dev/null 2>&1
   grep -q '^work=WROTE$' "$d/o2" 2>/dev/null \
@@ -993,27 +784,18 @@ PY
 import json,sys
 p=json.load(open(sys.argv[1]))
 want=sys.argv[2]
-assert want.startswith('xiaomi/mimo-'), want
+assert want.startswith('mimo-'), want
 assert p['model']['requested'] == p['model']['invoked'] == want
 assert p['source']['git_object_format'] in ('sha1','sha256')
 assert p['view'] == {'delivery_state':'complete','mode':'full_snapshot'}
 PY
   check "V36: submimo 把 models.env 的 mimo 行模型与完整 snapshot 事实交给唯一 terminal producer" $?
-  # MiMo CLI 自带模型表会落后于新模型(09-22:mimo-v2.6-pro 发布当天 CLI 报 Model not found)。
-  # 模型登记与隔离配置合并；agent 必须逐字等于这次生成的只读配置，不能被覆盖。
-  python3 - "$d/o2" "$("$BIN/aiwork-config" model mimo)" "$d/mimo-home-v36/mimocode/mimocode.json" <<'PY'
-import json,sys
-cfg=[l[len('mimocfg='):] for l in open(sys.argv[1]).read().splitlines() if l.startswith('mimocfg=')]
-assert len(cfg)==1 and cfg[0], cfg
-c=json.loads(cfg[0])
-provider,mid=sys.argv[2].split('/',1)
-assert set(c)=={'provider','agent'}, sorted(c)
-assert c['agent'] == json.load(open(sys.argv[3]))['agent']
-m=c['provider'][provider]['models'][mid]
-assert m['tool_call'] is True and m['limit']['context']>0 and m['limit']['output']>0, m
+  python3 - "$d/o2" "$("$BIN/aiwork-config" model mimo)" <<'PY'
+import sys
+rows = dict(line.split('=', 1) for line in open(sys.argv[1]).read().splitlines())
+assert rows['model'] == sys.argv[2]
 PY
-  check "V36: submimo 把 models.env 的 mimo 行模型登记给 MiMo CLI(同一份只读 agent 配置随模型一起传入)" $?
-
+  check "V36: submimo 把 models.env 的 mimo 行模型传给 Claude Code" $?
   # ── ③ subkimi
   # subkimi 要一份 review home 才肯派发(config.toml + 守卫 + 凭证),照 V13 的建法。
   # 第一版没建 ⇒ 它在调 kimi **之前**就退了,断言红在"没跑"上 —— 那不是防线的功劳,
@@ -1044,7 +826,6 @@ PY
   # ── ④ fix 不是这条命令的模式：拒绝运行，原仓一个字节都不写，mimo 一次都不启动。
   rm -f "$d/o4" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" \
-    MIMO_REVIEW_HOME="$d/mimo-home-v36d" \
     python3 "$_test_settings_py" run-with-programs bash "$b/submimo" fix "$d/t.md" "$repo/logs/l4.log" "$repo" >"$d/fix.out" 2>"$d/fix.err"
   local fix_rc=$?
   [[ "$fix_rc" -ne 0 ]] && grep -q 'fix is not supported on this command. Change code in your own worktree.' "$d/fix.err" \
@@ -1106,26 +887,18 @@ v37_wrappers_open_no_write_hole() {
 if touch "$PWN_REPO/PWNED_BY_LEG" 2>/dev/null; then echo WROTE > "$PWN_OUT"; else echo BLOCKED > "$PWN_OUT"; fi
 case "$(basename "$0")" in
   claude)
+    echo '{"type":"system","subtype":"init","tools":["Read","Glob","Grep"]}'
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
     echo '{"type":"result","subtype":"success","is_error":false,"result":"stub\nConclusion: PASS"}'
     ;;
   kimi)
     echo '{"role":"assistant","content":"stub\nConclusion: PASS"}'
     ;;
-  *)
-    if [[ " $* " == *" json "* ]]; then
-      echo '{"type":"step_start","timestamp":1,"sessionID":"ses_fixture","part":{"id":"prt_fixture_start","messageID":"msg_fixture","sessionID":"ses_fixture","snapshot":"fixture-snapshot","type":"step-start"}}'
-      echo '{"type":"text","timestamp":2,"sessionID":"ses_fixture","part":{"id":"prt_fixture_text","messageID":"msg_fixture","sessionID":"ses_fixture","type":"text","text":"stub\nConclusion: PASS","time":{"start":1,"end":2}}}'
-      echo '{"type":"step_finish","timestamp":3,"sessionID":"ses_fixture","part":{"id":"prt_fixture_finish","reason":"stop","snapshot":"fixture-snapshot","messageID":"msg_fixture","sessionID":"ses_fixture","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}'
-    else
-      echo "Conclusion: PASS"
-    fi
-    ;;
 esac
 PWN2
     chmod +x "$1"
   }
-  _mk_pwn_stub2 "$b/claude"; _mk_pwn_stub2 "$b/mimo"; _mk_pwn_stub2 "$b/kimi"
+  _mk_pwn_stub2 "$b/claude"; _mk_pwn_stub2 "$b/kimi"
 
   # ── ① 腿日志确实写得出来(这条立住了,写口才可以去掉)
   rm -f "$repo/logs/l.log" "$d/o"
@@ -1156,7 +929,6 @@ RECORD
   # ── ③ 相对日志路径 + cwd=仓根:第一版在这里整仓开闸,而且**一声不响**
   rm -f "$d/o3" "$repo/PWNED_BY_LEG"
   ( cd "$repo" && env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" \
-      MIMO_REVIEW_HOME="$d/mimo-home-v37a" \
       python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "relative.log" "$repo" ) >/dev/null 2>&1
   [[ "$(cat "$d/o3" 2>/dev/null)" == "BLOCKED" && ! -e "$repo/PWNED_BY_LEG" ]]
   check "V37: 相对日志路径 + cwd=仓根 ⇒ 防线**仍然生效**(第一版这里整仓开闸,还不报错)" $?
@@ -1164,7 +936,6 @@ RECORD
   # ── ④ 日志目录还不存在:wrapper 应当自己建好并跑起来,不是拒跑(回归)
   rm -rf "$repo/fresh" ; rm -f "$d/o4" "$repo/PWNED_BY_LEG"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o4" \
-    MIMO_REVIEW_HOME="$d/mimo-home-v37b" \
     python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$repo/fresh/leg.log" "$repo" >/dev/null 2>&1
   [[ -e "$repo/fresh/leg.log" && "$(cat "$d/o4" 2>/dev/null)" == "BLOCKED" ]]
   check "V37: 日志目录不存在 ⇒ wrapper 建好它并正常跑(别把防线做成回归)" $?
@@ -1693,14 +1464,7 @@ PY
 import os, sys
 sys.stdout.write(open(os.environ["KIMI_STREAM_FIXTURE"], encoding="utf-8").read())
 PY
-  cat > "$b/mimo" <<'PY'
-#!/usr/bin/env python3
-import os, sys
-if "--format" not in sys.argv or sys.argv[sys.argv.index("--format")+1] != "json":
-    raise SystemExit("review must request --format json")
-sys.stdout.write(open(os.environ["MIMO_JSON_FIXTURE"], encoding="utf-8").read())
-PY
-  chmod +x "$b/claude" "$b/kimi" "$b/mimo"
+  chmod +x "$b/claude" "$b/kimi"
 
   _published() {  # $1 report $2 log
     python3 - "$BIN/_leg_session.py" "$1" "$d/last.txt" "$2" <<'PY'
@@ -1755,31 +1519,28 @@ PY
   check "V46: subkimi 裁决来自报告而不是过程里的 BLOCK" \
     $(python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); sys.exit(0 if f["verdict"]=="PASS" else 1)' "$d/kimi.facts.json"; echo $?)
 
-  # 样本从真实 mimo run --format json 日志裁出：几条 step_start / tool_use / text /
-  # step_finish，会话号换成占位符，正文缩短。最后一条消息的 text 部分先出现一次
-  # 旧快照，再用同 part.id 的后一次内容和后一个 part 拼成报告。
-  # 工具名从那份日志里的 bash 改成 read，原因和上面的 Kimi 样本一样。
+  # Claude Code stream captured against Xiaomi; body shortened for this oracle.
+  cat > "$b/claude" <<'PY'
+#!/usr/bin/env python3
+import os, sys
+sys.stdin.read()
+sys.stdout.write(open(os.environ["MIMO_JSON_FIXTURE"], encoding="utf-8").read())
+PY
   printf '%s' $'Shared fixture checked.\n\nConclusion: PASS' > "$d/mimo-want.txt"
-  env PATH="$b:$PATH" MIMO_JSON_FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/mimo-run-json.jsonl" \
-    MIMO_REVIEW_HOME="$d/mimo-home" \
+  env PATH="$b:$PATH" MIMO_JSON_FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/claude-mimo-stream.jsonl" \
     AIWORK_REVIEW_FACTS_PATH="$d/mimo.facts.json" AIWORK_REVIEW_RESULT_BIN="$b/_review_result.py" \
     AIWORK_REVIEW_REPORT_PATH="$d/mimo-report.md" \
     python3 "$_test_settings_py" run-with-programs bash "$b/submimo" review "$d/t.md" "$d/mimo.log" "$d/repo" >/dev/null 2>"$d/mimo.err"; rc=$?
   check "V46: submimo 退出 0" $([[ $rc -eq 0 ]]; echo $?)
-  cmp -s "$d/mimo-report.md" "$d/mimo-want.txt"; check "V46: submimo 报告是最后一条消息按真实事件拼出的正文" $?
+  cmp -s "$d/mimo-report.md" "$d/mimo-want.txt"; check "V46: submimo 报告是 Claude Code 最后 result 的正文" $?
   python3 - "$d/mimo-report.md" "$d/mimo.log" <<'PY'
 import pathlib, sys
 paths = [pathlib.Path(p) for p in sys.argv[1:]]
 if not all(path.is_file() for path in paths):
     raise SystemExit(1)
 report, log = (path.read_text(encoding="utf-8") for path in paths)
-kept_out = (
-    "All suites pass.",
-    "python: all 23 cases checked",
-    "earlier snapshot",
-)
-ok = all(piece not in report and piece in log for piece in kept_out)
-raise SystemExit(0 if ok else 1)
+kept_out = ("All suites pass.", "python: all 23 cases checked", "earlier snapshot")
+raise SystemExit(0 if all(piece not in report and piece in log for piece in kept_out) else 1)
 PY
   check "V46: submimo 发布正文只有报告，过程和旧快照留在日志" $?
   check "V46: submimo 裁决来自报告而不是更早的消息" \
@@ -1793,7 +1554,6 @@ v13_subkimi_leg
 v20_max_turns_does_not_discard_work
 v21_agent_leg_body_is_single_source
 v24_coverage_report
-v33_submimo_review_leg_is_read_only
 v35_legs_run_in_readonly_repo
 v36_wrappers_actually_use_readonly_repo
 v37_wrappers_open_no_write_hole

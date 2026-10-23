@@ -1,0 +1,7 @@
+{"type": "system", "subtype": "init", "tools": ["Bash", "CronCreate", "CronDelete", "CronList", "DesignSync", "EnterWorktree", "ExitWorktree", "Glob", "Grep", "ListAgents", "Read", "ReportFindings", "ScheduleWakeup", "SendMessage", "Skill", "TaskStop", "Workflow"], "model": "deepseek-flash"}
+{"type": "assistant", "message": {"role": "assistant", "model": "deepseek-flash", "content": [{"type": "tool_use", "id": "call_00_APdhhoQ5T8WahB5esrxX2925", "name": "Read", "input": {"file_path": "README.md"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "call_00_APdhhoQ5T8WahB5esrxX2925", "type": "tool_result", "content": "Public synthetic file.\n"}]}}
+{"type": "assistant", "message": {"role": "assistant", "model": "deepseek-flash", "content": [{"type": "tool_use", "id": "call_01_C0xiRWRatgl8ec5NehuN5947", "name": "Read", "input": {"file_path": "math.py"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "call_01_C0xiRWRatgl8ec5NehuN5947", "type": "tool_result", "content": "Public synthetic file.\n"}]}}
+{"type": "assistant", "message": {"role": "assistant", "model": "deepseek-flash", "content": [{"type": "text", "text": "Conclusion: PASS\n"}]}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "Conclusion: PASS\n", "modelUsage": {"deepseek-flash": {}}}

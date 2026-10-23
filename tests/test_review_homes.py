@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # of this routing table: a new adapter without a fixture is a failure.
 STUBS = {'subcodex': 'codex', 'subcursor': 'cursor-agent',
          'subagent': 'claude', 'subdeepseek-agent': 'claude',
-         'subkimi': 'kimi', 'submimo': 'mimo'}
+         'subkimi': 'kimi', 'submimo': 'claude'}
 CAPTURE = '''
 import json
 from pathlib import Path
@@ -29,8 +29,6 @@ cli = Path(sys.argv[0]).name
 record = {'workspace': os.environ['REVIEW_WORKSPACE_DIR'], 'cli': cli}
 if cli == 'kimi':
     runtime = os.environ['KIMI_CODE_HOME']
-elif cli == 'mimo':
-    runtime = os.environ['XDG_CONFIG_HOME']
 elif cli == 'cursor-agent':
     runtime = os.environ['HOME']
 elif cli == 'claude':
@@ -81,7 +79,7 @@ class ReviewHomes(unittest.TestCase):
         self.data.mkdir()
         (self.data / 'existing-output').write_text('keep')
         self.env = self.fixture._env()
-        for key in ('KIMI_REVIEW_HOME', 'MIMO_REVIEW_HOME', 'CODEX_BIN',
+        for key in ('KIMI_REVIEW_HOME', 'CODEX_BIN',
                     'REVIEW_PRINT_HOME', 'CURSOR_API_KEY'):
             self.env.pop(key, None)
         self.env.update(AIWORK_DATA_DIR=str(self.data),
@@ -214,27 +212,20 @@ class ReviewHomes(unittest.TestCase):
         self.assert_clean()
 
     def test_override_homes_keep_caller_files_and_are_guarded(self):
-        for leg, variable, directory in [('subkimi', 'KIMI_REVIEW_HOME', 'kimi-home'),
-                                         ('submimo', 'MIMO_REVIEW_HOME', 'mimo-home')]:
+        for leg, variable, directory in [('subkimi', 'KIMI_REVIEW_HOME', 'kimi-home')]:
             with self.subTest(leg=leg):
                 home = self.d / directory
                 marker = home / 'caller-file'
                 marker.write_text('keep')
-                config = home / ('config.toml' if leg == 'subkimi' else 'mimocode/mimocode.json')
+                config = home / 'config.toml'
                 config.parent.mkdir(exist_ok=True)
-                if leg == 'submimo':
-                    config.write_text('{"caller":true}\n')
                 before = config.read_bytes()
                 result = self.run_leg(leg, **{variable: str(home)})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 record = json.loads(Path(self.env['HOME_CAPTURE']).read_text())
                 self.assertEqual(record['runtime'], str(home))
                 self.assertEqual(marker.read_text(), 'keep')
-                if leg == 'subkimi':
-                    self.assertEqual(config.read_bytes(), before)
-                else:
-                    # MiMo has no seed: retain its existing agent-config rewrite.
-                    self.assertIn('aiwork-review', json.loads(config.read_text())['agent'])
+                self.assertEqual(config.read_bytes(), before)
                 self.assertTrue((home / 'sessions/fixture').exists())
                 self.assert_clean()
                 inside = self.fixture.repo / directory

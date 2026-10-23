@@ -5,50 +5,53 @@ set -uo pipefail
 BIN_DIR="$(/usr/bin/dirname "$(/bin/realpath "$0")")" || exit 78
 
 . "$BIN_DIR/_review-platform.sh" || exit 78
-review_platform_check subagent || exit 78
-aiwork_init subagent || exit 78
+# Provider differences live here; platform routing happens before any settings.
+PROVIDER="${1:-}"
+READ_ONLY=0
+DEFAULT_MAX_TURNS=200
+AUTH_ENV=ANTHROPIC_AUTH_TOKEN
+case "$PROVIDER" in
+  deepseek)
+    PREFIX=DEEPSEEK; LABEL=subdeepseek-agent; MODEL_LEG=deepseek
+    SETTINGS_FILE=deepseek.env; SETTINGS_VAR=DEEPSEEK_API_KEY
+    DEFAULT_BASE_URL=https://api.deepseek.com/anthropic
+    BILLING_MODE=api
+    ;;
+  mimo)
+    PREFIX=MIMO; LABEL=submimo; MODEL_LEG=mimo
+    SETTINGS_FILE=mimo.env; SETTINGS_VAR=MIMO_API_KEY
+    READ_ONLY=1
+    BILLING_MODE=api
+    ;;
+  *) PREFIX=DEEPSEEK; LABEL=subagent; MODEL_LEG=deepseek ;;
+esac
+review_platform_check "$LABEL" || exit 78
+aiwork_init "$LABEL" || exit 78
 
-# subagent - DeepSeek 评审命令的躯干:把 Claude Code headless(`claude -p`)指向
-# DeepSeek 的 Anthropic 兼容端点,让模型自己读仓库并在 review 的可写副本里跑本地检查。
-# 经 `subdeepseek-agent` 这个瘦 shim 调用。
-#
-#   review  -> claude -p,可写副本 + 原仓只读,出卷闸(必须给裁决)。
-#   explore -> claude -p,同样只读,无裁决闸。
-#   fix     -> 不在这条命令里做。要改代码,在自己的工作树里打开那家的命令行。
-#
-# 端点凭据只注入子进程,**绝不写 ~/.claude/settings.json**(那会劫持主 harness)。
-#
-# 撞上 max-turns 不丢工作(V20):`claude -p` 默认只印最后一条消息,撞上限时整轮探索
-# 产出为零 —— deepseek 腿 07-21 撞 40、08-03 撞 80,两次的修法都是把上限翻倍,那是修
-# 数字不是修因。真正的因是**一个会把"慢"变成"什么都没有"的护栏**。所以这里走
-# stream-json,把模型说过的话与工具动作实时落盘再渲染成人能读的日志,并记下
-# 「用了 N / 上限 M 轮」——**下次调上限凭这个测量,不凭翻倍**。
-
-
-# 历史记录（该未使用的依赖已移除，运行目录改由 review_workspace_home 创建）：
-# 「运行期 home 不许在被评审的仓里」的共享闸(track repo-write-audit 第二轮)。
-# 缺件就拒跑:少了它 = 这条腿没有这道检查,而"腿被自家防线弄死"的错误信息
-# 长得像额度耗尽 —— 静默失效正是这一单反复记账的那种病。
-
+# Credentials are passed only in the child environment, never written to Claude settings.
 
 usage() {
-  local default_model
-  default_model="$("$BIN_DIR/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
-  printf 'DeepSeek default model: %s\n\n' "$default_model" >&2
+  local default_model override
+  override="${PREFIX}_MODEL"
+  default_model="$("$BIN_DIR/aiwork-config" model "$MODEL_LEG" "${!override:-}")" || exit 1
+  printf '%s default model: %s\n\n' "${PREFIX/DEEPSEEK/DeepSeek}" "$default_model" >&2
   cat >&2 <<'EOF'
 Usage:
   subagent <provider> review  TASK_FILE LOG_FILE [REPO_DIR]
   subagent <provider> explore TASK_FILE LOG_FILE [REPO_DIR]
 
 Providers (thin shims in parentheses; callers normally use the shim):
-  deepseek  (subdeepseek-agent)  model from ~/.config/aiwork/models.env, env DEEPSEEK_*
+  deepseek  (subdeepseek-agent)
+  mimo      (submimo; read-only tools in both modes)
+Models: ~/.config/aiwork/models.env; MiMo credentials/address: mimo.env.
 
-Environment (PREFIX = DEEPSEEK):
+Environment (PREFIX = DEEPSEEK or MIMO):
   <PREFIX>_MODEL          model id
   <PREFIX>_TIMEOUT        seconds before timeout (default 900)
   <PREFIX>_MAX_TURNS      agent turn cap (default 200)
-  <PREFIX>_API_KEY        overrides DEEPSEEK_API_KEY from deepseek.env
-  <PREFIX>_ANTHROPIC_URL  Anthropic-compatible base URL
+  DEEPSEEK_API_KEY        overrides the key from deepseek.env
+  DEEPSEEK_ANTHROPIC_URL  overrides DeepSeek base URL
+MiMo always reads MIMO_BASE_URL and MIMO_API_KEY from mimo.env.
 EOF
 }
 
@@ -71,37 +74,34 @@ if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   REPO_DIR="$SOURCE_REPO"
 fi
 
-# ── 供应商表:腿与腿之间的差异**只准活在这里** ────────────────────────────
-case "$PROVIDER" in
-  deepseek)
-    PREFIX="DEEPSEEK"; LABEL="subdeepseek-agent"
-    BILLING_MODE="api"
-    DEFAULT_MODEL="$("$BIN_DIR/aiwork-config" model deepseek "${DEEPSEEK_MODEL:-}")" || exit 1
-    DEFAULT_BASE_URL="https://api.deepseek.com/anthropic"
-    SETTINGS_FILE="deepseek.env"
-    SETTINGS_VAR="DEEPSEEK_API_KEY"
-    # 轮次预算**凭测量**:08-03 实测「只看一个文件」的琐碎评审就用掉 56 轮
-    # (deepseek-v4-flash 的做法是大量小步 Read/Bash,单位工作的轮次消耗远高于强模型)。
-    # 它 07-21 撞过 40、08-03 撞过 80 —— 两次的修法都是翻倍,那是修数字。
-    # 200 是从 56 轮/单文件外推的,不是拍的;下次要动请拿新的 turns 实测来动。
-    DEFAULT_MAX_TURNS=200
-    # 认证 header 风格:DeepSeek 的 Anthropic 面走 Authorization: Bearer。
-    # (这一格 08-18 才出现 —— 在那之前 Bearer 是硬写在下面注环境那行里的,
-    #  于是"换个后端"会静默变成"换个后端但认证方式没跟着换"。)
-    AUTH_ENV="ANTHROPIC_AUTH_TOKEN"
-    # 底座:借 Claude Code 当壳。DeepSeek 的 Anthropic 面**做**工具格式转换,
-    # 所以这条路对它是通的(GLM 那格 08-18 换走的原因正是 Go 那边不转换)。
-    AGENT_BASE="claude"
-    ;;
-  *) LABEL="subagent"; die "unknown provider: $PROVIDER (supported: deepseek)" ;;
-esac
-
-# 前缀化 env 查表(DEEPSEEK_*)
-v="${PREFIX}_MODEL";          MODEL="${!v:-$DEFAULT_MODEL}"
+[[ "$LABEL" != subagent ]] || die "unknown provider: $PROVIDER (supported: deepseek, mimo)"
+v="${PREFIX}_MODEL"
+MODEL="$("$BIN_DIR/aiwork-config" model "$MODEL_LEG" "${!v:-}")" || exit 1
+CLAUDE_MODEL="$MODEL"
+if [[ "$READ_ONLY" == 1 ]]; then
+  DEFAULT_BASE_URL="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" MIMO_BASE_URL)" || exit 1
+fi
 v="${PREFIX}_TIMEOUT";        TIMEOUT_SECONDS="${!v:-900}"
 v="${PREFIX}_MAX_TURNS";      MAX_TURNS="${!v:-$DEFAULT_MAX_TURNS}"
 v="${PREFIX}_API_KEY";        API_KEY="${!v:-}"
 v="${PREFIX}_ANTHROPIC_URL";  BASE_URL="${!v:-$DEFAULT_BASE_URL}"
+if [[ "$READ_ONLY" == 1 ]]; then
+  # MiMo uses machine settings exclusively; inherited provider variables cannot bypass them.
+  BASE_URL="$DEFAULT_BASE_URL"
+  API_KEY="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" "$SETTINGS_VAR")" || exit 1
+  "$AIWORK_PROGRAMS/python3" - "$BASE_URL" <<'PYURL' || die 'mimo.env: invalid MIMO_BASE_URL (expected an HTTPS Anthropic base URL)'
+import sys
+from urllib.parse import urlsplit
+try:
+    u=urlsplit(sys.argv[1])
+    ok=(u.scheme=='https' and bool(u.hostname) and not(u.username or u.password or u.query or u.fragment)
+        and u.path.rstrip('/').endswith('/anthropic'))
+except ValueError:
+    ok=False
+raise SystemExit(0 if ok else 1)
+PYURL
+  case "$BASE_URL" in https://token-plan-*.xiaomimimo.com/*) BILLING_MODE=subscription ;; esac
+fi
 
 if [[ "$MODE" == "fix" ]]; then
   die "fix is not supported on this command. Change code in your own worktree."
@@ -152,18 +152,14 @@ $(cat "$TASK_FILE")
 
 EXPLORE_SYSTEM_PROMPT="You are an independent agent running inside a read-only harness. Read the repository with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}). Do not modify files, push, merge, install dependencies, or spawn other agents."
 
-# ── 把 diff 算好塞进提示词 ─────────────────────────────────────────────────
-# 提示词就是"系统提示 + 任务书"。**不再往里塞 diff** —— 腿自己有 shell,
-# 自己跑 git diff/log/show 去看。
-#
-# 08-18~08-19 这里曾经有一整套 diff 注入(按通道算预算、按字节截断、工件排除、
-# 基线校验),是为了补偿"把 bash 关掉"造成的失明。业主推翻了那个方向:
-# 评审腿**没有**"改判据让自己及格"的动机(那是执行腿的威胁模型),
-# 而关 bash 的代价是 E2BIG(腿直接起不来)、SIGPIPE 静默暴毙、基线打错字静默变瞎 ——
-# **最坏形态是腿根本没跑起来而 panel 照常出结论**,比腿写个文件危险得多。
-# 那一套连同 `_prompt-budget.sh` 已整体拆除;防线换成跑完的写审计
-# (track `repo-write-audit`,**还没上线**,窗口期是明账)。
-if [[ "$MODE" == "explore" ]]; then
+if [[ "$READ_ONLY" == 1 ]]; then
+  READER_TOOLS="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" claude-tools)" || exit 78
+  READER_PROMPT="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" claude-prompt)" || exit 78
+  PROMPT="$READER_PROMPT
+
+--- TASK ($MODE) ---
+$(cat "$TASK_FILE")"
+elif [[ "$MODE" == "explore" ]]; then
   PROMPT="${EXPLORE_SYSTEM_PROMPT}
 
 --- DESIGN BRIEF ---
@@ -203,6 +199,11 @@ trap _subagent_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 RUNTIME_HOME="$(review_workspace_home claude-home)" || exit 78
+if [[ "$READ_ONLY" == 1 ]]; then
+  [[ -f "$BIN_DIR/_review-reader-context.sh" ]] || die 'missing reader context helper ⇒ 拒绝派发'
+  . "$BIN_DIR/_review-reader-context.sh"
+  review_reader_context "$REPO_DIR" || exit 78
+fi
 
 STREAM_FILE="${LOG_FILE%.log}.stream.jsonl"
 ERR_FILE="$(mktemp)"
@@ -216,7 +217,9 @@ ERR_FILE="$(mktemp)"
   echo "repo: $REPO_DIR"
   echo "source_repo: $SOURCE_REPO"
   echo "task: $TASK_FILE"
-  if [[ "$MODE" == "review" ]]; then
+  if [[ "$READ_ONLY" == 1 ]]; then
+    echo "视野: ${READER_TOOLS}，只读代码；不能跑命令。"
+  elif [[ "$MODE" == "review" ]]; then
     echo "视野: 底座腿 —— 独立可写副本；Bash 可跑本地 tests/lint/build/诊断。"
     echo "      Write/Edit/Task 关闭；原仓由外层只读挂载保护。"
   else
@@ -226,48 +229,41 @@ ERR_FILE="$(mktemp)"
 } > "$LOG_FILE"
 
 RC=0
-# ── 原仓只读 + review 副本可写 ─────────────────────────────────────────────
-# 模型 cwd/--dir 是独立 clone；mount namespace 只把 SOURCE_REPO 盖成只读。
-# 腿可在 clone 跑 tests/build，但原仓写口物理消失 —— 08-18 我发现
-# `git diff --output=<path>` 能绕过任何命令行白名单,而"把 bash 整个关掉"那条路
-# 已经被四审推翻(腿会静默起不来,比腿写个文件危险得多)。
-# **一个写口都不开。** 腿日志是父 shell 重定向写的(`>> "$LOG_FILE"` / `| tee -a`),
-# fd 在**父 namespace** 就打开了,挂载管不着已经打开的 fd —— 探针实测过。
-# 第一版开了 `--rw <日志目录>`,那个写口不但多余,还带来两条真 bug:
-# `dirname` 相对调用方 cwd 解析 ⇒ 从仓根裸文件名调用时整仓开闸(安静失效);
-# 以及它在 mkdir 日志目录之前构建 ⇒ 新日志目录直接拒跑(行为回归)。判据 V37。
-# fail-closed 在 ro-repo-exec 里:挂不上就拒跑,绝不降级成"在可写的仓里跑"。
-#
-[[ -x "$BIN_DIR/ro-repo-exec" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发（不在可写的仓里跑评审腿）\n' "$(basename "$0")" "$BIN_DIR/ro-repo-exec" >&2; exit 78; }
-[[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
-RO_EXEC=("$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" --)
-
-# 凭据只在本次调用的子进程里;父 harness 那把真的 ANTHROPIC_API_KEY 要擦掉,
-# 否则它会盖过供应商 token。提示词走 stdin:--allowedTools/--disallowedTools 是变长
-# 参数,尾随的位置参数会被当成又一个工具名吞掉。
-if [[ "$MODE" == "review" ]]; then
-  CLAUDE_BASH_TOOLS=(Bash)
+# Linux retains the source repository guard; only audited MiMo can reach Mac here.
+EXEC_NAME="$(basename "$0")"
+[[ "$READ_ONLY" == 1 ]] && EXEC_NAME="$LABEL"
+review_platform_ro_exec "$SOURCE_REPO" "$EXEC_NAME" || exit 78
+[[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$EXEC_NAME" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
+if [[ "$READ_ONLY" == 1 ]]; then
+  READER_SETTINGS="$RUNTIME_HOME/reader-settings.json"
+  "$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" claude-settings "$READER_SETTINGS" || exit 78
+  IFS=, read -r -a CLAUDE_TOOLS <<< "$READER_TOOLS"
+  CLAUDE_OPTIONS=(--setting-sources "" --settings "$READER_SETTINGS" --permission-prompts none --tools "$READER_TOOLS"
+    --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands
+    --allowedTools "${CLAUDE_TOOLS[@]}")
+elif [[ "$MODE" == "review" ]]; then
+  CLAUDE_OPTIONS=(--setting-sources project --allowedTools Read Glob Grep Bash
+    --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent)
 else
-  CLAUDE_BASH_TOOLS=("Bash(git diff:*)" "Bash(git log:*)" \
-                     "Bash(git status:*)" "Bash(git show:*)")
+  CLAUDE_OPTIONS=(--setting-sources project --allowedTools Read Glob Grep
+    "Bash(git diff:*)" "Bash(git log:*)" "Bash(git status:*)" "Bash(git show:*)"
+    --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent)
 fi
 (
-  cd "$REPO_DIR"
-  printf '%s\n' "$PROMPT" | env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
-    "$AUTH_ENV=$API_KEY" \
-    CLAUDE_CONFIG_DIR="$RUNTIME_HOME" \
-    ANTHROPIC_BASE_URL="$BASE_URL" \
-    ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
-    ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \
-    ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
-    "${RO_EXEC[@]}" "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" "$AIWORK_PROGRAMS/claude" -p \
-      --model sonnet \
-      --no-session-persistence \
-      --setting-sources project \
-      --max-turns "$MAX_TURNS" \
-      --output-format stream-json --verbose \
-      --allowedTools Read Glob Grep "${CLAUDE_BASH_TOOLS[@]}" \
-      --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent
+  cd "$REPO_DIR" || exit 78
+  unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+  export "$AUTH_ENV=$API_KEY"
+  export CLAUDE_CONFIG_DIR="$RUNTIME_HOME" ANTHROPIC_BASE_URL="$BASE_URL"
+  export ANTHROPIC_DEFAULT_OPUS_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_SONNET_MODEL="$CLAUDE_MODEL"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$CLAUDE_MODEL"
+  if [[ "$READ_ONLY" == 1 ]]; then
+    unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL
+    unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+  fi
+  printf '%s\n' "$PROMPT" | ${RO_EXEC[@]+"${RO_EXEC[@]}"} "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" "$AIWORK_PROGRAMS/claude" -p \
+    --model sonnet --no-session-persistence --max-turns "$MAX_TURNS" \
+    --output-format stream-json --verbose "${CLAUDE_OPTIONS[@]}"
 ) > "$STREAM_FILE" 2>"$ERR_FILE" || RC=$?
 
 # 渲染:把 stream-json 还原成人能读的日志。**撞上限/超时也要渲染** —— 那正是这条
@@ -277,7 +273,7 @@ import json, sys, pathlib
 
 stream, log, cap, rc, errfile = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 turns, out = 0, []
-for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").splitlines():
+for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").split("\n"):
     line = line.strip()
     if not line.startswith("{"):
         continue
@@ -285,14 +281,18 @@ for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").s
         ev = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if ev.get("type") != "assistant":
+    if not isinstance(ev, dict) or ev.get("type") != "assistant":
         continue
     turns += 1
-    for block in (ev.get("message") or {}).get("content") or []:
+    message = ev.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict):
+            continue
         if block.get("type") == "text" and block.get("text", "").strip():
             out.append(block["text"].rstrip())
         elif block.get("type") == "tool_use":
-            inp = block.get("input") or {}
+            inp = block.get("input") if isinstance(block.get("input"), dict) else {}
             hint = inp.get("file_path") or inp.get("pattern") or inp.get("command") or ""
             out.append(f"  → {block.get('name','tool')} {hint}".rstrip())
 
@@ -315,12 +315,13 @@ with open(log, "a", encoding="utf-8") as fh:
     fh.write(body + "\n" + "\n".join(footer) + "\n")
 PY
 
-# 最后一条消息是 stream-json 的 result.result，不是渲染进日志的过程。
-"$AIWORK_PROGRAMS/python3" - "$STREAM_FILE" "$REPORT" <<'PY'
+# 最后一条消息和自报模型只取 CLI 结构字段，不从正文或工具返回值里猜。
+REPORTED="$("$AIWORK_PROGRAMS/python3" - "$STREAM_FILE" "$REPORT" "$FACT_MODEL" <<'PY'
 import json, pathlib, sys
-stream, dest = sys.argv[1:]
+stream, dest, requested = sys.argv[1:]
 last = None
-for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").splitlines():
+models = []
+for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").split("\n"):
     line = line.strip()
     if not line.startswith("{"):
         continue
@@ -328,15 +329,43 @@ for line in pathlib.Path(stream).read_text(encoding="utf-8", errors="replace").s
         event = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
-        last = event["result"]
-if not isinstance(last, str):
-    raise SystemExit(0)
-pathlib.Path(dest).write_text(last)
+    if not isinstance(event, dict):
+        continue
+    kind = event.get("type")
+    reported = []
+    if kind == "system" and event.get("subtype") == "init":
+        reported.append(event.get("model"))
+    elif kind == "assistant" and isinstance(event.get("message"), dict):
+        reported.append(event["message"].get("model"))
+    elif kind == "result":
+        if isinstance(event.get("result"), str):
+            last = event["result"]
+        if isinstance(event.get("modelUsage"), dict):
+            reported.extend(event["modelUsage"])
+    models.extend(model for model in reported if isinstance(model, str) and model.strip())
+if isinstance(last, str):
+    pathlib.Path(dest).write_text(last)
+# 多处自报不一致时保留不符的原值，让现有发布检查拒发，不能被 init 的请求值盖掉。
+print(next((model for model in models if model != requested), models[0] if models else ""))
 PY
+)" || exit 78
 
 if [[ -s "$ERR_FILE" ]]; then cat "$ERR_FILE" >&2; fi
 rm -f "$ERR_FILE"
 
+AUDIT_MESSAGE=""
+audit_rc=0
+if [[ "$READ_ONLY" == 1 ]]; then
+  audit="$(review_workspace_reader_audit audit-claude "$STREAM_FILE")" || audit_rc=$?
+  if [[ "$audit_rc" == 0 ]]; then
+    printf '\n核实工具: %s\n' "$audit" >> "$LOG_FILE"
+  elif [[ "$audit_rc" == 1 || "$audit_rc" == 3 ]]; then
+    AUDIT_MESSAGE="$audit"
+    printf '\n%s\n' "$audit" >> "$LOG_FILE"
+  else
+    printf '%s: %s ⇒ 拒绝派发\n' "$LABEL" "$audit" >&2
+    exit 78
+  fi
+fi
 review_workspace_finish "${LABEL:-subagent}" "$RC" "$MODE" \
-  "$FACT_MODEL" "$BILLING_MODE" "" ""
+  "$FACT_MODEL" "$BILLING_MODE" "$REPORTED" "" "$AUDIT_MESSAGE" "$audit_rc"

@@ -39,7 +39,7 @@ class SettingsTest(unittest.TestCase):
         write_programs(self.config)
         self.models = {'codex': 'gpt-fixture', 'cursor': 'composer-2.5',
                        'deepseek': 'deepseek-fixture',
-                       'kimi': 'kimi-code/k3', 'mimo': 'xiaomi/mimo-v2.5-pro'}
+                       'kimi': 'kimi-code/k3', 'mimo': 'mimo-v2.5-pro'}
         self.write_models()
         self.env = dict(os.environ, AIWORK_CONFIG_DIR=str(self.config), HOME=str(self.d / 'home'))
         self.environment = patch.dict(os.environ, self.env, clear=True)
@@ -131,7 +131,7 @@ class SettingsTest(unittest.TestCase):
         fake = self.d / 'fake'
         fake.mkdir()
         marker = self.d / 'provider-called'
-        for name in ('codex', 'cursor-agent', 'kimi', 'mimo', 'claude'):
+        for name in ('codex', 'cursor-agent', 'kimi', 'claude'):
             script = fake / name
             script.write_text('#!/bin/sh\ntouch "$PROVIDER_MARKER"\nexit 1\n')
             script.chmod(0o755)
@@ -162,11 +162,14 @@ class SettingsTest(unittest.TestCase):
         installed = self.d / 'installed'
         installed.mkdir()
         callers = {'subcodex': [], 'subcursor': [], 'subkimi': [],
-                   'submimo': [], 'subagent': ['deepseek']}
+                   'submimo': [], 'subdeepseek-agent': [], 'subagent': ['deepseek']}
         # Derive coverage from the shell callers so another migrated leg cannot be missed.
-        actual = {p.name for p in (ROOT / 'bin').iterdir()
-                  if p.is_file() and p.read_bytes().startswith(b'#!/usr/bin/env bash')
-                  and re.search(r'/aiwork-config" model ', p.read_text())}
+        sources = {p.name: p.read_text() for p in (ROOT / 'bin').iterdir()
+                   if p.is_file() and p.read_bytes().startswith(b'#!/usr/bin/env bash')}
+        direct = {name for name, source in sources.items()
+                  if re.search(r'/aiwork-config" model ', source)}
+        shim = re.compile(r'^exec.*?/(?:' + '|'.join(map(re.escape, direct)) + r')"\s', re.M)
+        actual = direct | {name for name, source in sources.items() if shim.search(source)}
         self.assertEqual(actual, set(callers))
         (self.config / 'models.env').unlink()
         for name, prefix in callers.items():

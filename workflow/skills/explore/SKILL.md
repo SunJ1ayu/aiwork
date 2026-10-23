@@ -29,6 +29,6 @@ explore BRIEF --repo DIR --leg subdeepseek-agent --leg submimo
 
 - `subdeepseek-agent explore TASK LOG REPO` — Claude Code headless。凭证 `~/.config/aiwork/deepseek.env` 的 `DEEPSEEK_API_KEY`。超时 `DEEPSEEK_TIMEOUT`。
 - `subkimi explore TASK LOG REPO` — `kimi -p`。凭证 `~/.kimi-code/credentials/kimi-code.json`（运行目录见 [README「评审运行目录」](../../../README.md#评审运行目录)）。超时 `KIMI_TIMEOUT`。
-- `submimo explore TASK LOG REPO` — `mimo run`。凭证 `~/.local/share/mimocode/auth.json`。超时 `MIMO_CLI_TIMEOUT`。
+- `submimo explore TASK LOG REPO` — `subagent mimo`，经 Claude Code 连接小米接口；凭证和接口地址在 `~/.config/aiwork/mimo.env`。超时 `MIMO_TIMEOUT`；只读工具和跑完核对见 `bin/_reader_tools.py`。
 - `subcursor explore TASK LOG REPO` — `cursor-agent`。凭证 `~/.config/cursor/auth.json`。超时 `CURSOR_TIMEOUT`。
 - `subcodex explore TASK LOG REPO` — `codex exec`。凭证 `~/.codex/auth.json`。超时 `SUBCODEX_TIMEOUT`。

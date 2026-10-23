@@ -107,8 +107,9 @@ grep -q 'DEFAULT_MAX_TURNS=200' "$ROOT/bin/subagent" \
 check "W3: DeepSeek 默认轮次是 200，帮助文本指向本机凭证" $?
 grep -q 'KIMI_TIMEOUT:-1500' "$ROOT/bin/subkimi"
 check "W3: Kimi 超时默认 1500 秒" $?
-grep -q 'aiwork-config.*model mimo' "$ROOT/bin/submimo" \
-  && ! grep -q 'DEFAULT_MODEL="xiaomi/' "$ROOT/bin/submimo"
+grep -q 'MODEL_LEG=mimo' "$ROOT/bin/subagent" \
+  && grep -Fq 'model "$MODEL_LEG"' "$ROOT/bin/subagent" \
+  && ! grep -q 'DEFAULT_MODEL="mimo-' "$ROOT/bin/subagent"
 check "W3: MiMo 默认模型来自本机设置，代码不复制版本号" $?
 ! grep -q 'skills/panel' "$ROOT/bin/sync-workflow-docs"
 check "W3: 同步清单不再部署已删除的方案说明" $?

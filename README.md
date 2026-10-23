@@ -41,7 +41,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 
 - `bin/subdeepseek-agent` — DeepSeek，经 Claude Code headless 读仓库。模型来自 `~/.config/aiwork/models.env` 的 deepseek 行。
 - `bin/subkimi` — Kimi，kimi-code CLI。review、explore 的 agent profile 和跑完核对读 `bin/_reader_tools.py`。派发前的 hook 是 `kimi-review-home/hooks/guard.mjs`，放行名单是另一份。清单以外的工具（含被 CLI 拒掉的尝试），或者输出里看不出用了哪些工具，只在这次本来会成功时记成 `readonly_tools`：不发评审，这个失败原因不重试。没有结论的那次仍是 `no_verdict`，会重试一次。任务复制进快照，由 Read 读取，正文不进命令行参数。模型来自 kimi 行。
-- `bin/submimo <review|explore>` — MiMo，官方 `mimo` CLI。review、explore 的 CLI 配置和跑完核对跟 `subkimi` 一样读 `bin/_reader_tools.py`（两家名字不同，各用自己的那张表）。对不上，或者输出里看不出用了哪些工具，只在这次本来会成功时记成 `readonly_tools`：不发评审，这个失败原因不重试。没有结论的那次仍是 `no_verdict`，会重试一次。模型来自 mimo 行。
+- `bin/submimo <review|explore>` — MiMo，经 `bin/subagent` 复用 Claude Code headless，连接小米的 Anthropic 兼容接口。模型读 `models.env` 的 mimo 行（API 原生 `mimo-…` 名称）；接口地址和密钥读 `mimo.env`。两个模式只提供读取工具，配置和跑完核对共用 `bin/_reader_tools.py`；看不出实际工具或出现其他工具时记为 `readonly_tools`，不发评审、不因这个原因重试。超时使用 `MIMO_TIMEOUT`，轮次上限使用 `MIMO_MAX_TURNS`。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。两个平台的原生沙箱设置见 `bin/subcodex` 的 `CODEX_CFG`；Linux 外层另经 `ro-repo-exec`。副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。
@@ -95,12 +95,12 @@ The macOS guarantees and limitations are defined in one place:
 Linux details: `tests/_no-egress.sh`. This guard prevents accidental paid calls
 from tests (the 2026-08-10 incident), within the documented platform limits.
 
-## MiMo agent CLI setup
+## MiMo / DeepSeek 的 Claude Code 外壳
 
-```bash
-npm install -g @mimo-ai/cli
-mimo                      # or: mimo providers login / list
-```
+两条腿共用 `bin/subagent` 的供应商表；各自的工具能力与平台限制不变。
+先安装 Claude Code，并在本机 `programs/claude`、`programs/node` 登记安装路径。
+MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行目录。
+小米接口的配置方法见[官方 Claude Code 文档](https://mimo.mi.com/docs/zh-CN/tokenplan/integration/claudecode)。
 
 ## 本机设置
 
@@ -108,13 +108,14 @@ mimo                      # or: mimo providers login / list
 
 - `models.env`：Codex、Cursor、DeepSeek、Kimi、MiMo 的模型选择，每条一行。可参考 `templates/models.env.example`。
 - `deepseek.env`：DeepSeek 使用的 `DEEPSEEK_API_KEY`，保留文件权限 600。
-- `models.env`、`deepseek.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
+- `mimo.env`：两行 `MIMO_BASE_URL=…`、`MIMO_API_KEY=…`，文件权限 600。地址使用小米控制台给出的 Anthropic 兼容 Base URL：按量付费和 Token Plan 的地址、凭证不同，不能混用；地址须为 HTTPS、以 `/anthropic` 结尾，不带用户名、密码、查询串或片段。MiMo 不从环境变量补地址或密钥。
+- `models.env`、`deepseek.env`、`mimo.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
 - `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。
 
 `programs/` 登记本机程序路径：每项是指向唯一安装位置的符号链接（不要复制可执行文件）。
-`python3` 必须是 Python 3.11 以上；其余项为 `codex`、`cursor-agent`、`kimi`、`mimo`、`claude`、`node`。
+`python3` 必须是 Python 3.11 以上；其余项为 `codex`、`cursor-agent`、`kimi`、`claude`、`node`。
 例如确认安装位置后，执行 `ln -s /绝对安装路径/python3 ~/.config/aiwork/programs/python3`；
 先用 `install -d -m 700 ~/.config/aiwork/programs` 建目录，其余项同样登记。
 两台机器分别登记自己的安装位置，不能直接沿用另一台的链接目标。
@@ -151,13 +152,13 @@ Kimi 自动生成的 hook 使用登记的 node 路径；自管 `KIMI_REVIEW_HOME
 
 `kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。
 每次渲染配置和 guard，另写 CLI 的只读 agent profile；credentials 链接到 Kimi CLI 自己的凭证目录。缺少 `kimi-code.json` 时拒跑并提示先用 kimi 登录。
-`submimo` 的临时 `XDG_CONFIG_HOME` 与评审副本一起删除，凭证仍由 MiMo 自己管理。
-`KIMI_REVIEW_HOME`、`MIMO_REVIEW_HOME` 指定的目录由调用方管理：不渲染种子、不删除，仍经过 `review_home_guard`；Kimi 仍重写只读 agent profile，MiMo 仍重写隔离评审配置。
+`submimo` 和 `subdeepseek-agent` 每次创建临时 `CLAUDE_CONFIG_DIR`，禁用会话持久化，随评审副本一起删除；凭证只经子进程环境传入，不写 Claude Code 设置。MiMo 还禁用项目设置、MCP 和技能。
+`KIMI_REVIEW_HOME` 指定的目录由调用方管理：不渲染种子、不删除，仍经过 `review_home_guard`；Kimi 仍重写只读 agent profile。
 
 ### 加新评审腿的规矩
 
 - 运行目录在 `review_workspace_prepare` 之后调用 `_review-workspace.sh` 的 `review_workspace_home <名字>` 创建（权限 700），由现有 workspace 清理一起删除。
-- 登录凭证只用各家 CLI 自己的位置，不复制凭证。
+- 登录凭证使用 CLI 自己的位置；API 外壳从本机设置读取，只在子进程环境传入。
 - CLI 自己的会话记录能关就关。
 - 每家 CLI 都必须在 `tests/test_review_homes.py` 里有明确的运行状态检查，没有就测试失败。
 - 数据目录里不放凭证或凭证链接，只留工作产物。

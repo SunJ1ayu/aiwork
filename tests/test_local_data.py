@@ -4,7 +4,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
-from _test_settings import write_programs
+from _test_settings import write_programs, write_settings
 
 from pathlib import Path
 import shutil
@@ -98,7 +98,7 @@ class LocalDataTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), str(mounted / 'logs'))
         self.assertFalse((mounted / 'logs').exists())
 
-        for name in ('out', '.mimocode', 'etc', 'scratch', 'tasks', 'worktrees'):
+        for name in ('out', '.claude', 'etc', 'scratch', 'tasks', 'worktrees'):
             result = self.run_tool('aiwork-config', 'data-path', name)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), str(self.data / name))
@@ -170,22 +170,13 @@ class LocalDataTests(unittest.TestCase):
         subprocess.run(['git', '-C', str(repo), 'commit', '-qm', 'init'], check=True, capture_output=True)
         task = self.d / 'leg-task.md'
         task.write_text('fixture\n')
-        config = self.d / 'leg-settings'
-        config.mkdir()
-        (config / 'models.env').write_text(
-            'codex=gpt-6-sol\n'
-            'cursor=grok-4.7-high\n'
-            'deepseek=deepseek-flash\n'
-            'kimi=kimi-code/kimi-for-coding\n'
-            'mimo=xiaomi/mimo-v2.6-pro\n')
+        config = write_settings(self.d / 'leg-settings')
         kimi_home = self.d / 'kimi-home'
         (kimi_home / 'hooks').mkdir(parents=True)
         (kimi_home / 'credentials').mkdir()
         (kimi_home / 'config.toml').write_text('model = "fixture"\n')
         (kimi_home / 'hooks' / 'guard.mjs').write_text('process.exit(2)\n')
         (kimi_home / 'credentials' / 'kimi-code.json').write_text('{}\n')
-        mimo_home = self.d / 'mimo-home'
-        mimo_home.mkdir()
         fake = self.d / 'leg-fake'
         fake.mkdir()
         cases = (
@@ -193,9 +184,9 @@ class LocalDataTests(unittest.TestCase):
             ('subcursor', ('review',), {'CURSOR_API_KEY': 'fixture'}),
             ('subagent', ('deepseek', 'review'), {'DEEPSEEK_API_KEY': 'fixture'}),
             ('subkimi', ('review',), {'KIMI_REVIEW_HOME': str(kimi_home)}),
-            ('submimo', ('review',), {'MIMO_REVIEW_HOME': str(mimo_home)}),
+            ('submimo', ('review',), {}),
         )
-        binaries = ('codex', 'cursor-agent', 'claude', 'kimi', 'mimo')
+        binaries = ('codex', 'cursor-agent', 'claude', 'kimi')
         for name, prefix, extra in cases:
             missing = self.d / f'missing-{name}'
             calls = self.d / f'calls-{name}'
@@ -206,7 +197,7 @@ class LocalDataTests(unittest.TestCase):
             env = dict(self.env)
             env.update(AIWORK_DATA_DIR=str(missing), AIWORK_CONFIG_DIR=str(config),
                        PATH=str(fake) + os.pathsep + env.get('PATH', ''))
-            for key in ('KIMI_REVIEW_HOME', 'MIMO_REVIEW_HOME', 'CURSOR_API_KEY',
+            for key in ('KIMI_REVIEW_HOME', 'CURSOR_API_KEY',
                         'DEEPSEEK_API_KEY', 'REVIEW_PRINT_HOME'):
                 env.pop(key, None)
             env.update(extra)

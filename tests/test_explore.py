@@ -26,8 +26,8 @@ from _test_retention import extreme_mtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "tests" / "fixtures" / "mimo-run-json.jsonl"
-# Last message assembled from tests/fixtures/mimo-run-json.jsonl (see V46).
+FIXTURE = ROOT / "tests" / "fixtures" / "claude-mimo-stream.jsonl"
+# Last message assembled from tests/fixtures/claude-mimo-stream.jsonl (see V46).
 FIXTURE_LAST = "Shared fixture checked.\n\nConclusion: PASS"
 NO_CONCLUSION = (
     "方向：每条腿只读 main 的一份快照。\n"
@@ -533,15 +533,15 @@ class MimoExploreTests(unittest.TestCase):
         config = write_settings(root / "settings")
         fake = root / "fake"
         fake.mkdir()
-        (fake / "mimo").write_text(textwrap.dedent('''\
+        (fake / "claude").write_text(textwrap.dedent('''\
             #!/usr/bin/env python3
             import os, pathlib, sys
             pathlib.Path(os.environ["MIMO_ARGV"]).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
-            if "--format" not in sys.argv or sys.argv[sys.argv.index("--format") + 1] != "json":
-                raise SystemExit("explore must request --format json")
+            if "--output-format" not in sys.argv or sys.argv[sys.argv.index("--output-format") + 1] != "stream-json":
+                raise SystemExit("explore must request --output-format stream-json")
             sys.stdout.write(pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8"))
         '''), encoding="utf-8")
-        (fake / "mimo").chmod(0o755)
+        (fake / "claude").chmod(0o755)
         write_programs(config, fake)
         task = root / "task.md"
         task.write_text("# brief\n", encoding="utf-8")
@@ -552,7 +552,6 @@ class MimoExploreTests(unittest.TestCase):
         env.update(
             PATH=str(fake) + os.pathsep + env.get("PATH", ""),
             AIWORK_CONFIG_DIR=str(config),
-            MIMO_REVIEW_HOME=str(root / "mimo-home"),
             MIMO_ARGV=str(root / "argv.txt"),
             MIMO_JSON_FIXTURE=str(fixture),
             AIWORK_REVIEW_REPORT_PATH=str(report),
@@ -575,12 +574,11 @@ class MimoExploreTests(unittest.TestCase):
         self.assertNotIn("Direction / Core bet", argv)
 
     def test_explore_without_a_conclusion_line_is_success(self):
-        kept = []
-        for line in FIXTURE.read_text(encoding="utf-8").splitlines(keepends=True):
-            if '"text":"Conclusion: PASS"' in line:
-                continue
-            kept.append(line)
-        fixture = self._write("mimo-no-conclusion.jsonl", "".join(kept))
+        events = [json.loads(line) for line in FIXTURE.read_text().splitlines()]
+        for event in events:
+            if event.get('type') == 'result':
+                event['result'] = "Shared fixture checked.\n\n"
+        fixture = self._write("mimo-no-conclusion.jsonl", ''.join(json.dumps(e)+'\n' for e in events))
         result, _argv, body, sidecar = self.run_leg(fixture)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(body, "Shared fixture checked.\n\n")
@@ -820,18 +818,14 @@ class ExploreLegContractTests(unittest.TestCase):
         )
 
     def _blank_submimo(self, log, report, facts):
-        payload = json.dumps({
-            "type": "text",
-            "part": {"id": "p", "messageID": "m", "text": " \t\n"},
-        })
-        self._stub("mimo", textwrap.dedent(f'''\
+        payload = json.dumps({"type":"result","subtype":"success","is_error":False,"result":" \t\n"})
+        self._stub("claude", textwrap.dedent(f'''\
             #!/usr/bin/env python3
             print({payload!r})
         '''))
         return (
             [str(ROOT / "bin" / "submimo"), "explore", str(self.task), str(log), str(self.repo)],
             self._env(
-                MIMO_REVIEW_HOME=str(self.root / "mimo-home"),
                 AIWORK_REVIEW_REPORT_PATH=str(report),
                 AIWORK_REVIEW_FACTS_PATH=str(facts)),
         )
