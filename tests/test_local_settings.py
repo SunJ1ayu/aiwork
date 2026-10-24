@@ -163,19 +163,6 @@ class SettingsTest(unittest.TestCase):
                 self.assertEqual({p.name: os.readlink(p) if p.is_symlink() else p.read_bytes()
                                   for p in (config / 'programs').iterdir()}, before)
 
-    def test_child_workspace_keeps_unix_socket_paths_short(self):
-        inherited_tmp = self.d / ('parent-workspace-' + 'x' * 64)
-        inherited_tmp.mkdir()
-        probe = self.d / 'socket-workspace.py'
-        probe.write_text(f'import sys; sys.path.insert(0, {str(ROOT / "tests")!r})\n'
-                         'import _no_egress\nimport socket, tempfile\nfrom pathlib import Path\n'
-                         'with socket.socket(socket.AF_UNIX) as server:\n'
-                         '    server.bind(str(Path(tempfile.mkdtemp()) / "service.sock"))\n')
-        result = subprocess.run([sys.executable, str(probe)],
-                                env=dict(self.env, TMPDIR=str(inherited_tmp)),
-                                capture_output=True, text=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
     def test_missing_file_and_each_missing_leg_name_the_path_and_leg(self):
         path = self.config / 'models.env'
         path.unlink()

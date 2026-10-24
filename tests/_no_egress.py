@@ -97,6 +97,7 @@ if _MACOS:
         return True
 
     def _workspace_command(command):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from _test_settings import owned_settings
         if owned_settings():
             return []
