@@ -10,6 +10,7 @@ import importlib.machinery
 import importlib.util
 import json
 import re
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
@@ -76,8 +77,8 @@ class SettingsTest(unittest.TestCase):
                     self.assertNotIn(key, environment)
                 for key, value in control.items():
                     self.assertEqual(environment[key], value)
-                self.assertEqual(environment['AIWORK_CONFIG_DIR'], str(self.config))
-                self.assertEqual(environment['AIWORK_DATA_DIR'], self.env['AIWORK_DATA_DIR'])
+                self.assertNotEqual(environment['AIWORK_CONFIG_DIR'], str(self.config))
+                self.assertNotEqual(environment['AIWORK_DATA_DIR'], self.env['AIWORK_DATA_DIR'])
 
     def test_each_leg_is_read_from_models_env(self):
         for leg, expected in self.models.items():
@@ -85,6 +86,95 @@ class SettingsTest(unittest.TestCase):
                 result = self.invoke_config('model', leg)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
+
+    def test_public_test_startup_does_not_mutate_inherited_machine_directories(self):
+        # Run the actual model-changing statements from both shell oracles.
+        changes = {}
+        for filename in ('test-review-tooling.sh', 'test-subcodex.sh'):
+            source = (ROOT / 'tests' / filename).read_text()
+            for statement, leg, model in re.findall(
+                    r'^\s*(test_model_set (deepseek|kimi|codex) ([A-Za-z0-9_/.-]+))$',
+                    source, re.M):
+                changes.setdefault(leg, (statement, model))
+        self.assertEqual(set(changes), {'deepseek', 'kimi', 'codex'})
+        outside = self.d / 'pretend-machine'
+        config = outside / 'settings'
+        data = outside / 'data'
+        config.mkdir(parents=True)
+        data.mkdir()
+        write_programs(config)
+        models = b'deepseek=deepseek-owner\nkimi=kimi-code/owner\ncodex=gpt-owner\n'
+        (config / 'models.env').write_bytes(models)
+        (data / 'keep').write_bytes(b'owner data\n')
+
+        def snapshot():
+            return {str(p.relative_to(outside)):
+                    ('link', os.readlink(p)) if p.is_symlink() else
+                    ('file', p.read_bytes()) if p.is_file() else ('directory',)
+                    for p in outside.rglob('*')}
+
+        baseline = snapshot()
+        suffix = (f'import sys; sys.path.insert(0, {str(ROOT / "bin")!r})\n'
+                  'from _aiwork_config import data_path\n'
+                  'from pathlib import Path\n'
+                  'p = data_path("logs")\np.mkdir(parents=True, exist_ok=True)\n'
+                  '(p / "test-output").write_text("fixture data")\n')
+        python = self.d / 'inherited-settings.py'
+        python.write_text(f'import sys; sys.path.insert(0, {str(ROOT / "tests")!r})\n'
+                          'import _no_egress\nimport os\nfrom _test_settings import set_model\n'
+                          + ''.join(f'set_model(os.environ["AIWORK_CONFIG_DIR"], {leg!r}, {model!r})\n'
+                                    for leg, (_, model) in changes.items()) + suffix)
+        shell = self.d / 'inherited-settings.sh'
+        shell.write_text('set -uo pipefail\n'
+                         f'. {shlex.quote(str(ROOT / "tests/_no-egress.sh"))} || exit 78\n'
+                         + '\n'.join(statement for statement, _ in changes.values())
+                         + f"\n{shlex.quote(sys.executable)} - <<'PY'\n" + suffix + 'PY\n')
+        inherited = dict(self.env, AIWORK_CONFIG_DIR=str(config), AIWORK_DATA_DIR=str(data),
+                         AIWORK_PROGRAMS=str(config / 'programs'),
+                         AIWORK_TEST_FIXTURE_ROOT=str(outside), AIWORK_TEST_TMPDIR=str(data),
+                         AIWORK_TEST_RUNNER_READY='1')
+        for command in ([sys.executable, str(python)], ['bash', str(shell)]):
+            with self.subTest(entry=command[0]):
+                (config / 'models.env').write_bytes(models)
+                shutil.rmtree(data / 'logs', ignore_errors=True)
+                result = subprocess.run(command, env=inherited, capture_output=True,
+                                        text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(snapshot(), baseline)
+
+    def test_fixture_mutators_reject_unowned_inherited_directories(self):
+        config = self.d / 'pretend-machine'
+        config.mkdir()
+        write_programs(config)
+        models = config / 'models.env'
+        models.write_text('deepseek=deepseek-owner\n')
+        before = {p.name: os.readlink(p) if p.is_symlink() else p.read_bytes()
+                  for p in (config / 'programs').iterdir()}
+        inherited = dict(self.env, AIWORK_CONFIG_DIR=str(config),
+                         AIWORK_TEST_FIXTURE_ROOT=str(config))
+        for args in (('set-model', 'deepseek', 'deepseek-fixture-next'),
+                     ('run-with-programs', '/usr/bin/true')):
+            with self.subTest(command=args[0]):
+                models.write_text('deepseek=deepseek-owner\n')
+                result = subprocess.run([sys.executable, str(ROOT / 'tests/_test_settings.py'), *args],
+                                        env=inherited, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(models.read_text(), 'deepseek=deepseek-owner\n')
+                self.assertEqual({p.name: os.readlink(p) if p.is_symlink() else p.read_bytes()
+                                  for p in (config / 'programs').iterdir()}, before)
+
+    def test_child_workspace_keeps_unix_socket_paths_short(self):
+        inherited_tmp = self.d / ('parent-workspace-' + 'x' * 64)
+        inherited_tmp.mkdir()
+        probe = self.d / 'socket-workspace.py'
+        probe.write_text(f'import sys; sys.path.insert(0, {str(ROOT / "tests")!r})\n'
+                         'import _no_egress\nimport socket, tempfile\nfrom pathlib import Path\n'
+                         'with socket.socket(socket.AF_UNIX) as server:\n'
+                         '    server.bind(str(Path(tempfile.mkdtemp()) / "service.sock"))\n')
+        result = subprocess.run([sys.executable, str(probe)],
+                                env=dict(self.env, TMPDIR=str(inherited_tmp)),
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_missing_file_and_each_missing_leg_name_the_path_and_leg(self):
         path = self.config / 'models.env'

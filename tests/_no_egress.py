@@ -97,7 +97,8 @@ if _MACOS:
         return True
 
     def _workspace_command(command):
-        if os.environ.get("AIWORK_TEST_TMPDIR"):
+        from _test_settings import owned_settings
+        if owned_settings():
             return []
         settings = os.path.join(os.path.dirname(__file__), "_test_settings.py")
         return [sys.executable, settings, "--workspace"] + command

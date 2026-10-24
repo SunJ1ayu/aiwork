@@ -3,6 +3,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
+from _test_settings import context_fds
 
 from pathlib import Path
 import shlex
@@ -85,7 +86,8 @@ class MachineBitsTests(unittest.TestCase):
                 with self.subTest(suite=filename):
                     result = subprocess.run(
                         [sys.executable, str(ROOT / 'tests' / filename), *tests],
-                        env=dict(os.environ, TMPDIR=str(alias)), capture_output=True, text=True, timeout=120)
+                        env=dict(os.environ, TMPDIR=str(alias)), pass_fds=context_fds(),
+                        capture_output=True, text=True, timeout=120)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def oracle_functions(self):

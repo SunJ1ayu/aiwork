@@ -24,9 +24,10 @@ check(){ # check "desc" COND_RC   (0 => pass)
   if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi
 }
 
-# 判卷工具自己不许碰留下的评审命令所用的本机凭证和运行期 home。
-OWNER_CRED_DIR="/root/.kimi-code/credentials"
-# Legacy homes are read-only fingerprint targets until the separate migration.
+# Observe disposable stand-ins; the oracle must never read real credentials.
+OWNER_CRED_DIR="$(mktemp -d)"
+printf 'fixture credentials\n' > "$OWNER_CRED_DIR/keep"
+# Compare the fixture's legacy-home paths as well as its credentials.
 OWNER_KIMI_HOME="$("$BIN/aiwork-config" data-path)/kimi-review-home"
 OWNER_MIMO_CFG="$("$BIN/aiwork-config" path mimo.env)"
 _fp1() {   # Read identity and content together; failed observations are errors.
@@ -75,7 +76,7 @@ _owner_env_fp() {
 }
 OWNER_ENV_BEFORE="$(_owner_env_fp)"
 if [[ $? -ne 0 || -z "$OWNER_ENV_BEFORE" ]]; then
-  bad "V45: 无法读取运行前的真实环境指纹"
+  bad "V45: 无法读取运行前的夹具环境指纹"
   exit 1
 fi
 fixture_git_repo() { # path
@@ -1409,26 +1410,23 @@ GITSTUB2
 # 失败/冲突才加第三条；四审保留显式入口。额度不足是腿的健康状态，不是实现 BLOCK。
 
 v45_oracle_never_touches_owner_credentials() {
-  echo "V45: 判卷工具自己不许碰业主的真实评审环境"
+  echo "V45: 判卷工具不得修改凭证和运行期 home 夹具"
   local after changed
   after="$(_owner_env_fp)"
   if [[ $? -ne 0 || -z "$after" ]]; then
-    bad "V45: 无法读取运行后的真实环境指纹"
+    bad "V45: 无法读取运行后的夹具环境指纹"
     return 1
   fi
   if [[ "$after" == "$OWNER_ENV_BEFORE" ]]; then
     # 🔴 PASS 时**不打印指纹**:收据是要 commit 进仓的,而指纹里有业主凭证文件的
     #    大小/时间/短哈希 —— 绿的时候没人需要它,红的时候才需要,那时也只打变了的那几项。
-    ok "V45: 整套判据跑完后业主的凭证目录 / kimi home / mimo home 原封不动"
+    ok "V45: 整套判据跑完后凭证 / kimi home / mimo 配置夹具原封不动"
   else
     changed="$(comm -3 <(printf '%s' "$OWNER_ENV_BEFORE" | tr ';' '\n' | sort) \
                        <(printf '%s' "$after"            | tr ';' '\n' | sort) \
                | tr -d '\t' | paste -sd' ' -)"
-    bad "V45: 判据动了业主的真实环境 —— 变的是:$changed"
-    echo "     ⚠️ 你若在这 ~3 分钟里跑过 kimi login / 并发跑了一轮评审,那是误报;"
-    echo "        否则就是判据在写它不该写的地方 —— **先查判据,别先调钝这道闸**。"
-    echo "     去哪找:判据里跑 subkimi / submimo / subdeepseek-agent 而**没把对应的"
-    echo "        *_REVIEW_HOME 指进夹具**的调用点。2026-08-25 一共揪出 5 处,一处一处补。"
+    bad "V45: 判据修改了受保护的夹具 —— 变的是:$changed"
+    echo "     检查本次套件和 CLI 桩是否写了凭证或运行期 home 夹具。"
   fi
 }
 

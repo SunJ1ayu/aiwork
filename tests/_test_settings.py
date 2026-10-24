@@ -1,11 +1,14 @@
 """Disposable machine settings for offline tests; never inspect user settings."""
 import atexit
+import fcntl
+import json
 import os
 from pathlib import Path
 import re
 import shlex
 import shutil
 import subprocess
+import stat
 import sys
 import tempfile
 
@@ -36,6 +39,47 @@ def clear_inherited_environment():
 PROGRAMS = ('codex', 'cursor-agent', 'kimi', 'claude')
 
 
+def context():
+    """The open, unlinked read-only record belongs to the test supervisor.
+
+    Exported paths and ready flags alone never establish ownership. A child
+    that does not inherit the descriptor starts its own disposable context.
+    """
+    try:
+        fd = int(os.environ.get('AIWORK_TEST_CONTEXT_FD', '-1'))
+        if fd < 10:
+            return None
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 0
+                or info.st_uid != os.getuid() or info.st_size > 4096
+                or fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY):
+            return None
+        record = json.loads(os.pread(fd, 4096, 0))
+        root = Path(record['root'])
+        current = root.stat()
+        if (record['kind'] != 'aiwork-test-settings'
+                or [current.st_dev, current.st_ino] != record['identity']):
+            return None
+        return fd, root
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def context_fds():
+    owned = context()
+    return (owned[0],) if owned else ()
+
+
+def owned_settings():
+    owned = context()
+    return bool(owned and os.environ.get('AIWORK_TEST_TMPDIR') == str(owned[1])
+        and os.environ.get('AIWORK_PROGRAMS') == str(Path(os.environ.get('AIWORK_CONFIG_DIR', '')) / 'programs')
+        and all(
+        os.environ.get(key) and Path(os.environ[key]).resolve().is_relative_to(owned[1])
+        and Path(os.environ[key]).is_dir()
+        for key in ('AIWORK_CONFIG_DIR', 'AIWORK_DATA_DIR')))
+
+
 def write_platform_probe(directory, *, macos=False):
     """Give disposable deployments the real routing rules with a fixed probe."""
     helper = Path(__file__).resolve().parents[1] / 'bin/_review-platform.sh'
@@ -48,7 +92,10 @@ def write_platform_probe(directory, *, macos=False):
 
 
 def fixture_directory(directory):
-    root = Path(os.environ.get('AIWORK_TEST_FIXTURE_ROOT', tempfile.gettempdir())).resolve()
+    owned = context()
+    if not owned:
+        raise ValueError('fixture operation requires a test-owned context')
+    root = owned[1]
     path = Path(directory)
     if not path.resolve().is_relative_to(root):
         raise ValueError('program fixtures must live in the disposable test directory')
@@ -93,7 +140,7 @@ def run_with_programs(command):
                     continue
                 (programs / name).unlink(missing_ok=True)
                 (programs / name).symlink_to(target)
-        return subprocess.call(command)
+        return subprocess.call(command, pass_fds=context_fds())
     finally:
         for name, target in saved.items():
             (programs / name).unlink(missing_ok=True)
@@ -101,7 +148,7 @@ def run_with_programs(command):
 
 
 def write_settings(directory):
-    directory = Path(directory)
+    directory = fixture_directory(directory)
     directory.mkdir(parents=True, exist_ok=True)
     write_programs(directory)
     (directory / 'models.env').write_text(''.join(f'{k}={v}\n' for k, v in MODELS.items()))
@@ -113,7 +160,7 @@ def write_settings(directory):
 def write_kimi_config(home, config=None):
     """A caller-owned home must attach the same guard the wrapper preflights."""
     import json
-    home = Path(home)
+    home = fixture_directory(home)
     (home / 'config.toml').write_text(
         'default_model = "fixture"\n[[hooks]]\nevent = "PreToolUse"\nmatcher = ".*"\ncommand = '
         + json.dumps(shlex.quote(str(Path(config or os.environ['AIWORK_CONFIG_DIR']) / 'programs/node')) + ' ' + shlex.quote(str(home / 'hooks/guard.mjs')))
@@ -121,7 +168,7 @@ def write_kimi_config(home, config=None):
 
 
 def set_model(directory, leg, model):
-    path = Path(directory) / 'models.env'
+    path = fixture_directory(directory) / 'models.env'
     lines = path.read_text().splitlines()
     found = False
     for i, line in enumerate(lines):
@@ -133,29 +180,43 @@ def set_model(directory, leg, model):
     path.write_text('\n'.join(lines) + '\n')
 
 
-def ensure_workspace():
-    if not os.environ.get('AIWORK_TEST_TMPDIR'):
-        workspace = tempfile.TemporaryDirectory(prefix='ng-')
-        atexit.register(workspace.cleanup)
-        os.environ['AIWORK_TEST_TMPDIR'] = workspace.name
-        os.environ['TMPDIR'] = workspace.name
-
-
-def ensure_settings(*, workspace=False):
-    if workspace:
-        ensure_workspace()
-    if not os.environ.get('AIWORK_DATA_DIR'):
-        data = tempfile.TemporaryDirectory(prefix='aiwork-test-data-')
-        atexit.register(data.cleanup)
-        os.environ['AIWORK_DATA_DIR'] = data.name
-    if not os.environ.get('AIWORK_CONFIG_DIR'):
-        temp = tempfile.TemporaryDirectory(prefix='aiwork-test-settings-')
+def ensure_settings(*, fresh=False):
+    if fresh or not owned_settings():
+        # Nested callers may inherit a long TMPDIR; Unix sockets need short paths.
+        temp = tempfile.TemporaryDirectory(prefix='ng-', dir='/tmp')
         atexit.register(temp.cleanup)
-        os.environ['AIWORK_CONFIG_DIR'] = str(write_settings(temp.name))
+        root = Path(temp.name).resolve()
+        info = root.stat()
+        with tempfile.NamedTemporaryFile(dir=root) as record:
+            record.write(json.dumps({'kind': 'aiwork-test-settings', 'root': str(root),
+                                     'identity': [info.st_dev, info.st_ino]}).encode())
+            record.flush()
+            original = os.open(record.name, os.O_RDONLY)
+            try:
+                fd = fcntl.fcntl(original, fcntl.F_DUPFD, 10)
+            finally:
+                os.close(original)
+        os.set_inheritable(fd, True)
+        atexit.register(os.close, fd)
+        os.environ['AIWORK_TEST_CONTEXT_FD'] = str(fd)
+        os.environ['AIWORK_CONFIG_DIR'] = str(root / 'settings')
+        os.environ['AIWORK_DATA_DIR'] = str(root / 'data')
+        (root / 'data').mkdir()
+        write_settings(root / 'settings')
+    root = context()[1]
+    os.environ['AIWORK_PROGRAMS'] = str(Path(os.environ['AIWORK_CONFIG_DIR']) / 'programs')
+    os.environ.pop('AIWORK_TEST_FIXTURE_ROOT', None)
+    os.environ['AIWORK_TEST_TMPDIR'] = str(root)
+    os.environ.pop('AIWORK_TEST_RUNNER_READY', None)
+    if not Path(os.environ.get('TMPDIR', '/')).resolve().is_relative_to(root):
+        os.environ['TMPDIR'] = str(root)
+    tempfile.tempdir = None
 
 
 if __name__ == '__main__':
-    if sys.argv[1] == 'run-with-programs':
+    if sys.argv[1] == 'owned':
+        raise SystemExit(0 if owned_settings() else 1)
+    elif sys.argv[1] == 'run-with-programs':
         raise SystemExit(run_with_programs(sys.argv[2:]))
     elif sys.argv[1] == 'clear-inherited-env':
         keys = inherited_environment_keys()
@@ -170,18 +231,7 @@ if __name__ == '__main__':
         isolated = command[:1] == ['--isolated']
         if isolated:
             command = command[1:]
-            os.environ['AIWORK_TEST_FIXTURE_ROOT'] = str(Path(tempfile.gettempdir()).resolve())
         if command[:1] == ['--workspace']:
-            ensure_workspace()
             command = command[1:]
-        with tempfile.TemporaryDirectory(prefix='aiwork-test-settings-') as directory, \
-                tempfile.TemporaryDirectory(prefix='aiwork-test-data-') as data:
-            env = dict(os.environ)
-            env.setdefault('AIWORK_TEST_FIXTURE_ROOT', str(Path(tempfile.gettempdir()).resolve()))
-            if isolated or not env.get('AIWORK_CONFIG_DIR'):
-                env['AIWORK_CONFIG_DIR'] = str(write_settings(directory))
-            if isolated or not env.get('AIWORK_DATA_DIR'):
-                env['AIWORK_DATA_DIR'] = data
-            if isolated:
-                env['AIWORK_TEST_RUNNER_READY'] = '1'
-            raise SystemExit(subprocess.call(command, env=env))
+        ensure_settings(fresh=isolated)
+        raise SystemExit(subprocess.call(command, pass_fds=context_fds()))
