@@ -47,12 +47,12 @@ limiter = os.path.join(tests, os.pardir, "bin", "aiwork-timeout")
 LIMIT = 600  # 秒;判据里最长的代跑命令是 N3c 的单个套件,它自己还套着 20 秒
 sys.path.insert(0, tests)
 import _test_settings
-_test_settings.ensure_settings(workspace=True)
+_test_settings.ensure_settings()
 
 mine, theirs = socket.socketpair()
 os.dup2(theirs.fileno(), fd)
 theirs.close()
-oracle = subprocess.Popen([shell, script] + args, pass_fds=(fd,),
+oracle = subprocess.Popen([shell, script] + args, pass_fds=(fd, *_test_settings.context_fds()),
                           env=dict(os.environ, AIWORK_NOEG_HOST_FD=str(fd)))
 os.close(fd)
 token = secrets.token_hex(16)
@@ -97,7 +97,8 @@ def handle(req, fds):
         try:
             proc = subprocess.Popen([limiter, "%g" % limit] + list(req["argv"]),
                                     stdin=fds[0], stdout=fds[1], stderr=fds[2],
-                                    env=req["env"], cwd=req["cwd"])
+                                    env=req["env"], cwd=req["cwd"],
+                                    pass_fds=_test_settings.context_fds())
         except OSError as e:
             return reply({"error": "起不来:%s" % e})
         state["running"] = proc

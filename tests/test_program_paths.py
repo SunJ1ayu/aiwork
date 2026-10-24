@@ -281,7 +281,7 @@ class ProgramPaths(unittest.TestCase):
                 self.assertEqual(list(self.data.iterdir()), [])
 
     def test_fixture_settings_survive_a_nested_temporary_directory(self):
-        from _test_settings import write_settings
+        from _test_settings import context_fds, write_settings
         write_settings(self.config)
         before = {p.name: os.readlink(p) for p in self.programs.iterdir() if p.is_symlink()}
         nested = self.root / 'nested-tmp'
@@ -294,9 +294,9 @@ class ProgramPaths(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / 'tests/_test_settings.py'),
                                  'run-with-programs', str(self.programs / 'codex')],
                                 env=dict(self.env, TMPDIR=str(nested),
-                                         PATH=str(fake) + os.pathsep + self.env['PATH'],
-                                         AIWORK_TEST_FIXTURE_ROOT=str(self.root)),
-                                capture_output=True, text=True, timeout=15)
+                                         PATH=str(fake) + os.pathsep + self.env['PATH']),
+                                capture_output=True, text=True, timeout=15,
+                                pass_fds=context_fds())
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.marker.read_text().strip(), 'selected')
         self.assertEqual({p.name: os.readlink(p) for p in self.programs.iterdir() if p.is_symlink()}, before)
