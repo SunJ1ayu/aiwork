@@ -47,7 +47,7 @@ limiter = os.path.join(tests, os.pardir, "bin", "aiwork-timeout")
 LIMIT = 600  # 秒;判据里最长的代跑命令是 N3c 的单个套件,它自己还套着 20 秒
 sys.path.insert(0, tests)
 import _test_settings
-_test_settings.ensure_settings(workspace=True)
+_test_settings.ensure_settings()
 
 mine, theirs = socket.socketpair()
 os.dup2(theirs.fileno(), fd)

@@ -69,8 +69,9 @@ fi
 
 # Provision fixtures even if the caller exported their real machine settings.
 # Missing-component/coverage checks above remain usable in minimal deployments.
-if [[ "${AIWORK_TEST_RUNNER_READY:-}" != 1 ]]; then
-  exec python3 "$(dirname "${BASH_SOURCE[0]}")/../tests/_test_settings.py" --isolated bash "$0" "$@"
+TEST_SETTINGS="$(dirname "${BASH_SOURCE[0]}")/../tests/_test_settings.py"
+if ! python3 "$TEST_SETTINGS" owned; then
+  exec python3 "$TEST_SETTINGS" --isolated bash "$0" "$@"
 fi
 
 names=(); rcs=(); summaries=(); outs=()

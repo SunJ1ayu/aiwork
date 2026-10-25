@@ -294,8 +294,7 @@ class ProgramPaths(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / 'tests/_test_settings.py'),
                                  'run-with-programs', str(self.programs / 'codex')],
                                 env=dict(self.env, TMPDIR=str(nested),
-                                         PATH=str(fake) + os.pathsep + self.env['PATH'],
-                                         AIWORK_TEST_FIXTURE_ROOT=str(self.root)),
+                                         PATH=str(fake) + os.pathsep + self.env['PATH']),
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.marker.read_text().strip(), 'selected')

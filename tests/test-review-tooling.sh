@@ -24,9 +24,10 @@ check(){ # check "desc" COND_RC   (0 => pass)
   if [[ "$2" -eq 0 ]]; then ok "$1"; else bad "$1"; fi
 }
 
-# 判卷工具自己不许碰留下的评审命令所用的本机凭证和运行期 home。
-OWNER_CRED_DIR="/root/.kimi-code/credentials"
-# Legacy homes are read-only fingerprint targets until the separate migration.
+# Observe disposable stand-ins; the oracle must never read real credentials.
+OWNER_CRED_DIR="$(test_mktemp -d)"
+printf 'fixture credentials\n' > "$OWNER_CRED_DIR/keep"
+# Compare the fixture's legacy-home paths as well as its credentials.
 OWNER_KIMI_HOME="$("$BIN/aiwork-config" data-path)/kimi-review-home"
 OWNER_MIMO_CFG="$("$BIN/aiwork-config" path mimo.env)"
 _fp1() {   # Read identity and content together; failed observations are errors.
@@ -75,7 +76,7 @@ _owner_env_fp() {
 }
 OWNER_ENV_BEFORE="$(_owner_env_fp)"
 if [[ $? -ne 0 || -z "$OWNER_ENV_BEFORE" ]]; then
-  bad "V45: 无法读取运行前的真实环境指纹"
+  bad "V45: 无法读取运行前的夹具环境指纹"
   exit 1
 fi
 fixture_git_repo() { # path
@@ -92,7 +93,7 @@ fixture_git_repo() { # path
 
 v9_claude_shell_base() {
   echo "[V9] claude 壳底座(subdeepseek-agent):env 注入、只读工具、裁决 gate"
-  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b rc; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
   # 2026-08-18 **这一组从 GLM 腿挪到 DeepSeek 腿**:GLM 的底座换成了 opencode CLI
@@ -302,7 +303,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
 
 v13_subkimi_leg() {
   echo "[V13] subkimi: guard default-deny, wrapper contract, panel 4th-leg selection"
-  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b rc; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
 
@@ -442,7 +443,7 @@ PY
 
 v20_max_turns_does_not_discard_work() {
   echo "[V20] 底座腿撞上 max-turns 不许把工作全丢掉"
-  local d fake; d="$(mktemp -d)"; fake="$d/fakebin"; mkdir -p "$fake"
+  local d fake; d="$(test_mktemp -d)"; fake="$d/fakebin"; mkdir -p "$fake"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   # 假 claude:吐几条 stream-json(含模型说的话与工具动作)后按 max-turns 那样 rc=1
   cat > "$fake/claude" <<'FAKE'
@@ -484,7 +485,7 @@ v21_agent_leg_body_is_single_source() {
   check "V21: subdeepseek-agent 是瘦 shim(有效行 ≤ 6)" $?
   grep -q "deepseek" "$BIN/subagent" 2>/dev/null; check "V21: 供应商表含 deepseek" $?
 
-  local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
+  local d; d="$(test_mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   fixture_git_repo "$d/repo"
   cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"
@@ -507,7 +508,7 @@ CAPEOF
 
 v24_coverage_report() {
   echo "[V24] 孤儿套件要红"
-  local d rc out; d="$(mktemp -d)"
+  local d rc out; d="$(test_mktemp -d)"
   out="$(bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"; rc=$?
   check "V24: 没有孤儿套件时 coverage-only 不因为手列名单变红" $([[ $rc -eq 0 ]]; echo $?)
   if grep -Eq "规矩4|_tooling-paths|未覆盖" <<<"$out"; then
@@ -547,7 +548,7 @@ v24_coverage_report() {
 
 v35_legs_run_in_readonly_repo() {
   echo "[V35] 评审腿在只读的仓里跑(写口物理消失,读能力一条不少)"
-  local d; d="$(mktemp -d)"
+  local d; d="$(test_mktemp -d)"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs" "$repo/bin" "$repo/tests"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && printf 'y\n' > tests/oracle.sh \
@@ -680,7 +681,7 @@ v35_legs_run_in_readonly_repo() {
 # 各写一次，避免“模型没启动”或“只测了一边”的假绿。
 v36_wrappers_actually_use_readonly_repo() {
   echo "[V36] review 路径在可写副本运行，原仓保持物理只读"
-  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && printf '/logs/\n' > .gitignore && git add -A \
@@ -858,7 +859,7 @@ PY
 # ⇒ 修法是**把写口去掉**,不是把它修好:写口为零 ⇒ 上面两条一起消失,防线还更严。
 v37_wrappers_open_no_write_hole() {
   echo "[V37] wrapper 不给腿开任何写口(腿日志靠父进程的 fd,不靠写口)"
-  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
@@ -960,7 +961,7 @@ RECORD
 # ⇒ 落在仓内就**拒跑并说清楚**,别让底座自己去撞一个没人看得懂的错。
 v38_leg_runtime_home_outside_repo() {
   echo "[V38] 腿的运行期状态目录不许在被评审的仓里"
-  local d; d="$(mktemp -d)"
+  local d; d="$(test_mktemp -d)"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
@@ -1049,7 +1050,7 @@ v38_leg_runtime_home_outside_repo() {
 #    写得进去就拒跑。
 v39_readonly_blind_spots() {
   echo "[V39] 只读挂载的两个盲区:worktree 的 git 目录 / 挂载没生效"
-  local d; d="$(mktemp -d)"
+  local d; d="$(test_mktemp -d)"
   local repo="$d/repo"; mkdir -p "$repo"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
@@ -1128,7 +1129,7 @@ v41_oracle_never_executes_its_own_comments() {
   # "`git diff --output=` 能写文件所以危险",于是判据自己把它执行了(空文件名被 git
   # 拒了才没写成)。判定逻辑当时没坏,所以三组对照全对、收据照印 PASS ——
   # **这种病不会让判据变红,它让判据在你背后跑命令**,只能靠机械扫描抓。
-  local d; d="$(mktemp -d)"
+  local d; d="$(test_mktemp -d)"
   local lint="$d/lint.py"
   cat > "$lint" <<'LINT_PY'
 # shell 引号状态机:找出「会被 shell 当成命令替换执行」的反引号。
@@ -1348,7 +1349,7 @@ v42_git_common_dir_no_silent_gap() {
   # ⇒ 报错进 /dev/null、`|| true` 吞掉 rc ⇒ 共同目录拿到空 ⇒ **不挂只读**。
   # 后果:腿照样往 /main/.git 写(git tag / 直接写 objects),而仓根探针一路绿灯。
   # 这是全工具唯一一处**失败被吞而不是 fail-closed** 的地方,而 fail-closed 正是本单的规格。
-  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
 
   if review_platform_is_macos; then
     echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
@@ -1409,33 +1410,30 @@ GITSTUB2
 # 失败/冲突才加第三条；四审保留显式入口。额度不足是腿的健康状态，不是实现 BLOCK。
 
 v45_oracle_never_touches_owner_credentials() {
-  echo "V45: 判卷工具自己不许碰业主的真实评审环境"
+  echo "V45: 判卷工具不得修改凭证和运行期 home 夹具"
   local after changed
   after="$(_owner_env_fp)"
   if [[ $? -ne 0 || -z "$after" ]]; then
-    bad "V45: 无法读取运行后的真实环境指纹"
+    bad "V45: 无法读取运行后的夹具环境指纹"
     return 1
   fi
   if [[ "$after" == "$OWNER_ENV_BEFORE" ]]; then
     # 🔴 PASS 时**不打印指纹**:收据是要 commit 进仓的,而指纹里有业主凭证文件的
     #    大小/时间/短哈希 —— 绿的时候没人需要它,红的时候才需要,那时也只打变了的那几项。
-    ok "V45: 整套判据跑完后业主的凭证目录 / kimi home / mimo home 原封不动"
+    ok "V45: 整套判据跑完后凭证 / kimi home / mimo 配置夹具原封不动"
   else
     changed="$(comm -3 <(printf '%s' "$OWNER_ENV_BEFORE" | tr ';' '\n' | sort) \
                        <(printf '%s' "$after"            | tr ';' '\n' | sort) \
                | tr -d '\t' | paste -sd' ' -)"
-    bad "V45: 判据动了业主的真实环境 —— 变的是:$changed"
-    echo "     ⚠️ 你若在这 ~3 分钟里跑过 kimi login / 并发跑了一轮评审,那是误报;"
-    echo "        否则就是判据在写它不该写的地方 —— **先查判据,别先调钝这道闸**。"
-    echo "     去哪找:判据里跑 subkimi / submimo / subdeepseek-agent 而**没把对应的"
-    echo "        *_REVIEW_HOME 指进夹具**的调用点。2026-08-25 一共揪出 5 处,一处一处补。"
+    bad "V45: 判据修改了受保护的夹具 —— 变的是:$changed"
+    echo "     检查本次套件和 CLI 桩是否写了凭证或运行期 home 夹具。"
   fi
 }
 
 # 发布正文是各家命令行结构里的最后一条消息，不是渲染后的过程。
 v46_final_report_is_the_last_message() {
   echo "[V46] 评审腿把最后一条消息原样写入报告文件"
-  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
+  local d b rc; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
   fixture_git_repo "$d/repo"
   printf '# t\n' > "$d/t.md"
   cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \

@@ -10,6 +10,7 @@ import importlib.machinery
 import importlib.util
 import json
 import re
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
@@ -76,8 +77,8 @@ class SettingsTest(unittest.TestCase):
                     self.assertNotIn(key, environment)
                 for key, value in control.items():
                     self.assertEqual(environment[key], value)
-                self.assertEqual(environment['AIWORK_CONFIG_DIR'], str(self.config))
-                self.assertEqual(environment['AIWORK_DATA_DIR'], self.env['AIWORK_DATA_DIR'])
+                self.assertNotEqual(environment['AIWORK_CONFIG_DIR'], str(self.config))
+                self.assertNotEqual(environment['AIWORK_DATA_DIR'], self.env['AIWORK_DATA_DIR'])
 
     def test_each_leg_is_read_from_models_env(self):
         for leg, expected in self.models.items():
@@ -85,6 +86,164 @@ class SettingsTest(unittest.TestCase):
                 result = self.invoke_config('model', leg)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
+
+    def test_public_test_startup_does_not_mutate_inherited_machine_directories(self):
+        # Run the actual model-changing statements from both shell oracles.
+        changes = {}
+        for filename in ('test-review-tooling.sh', 'test-subcodex.sh'):
+            source = (ROOT / 'tests' / filename).read_text()
+            for statement, leg, model in re.findall(
+                    r'^\s*(test_model_set (deepseek|kimi|codex) ([A-Za-z0-9_/.-]+))$',
+                    source, re.M):
+                changes.setdefault(leg, (statement, model))
+        self.assertEqual(set(changes), {'deepseek', 'kimi', 'codex'})
+        outside = self.d / 'pretend-machine'
+        config = outside / 'settings'
+        data = outside / 'data'
+        config.mkdir(parents=True)
+        data.mkdir()
+        write_programs(config)
+        models = b'deepseek=deepseek-owner\nkimi=kimi-code/owner\ncodex=gpt-owner\n'
+        (config / 'models.env').write_bytes(models)
+        (data / 'keep').write_bytes(b'owner data\n')
+
+        def snapshot():
+            return {str(p.relative_to(outside)):
+                    ('link', os.readlink(p)) if p.is_symlink() else
+                    ('file', p.read_bytes()) if p.is_file() else ('directory',)
+                    for p in outside.rglob('*')}
+
+        baseline = snapshot()
+        suffix = (f'import sys; sys.path.insert(0, {str(ROOT / "bin")!r})\n'
+                  'from _aiwork_config import data_path\n'
+                  'from pathlib import Path\n'
+                  'p = data_path("logs")\np.mkdir(parents=True, exist_ok=True)\n'
+                  '(p / "test-output").write_text("fixture data")\n')
+        python = self.d / 'inherited-settings.py'
+        python.write_text(f'import sys; sys.path.insert(0, {str(ROOT / "tests")!r})\n'
+                          'import _no_egress\nimport os\nfrom _test_settings import set_model\n'
+                          + ''.join(f'set_model(os.environ["AIWORK_CONFIG_DIR"], {leg!r}, {model!r})\n'
+                                    for leg, (_, model) in changes.items()) + suffix)
+        shell = self.d / 'inherited-settings.sh'
+        shell.write_text('set -uo pipefail\n'
+                         f'. {shlex.quote(str(ROOT / "tests/_no-egress.sh"))} || exit 78\n'
+                         + '\n'.join(statement for statement, _ in changes.values())
+                         + f"\n{shlex.quote(sys.executable)} - <<'PY'\n" + suffix + 'PY\n')
+        inherited = dict(self.env, AIWORK_CONFIG_DIR=str(config), AIWORK_DATA_DIR=str(data),
+                         AIWORK_PROGRAMS=str(config / 'programs'),
+                         AIWORK_TEST_FIXTURE_ROOT=str(outside), AIWORK_TEST_TMPDIR=str(data),
+                         AIWORK_TEST_RUNNER_READY='1')
+        for command in ([sys.executable, str(python)], ['bash', str(shell)]):
+            with self.subTest(entry=command[0]):
+                (config / 'models.env').write_bytes(models)
+                shutil.rmtree(data / 'logs', ignore_errors=True)
+                result = subprocess.run(command, env=inherited, capture_output=True,
+                                        text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(snapshot(), baseline)
+
+    def test_fixture_mutators_reject_unowned_inherited_directories(self):
+        config = self.d / 'pretend-machine'
+        config.mkdir()
+        write_programs(config)
+        models = config / 'models.env'
+        models.write_text('deepseek=deepseek-owner\n')
+        before = {p.name: os.readlink(p) if p.is_symlink() else p.read_bytes()
+                  for p in (config / 'programs').iterdir()}
+        inherited = dict(self.env, AIWORK_CONFIG_DIR=str(config),
+                         AIWORK_TEST_FIXTURE_ROOT=str(config))
+        inherited.pop('AIWORK_TEST_CONTEXT', None)
+        for args in (('set-model', 'deepseek', 'deepseek-fixture-next'),
+                     ('run-with-programs', '/usr/bin/true')):
+            with self.subTest(command=args[0]):
+                models.write_text('deepseek=deepseek-owner\n')
+                result = subprocess.run([sys.executable, str(ROOT / 'tests/_test_settings.py'), *args],
+                                        env=inherited, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(models.read_text(), 'deepseek=deepseek-owner\n')
+                self.assertEqual({p.name: os.readlink(p) if p.is_symlink() else p.read_bytes()
+                                  for p in (config / 'programs').iterdir()}, before)
+
+    def test_default_subprocesses_keep_the_supervised_test_directories(self):
+        # N11's clients and CLI fixture helpers use the default close_fds=True.
+        # Exercise both guards, a second Python hop, and the real shell mutator.
+        probe = self.d / 'descendants.py'
+        probe.write_text('''import json, os, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+keys = ('AIWORK_CONFIG_DIR', 'AIWORK_DATA_DIR', 'AIWORK_PROGRAMS', 'AIWORK_TEST_TMPDIR')
+expected = {key: os.environ[key] for key in keys}
+leaf = "import json,os; print(json.dumps({key:os.environ[key] for key in " + repr(keys) + "}))"
+python = "import sys; sys.path.insert(0, " + repr(sys.argv[1]) + "); import _no_egress; " + leaf
+shell = '. "$1/_no-egress.sh"; test_model_set codex gpt-descendant; exec "$2" -c "$3"'
+middle = "import subprocess,sys; p=subprocess.run([sys.executable,'-c',sys.argv[1]],capture_output=True,text=True); print(p.stdout,end=''); sys.stderr.write(p.stderr); sys.exit(p.returncode)"
+for command in ([sys.executable, '-c', python],
+                [sys.executable, '-c', middle, python],
+                ['bash', '-c', shell, 'probe', sys.argv[1], sys.executable, leaf]):
+    result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    actual = json.loads(result.stdout)
+    assert actual == expected, (command[0], expected, actual)
+assert 'codex=gpt-descendant' in (Path(expected['AIWORK_CONFIG_DIR']) / 'models.env').read_text()
+print('descendants share settings, data, programs and workspace')
+''')
+        result = subprocess.run([sys.executable, str(ROOT / 'tests/_test_settings.py'),
+                                 '--isolated', sys.executable, str(probe), str(ROOT / 'tests')],
+                                env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('descendants share settings, data, programs and workspace', result.stdout)
+
+    def test_context_expires_when_its_supervisor_exits(self):
+        code = (f'import os,sys; sys.path.insert(0, {str(ROOT / "tests")!r}); '
+                'from _test_settings import ensure_settings; ensure_settings(fresh=True); '
+                'import json; print(json.dumps({k:os.environ[k] for k in '
+                '("AIWORK_CONFIG_DIR", "AIWORK_DATA_DIR", "AIWORK_PROGRAMS", '
+                '"AIWORK_TEST_TMPDIR", "AIWORK_TEST_CONTEXT")}), flush=True); '
+                'input(); os._exit(0)')
+        owner = subprocess.Popen([sys.executable, '-c', code], env=self.env,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: owner.poll() is None and owner.kill())
+        environment = dict(self.env, **json.loads(owner.stdout.readline()))
+        root = Path(environment['AIWORK_TEST_TMPDIR'])
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        helper = [sys.executable, str(ROOT / 'tests/_test_settings.py')]
+        alive = subprocess.run([*helper, 'owned'], env=environment, timeout=10)
+        self.assertEqual(alive.returncode, 0)
+        _, error = owner.communicate('\n', timeout=10)
+        self.assertEqual(owner.returncode, 0, error)
+        # os._exit leaves the authentic record and tree intact; its lock is gone.
+        models = root / 'settings/models.env'
+        before = models.read_bytes()
+        stale = subprocess.run([*helper, 'owned'], env=environment, timeout=10)
+        self.assertNotEqual(stale.returncode, 0)
+        rejected = subprocess.run([*helper, 'set-model', 'codex', 'gpt-stale'],
+                                  env=environment, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(models.read_bytes(), before)
+
+    def test_shell_fixture_allocation_uses_workspace_when_native_mktemp_does_not(self):
+        # Replay the suite's real allocation with BSD's default-directory behavior.
+        source = (ROOT / 'tests/test-subcodex.sh').read_text()
+        allocation = re.search(r'^d="\$\(([^\n)]+)\)"', source, re.M).group(1)
+        native = self.d / 'native-temp'
+        workspace = self.d / 'workspace'
+        fake = self.d / 'native-bin'
+        for directory in (native, workspace, fake):
+            directory.mkdir()
+        mktemp = fake / 'mktemp'
+        mktemp.write_text('#!/bin/sh\nexec /usr/bin/mktemp "$@" '
+                          '"$NATIVE_TEMP/tmp.XXXXXXXX"\n')
+        mktemp.chmod(0o755)
+        script = (f'. {shlex.quote(str(ROOT / "tests/_no-egress.sh"))} || exit 78\n'
+                  f'd="$({allocation})" || exit\nprintf "%s\\n" "$d"\nrm -rf "$d"\n')
+        result = subprocess.run(['bash', '-c', script],
+                                env=dict(self.env, TMPDIR=str(workspace), NATIVE_TEMP=str(native),
+                                         AIWORK_PROGRAMS=str(self.config / 'programs'),
+                                         PATH=str(fake) + os.pathsep + self.env['PATH']),
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(Path(result.stdout.strip()).is_relative_to(workspace), result.stdout)
 
     def test_missing_file_and_each_missing_leg_name_the_path_and_leg(self):
         path = self.config / 'models.env'

@@ -143,7 +143,8 @@ _test_settings_py="$(dirname "${BASH_SOURCE[0]}")/_test_settings.py"
 _test_review_unset="$(python3 "$_test_settings_py" clear-inherited-env)" || exit 78
 eval "$_test_review_unset"
 unset _test_review_unset
-if [[ -z "${AIWORK_CONFIG_DIR:-}" || -z "${AIWORK_DATA_DIR:-}" ]]; then
+if ! python3 "$_test_settings_py" owned; then
   exec python3 "$_test_settings_py" "${BASH:-bash}" "$0" "$@"
 fi
 test_model_set() { python3 "$_test_settings_py" set-model "$@"; }
+test_mktemp() { python3 "$_test_settings_py" mktemp "$@"; }
