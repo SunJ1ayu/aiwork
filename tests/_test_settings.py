@@ -40,42 +40,46 @@ PROGRAMS = ('codex', 'cursor-agent', 'kimi', 'claude')
 
 
 def context():
-    """The open, unlinked read-only record belongs to the test supervisor.
+    """A supervisor's locked record proves its disposable tree is still live.
 
-    Exported paths and ready flags alone never establish ownership. A child
-    that does not inherit the descriptor starts its own disposable context.
+    Children reopen the record, so Python's default close_fds does not lose
+    ownership. Exported paths alone, or a record without its live lock, do
+    not authorize fixtures. This prevents accidents, not malicious callers.
     """
     try:
-        fd = int(os.environ.get('AIWORK_TEST_CONTEXT_FD', '-1'))
-        if fd < 10:
+        path = os.environ.get('AIWORK_TEST_CONTEXT')
+        if not path:
             return None
-        info = os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 0
-                or info.st_uid != os.getuid() or info.st_size > 4096
-                or fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY):
-            return None
-        record = json.loads(os.pread(fd, 4096, 0))
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd) as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or info.st_uid != os.getuid() or info.st_size > 4096):
+                return None
+            try:
+                fcntl.flock(stream, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass  # The supervisor still owns the exclusive lock.
+            else:
+                return None
+            record = json.load(stream)
         root = Path(record['root'])
         current = root.stat()
         if (record['kind'] != 'aiwork-test-settings'
+                or Path(path).parent != root
                 or [current.st_dev, current.st_ino] != record['identity']):
             return None
-        return fd, root
+        return root
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
-def context_fds():
-    owned = context()
-    return (owned[0],) if owned else ()
-
-
 def owned_settings():
     owned = context()
-    return bool(owned and os.environ.get('AIWORK_TEST_TMPDIR') == str(owned[1])
+    return bool(owned and os.environ.get('AIWORK_TEST_TMPDIR') == str(owned)
         and os.environ.get('AIWORK_PROGRAMS') == str(Path(os.environ.get('AIWORK_CONFIG_DIR', '')) / 'programs')
         and all(
-        os.environ.get(key) and Path(os.environ[key]).resolve().is_relative_to(owned[1])
+        os.environ.get(key) and Path(os.environ[key]).resolve().is_relative_to(owned)
         and Path(os.environ[key]).is_dir()
         for key in ('AIWORK_CONFIG_DIR', 'AIWORK_DATA_DIR')))
 
@@ -95,7 +99,7 @@ def fixture_directory(directory):
     owned = context()
     if not owned:
         raise ValueError('fixture operation requires a test-owned context')
-    root = owned[1]
+    root = owned
     path = Path(directory)
     if not path.resolve().is_relative_to(root):
         raise ValueError('program fixtures must live in the disposable test directory')
@@ -140,7 +144,7 @@ def run_with_programs(command):
                     continue
                 (programs / name).unlink(missing_ok=True)
                 (programs / name).symlink_to(target)
-        return subprocess.call(command, pass_fds=context_fds())
+        return subprocess.call(command)
     finally:
         for name, target in saved.items():
             (programs / name).unlink(missing_ok=True)
@@ -182,28 +186,24 @@ def set_model(directory, leg, model):
 
 def ensure_settings(*, fresh=False):
     if fresh or not owned_settings():
-        # Nested callers may inherit a long TMPDIR; Unix sockets need short paths.
+        # Never create the new tree inside an inherited real data directory.
         temp = tempfile.TemporaryDirectory(prefix='ng-', dir='/tmp')
         atexit.register(temp.cleanup)
         root = Path(temp.name).resolve()
         info = root.stat()
-        with tempfile.NamedTemporaryFile(dir=root) as record:
-            record.write(json.dumps({'kind': 'aiwork-test-settings', 'root': str(root),
-                                     'identity': [info.st_dev, info.st_ino]}).encode())
-            record.flush()
-            original = os.open(record.name, os.O_RDONLY)
-            try:
-                fd = fcntl.fcntl(original, fcntl.F_DUPFD, 10)
-            finally:
-                os.close(original)
-        os.set_inheritable(fd, True)
-        atexit.register(os.close, fd)
-        os.environ['AIWORK_TEST_CONTEXT_FD'] = str(fd)
+        record = (root / '.context').open('x+')
+        fcntl.flock(record, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        record.write(json.dumps({'kind': 'aiwork-test-settings', 'root': str(root),
+                                 'identity': [info.st_dev, info.st_ino]}))
+        record.flush()
+        os.chmod(record.name, 0o400)
+        atexit.register(record.close)
+        os.environ['AIWORK_TEST_CONTEXT'] = record.name
         os.environ['AIWORK_CONFIG_DIR'] = str(root / 'settings')
         os.environ['AIWORK_DATA_DIR'] = str(root / 'data')
         (root / 'data').mkdir()
         write_settings(root / 'settings')
-    root = context()[1]
+    root = context()
     os.environ['AIWORK_PROGRAMS'] = str(Path(os.environ['AIWORK_CONFIG_DIR']) / 'programs')
     os.environ.pop('AIWORK_TEST_FIXTURE_ROOT', None)
     os.environ['AIWORK_TEST_TMPDIR'] = str(root)
@@ -234,4 +234,4 @@ if __name__ == '__main__':
         if command[:1] == ['--workspace']:
             command = command[1:]
         ensure_settings(fresh=isolated)
-        raise SystemExit(subprocess.call(command, pass_fds=context_fds()))
+        raise SystemExit(subprocess.call(command))

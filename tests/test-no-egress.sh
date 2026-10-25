@@ -52,7 +52,7 @@ _test_settings.ensure_settings()
 mine, theirs = socket.socketpair()
 os.dup2(theirs.fileno(), fd)
 theirs.close()
-oracle = subprocess.Popen([shell, script] + args, pass_fds=(fd, *_test_settings.context_fds()),
+oracle = subprocess.Popen([shell, script] + args, pass_fds=(fd,),
                           env=dict(os.environ, AIWORK_NOEG_HOST_FD=str(fd)))
 os.close(fd)
 token = secrets.token_hex(16)
@@ -97,8 +97,7 @@ def handle(req, fds):
         try:
             proc = subprocess.Popen([limiter, "%g" % limit] + list(req["argv"]),
                                     stdin=fds[0], stdout=fds[1], stderr=fds[2],
-                                    env=req["env"], cwd=req["cwd"],
-                                    pass_fds=_test_settings.context_fds())
+                                    env=req["env"], cwd=req["cwd"])
         except OSError as e:
             return reply({"error": "起不来:%s" % e})
         state["running"] = proc
