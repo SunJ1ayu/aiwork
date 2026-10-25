@@ -25,7 +25,7 @@ check(){ # check "desc" COND_RC   (0 => pass)
 }
 
 # Observe disposable stand-ins; the oracle must never read real credentials.
-OWNER_CRED_DIR="$(mktemp -d)"
+OWNER_CRED_DIR="$(test_mktemp -d)"
 printf 'fixture credentials\n' > "$OWNER_CRED_DIR/keep"
 # Compare the fixture's legacy-home paths as well as its credentials.
 OWNER_KIMI_HOME="$("$BIN/aiwork-config" data-path)/kimi-review-home"
@@ -93,7 +93,7 @@ fixture_git_repo() { # path
 
 v9_claude_shell_base() {
   echo "[V9] claude 壳底座(subdeepseek-agent):env 注入、只读工具、裁决 gate"
-  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b rc; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
   # 2026-08-18 **这一组从 GLM 腿挪到 DeepSeek 腿**:GLM 的底座换成了 opencode CLI
@@ -303,7 +303,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
 
 v13_subkimi_leg() {
   echo "[V13] subkimi: guard default-deny, wrapper contract, panel 4th-leg selection"
-  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b rc; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   fixture_git_repo "$d/repo"
 
@@ -443,7 +443,7 @@ PY
 
 v20_max_turns_does_not_discard_work() {
   echo "[V20] 底座腿撞上 max-turns 不许把工作全丢掉"
-  local d fake; d="$(mktemp -d)"; fake="$d/fakebin"; mkdir -p "$fake"
+  local d fake; d="$(test_mktemp -d)"; fake="$d/fakebin"; mkdir -p "$fake"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   # 假 claude:吐几条 stream-json(含模型说的话与工具动作)后按 max-turns 那样 rc=1
   cat > "$fake/claude" <<'FAKE'
@@ -485,7 +485,7 @@ v21_agent_leg_body_is_single_source() {
   check "V21: subdeepseek-agent 是瘦 shim(有效行 ≤ 6)" $?
   grep -q "deepseek" "$BIN/subagent" 2>/dev/null; check "V21: 供应商表含 deepseek" $?
 
-  local d; d="$(mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
+  local d; d="$(test_mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   fixture_git_repo "$d/repo"
   cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"
@@ -508,7 +508,7 @@ CAPEOF
 
 v24_coverage_report() {
   echo "[V24] 孤儿套件要红"
-  local d rc out; d="$(mktemp -d)"
+  local d rc out; d="$(test_mktemp -d)"
   out="$(bash "$BIN/rust-check-review-tooling" --coverage-only 2>&1)"; rc=$?
   check "V24: 没有孤儿套件时 coverage-only 不因为手列名单变红" $([[ $rc -eq 0 ]]; echo $?)
   if grep -Eq "规矩4|_tooling-paths|未覆盖" <<<"$out"; then
@@ -548,7 +548,7 @@ v24_coverage_report() {
 
 v35_legs_run_in_readonly_repo() {
   echo "[V35] 评审腿在只读的仓里跑(写口物理消失,读能力一条不少)"
-  local d; d="$(mktemp -d)"
+  local d; d="$(test_mktemp -d)"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs" "$repo/bin" "$repo/tests"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && printf 'y\n' > tests/oracle.sh \
@@ -681,7 +681,7 @@ v35_legs_run_in_readonly_repo() {
 # 各写一次，避免“模型没启动”或“只测了一边”的假绿。
 v36_wrappers_actually_use_readonly_repo() {
   echo "[V36] review 路径在可写副本运行，原仓保持物理只读"
-  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && printf '/logs/\n' > .gitignore && git add -A \
@@ -859,7 +859,7 @@ PY
 # ⇒ 修法是**把写口去掉**,不是把它修好:写口为零 ⇒ 上面两条一起消失,防线还更严。
 v37_wrappers_open_no_write_hole() {
   echo "[V37] wrapper 不给腿开任何写口(腿日志靠父进程的 fd,不靠写口)"
-  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
@@ -961,7 +961,7 @@ RECORD
 # ⇒ 落在仓内就**拒跑并说清楚**,别让底座自己去撞一个没人看得懂的错。
 v38_leg_runtime_home_outside_repo() {
   echo "[V38] 腿的运行期状态目录不许在被评审的仓里"
-  local d; d="$(mktemp -d)"
+  local d; d="$(test_mktemp -d)"
   mkdir -p "$d/repo"   # 被评审的仓 = 子目录;观测文件留在 $d 下 = 仓外
   local repo="$d/repo"; mkdir -p "$repo/logs"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
@@ -1050,7 +1050,7 @@ v38_leg_runtime_home_outside_repo() {
 #    写得进去就拒跑。
 v39_readonly_blind_spots() {
   echo "[V39] 只读挂载的两个盲区:worktree 的 git 目录 / 挂载没生效"
-  local d; d="$(mktemp -d)"
+  local d; d="$(test_mktemp -d)"
   local repo="$d/repo"; mkdir -p "$repo"
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
@@ -1129,7 +1129,7 @@ v41_oracle_never_executes_its_own_comments() {
   # "`git diff --output=` 能写文件所以危险",于是判据自己把它执行了(空文件名被 git
   # 拒了才没写成)。判定逻辑当时没坏,所以三组对照全对、收据照印 PASS ——
   # **这种病不会让判据变红,它让判据在你背后跑命令**,只能靠机械扫描抓。
-  local d; d="$(mktemp -d)"
+  local d; d="$(test_mktemp -d)"
   local lint="$d/lint.py"
   cat > "$lint" <<'LINT_PY'
 # shell 引号状态机:找出「会被 shell 当成命令替换执行」的反引号。
@@ -1349,7 +1349,7 @@ v42_git_common_dir_no_silent_gap() {
   # ⇒ 报错进 /dev/null、`|| true` 吞掉 rc ⇒ 共同目录拿到空 ⇒ **不挂只读**。
   # 后果:腿照样往 /main/.git 写(git tag / 直接写 objects),而仓根探针一路绿灯。
   # 这是全工具唯一一处**失败被吞而不是 fail-closed** 的地方,而 fail-closed 正是本单的规格。
-  local d b; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b"
+  local d b; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
 
   if review_platform_is_macos; then
     echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
@@ -1433,7 +1433,7 @@ v45_oracle_never_touches_owner_credentials() {
 # 发布正文是各家命令行结构里的最后一条消息，不是渲染后的过程。
 v46_final_report_is_the_last_message() {
   echo "[V46] 评审腿把最后一条消息原样写入报告文件"
-  local d b rc; d="$(mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
+  local d b rc; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
   fixture_git_repo "$d/repo"
   printf '# t\n' > "$d/t.md"
   cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \

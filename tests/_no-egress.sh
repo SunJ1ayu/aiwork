@@ -147,3 +147,4 @@ if ! python3 "$_test_settings_py" owned; then
   exec python3 "$_test_settings_py" "${BASH:-bash}" "$0" "$@"
 fi
 test_model_set() { python3 "$_test_settings_py" set-model "$@"; }
+test_mktemp() { python3 "$_test_settings_py" mktemp "$@"; }

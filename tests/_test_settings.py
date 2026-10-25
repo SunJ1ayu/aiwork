@@ -226,6 +226,17 @@ if __name__ == '__main__':
         write_kimi_config(sys.argv[2])
     elif sys.argv[1] == 'set-model':
         set_model(os.environ['AIWORK_CONFIG_DIR'], *sys.argv[2:])
+    elif sys.argv[1] == 'mktemp':
+        # BSD mktemp can ignore TMPDIR; both languages allocate in the owned tree.
+        directory = fixture_directory(os.environ['TMPDIR'])
+        if sys.argv[2:] == ['-d']:
+            print(tempfile.mkdtemp(prefix='tmp.', dir=directory))
+        elif not sys.argv[2:]:
+            fd, path = tempfile.mkstemp(prefix='tmp.', dir=directory)
+            os.close(fd)
+            print(path)
+        else:
+            raise SystemExit('test_mktemp accepts only -d or no arguments')
     else:
         command = sys.argv[1:]
         isolated = command[:1] == ['--isolated']

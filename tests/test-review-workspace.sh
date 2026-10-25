@@ -54,7 +54,7 @@ new_repo() { # new_repo PATH
 test_snapshot_view() {
   echo '[RW1] snapshot carries the current source view, not ignored runtime state'
   local d repo before head work clone status_after
-  d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
+  d="$(test_mktemp -d)"; repo="$d/source"; new_repo "$repo"
   before="$(git -C "$repo" status --short)"
   head="$(git -C "$repo" rev-parse HEAD)"
   REVIEW_WORKSPACE_BASE="$d/workspaces"
@@ -100,7 +100,7 @@ test_snapshot_view() {
 test_write_boundary() {
   echo '[RW2] the leg can write/commit in its clone while source stays read-only'
   local d repo before_status before_head before_refs clone out work
-  d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
+  d="$(test_mktemp -d)"; repo="$d/source"; new_repo "$repo"
   before_status="$(git -C "$repo" status --short)"
   before_head="$(git -C "$repo" rev-parse HEAD)"
   before_refs="$(git -C "$repo" show-ref 2>/dev/null || true)"
@@ -139,7 +139,7 @@ test_write_boundary() {
 test_parallel_isolation() {
   echo '[RW3] concurrent legs receive distinct clones with the same snapshot'
   local d repo release p1 p2 r1 r2 i
-  d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
+  d="$(test_mktemp -d)"; repo="$d/source"; new_repo "$repo"
   release="$d/release"; r1="$d/one"; r2="$d/two"
   _rw_worker() { # leg marker result ready
     local leg="$1" marker="$2" result="$3" ready="$4"
@@ -181,7 +181,7 @@ test_parallel_isolation() {
 test_source_race_and_cleanup_guard() {
   echo '[RW4] a changing source and unsafe cleanup target both fail closed'
   local d repo fake real_git count rc actual
-  d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
+  d="$(test_mktemp -d)"; repo="$d/source"; new_repo "$repo"
 
   REVIEW_WORKSPACE_BASE="$repo/in-source"
   review_workspace_prepare "$repo" unsafe-base >/dev/null 2>&1; rc=$?
@@ -230,7 +230,7 @@ GIT_STUB
 test_gitlink_fails_closed() {
   echo '[RW5] gitlinks/submodules are rejected until their isolation is defined'
   local d repo oid rc
-  d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
+  d="$(test_mktemp -d)"; repo="$d/source"; new_repo "$repo"
   oid="$(git -C "$repo" rev-parse HEAD)"
   git -C "$repo" update-index --add --cacheinfo "160000,$oid,vendor/sub"
   REVIEW_WORKSPACE_BASE="$d/workspaces"
@@ -243,7 +243,7 @@ test_gitlink_fails_closed() {
 test_wrapper_helper_failure() {
   echo '[RW6] no wrapper invokes a model when workspace preparation fails'
   local d b repo rc mimo_rc deepseek_rc kimi_rc
-  d="$(mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
+  d="$(test_mktemp -d)"; b="$d/bin"; repo="$d/source"; mkdir -p "$b"; new_repo "$repo"
   cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/submimo" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_review-reader-context.sh" "$BIN/subagent" "$BIN/subdeepseek-agent" \
      "$BIN/subkimi" "$b/"
   cat > "$b/_review-workspace.sh" <<'HELPER_STUB'
@@ -315,7 +315,7 @@ MODEL_STUB
 test_report_path_and_missing_explore_message() {
   echo '[RW8] one report path, and one exit when explore has no final message'
   local d repo rc want
-  d="$(mktemp -d)"; repo="$d/source"; new_repo "$repo"
+  d="$(test_mktemp -d)"; repo="$d/source"; new_repo "$repo"
   LOG_FILE="$d/leg.log"
   unset AIWORK_REVIEW_REPORT_PATH
   printf 'OLD\n' > "${LOG_FILE}.report"
@@ -430,7 +430,7 @@ test_write_facts_without_helper_path() {
 test_write_facts_with_and_without_outcome() {
   echo '[RW10] facts supports both absent and populated optional fields'
   local d rc
-  d="$(mktemp -d)"
+  d="$(test_mktemp -d)"
   (
     AIWORK_REVIEW_RESULT_BIN="$BIN/_review_result.py"
     REVIEW_SNAPSHOT_OBJECT_FORMAT="$(git -C "$BIN/.." rev-parse --show-object-format)"
@@ -464,7 +464,7 @@ PYCODE
 test_mutation_sensitivity() {
   echo '[RW7] oracle rejects direct-source and shared-clone mutations'
   local d direct fake rc real_mktemp
-  d="$(mktemp -d)"; direct="$d/direct-source.sh"; fake="$d/bin"; mkdir -p "$fake"
+  d="$(test_mktemp -d)"; direct="$d/direct-source.sh"; fake="$d/bin"; mkdir -p "$fake"
 
   # Mutation 1: preparation appears successful but reports SOURCE as the model
   # repo. RW2 must reject it because the "work" write is blocked together with

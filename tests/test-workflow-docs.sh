@@ -33,7 +33,7 @@ echo "=== workflow docs oracle ==="
 
 echo "[W2] 同步器按 workflow/skills/*/SKILL.md 推导 skill，漂移默认拒绝、显式 force 才覆盖"
 if [[ -x "$SYNC" ]]; then
-  d="$(mktemp -d)"; outside="$(mktemp)"
+  d="$(test_mktemp -d)"; outside="$(test_mktemp)"
   mkdir -p "$d/.claude/skills/track"
   printf 'retired deployed skill: cleanup after merge\n' > "$d/.claude/skills/track/SKILL.md"
   printf 'outside\n' > "$outside"
