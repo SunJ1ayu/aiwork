@@ -29,7 +29,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 - `bin/` review commands (below)
 - 本机数据目录(不在这个仓库里):里面有哪些东西见 `bin/_aiwork_config.py` 的登记表
 - `gate/` shared merge gate. A project connects by the steps in [gate/README.md](gate/README.md)
-- `templates/` gate workflow templates (`aiwork-gate.yml`, `aiwork-review-ping.yml`) and `models.env.example`
+- `templates/` gate workflow templates (`aiwork-gate.yml`, `aiwork-review-ping.yml`) and local settings examples
 - `tests/` regression oracles for this tooling itself
 - `workflow/` canonical Claude instructions and workflow skills (deployed copies live outside Git)
 - `kimi-review-home/config.toml` and `hooks/guard.mjs` are versioned seeds; reviewer runtime homes use disposable review workspaces
@@ -50,7 +50,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
   review 机器人读 CI：公开仓库目前能读到；私有仓库须在 GitHub App 和本机 `apps/review.env` 的 `PERMISSIONS` 同时加入 `actions:read`（运行和日志）、`checks:read`（关卡 G1 检查）。配置示例见 `bin/gh-app-token`；取不到时如实注明并继续派腿。
   `--dry-run` 只把任务打印到标准输出，不调用模型、不发布评审、不清理过期数据；允许从开发工作树预览已合并的 PR。正式派腿仍须从干净且为最新 main 的共享检出运行。
   任务在 diff 之后再次要求结论。完整 diff（含删除）放得下就内联。超过 `READER_INLINE_DIFF_BYTES`（200KB）时，任务只列每个文件的状态和行数，完整 diff 在快照文件 `aiwork-review.diff`。
-  这条命令默认给评审命令 2400 秒；已有的超时环境变量可以覆盖。只有缺结论或输出被截断时重试一次，并在终端和发布的评审里写明。每次失败的尝试都留下，包括重试成功的那次；其他失败不重新启动评审命令。
+  时限、轮次和思考强度见[「本机设置」](#本机设置)。只有缺结论或输出被截断时重试一次，并在终端和发布的评审里写明。每次失败的尝试都留下，包括重试成功的那次；其他失败不重新启动评审命令。
 
 Kimi 和 Linux MiMo 的快照内有 `aiwork-git-context.txt`，含可用的 Git 历史和状态；它们没有命令工具，不能运行或声称运行测试。
 
@@ -109,9 +109,10 @@ MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行
 仓库只保存工作流；本机设置统一放在 `~/.config/aiwork/`（目录权限 700）：
 
 - `models.env`：Codex、Cursor、DeepSeek、Kimi、MiMo 的模型选择，每条一行。可参考 `templates/models.env.example`。
+- `runtime.env`：可选的时限、轮次上限和思考强度。写法与查询见下方；示例为 `templates/runtime.env.example`。
 - `deepseek.env`：DeepSeek 使用的 `DEEPSEEK_API_KEY`，保留文件权限 600。
 - `mimo.env`：两行 `MIMO_BASE_URL=…`、`MIMO_API_KEY=…`，文件权限 600。地址使用小米控制台给出的 Anthropic 兼容 Base URL：按量付费和 Token Plan 的地址、凭证不同，不能混用；地址须为 HTTPS、以 `/anthropic` 结尾，不带用户名、密码、查询串或片段。MiMo 不从环境变量补地址或密钥。
-- `models.env`、`deepseek.env`、`mimo.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
+- `models.env`、`runtime.env`、`deepseek.env`、`mimo.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
 - `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。
@@ -140,6 +141,23 @@ Kimi 自动生成的 hook 使用登记的 node 路径；自管 `KIMI_REVIEW_HOME
 `AIWORK_APPS_DIR` 仍可单独覆盖 App 配置目录。
 `models.env` 必须完整，包含每条腿的模型行；原有模型单次覆盖参数只是在完整设置的基础上换一次，不能代替文件或补缺行。
 缺少 `models.env` 或所需腿的模型行时明确报错并停止，不调用模型。
+
+`runtime.env` 的名字直接使用各腿已有的环境变量名；完整参数、单位和兜底值由
+`bin/aiwork-config runtime --help` 从 `bin/_aiwork_config.py` 的 `RUNTIME_OPTIONS` 生成。
+要改常用值，只改本机这个文件；单次运行可继续设同名环境变量。
+优先级为非空环境变量 > 本机文件 > 代码兜底，空环境变量视为未设。
+文件或某一项没写时使用兜底，不会自动创建或修改本机文件；已有机器无需补配置。
+时限和轮次必须为十进制正整数（不带前导零）；思考强度的允许值由读取器校验，写错时错误信息列出。
+整个文件会先校验，未知名字、无效值或不能读取都报错停止，即使该项被环境变量覆盖也不忽略文件错误。
+
+查询生效值（`direct` 是直接调用各腿，`reader` 是 `review-pr` / `explore`；两种上下文的兜底值见生成的帮助）：
+
+```bash
+bin/aiwork-config runtime submimo timeout --context reader
+bin/aiwork-config runtime subdeepseek-agent max_turns
+bin/aiwork-config runtime subcodex effort
+```
+
 本机数据由 `bin/aiwork-config data-path [相对路径]` 统一定位，默认 `~/.local/share/aiwork/`；
 `AIWORK_DATA_DIR` 可覆盖该入口（例如离线测试使用临时目录）。供应商隔离运行时会改写
 `XDG_*`，因此 aiwork 数据入口不随供应商的 XDG 设置变化。查询路径本身不创建目录。

@@ -32,8 +32,9 @@ No fix mode. Change code in your own worktree.
 
 Environment:
   SUBCODEX_MODEL    exact gpt-<model-id> (default: ~/.config/aiwork/models.env)
-  SUBCODEX_EFFORT   model_reasoning_effort (default: high)
-  SUBCODEX_TIMEOUT  wall-clock seconds (default: 1500)
+  SUBCODEX_EFFORT   model_reasoning_effort
+  SUBCODEX_TIMEOUT  wall-clock seconds
+Runtime settings and code fallbacks: aiwork-config runtime --help (see README: 本机设置)
 
 Logs: LOG_FILE = header + codex's final message; <log>.stream.jsonl = --json events;
 <log>.stderr = codex stderr.
@@ -59,14 +60,12 @@ SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 MODEL="$("$BIN_DIR/aiwork-config" model codex "${SUBCODEX_MODEL:-}")" || exit 1
 "$BIN_DIR/aiwork-config" family subcodex "$MODEL" >/dev/null \
   || die "SUBCODEX_MODEL must be one exact gpt-<model-id>, got '$MODEL'"
+EFFORT="$("$BIN_DIR/aiwork-config" runtime subcodex effort)" || exit 1
+TIMEOUT_SECONDS="$("$BIN_DIR/aiwork-config" runtime subcodex timeout)" || exit 1
 if [[ "$DRY_RUN" == 1 ]]; then
   printf 'subcodex: model=%s settings=%s (dry-run; no dispatch)\n' "$MODEL" "$("$BIN_DIR/aiwork-config" path models.env)"
   exit 0
 fi
-EFFORT="${SUBCODEX_EFFORT:-high}"
-[[ "$EFFORT" =~ ^[a-z]+$ ]] || die "SUBCODEX_EFFORT must be a lowercase word, got '$EFFORT'"
-TIMEOUT_SECONDS="${SUBCODEX_TIMEOUT:-1500}"
-[[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die 'SUBCODEX_TIMEOUT must be a positive integer'
 CODEX="$AIWORK_PROGRAMS/codex"
 review_platform_ro_exec "$SOURCE_REPO" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$(basename "$0")" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }

@@ -307,11 +307,15 @@ def _exact_value(token: str) -> str | None:
     return token if _TOKEN.fullmatch(token) else None
 
 
-def _assignments(filename: str) -> tuple[Path, list[tuple[int, str, str]]]:
+def _assignments(filename: str, *, optional: bool = False) -> tuple[Path, list[tuple[int, str, str]]]:
     """Every non-comment line is one exact assignment. Nothing is stripped or sourced."""
     path = setting_path(filename)
     try:
         raw = path.read_bytes()
+    except FileNotFoundError as exc:
+        if optional and not path.is_symlink():
+            return path, []
+        raise ConfigError(f'{path}: cannot read') from exc
     except OSError as exc:
         raise ConfigError(f'{path}: cannot read') from exc
     try:
@@ -377,6 +381,61 @@ def model(leg: str, override: str | None = None) -> str:
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', selected):
         raise ConfigError(f'{path}: invalid model for leg {leg}')
     return selected
+
+
+_READER_TIMEOUT = '2400'
+_AGENT_MAX_TURNS = '200'
+# (environment/file key, direct fallback, reader fallback or None for the direct fallback).
+# Runtime files use the existing override names, so one name has one meaning.
+RUNTIME_OPTIONS = {
+    'subcodex': {'timeout': ('SUBCODEX_TIMEOUT', '1500', _READER_TIMEOUT),
+                 'effort': ('SUBCODEX_EFFORT', 'high', None)},
+    'subcursor': {'timeout': ('CURSOR_TIMEOUT', '900', _READER_TIMEOUT)},
+    'subdeepseek-agent': {'timeout': ('DEEPSEEK_TIMEOUT', '900', _READER_TIMEOUT),
+                         'max_turns': ('DEEPSEEK_MAX_TURNS', _AGENT_MAX_TURNS, None)},
+    'subkimi': {'timeout': ('KIMI_TIMEOUT', '1500', _READER_TIMEOUT)},
+    'submimo': {'timeout': ('MIMO_TIMEOUT', '5400', None),
+                'max_turns': ('MIMO_MAX_TURNS', _AGENT_MAX_TURNS, None)},
+}
+CODEX_EFFORTS = frozenset(('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'))
+
+
+def _validate_runtime(option: str, value: str, location: str) -> None:
+    if option == 'effort':
+        if value not in CODEX_EFFORTS:
+            raise ConfigError(f'{location}: expected one of {", ".join(sorted(CODEX_EFFORTS))}')
+    elif not re.fullmatch(r'[1-9][0-9]*', value):
+        raise ConfigError(f'{location}: expected a positive integer')
+
+
+def runtime_settings(adapter: str, *, context: str = 'direct',
+                     environ: dict[str, str] | None = None) -> dict[str, str]:
+    """Resolve one leg's parameters without writing settings or sourcing shell data."""
+    if adapter not in RUNTIME_OPTIONS or context not in ('direct', 'reader'):
+        raise ConfigError('unsupported runtime adapter or context')
+    path, rows = _assignments('runtime.env', optional=True)
+    options = {spec[0]: option for settings in RUNTIME_OPTIONS.values()
+               for option, spec in settings.items()}
+    configured = {}
+    for number, name, value in rows:
+        if name not in options:
+            raise ConfigError(f'{path}:{number}: unknown runtime setting {name}')
+        _validate_runtime(options[name], value, f'{path}:{number}: {name}')
+        configured[name] = value
+    env = os.environ if environ is None else environ
+    selected = {}
+    for option, (variable, direct, reader) in RUNTIME_OPTIONS[adapter].items():
+        fallback = reader if context == 'reader' and reader is not None else direct
+        value = env.get(variable) or configured.get(variable, fallback)
+        _validate_runtime(option, value, f'environment {variable}')
+        selected[variable] = value
+    return selected
+
+
+def runtime_value(adapter: str, option: str, *, context: str = 'direct') -> str:
+    if adapter not in RUNTIME_OPTIONS or option not in RUNTIME_OPTIONS[adapter]:
+        raise ConfigError('unsupported runtime option')
+    return runtime_settings(adapter, context=context)[RUNTIME_OPTIONS[adapter][option][0]]
 
 
 def apps_dir() -> Path:
