@@ -773,7 +773,9 @@ else:
         self.env = {k:v for k,v in os.environ.items() if not k.startswith(
             ('SUBCODEX_', 'CURSOR_', 'DEEPSEEK_', 'MIMO_', 'KIMI_'))}
         self.env.update(AIWORK_CONFIG_DIR=str(self.config),HOME=str(self.home),
-                        RUNTIME_CAPTURE=str(self.capture),DEEPSEEK_API_KEY='fixture-key')
+                        RUNTIME_CAPTURE=str(self.capture),DEEPSEEK_API_KEY='fixture-key',
+                        XDG_CONFIG_HOME=str(self.d / 'unrelated-xdg'),
+                        CURSOR_AUTH_FILE=str(cursor / 'auth.json'))
 
     def _program(self, name, source):
         path = self.bin / name
