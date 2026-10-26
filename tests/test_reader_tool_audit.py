@@ -13,6 +13,7 @@ import importlib.machinery
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -158,14 +159,6 @@ class ReaderToolAuditTests(unittest.TestCase):
                         audit(name, dict(arguments, **{key: "../outside.txt"}), 3)
 
     def _claude_model_process_ran(self, leg, process):
-        macos = subprocess.run(
-            ["bash", "-c", '. "$1"; review_platform_is_macos',
-             "_", str(ROOT / "bin/_review-platform.sh")],
-            env=self._env(), capture_output=True).returncode == 0
-        if macos and leg == "subdeepseek-agent":
-            self.assertEqual(process.returncode, 78, process.stderr)
-            self.assertIn("Mac 上暂不运行", process.stderr)
-            return False
         self.assertEqual(process.returncode, 0, process.stderr)
         return True
 
@@ -451,6 +444,13 @@ class ReaderToolAuditTests(unittest.TestCase):
         (self.repo / "a.txt").write_text("a\n", encoding="utf-8")
         subprocess.check_call(["git", "-C", str(self.repo), "add", "-A"])
         subprocess.check_call(["git", "-C", str(self.repo), "commit", "-qm", "base"])
+        self.deployment = self.root / 'deployment'
+        shutil.copytree(ROOT / 'bin', self.deployment)
+        from _test_settings import write_platform_probe
+        write_platform_probe(self.deployment, macos=False)
+        wrapper = self.deployment / 'ro-repo-exec'
+        wrapper.write_text('#!/bin/bash\nshift 2\nexec "$@"\n')
+        wrapper.chmod(0o755)
         self.config = write_settings(self.root / "settings")
         self.data = self.root / "data"
         self.data.mkdir()
@@ -514,7 +514,7 @@ class ReaderToolAuditTests(unittest.TestCase):
         if leg == "subdeepseek-agent":
             fixture_env["DEEPSEEK_API_KEY"] = "fixture-deepseek-key"
         result = subprocess.run(
-            [str(ROOT / "bin" / leg), mode, str(self.task), str(log), str(self.repo)],
+            [str(self.deployment / leg), mode, str(self.task), str(log), str(self.repo)],
             env=self._env(
                 **fixture_env,
                 AIWORK_REVIEW_REPORT_PATH=str(report),
@@ -797,16 +797,22 @@ sys.stdout.write(pathlib.Path(os.environ['CLAUDE_STREAM']).read_text())
                     with self.assertRaises(review.ReviewError):
                         review.publishable_model(json.loads(emitted.read_text()))
 
-    def test_mac_mimo_allowed_deepseek_still_refused(self):
-        for mode in ('review','explore'):
-            result=self.run_leg(mode,True)
-            self.assertEqual(result.returncode,0,result.stderr)
-            self.assertTrue(self.capture.exists(), 'MiMo must start Claude Code on Mac')
-            self.capture.unlink()
-            result=self.run_leg(mode,True,'subagent')
-            self.assertEqual(result.returncode,78,result.stderr)
-            self.assertIn('DeepSeek',result.stderr)
-            self.assertFalse(self.capture.exists())
+    def test_mac_both_providers_share_command_policy(self):
+        sys.path.insert(0, str(ROOT / "bin"))
+        from _claude_sandbox import TOOLS
+        stream = self.stream.read_text()
+        events = [json.loads(line) for line in stream.splitlines()]
+        events[0]['tools'] = list(TOOLS)
+        self.stream.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
+        for mode in ('review', 'explore'):
+            for leg in ('submimo', 'subagent'):
+                result = self.run_leg(mode, True, leg)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                call = json.loads(self.capture.read_text())
+                self.assertEqual(call['argv'][call['argv'].index('--tools') + 1], ','.join(TOOLS))
+                self.assertTrue(call['settings']['sandbox']['enabled'])
+                self.assertFalse(call['settings']['sandbox']['allowUnsandboxedCommands'])
+                self.capture.unlink()
 
     def test_mimo_settings_fail_before_provider_and_name_bad_item(self):
         good=self.settings.read_text()

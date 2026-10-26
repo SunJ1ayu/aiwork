@@ -138,7 +138,7 @@ class ProgramPaths(unittest.TestCase):
     def test_mac_orchestrators_refuse_pending_legs_before_program_or_model_settings(self):
         fixture, env = self.mac_fixture()
         env['AIWORK_DATA_DIR'] = str(self.root / 'absent-data')
-        for leg in ('subcursor', 'subdeepseek-agent'):
+        for leg in ('subcursor',):
             direct = subprocess.run([str(fixture.bin / leg), '--help'], env=env,
                                     capture_output=True, text=True)
             self.assertEqual(direct.returncode, 78, direct.stderr)
@@ -160,11 +160,10 @@ class ProgramPaths(unittest.TestCase):
         fixture, env = self.mac_fixture()
         result = subprocess.run([str(fixture.bin / 'explore'), str(fixture.root / 'task.md'),
                                  '--repo', str(fixture.repo), '--leg', 'subkimi',
-                                 '--leg', 'subcursor', '--leg', 'subdeepseek-agent'],
+                                 '--leg', 'subcursor'],
                                 env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn('subcursor: Mac 上暂不运行', result.stderr)
-        self.assertIn('subdeepseek-agent: Mac 上暂不运行', result.stderr)
         self.assertNotIn('programs/', result.stderr)
         reports = result.stdout.splitlines()
         self.assertEqual(len(reports), 1, result.stdout + result.stderr)

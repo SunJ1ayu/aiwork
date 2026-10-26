@@ -115,6 +115,11 @@ class CommandlessReaders(LegCase):
     def setUp(self):
         super().setUp()
         self.copy("subkimi", "submimo", "subagent", "ro-repo-exec")
+        # Linux retains the commandless MiMo contract; Mac is covered by
+        # the shared sandbox/platform suites and native acceptance probes.
+        from _test_settings import write_platform_probe
+        write_platform_probe(self.bin, macos=False)
+        self.fake('ro-repo-exec', '#!/bin/sh\nshift 2\nexec "$@"\n')
         shutil.copytree(ROOT / "kimi-review-home", self.d / "kimi-review-home")
         self.home = self.d / "kimi-home"
         (self.home / "credentials").mkdir(parents=True)

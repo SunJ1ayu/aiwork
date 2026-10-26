@@ -41,7 +41,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 
 - `bin/subdeepseek-agent` — DeepSeek，经 Claude Code headless 读仓库。模型来自 `~/.config/aiwork/models.env` 的 deepseek 行。
 - `bin/subkimi` — Kimi，kimi-code CLI。review、explore 的 agent profile 和跑完核对读 `bin/_reader_tools.py`。派发前的 hook 是 `kimi-review-home/hooks/guard.mjs`，放行名单是另一份。清单以外的工具（含被 CLI 拒掉的尝试），或者输出里看不出用了哪些工具，只在这次本来会成功时记成 `readonly_tools`：不发评审，这个失败原因不重试。没有结论的那次仍是 `no_verdict`，会重试一次。任务复制进快照，由 Read 读取，正文不进命令行参数。模型来自 kimi 行。
-- `bin/submimo <review|explore>` — MiMo，经 `bin/subagent` 复用 Claude Code headless，连接小米的 Anthropic 兼容接口。模型读 `models.env` 的 mimo 行（API 原生 `mimo-…` 名称）；接口地址和密钥读 `mimo.env`。两个模式只提供读取工具，配置和跑完核对共用 `bin/_reader_tools.py`；看不出实际工具或出现其他工具时记为 `readonly_tools`，不发评审、不因这个原因重试。超时使用 `MIMO_TIMEOUT`，轮次上限使用 `MIMO_MAX_TURNS`。
+- `bin/submimo <review|explore>` — MiMo，经 `bin/subagent` 复用 Claude Code headless，连接小米的 Anthropic 兼容接口。模型读 `models.env` 的 mimo 行（API 原生 `mimo-…` 名称）；接口地址和密钥读 `mimo.env`。Linux 上两个模式只提供读取工具，配置和跑完核对共用 `bin/_reader_tools.py`；Mac 的命令策略见下方 Claude Code 外壳一节。看不出实际工具或出现其他工具时记为 `readonly_tools`，不发评审、不因这个原因重试。超时使用 `MIMO_TIMEOUT`，轮次上限使用 `MIMO_MAX_TURNS`。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。两个平台的原生沙箱设置见 `bin/subcodex` 的 `CODEX_CFG`；Linux 外层另经 `ro-repo-exec`。副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。
@@ -52,7 +52,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
   任务在 diff 之后再次要求结论。完整 diff（含删除）放得下就内联。超过 `READER_INLINE_DIFF_BYTES`（200KB）时，任务只列每个文件的状态和行数，完整 diff 在快照文件 `aiwork-review.diff`。
   这条命令默认给评审命令 2400 秒；已有的超时环境变量可以覆盖。只有缺结论或输出被截断时重试一次，并在终端和发布的评审里写明。每次失败的尝试都留下，包括重试成功的那次；其他失败不重新启动评审命令。
 
-Kimi、MiMo 的快照内有 `aiwork-git-context.txt`，含可用的 Git 历史和状态；它们没有命令工具，不能运行或声称运行测试。
+Kimi 和 Linux MiMo 的快照内有 `aiwork-git-context.txt`，含可用的 Git 历史和状态；它们没有命令工具，不能运行或声称运行测试。
 
 所有评审命令：`<tool> review TASK LOG REPO`。输出是主 agent 要核对的证据。
 
@@ -98,7 +98,9 @@ from tests (the 2026-08-10 incident), within the documented platform limits.
 ## MiMo / DeepSeek 的 Claude Code 外壳
 
 两条腿共用 `bin/subagent` 的供应商表；各自的工具能力与平台限制不变。
-先安装 Claude Code，并在本机 `programs/claude`、`programs/node` 登记安装路径。
+Claude Code 固定使用 2.1.301，并在本机 `programs/claude`、`programs/node` 登记安装路径。
+Mac 上 DeepSeek、MiMo 的 review / explore 共用 `bin/_claude_sandbox.py` 的原生沙箱策略和工具清单：允许在一次性副本内运行命令，命令断网、隐藏凭证，禁止退回无沙箱执行。程序自己的临时文件仅可写本次运行的临时目录；项目设置、MCP 和技能不参与配置。派模型前通过 Claude Code 自带 MCP 的 Bash 做离线启动检查，版本不符或原生沙箱起不来即拒绝派发。真实工具记录仍由 `bin/_reader_tools.py` 核对。Mac 沙箱不能叠加，腿内运行 aiwork 测试会被断网守卫拒绝；使用任务书里的 CI 结果。Linux 上两条腿的原有能力和保护保持不变。
+
 MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行目录。
 小米接口的配置方法见[官方 Claude Code 文档](https://mimo.mi.com/docs/zh-CN/tokenplan/integration/claudecode)。
 
@@ -122,7 +124,7 @@ MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行
 
 入口在启动时校验 Python 和本次所需程序；依赖表见 `bin/_programs.sh`，
 可用下述 `check-programs` 命令预检，不在文档中另抄一份依赖表。
-不使用某条腿时可以不登记它（例如尚未开放的 Mac DeepSeek / Cursor）；
+不使用某条腿时可以不登记它（例如尚未开放的 Mac Cursor）；
 直接入口、`review-pr` 和 `explore` 都先检查所选腿的平台支持，再读取该腿的设置；
 `explore` 的一条腿被平台拒跑时，其他腿照常运行。设置缺项、断链、非文件、不能执行或 Python 版本不够时，
 打印 `programs/项名` 与设置路径并退出，不查 PATH 补缺。`CODEX_BIN` 不再覆盖本机登记。
@@ -152,7 +154,7 @@ Kimi 自动生成的 hook 使用登记的 node 路径；自管 `KIMI_REVIEW_HOME
 
 `kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。
 每次渲染配置和 guard，另写 CLI 的只读 agent profile；credentials 链接到 Kimi CLI 自己的凭证目录。缺少 `kimi-code.json` 时拒跑并提示先用 kimi 登录。
-`submimo` 和 `subdeepseek-agent` 每次创建临时 `CLAUDE_CONFIG_DIR`，禁用会话持久化，随评审副本一起删除；凭证只经子进程环境传入，不写 Claude Code 设置。MiMo 还禁用项目设置、MCP 和技能。
+`submimo` 和 `subdeepseek-agent` 每次创建临时 `CLAUDE_CONFIG_DIR`，禁用会话持久化，随评审副本一起删除；凭证只经子进程环境传入，不写 Claude Code 设置。Linux MiMo 也禁用项目设置、MCP 和技能。
 `KIMI_REVIEW_HOME` 指定的目录由调用方管理：不渲染种子、不删除，仍经过 `review_home_guard`；Kimi 仍重写只读 agent profile。
 
 ### 加新评审腿的规矩

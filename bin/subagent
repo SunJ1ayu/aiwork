@@ -27,6 +27,7 @@ case "$PROVIDER" in
 esac
 review_platform_check "$LABEL" || exit 78
 aiwork_init "$LABEL" || exit 78
+review_platform_claude_mode
 
 # Credentials are passed only in the child environment, never written to Claude settings.
 
@@ -42,7 +43,7 @@ Usage:
 
 Providers (thin shims in parentheses; callers normally use the shim):
   deepseek  (subdeepseek-agent)
-  mimo      (submimo; read-only tools in both modes)
+  mimo      (submimo)
 Models: ~/.config/aiwork/models.env; MiMo credentials/address: mimo.env.
 
 Environment (PREFIX = DEEPSEEK or MIMO):
@@ -78,14 +79,14 @@ fi
 v="${PREFIX}_MODEL"
 MODEL="$("$BIN_DIR/aiwork-config" model "$MODEL_LEG" "${!v:-}")" || exit 1
 CLAUDE_MODEL="$MODEL"
-if [[ "$READ_ONLY" == 1 ]]; then
+if [[ "$PROVIDER" == mimo ]]; then
   DEFAULT_BASE_URL="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" MIMO_BASE_URL)" || exit 1
 fi
 v="${PREFIX}_TIMEOUT";        TIMEOUT_SECONDS="${!v:-900}"
 v="${PREFIX}_MAX_TURNS";      MAX_TURNS="${!v:-$DEFAULT_MAX_TURNS}"
 v="${PREFIX}_API_KEY";        API_KEY="${!v:-}"
 v="${PREFIX}_ANTHROPIC_URL";  BASE_URL="${!v:-$DEFAULT_BASE_URL}"
-if [[ "$READ_ONLY" == 1 ]]; then
+if [[ "$PROVIDER" == mimo ]]; then
   # MiMo uses machine settings exclusively; inherited provider variables cannot bypass them.
   BASE_URL="$DEFAULT_BASE_URL"
   API_KEY="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" "$SETTINGS_VAR")" || exit 1
@@ -152,7 +153,13 @@ $(cat "$TASK_FILE")
 
 EXPLORE_SYSTEM_PROMPT="You are an independent agent running inside a read-only harness. Read the repository with the tools you have (Read, Glob, Grep${TOOLS_SENTENCE_X}). Do not modify files, push, merge, install dependencies, or spawn other agents."
 
-if [[ "$READ_ONLY" == 1 ]]; then
+if [[ "$CLAUDE_SANDBOX" == 1 ]]; then
+  SANDBOX_TOOLS="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_claude_sandbox.py" tools)" || exit 78
+  PROMPT="You are an independent reviewer in a disposable writable repository copy. Use $SANDBOX_TOOLS to inspect code and run local diagnostics. Commands are network-isolated; credentials and files outside this copy are protected. Do not intentionally edit source files, install dependencies, push, merge or spawn agents. The aiwork test suite cannot run inside this Mac sandbox; use the provided CI results.
+
+--- TASK ($MODE) ---
+$(cat "$TASK_FILE")"
+elif [[ "$READ_ONLY" == 1 ]]; then
   READER_TOOLS="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" claude-tools)" || exit 78
   READER_PROMPT="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" claude-prompt)" || exit 78
   PROMPT="$READER_PROMPT
@@ -217,7 +224,9 @@ ERR_FILE="$(mktemp)"
   echo "repo: $REPO_DIR"
   echo "source_repo: $SOURCE_REPO"
   echo "task: $TASK_FILE"
-  if [[ "$READ_ONLY" == 1 ]]; then
+  if [[ "$CLAUDE_SANDBOX" == 1 ]]; then
+    echo "视野: ${SANDBOX_TOOLS}；Claude Code 原生沙箱，只写本次副本、命令断网、隐藏凭证。"
+  elif [[ "$READ_ONLY" == 1 ]]; then
     echo "视野: ${READER_TOOLS}，只读代码；不能跑命令。"
   elif [[ "$MODE" == "review" ]]; then
     echo "视野: 底座腿 —— 独立可写副本；Bash 可跑本地 tests/lint/build/诊断。"
@@ -229,18 +238,22 @@ ERR_FILE="$(mktemp)"
 } > "$LOG_FILE"
 
 RC=0
-# Linux retains the source repository guard; only audited MiMo can reach Mac here.
+# Linux retains its existing source repository guard.
 EXEC_NAME="$(basename "$0")"
-[[ "$READ_ONLY" == 1 ]] && EXEC_NAME="$LABEL"
+[[ "$PROVIDER" == mimo ]] && EXEC_NAME="$LABEL"
 review_platform_ro_exec "$SOURCE_REPO" "$EXEC_NAME" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$EXEC_NAME" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
-if [[ "$READ_ONLY" == 1 ]]; then
+if [[ "$CLAUDE_SANDBOX" == 1 ]]; then
+  SANDBOX_HELPER="$BIN_DIR/_claude_sandbox.py"
+  COMMAND_TMP="$(review_workspace_home claude-tmp)" || exit 78
+  export CLAUDE_CODE_TMPDIR="$COMMAND_TMP" TMPDIR="$COMMAND_TMP"
+  READER_SETTINGS="$RUNTIME_HOME/sandbox-settings.json"
+  "$AIWORK_PROGRAMS/python3" "$SANDBOX_HELPER" settings "$READER_SETTINGS" "$AIWORK_CONFIG_DIR" "$RUNTIME_HOME" "$COMMAND_TMP" || exit 78
+  READER_TOOLS="$("$AIWORK_PROGRAMS/python3" "$SANDBOX_HELPER" tools)" || exit 78
+  CLAUDE_CONFIG_DIR="$RUNTIME_HOME" "$AIWORK_PROGRAMS/python3" "$SANDBOX_HELPER" preflight "$AIWORK_PROGRAMS/claude" "$READER_SETTINGS" "$REPO_DIR" || exit 78
+elif [[ "$READ_ONLY" == 1 ]]; then
   READER_SETTINGS="$RUNTIME_HOME/reader-settings.json"
   "$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" claude-settings "$READER_SETTINGS" || exit 78
-  IFS=, read -r -a CLAUDE_TOOLS <<< "$READER_TOOLS"
-  CLAUDE_OPTIONS=(--setting-sources "" --settings "$READER_SETTINGS" --permission-prompts none --tools "$READER_TOOLS"
-    --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands
-    --allowedTools "${CLAUDE_TOOLS[@]}")
 elif [[ "$MODE" == "review" ]]; then
   CLAUDE_OPTIONS=(--setting-sources project --allowedTools Read Glob Grep Bash
     --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent)
@@ -249,6 +262,13 @@ else
     "Bash(git diff:*)" "Bash(git log:*)" "Bash(git status:*)" "Bash(git show:*)"
     --disallowedTools Write Edit NotebookEdit WebFetch WebSearch Task Agent)
 fi
+if [[ "$READ_ONLY" == 1 || "$CLAUDE_SANDBOX" == 1 ]]; then
+  IFS=, read -r -a CLAUDE_TOOLS <<< "$READER_TOOLS"
+  CLAUDE_OPTIONS=(--setting-sources "" --settings "$READER_SETTINGS" --permission-prompts none --tools "$READER_TOOLS"
+    --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands
+    --allowedTools "${CLAUDE_TOOLS[@]}")
+fi
+
 (
   cd "$REPO_DIR" || exit 78
   unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
@@ -256,7 +276,7 @@ fi
   export CLAUDE_CONFIG_DIR="$RUNTIME_HOME" ANTHROPIC_BASE_URL="$BASE_URL"
   export ANTHROPIC_DEFAULT_OPUS_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_SONNET_MODEL="$CLAUDE_MODEL"
   export ANTHROPIC_DEFAULT_HAIKU_MODEL="$CLAUDE_MODEL"
-  if [[ "$READ_ONLY" == 1 ]]; then
+  if [[ "$READ_ONLY" == 1 || "$CLAUDE_SANDBOX" == 1 ]]; then
     unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL
     unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
     export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
@@ -355,8 +375,10 @@ rm -f "$ERR_FILE"
 
 AUDIT_MESSAGE=""
 audit_rc=0
-if [[ "$READ_ONLY" == 1 ]]; then
-  audit="$(review_workspace_reader_audit audit-claude "$STREAM_FILE")" || audit_rc=$?
+if [[ "$READ_ONLY" == 1 || "$CLAUDE_SANDBOX" == 1 ]]; then
+  AUDIT_KIND=audit-claude
+  [[ "$CLAUDE_SANDBOX" == 1 ]] && AUDIT_KIND=audit-claude-sandbox
+  audit="$(review_workspace_reader_audit "$AUDIT_KIND" "$STREAM_FILE")" || audit_rc=$?
   if [[ "$audit_rc" == 0 ]]; then
     printf '\n核实工具: %s\n' "$audit" >> "$LOG_FILE"
   elif [[ "$audit_rc" == 1 || "$audit_rc" == 3 ]]; then

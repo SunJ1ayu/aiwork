@@ -28,7 +28,7 @@ class LegFinish(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for name in ("_python", "_programs.sh", "aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
-                     "_paths.py", "_review-platform.sh",
+                     "_paths.py", "_review-platform.sh", "_claude_sandbox.py",
                      "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_reader_tools.py", "_cursor-stream.py",
                      "ro-repo-exec",
                      "subagent", "subkimi", "submimo", "subcodex", "subcursor"):
@@ -86,7 +86,7 @@ if case in ("nonzero", "review_nonzero"):
     raise SystemExit(1)
 text = {"blank": " \\t\\n", "no_verdict": "Review has evidence but no decision.\\n",
         "pass": "Conclusion: PASS\\n", "explore_ok": "Conclusion: PASS\\n"}[case]
-print('{"type":"system","subtype":"init","tools":["Read","Glob","Grep"]}')
+print(__import__('json').dumps({'type':'system','subtype':'init','tools': sys.argv[sys.argv.index('--tools')+1].split(',') if '--tools' in sys.argv else ['Read','Glob','Grep']}))
 print('{"type":"result","subtype":"success","is_error":false,"result":' + __import__("json").dumps(text) + "}")
 """)
 
@@ -290,12 +290,12 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             (self.bin / tool).rename(hidden)
             try:
                 for leg in ("subagent", "subkimi", "submimo", "subcodex", "subcursor"):
-                    if macos and tool == 'ro-repo-exec' and leg in ('subkimi', 'submimo', 'subcodex'):
-                        continue  # Mac readers and native Codex do not use this wrapper.
+                    if macos and tool == 'ro-repo-exec' and leg in ('subagent', 'subkimi', 'submimo', 'subcodex'):
+                        continue  # Mac legs use their native/reader protection instead of this wrapper.
                     with self.subTest(tool=tool, leg=leg):
                         result = self._run(leg, "review", "pass")
                         self.assertEqual(result.returncode, 78, result.stderr)
-                        if macos and leg in ('subagent', 'subcursor'):
+                        if macos and leg == 'subcursor':
                             self.assertIn('Mac 上暂不运行，等待', result.stderr)
                         else:
                             self.assertEqual(result.stderr.splitlines()[-1:], [
