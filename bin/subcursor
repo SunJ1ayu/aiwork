@@ -20,12 +20,13 @@ No fix mode, shell execution, or chat fallback.
 
 Environment:
   CURSOR_MODEL       explicit model ID (default: ~/.config/aiwork/models.env)
-  CURSOR_TIMEOUT     wall-clock seconds (default 900)
+  CURSOR_TIMEOUT     wall-clock seconds
   CURSOR_AUTH_FILE   login credentials (default $XDG_CONFIG_HOME/cursor/auth.json,
                      or $HOME/.config/cursor/auth.json)
   CURSOR_API_KEY     explicit API-key authentication instead of session login
 Logs: LOG_FILE = header + assistant text; sibling .stream.jsonl contains
 raw events, and .stream-summary.json records completion, reported model and usage.
+Runtime settings and code fallbacks: aiwork-config runtime --help (see README: 本机设置)
 EOF
 }
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
@@ -40,8 +41,7 @@ SOURCE_REPO="$(realpath "$SOURCE_REPO")"
 MODEL="$("$BIN_DIR/aiwork-config" model cursor "${CURSOR_MODEL:-}")" || exit 1
 "$AIWORK_PROGRAMS/python3" "$BIN_DIR/_review_result.py" cursor-family "$MODEL" >/dev/null \
   || die 'CURSOR_MODEL must identify an explicit supported model family (no auto routing)'
-TIMEOUT_SECONDS="${CURSOR_TIMEOUT:-900}"
-[[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die 'timeout must be a positive integer'
+TIMEOUT_SECONDS="$("$BIN_DIR/aiwork-config" runtime subcursor timeout)" || exit 1
 CURSOR_BIN="$AIWORK_PROGRAMS/cursor-agent"
 AUTH_FILE="${CURSOR_AUTH_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/cursor/auth.json}"
 BILLING=subscription

@@ -8,7 +8,6 @@ BIN_DIR="$(/usr/bin/dirname "$(/bin/realpath "$0")")" || exit 78
 # Provider differences live here; platform routing happens before any settings.
 PROVIDER="${1:-}"
 READ_ONLY=0
-DEFAULT_MAX_TURNS=200
 AUTH_ENV=ANTHROPIC_AUTH_TOKEN
 case "$PROVIDER" in
   deepseek)
@@ -48,11 +47,12 @@ Models: ~/.config/aiwork/models.env; MiMo credentials/address: mimo.env.
 
 Environment (PREFIX = DEEPSEEK or MIMO):
   <PREFIX>_MODEL          model id
-  <PREFIX>_TIMEOUT        seconds before timeout (default 900)
-  <PREFIX>_MAX_TURNS      agent turn cap (default 200)
+  <PREFIX>_TIMEOUT        seconds before timeout
+  <PREFIX>_MAX_TURNS      agent turn cap
   DEEPSEEK_API_KEY        overrides the key from deepseek.env
   DEEPSEEK_ANTHROPIC_URL  overrides DeepSeek base URL
 MiMo always reads MIMO_BASE_URL and MIMO_API_KEY from mimo.env.
+Runtime settings and code fallbacks: aiwork-config runtime --help (see README: 本机设置)
 EOF
 }
 
@@ -83,8 +83,8 @@ CLAUDE_MODEL="$MODEL"
 if [[ "$PROVIDER" == mimo ]]; then
   DEFAULT_BASE_URL="$("$BIN_DIR/aiwork-config" value "$SETTINGS_FILE" MIMO_BASE_URL)" || exit 1
 fi
-v="${PREFIX}_TIMEOUT";        TIMEOUT_SECONDS="${!v:-900}"
-v="${PREFIX}_MAX_TURNS";      MAX_TURNS="${!v:-$DEFAULT_MAX_TURNS}"
+TIMEOUT_SECONDS="$("$BIN_DIR/aiwork-config" runtime "$LABEL" timeout)" || exit 1
+MAX_TURNS="$("$BIN_DIR/aiwork-config" runtime "$LABEL" max_turns)" || exit 1
 v="${PREFIX}_API_KEY";        API_KEY="${!v:-}"
 v="${PREFIX}_ANTHROPIC_URL";  BASE_URL="${!v:-$DEFAULT_BASE_URL}"
 if [[ "$PROVIDER" == mimo ]]; then

@@ -6,7 +6,8 @@ import json
 import sys
 
 from _aiwork_config import (
-    ConfigError, program, check_programs, app_key, apps_dir, data_path, model, model_family, prune_data, setting_path, setting_value,
+    ConfigError, RUNTIME_OPTIONS, program, check_programs, app_key, apps_dir, data_path,
+    model, model_family, prune_data, runtime_value, setting_path, setting_value,
 )
 
 
@@ -20,7 +21,19 @@ def main():
     models = commands.add_parser('model')
     models.add_argument('leg')
     models.add_argument('override', nargs='?')
-    names = ('models.env', 'deepseek.env', 'mimo.env', 'apps', 'private-terms')
+    defaults = '\n'.join(
+        f'{adapter} {option}: {variable}; direct={direct}, reader={reader or direct}'
+        for adapter, settings in RUNTIME_OPTIONS.items()
+        for option, (variable, direct, reader) in settings.items())
+    runtime = commands.add_parser('runtime', formatter_class=argparse.RawDescriptionHelpFormatter,
+                                  description='Environment > optional runtime.env > code fallback. '
+                                              'Empty environment overrides are ignored.',
+                                  epilog='Code fallbacks (seconds / turns / effort):\n' + defaults)
+    runtime.add_argument('adapter', choices=tuple(RUNTIME_OPTIONS))
+    runtime.add_argument('option', choices=tuple(dict.fromkeys(
+        option for settings in RUNTIME_OPTIONS.values() for option in settings)))
+    runtime.add_argument('--context', choices=('direct', 'reader'), default='direct')
+    names = ('models.env', 'runtime.env', 'deepseek.env', 'mimo.env', 'apps', 'private-terms')
     paths = commands.add_parser('path')
     paths.add_argument('name', choices=names)
     values = commands.add_parser('value')
@@ -44,6 +57,8 @@ def main():
             return 0
         elif args.command == 'model':
             value = model(args.leg, args.override)
+        elif args.command == 'runtime':
+            value = runtime_value(args.adapter, args.option, context=args.context)
         elif args.command == 'data-path':
             value = data_path(args.name)
         elif args.command == 'prune-data':

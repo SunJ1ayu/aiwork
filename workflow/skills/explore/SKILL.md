@@ -23,7 +23,7 @@ explore BRIEF --repo DIR --leg subdeepseek-agent --leg submimo
 
 ## 五条腿
 
-超时没设时，`explore` 给该腿 2400 秒。下面的环境变量若已设置，用那个值。
+时限、轮次和思考强度的本机设置、临时覆盖与兜底查询见 [README「本机设置」](../../../README.md#本机设置)。
 
 失败时先看命令打出的那一行原因：`timeout` 是到点，`auth` 是凭证，`quota` / `rate_limit` 是额度或窗口，`readonly_tools` 是这次调用了只读清单以外的工具，或输出里看不出用了哪些工具，`runtime` 和 `readonly_tools` 后面带该腿 stderr 的末尾。没有报告文件时，原因是腿没有交出最后一条消息。只有空白也算没交出。
 

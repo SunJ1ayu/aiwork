@@ -4,7 +4,8 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
-from _test_settings import write_programs
+from _test_settings import write_programs, write_settings, write_platform_probe
+from _runtime_cases import RUNTIME_CASES
 
 import importlib.machinery
 import importlib.util
@@ -43,6 +44,8 @@ class SettingsTest(unittest.TestCase):
                        'kimi': 'kimi-code/k3', 'mimo': 'mimo-v2.5-pro'}
         self.write_models()
         self.env = dict(os.environ, AIWORK_CONFIG_DIR=str(self.config), HOME=str(self.d / 'home'))
+        for _, _, variable, *_ in RUNTIME_CASES:
+            self.env.pop(variable, None)
         self.environment = patch.dict(os.environ, self.env, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -86,6 +89,83 @@ class SettingsTest(unittest.TestCase):
                 result = self.invoke_config('model', leg)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
+
+    def test_runtime_defaults_do_not_require_a_runtime_file(self):
+        help_text = self.invoke_config('runtime', '--help')
+        self.assertEqual(help_text.returncode, 0, help_text.stderr)
+        for adapter, option, variable, direct, reader, _ in RUNTIME_CASES:
+            for context, expected in (('direct', direct), ('reader', reader)):
+                with self.subTest(adapter=adapter, option=option, context=context):
+                    result = self.invoke_config('runtime', adapter, option, '--context', context)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), expected)
+            self.assertIn(f'{adapter} {option}: {variable}; direct={direct}, reader={reader}', help_text.stdout)
+        self.assertFalse((self.config / 'runtime.env').exists())
+
+    def test_runtime_file_and_environment_precedence_for_each_option(self):
+        path = self.config / 'runtime.env'
+        path.write_text(''.join(f"export {variable}='{sample}'\n"
+                               for _, _, variable, _, _, sample in RUNTIME_CASES))
+        for adapter, option, variable, _, _, sample in RUNTIME_CASES:
+            for context in ('direct', 'reader'):
+                for override, expected in ((None, sample), ('', sample),
+                                           ('xhigh' if option == 'effort' else '7199',
+                                            'xhigh' if option == 'effort' else '7199')):
+                    with self.subTest(adapter=adapter, option=option, context=context, override=override):
+                        if override is None:
+                            self.env.pop(variable, None)
+                        else:
+                            self.env[variable] = override
+                        result = self.invoke_config('runtime', adapter, option, '--context', context)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.strip(), expected)
+                self.env.pop(variable, None)
+
+    def test_runtime_file_errors_are_not_hidden_by_a_valid_override(self):
+        path = self.config / 'runtime.env'
+        cases = [(f'{variable}=' + ('banana' if option == 'effort' else '0') + '\n', variable)
+                 for _, option, variable, *_ in RUNTIME_CASES]
+        cases += [('MIMO_TIMEOUT=\n', 'MIMO_TIMEOUT'),
+                  ('MIMO_TIMEOUT=1\nMIMO_TIMEOUT=2\n', 'MIMO_TIMEOUT'),
+                  ('MIMO_TIMEOUT=1 # trailing\n', 'MIMO_TIMEOUT'),
+                  ('MIMO_TIMOUT=123\n', 'MIMO_TIMOUT'),
+                  ('MIMO_TIMEOUT=1.5\n', 'MIMO_TIMEOUT')]
+        self.env['MIMO_TIMEOUT'] = '7199'
+        for text, variable in cases:
+            with self.subTest(text=text):
+                path.write_text(text)
+                result = self.invoke_config('runtime', 'submimo', 'timeout')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn(str(path), result.stderr)
+                self.assertIn(variable, result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+        path.write_bytes(b'MIMO_TIMEOUT=1\n\xff')
+        result = self.invoke_config('runtime', 'submimo', 'timeout')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f'{path}:2', result.stderr)
+
+    def test_runtime_invalid_environment_stops_instead_of_using_the_file(self):
+        for adapter, option, variable, _, _, sample in RUNTIME_CASES:
+            (self.config / 'runtime.env').write_text(f'{variable}={sample}\n')
+            self.env[variable] = 'banana' if option == 'effort' else '-1'
+            with self.subTest(variable=variable):
+                result = self.invoke_config('runtime', adapter, option)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn(f'environment {variable}', result.stderr)
+            self.env.pop(variable)
+
+    def test_runtime_missing_entries_fall_back_but_broken_paths_do_not(self):
+        path = self.config / 'runtime.env'
+        path.write_text('DEEPSEEK_MAX_TURNS=333\n')
+        self.assertEqual(self.invoke_config('runtime', 'submimo', 'timeout').stdout.strip(), '5400')
+        path.unlink()
+        path.symlink_to(self.d / 'missing-runtime')
+        self.assertNotEqual(self.invoke_config('runtime', 'submimo', 'timeout').returncode, 0)
+        path.unlink()
+        path.mkdir()
+        self.assertNotEqual(self.invoke_config('runtime', 'submimo', 'timeout').returncode, 0)
 
     def test_public_test_startup_does_not_mutate_inherited_machine_directories(self):
         # Run the actual model-changing statements from both shell oracles.
@@ -634,6 +714,136 @@ print('descendants share settings, data, programs and workspace')
         fixture.env['AIWORK_APPS_DIR'] = str(fixture.root / 'apps')
         result = fixture.invoke(['--repo', 'SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'])
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class RuntimeAdapterTests(unittest.TestCase):
+    """Observe arguments at the external timeout/provider boundary, without a model call."""
+
+    CONFIGURED = {variable: sample for _, _, variable, _, _, sample in RUNTIME_CASES}
+    TIMEOUTS = {adapter: variable for adapter, option, variable, *_ in RUNTIME_CASES if option == 'timeout'}
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.d = Path(self.temp.name)
+        self.bin = self.d / 'bin'
+        self.bin.mkdir()
+        for source in (ROOT / 'bin').iterdir():
+            if source.is_file() and (source.name.startswith('_') or source.name in (
+                    'aiwork-config', 'subagent', 'subdeepseek-agent', 'submimo',
+                    'subcodex', 'subcursor', 'subkimi')):
+                shutil.copy2(source, self.bin / source.name)
+        write_platform_probe(self.bin, macos=False)
+        self._program('ro-repo-exec', '#!/bin/sh\nshift 2\nexec "$@"\n')
+        self._program('aiwork-timeout', '''#!/usr/bin/env python3
+import json,os,sys
+json.dump(sys.argv[1:],open(os.environ['RUNTIME_CAPTURE'],'w'))
+raise SystemExit(86)
+''')
+        self._program('codex', '''#!/usr/bin/env python3
+import json,sys
+if sys.argv[1:3] == ['debug','models']:
+    print(json.dumps({'models':[{'slug':'gpt-6-sol'}]}))
+else:
+    print('{}')
+''')
+        for name in ('claude', 'kimi', 'cursor-agent'):
+            self._program(name, '#!/bin/sh\nexit 99\n')
+        self.config = write_settings(self.d / 'settings')
+        write_programs(self.config, self.bin)
+        self.repo = self.d / 'repo'
+        self.repo.mkdir()
+        for args in [('init','-q','-b','main'),('config','user.name','Test'),
+                     ('config','user.email','test@example.invalid')]:
+            subprocess.run(['git','-C',str(self.repo),*args],check=True,capture_output=True)
+        (self.repo / 'file').write_text('fixture\n')
+        subprocess.run(['git','-C',str(self.repo),'add','.'],check=True)
+        subprocess.run(['git','-C',str(self.repo),'commit','-qm','fixture'],check=True)
+        self.task = self.d / 'task.md'
+        self.task.write_text('Inspect file.\n')
+        self.capture = self.d / 'capture.json'
+        self.home = self.d / 'home'
+        credentials = self.home / '.kimi-code/credentials'
+        credentials.mkdir(parents=True)
+        (credentials / 'kimi-code.json').write_text('{}')
+        cursor = self.home / '.config/cursor'
+        cursor.mkdir(parents=True)
+        (cursor / 'auth.json').write_text('{"accessToken":"fixture","refreshToken":"fixture"}')
+        shutil.copytree(ROOT / 'kimi-review-home', self.d / 'kimi-review-home')
+        self.env = {k:v for k,v in os.environ.items() if not k.startswith(
+            ('SUBCODEX_', 'CURSOR_', 'DEEPSEEK_', 'MIMO_', 'KIMI_'))}
+        self.env.update(AIWORK_CONFIG_DIR=str(self.config),HOME=str(self.home),
+                        RUNTIME_CAPTURE=str(self.capture),DEEPSEEK_API_KEY='fixture-key',
+                        XDG_CONFIG_HOME=str(self.d / 'unrelated-xdg'),
+                        CURSOR_AUTH_FILE=str(cursor / 'auth.json'))
+
+    def _program(self, name, source):
+        path = self.bin / name
+        path.write_text(source)
+        path.chmod(0o755)
+
+    def invoke(self, leg, mode='review', extra=None):
+        self.capture.unlink(missing_ok=True)
+        result = subprocess.run([str(self.bin / leg),mode,str(self.task),
+                                 str(self.d / (leg+'.log')),str(self.repo)],
+                                env=dict(self.env,**(extra or {})),capture_output=True,text=True,timeout=30)
+        return result, json.loads(self.capture.read_text()) if self.capture.exists() else None
+
+    def test_direct_mimo_reads_runtime_file_before_start(self):
+        (self.config / 'runtime.env').write_text('MIMO_TIMEOUT=6100\nMIMO_MAX_TURNS=311\n')
+        result, args = self.invoke('submimo')
+        self.assertIsNotNone(args,result.stderr)
+        self.assertEqual(args[0],'6100')
+        self.assertEqual(args[args.index('--max-turns')+1],'311')
+
+    def assert_parameters(self, leg, args, expected):
+        self.assertIsNotNone(args)
+        self.assertEqual(args[2] if args[0]=='-k' else args[0],expected[self.TIMEOUTS[leg]])
+        if leg in ('subdeepseek-agent','submimo'):
+            variable = 'DEEPSEEK_MAX_TURNS' if leg=='subdeepseek-agent' else 'MIMO_MAX_TURNS'
+            self.assertEqual(args[args.index('--max-turns')+1],expected[variable])
+        if leg=='subcodex':
+            self.assertIn('model_reasoning_effort='+expected['SUBCODEX_EFFORT'],args)
+
+    def test_all_direct_legs_receive_configured_parameters(self):
+        (self.config/'runtime.env').write_text(''.join(f'{k}={v}\n' for k,v in self.CONFIGURED.items()))
+        for leg in self.TIMEOUTS:
+            for mode in ('review','explore'):
+                with self.subTest(leg=leg,mode=mode):
+                    result,args=self.invoke(leg,mode)
+                    self.assertIsNotNone(args,result.stderr)
+                    self.assert_parameters(leg,args,self.CONFIGURED)
+
+    def test_all_direct_legs_keep_fallbacks_without_a_runtime_file(self):
+        expected = {variable: direct for _, _, variable, direct, _, _ in RUNTIME_CASES}
+        for leg in self.TIMEOUTS:
+            with self.subTest(leg=leg):
+                result, args = self.invoke(leg)
+                self.assertIsNotNone(args, result.stderr)
+                self.assert_parameters(leg, args, expected)
+        self.assertFalse((self.config / 'runtime.env').exists())
+
+    def test_all_direct_legs_accept_environment_overrides(self):
+        (self.config / 'runtime.env').write_text(''.join(f'{k}={v}\n' for k,v in self.CONFIGURED.items()))
+        overrides = {variable: 'xhigh' if option == 'effort' else '7201'
+                     for _, option, variable, *_ in RUNTIME_CASES}
+        for leg in self.TIMEOUTS:
+            with self.subTest(leg=leg):
+                result, args = self.invoke(leg, extra=overrides)
+                self.assertIsNotNone(args, result.stderr)
+                self.assert_parameters(leg, args, overrides)
+
+    def test_all_direct_legs_stop_before_provider_on_invalid_settings(self):
+        for leg, variable in self.TIMEOUTS.items():
+            for bad_file in (True, False):
+                with self.subTest(leg=leg, bad_file=bad_file):
+                    (self.config / 'runtime.env').write_text('MIMO_TIMEOUT=bad\n' if bad_file else '')
+                    extra = {variable: '7201' if bad_file else 'bad'}
+                    result, args = self.invoke(leg, extra=extra)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIsNone(args)
+                    self.assertIn(str(self.config / 'runtime.env') if bad_file else f'environment {variable}',
+                                  result.stderr)
 
 
 if __name__ == '__main__':
