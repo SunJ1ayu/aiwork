@@ -66,6 +66,7 @@ if [[ $# -lt 4 || $# -gt 5 ]]; then usage; exit 2; fi
 
 PROVIDER="$1"; MODE="$2"; TASK_FILE="$3"; LOG_FILE="$4"; REPO_DIR="${5:-$PWD}"
 SOURCE_REPO="$REPO_DIR"
+COMMAND_TMP=""
 
 if [[ "$MODE" == "review" || "$MODE" == "explore" ]]; then
   _SOURCE_TOP="$(git -C "$SOURCE_REPO" rev-parse --show-toplevel 2>/dev/null)" \
@@ -199,6 +200,7 @@ _subagent_cleanup() {
     review_workspace_cleanup \
       || echo "$LABEL: 警告:review workspace 清理失败:${REVIEW_WORKSPACE_DIR:-?}" >&2
   fi
+  [[ -z "${COMMAND_TMP:-}" ]] || rm -rf -- "$COMMAND_TMP"
   trap - EXIT
   exit "$rc"
 }
@@ -245,10 +247,16 @@ review_platform_ro_exec "$SOURCE_REPO" "$EXEC_NAME" || exit 78
 [[ -x "$BIN_DIR/aiwork-timeout" ]] || { printf '%s: 少了 %s ⇒ 拒绝派发\n' "$EXEC_NAME" "$BIN_DIR/aiwork-timeout" >&2; exit 78; }
 if [[ "$CLAUDE_SANDBOX" == 1 ]]; then
   SANDBOX_HELPER="$BIN_DIR/_claude_sandbox.py"
-  COMMAND_TMP="$(review_workspace_home claude-tmp)" || exit 78
+  COMMAND_TMP="$(mktemp -d /tmp/ac.XXXXXXXX)" || exit 78
+  COMMAND_TMP="$(cd "$COMMAND_TMP" && pwd -P)" || exit 78
+  # Native shell tracking falls back to a shared /tmp directory for long paths.
+  git -C "$REPO_DIR" repack -a -d >/dev/null 2>&1 || exit 78
+  rm -f -- "$REPO_DIR/.git/objects/info/alternates" || exit 78
+  export PATH="/Library/Developer/CommandLineTools/usr/bin:$PATH"
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null XDG_CONFIG_HOME="$COMMAND_TMP"
   export CLAUDE_CODE_TMPDIR="$COMMAND_TMP" TMPDIR="$COMMAND_TMP"
   READER_SETTINGS="$RUNTIME_HOME/sandbox-settings.json"
-  "$AIWORK_PROGRAMS/python3" "$SANDBOX_HELPER" settings "$READER_SETTINGS" "$AIWORK_CONFIG_DIR" "$RUNTIME_HOME" "$COMMAND_TMP" || exit 78
+  "$AIWORK_PROGRAMS/python3" "$SANDBOX_HELPER" settings "$READER_SETTINGS" "$REPO_DIR" "$COMMAND_TMP" || exit 78
   READER_TOOLS="$("$AIWORK_PROGRAMS/python3" "$SANDBOX_HELPER" tools)" || exit 78
   CLAUDE_CONFIG_DIR="$RUNTIME_HOME" "$AIWORK_PROGRAMS/python3" "$SANDBOX_HELPER" preflight "$AIWORK_PROGRAMS/claude" "$READER_SETTINGS" "$REPO_DIR" || exit 78
 elif [[ "$READ_ONLY" == 1 ]]; then

@@ -16,7 +16,7 @@ class ClaudeSandboxTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('claude_sandbox', ROOT / 'bin/_claude_sandbox.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        settings = module.settings(Path('/Users/fixture'), Path('/settings'), Path('/runtime'), Path('/command-tmp'))
+        settings = module.settings(Path('/Users/fixture'), Path('/copy'), Path('/command-tmp'))
         sandbox = settings['sandbox']
         self.assertTrue(sandbox['enabled'])
         self.assertTrue(sandbox['failIfUnavailable'])
@@ -26,14 +26,25 @@ class ClaudeSandboxTests(unittest.TestCase):
         self.assertFalse(sandbox['network']['allowLocalBinding'])
         self.assertFalse(sandbox['network']['allowAllUnixSockets'])
         self.assertTrue(settings['permissions']['blockReadsOutsideWorkingDirectories'])
-        self.assertIn('/settings', sandbox['filesystem']['denyRead'])
-        self.assertIn('/runtime', sandbox['filesystem']['denyRead'])
+        self.assertEqual(sandbox['filesystem']['denyRead'], ['/'])
         self.assertEqual(sandbox['filesystem']['allowWrite'], ['/command-tmp'])
-        for directory in ('.codex', '.claude', '.config/cursor', '.kimi-code', '.local/share/mimocode'):
-            self.assertIn('/Users/fixture/' + directory, sandbox['filesystem']['denyRead'])
         protected = {item['name'] for item in sandbox['credentials']['envVars'] if item['mode'] == 'deny'}
         self.assertTrue({'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'MIMO_API_KEY'} <= protected)
         self.assertEqual(module.TOOLS, ('Read', 'Glob', 'Grep', 'Bash'))
+
+    def test_read_scope_is_default_deny(self):
+        spec = importlib.util.spec_from_file_location('claude_sandbox', ROOT / 'bin/_claude_sandbox.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        policy = module.settings(Path('/Users/fixture'), Path('/copy'), Path('/command-tmp'))['sandbox']['filesystem']
+        self.assertIn('/', policy['denyRead'])
+        self.assertEqual(policy['allowRead'][:2], ['/copy', '/command-tmp'])
+        self.assertEqual(policy['allowRead'][2:], [
+            '/bin', '/sbin', '/usr/bin', '/usr/sbin', '/usr/lib', '/usr/libexec',
+            '/usr/share', '/System/Library', '/dev', '/Library/Developer/CommandLineTools',
+            '/opt/homebrew/Cellar', '/opt/homebrew/opt', '/opt/homebrew/lib'])
+        for broad in ('/Users', '/Volumes', '/private', '/tmp', '/var', '/System', '/usr'):
+            self.assertNotIn(broad, policy['allowRead'])
 
     def test_command_audit_accepts_bash_but_rejects_other_tools(self):
         sys.path.insert(0, str(ROOT / 'bin'))
@@ -62,7 +73,7 @@ class ClaudeSandboxTests(unittest.TestCase):
         spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for scenario in ('ready', 'wrong-version', 'sandbox-denied', 'missing-response'):
+            for scenario in ('ready', 'wrong-version', 'sandbox-denied', 'missing-response', 'ignored-policy'):
                 with self.subTest(scenario=scenario):
                     cli = root / 'claude'
                     # MCP shapes captured from the installed 2.1.301 CLI; no model
@@ -82,6 +93,10 @@ for line in sys.stdin:
             break
         result = {'content': [{'type': 'text', 'text': json.dumps({
             'stdout': 'AIWORK_NATIVE_SANDBOX_READY', 'stderr': '', 'interrupted': False})}]}
+        if scenario == 'ignored-policy':
+            import subprocess
+            output = subprocess.run(request['params']['arguments']['command'], shell=True, capture_output=True, text=True)
+            result['content'][0]['text'] = json.dumps({'stdout': output.stdout, 'stderr': output.stderr, 'interrupted': False})
         if scenario == 'sandbox-denied':
             result['isError'] = True
     else:

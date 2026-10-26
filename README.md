@@ -97,9 +97,9 @@ from tests (the 2026-08-10 incident), within the documented platform limits.
 
 ## MiMo / DeepSeek 的 Claude Code 外壳
 
-两条腿共用 `bin/subagent` 的供应商表；各自的工具能力与平台限制不变。
+两条腿共用 `bin/subagent` 的供应商表。
 Claude Code 固定使用 2.1.301，并在本机 `programs/claude`、`programs/node` 登记安装路径。
-Mac 上 DeepSeek、MiMo 的 review / explore 共用 `bin/_claude_sandbox.py` 的原生沙箱策略和工具清单：允许在一次性副本内运行命令，命令断网、隐藏凭证，禁止退回无沙箱执行。程序自己的临时文件仅可写本次运行的临时目录；项目设置、MCP 和技能不参与配置。派模型前通过 Claude Code 自带 MCP 的 Bash 做离线启动检查，版本不符或原生沙箱起不来即拒绝派发。真实工具记录仍由 `bin/_reader_tools.py` 核对。Mac 沙箱不能叠加，腿内运行 aiwork 测试会被断网守卫拒绝；使用任务书里的 CI 结果。Linux 上两条腿的原有能力和保护保持不变。
+Mac 上 DeepSeek、MiMo 的 review / explore 共用 `bin/_claude_sandbox.py` 的原生沙箱策略和工具清单：允许在一次性副本内运行命令，命令断网、隐藏凭证，读取仅开放本次副本、运行临时目录和必要的系统程序与库，禁止退回无沙箱执行。程序自己的临时文件仅可写本次运行的临时目录；项目设置、MCP 和技能不参与配置。派模型前通过 Claude Code 自带 MCP 的 Bash 做离线启动检查，同时用副本内外两个临时探针验证可读与拒读；版本不符、原生沙箱起不来或读限制未生效即拒绝派发。真实工具记录仍由 `bin/_reader_tools.py` 核对。Mac 沙箱不能叠加，腿内运行 aiwork 测试会被断网守卫拒绝；使用任务书里的 CI 结果。Linux 上两条腿的原有能力和保护保持不变。
 
 MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行目录。
 小米接口的配置方法见[官方 Claude Code 文档](https://mimo.mi.com/docs/zh-CN/tokenplan/integration/claudecode)。

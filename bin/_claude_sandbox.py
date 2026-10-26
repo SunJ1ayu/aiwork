@@ -7,7 +7,7 @@ from pathlib import Path
 TOOLS = ('Read', 'Glob', 'Grep', 'Bash')
 
 
-def settings(home, config, runtime, command_tmp):
+def settings(home, repo, command_tmp):
     return {
         'permissions': {'blockReadsOutsideWorkingDirectories': True},
         'sandbox': {
@@ -21,14 +21,17 @@ def settings(home, config, runtime, command_tmp):
             'filesystem': {
                 'allowWrite': [str(command_tmp)],
                 'denyWrite': [str(home / '.npm/_logs'), '/tmp/claude', '/private/tmp/claude'],
-                'denyRead': [str(config), str(runtime)] + [str(home / name) for name in
-                    ('.claude', '.claude.json', '.codex', '.config/cursor',
-                     'Library/Application Support/Cursor', '.kimi-code',
-                     '.local/share/mimocode', '.ssh', '.aws', '.config/gh')],
+                'denyRead': ['/'],
+                'allowRead': [str(repo), str(command_tmp),
+                    '/bin', '/sbin', '/usr/bin', '/usr/sbin', '/usr/lib',
+                    '/usr/libexec', '/usr/share', '/System/Library', '/dev',
+                    '/Library/Developer/CommandLineTools',
+                    '/opt/homebrew/Cellar', '/opt/homebrew/opt', '/opt/homebrew/lib'],
             },
             'credentials': {'envVars': [{'name': name, 'mode': 'deny'} for name in sorted(
                 set(os.environ) - {'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'SHELL',
-                                   'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'TERM'} |
+                                   'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'TERM',
+                                   'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'XDG_CONFIG_HOME'} |
                 {'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'MIMO_API_KEY'})]},
         },
     }
@@ -36,10 +39,18 @@ def settings(home, config, runtime, command_tmp):
 
 def preflight(cli, settings_file, repo):
     """Exercise native Bash through Claude's MCP server without dispatching a model."""
+    import shlex
+    import tempfile
     import select
     import signal
     import subprocess
     import time
+    inside = tempfile.NamedTemporaryFile(prefix='.aiwork-read-check-', dir=repo)
+    outside = tempfile.NamedTemporaryFile(prefix='aiwork-denied-read-', dir=Path(settings_file).parent)
+    inside.write(b'probe'); inside.flush()
+    outside.write(b'probe'); outside.flush()
+    command = ('if /bin/cat ' + shlex.quote(inside.name) + ' >/dev/null 2>&1 && ! /bin/cat '
+               + shlex.quote(outside.name) + ' >/dev/null 2>&1; then printf AIWORK_NATIVE_SANDBOX_READY; fi')
     process = subprocess.Popen(
         [cli, '--setting-sources', '', '--settings', settings_file, 'mcp', 'serve'],
         cwd=repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -80,7 +91,7 @@ def preflight(cli, settings_file, repo):
             raise ValueError('Claude Code must be 2.1.301')
         request({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         result = request({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {
-            'name': 'Bash', 'arguments': {'command': 'printf AIWORK_NATIVE_SANDBOX_READY',
+            'name': 'Bash', 'arguments': {'command': command,
                                          'description': 'Offline native sandbox startup check'}}})
         content = result.get('content', [])
         if result.get('isError') or len(content) != 1:
@@ -99,6 +110,8 @@ def preflight(cli, settings_file, repo):
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
+        inside.close()
+        outside.close()
         process.stdin.close()
         process.stdout.close()
 
@@ -107,8 +120,8 @@ if __name__ == '__main__':
     if sys.argv[1] == 'tools':
         print(','.join(TOOLS))
     elif sys.argv[1] == 'settings':
-        dest, config, runtime, command_tmp = map(Path, sys.argv[2:])
-        dest.write_text(json.dumps(settings(Path.home(), config.resolve(), runtime.resolve(), command_tmp.resolve())) + '\n')
+        dest, repo, command_tmp = map(Path, sys.argv[2:])
+        dest.write_text(json.dumps(settings(Path.home(), repo.resolve(), command_tmp.resolve())) + '\n')
     elif sys.argv[1] == 'preflight':
         try:
             preflight(*sys.argv[2:])

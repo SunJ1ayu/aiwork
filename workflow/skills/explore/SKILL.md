@@ -15,7 +15,7 @@ description: 让几条腿各自对同一份题面提方案。
 explore BRIEF --repo DIR --leg subdeepseek-agent --leg submimo
 ```
 
-`BRIEF` 写目标、已有事实、约束，以及还待核实的前提。`--repo` 是目标仓库；每条腿只读它本地 main（不会先 fetch）的一份快照。`--leg` 可重复，被点名的腿并行跑。
+`BRIEF` 写目标、已有事实、约束，以及还待核实的前提。`--repo` 是目标仓库；每条腿获得它本地 main（不会先 fetch）的一份快照；各腿的工具与平台能力见 [README](../../../README.md)。`--leg` 可重复，被点名的腿并行跑。
 
 先写下自己的判断，再看各家方案。方案要用代码或小实验核实，不按票数采纳。
 
@@ -29,6 +29,6 @@ explore BRIEF --repo DIR --leg subdeepseek-agent --leg submimo
 
 - `subdeepseek-agent explore TASK LOG REPO` — Claude Code headless。凭证 `~/.config/aiwork/deepseek.env` 的 `DEEPSEEK_API_KEY`。超时 `DEEPSEEK_TIMEOUT`。
 - `subkimi explore TASK LOG REPO` — `kimi -p`。凭证 `~/.kimi-code/credentials/kimi-code.json`（运行目录见 [README「评审运行目录」](../../../README.md#评审运行目录)）。超时 `KIMI_TIMEOUT`。
-- `submimo explore TASK LOG REPO` — `subagent mimo`，经 Claude Code 连接小米接口；凭证和接口地址在 `~/.config/aiwork/mimo.env`。超时 `MIMO_TIMEOUT`；只读工具和跑完核对见 `bin/_reader_tools.py`。
+- `submimo explore TASK LOG REPO` — `subagent mimo`，经 Claude Code 连接小米接口；凭证和接口地址在 `~/.config/aiwork/mimo.env`。超时 `MIMO_TIMEOUT`；跑完核对见 `bin/_reader_tools.py`。
 - `subcursor explore TASK LOG REPO` — `cursor-agent`。凭证 `~/.config/cursor/auth.json`。超时 `CURSOR_TIMEOUT`。
 - `subcodex explore TASK LOG REPO` — `codex exec`。凭证 `~/.codex/auth.json`。超时 `SUBCODEX_TIMEOUT`。
