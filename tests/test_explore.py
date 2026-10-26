@@ -539,7 +539,13 @@ class MimoExploreTests(unittest.TestCase):
             pathlib.Path(os.environ["MIMO_ARGV"]).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
             if "--output-format" not in sys.argv or sys.argv[sys.argv.index("--output-format") + 1] != "stream-json":
                 raise SystemExit("explore must request --output-format stream-json")
-            sys.stdout.write(pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8"))
+            import json
+            content = pathlib.Path(os.environ["MIMO_JSON_FIXTURE"]).read_text(encoding="utf-8")
+            events = [json.loads(line) for line in content.splitlines() if line.strip()]
+            for event in events:
+                if event.get("type") == "system" and event.get("subtype") == "init":
+                    event["tools"] = sys.argv[sys.argv.index("--tools") + 1].split(",")
+                print(json.dumps(event))
         '''), encoding="utf-8")
         (fake / "claude").chmod(0o755)
         write_programs(config, fake)
@@ -691,8 +697,10 @@ class ExploreLegContractTests(unittest.TestCase):
         answer = "Direction noted.\n"
         self._stub("claude", textwrap.dedent(f'''\
             #!/usr/bin/env python3
-            import json
-            print(json.dumps({{"type": "result", "result": {answer!r}}}))
+            import json, sys
+            if '--tools' in sys.argv:
+                print(json.dumps({{"type":"system","subtype":"init","tools":sys.argv[sys.argv.index('--tools')+1].split(',')}}))
+            print(json.dumps({{"type": "result", "subtype":"success", "is_error":False, "result": {answer!r}}}))
         '''))
         result = self._run(
             [str(ROOT / "bin" / "subagent"), "deepseek", "explore",
@@ -706,8 +714,10 @@ class ExploreLegContractTests(unittest.TestCase):
         answer = "Direction noted.\n"
         self._stub("claude", textwrap.dedent(f'''\
             #!/usr/bin/env python3
-            import json
-            print(json.dumps({{"type": "result", "result": {answer!r}}}))
+            import json, sys
+            if '--tools' in sys.argv:
+                print(json.dumps({{"type":"system","subtype":"init","tools":sys.argv[sys.argv.index('--tools')+1].split(',')}}))
+            print(json.dumps({{"type": "result", "subtype":"success", "is_error":False, "result": {answer!r}}}))
         '''))
         result = self._run(
             [str(ROOT / "bin" / "subagent"), "deepseek", "explore",

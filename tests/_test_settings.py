@@ -106,6 +106,32 @@ def fixture_directory(directory):
     return path
 
 
+def claude_fixture_launcher(programs, target):
+    """Model stubs also implement the native CLI's offline MCP startup protocol."""
+    launcher = programs / '_claude-fixture'
+    source = '#!' + sys.executable + '\n' + """
+import json, os, sys
+if sys.argv[-2:] == ['mcp', 'serve']:
+    for line in sys.stdin:
+        message = json.loads(line)
+        if message.get('method') == 'initialize':
+            result = {'protocolVersion': '2024-11-05', 'capabilities': {},
+                      'serverInfo': {'name': 'offline-fixture', 'version': '2.1.301'}}
+        elif message.get('method') == 'tools/call':
+            result = {'content': [{'type': 'text', 'text': json.dumps({
+                'stdout': 'AIWORK_NATIVE_SANDBOX_READY', 'stderr': '', 'interrupted': False})}]}
+        else:
+            continue
+        print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
+    raise SystemExit(0)
+""" + 'os.execv(' + repr(str(target)) + ', [' + repr(str(target)) + '] + sys.argv[1:])\n'
+    with tempfile.NamedTemporaryFile(mode='w', dir=programs, delete=False) as temporary:
+        temporary.write(source)
+        os.chmod(temporary.name, 0o755)
+    os.replace(temporary.name, launcher)
+    return launcher
+
+
 def write_programs(directory, fake=None):
     """Bind only disposable provider stubs; python/node belong to the test runtime."""
     programs = fixture_directory(directory) / 'programs'
@@ -118,6 +144,8 @@ def write_programs(directory, fake=None):
         target = runtime.get(name, reject)
         if fake is not None and (Path(fake) / name).exists():
             target = Path(fake) / name
+            if name == 'claude':
+                target = claude_fixture_launcher(programs, target)
         link = programs / name
         link.unlink(missing_ok=True)
         link.symlink_to(target)
@@ -143,7 +171,7 @@ def run_with_programs(command):
                 except ValueError:
                     continue
                 (programs / name).unlink(missing_ok=True)
-                (programs / name).symlink_to(target)
+                (programs / name).symlink_to(claude_fixture_launcher(programs, target) if name == 'claude' else target)
         return subprocess.call(command)
     finally:
         for name, target in saved.items():

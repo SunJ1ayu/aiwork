@@ -39,7 +39,8 @@ pathlib.Path(os.environ['RO_MARKER']).write_text('\n'.join(sys.argv[1:]))
 raise SystemExit(86)
 ''')
         for cli, stream in (('kimi', KIMI_READ), ('claude', MIMO_READ)):
-            self.fixture._write(cli, '#!/usr/bin/env python3\nprint(' + repr(stream) + ')\n')
+            self.fixture._write(cli, '#!/usr/bin/env python3\nimport json,sys\nstream=' + repr(stream) + '\n' +
+                "for line in stream.splitlines():\n e=json.loads(line)\n if e.get('type')=='system' and '--tools' in sys.argv:e['tools']=sys.argv[sys.argv.index('--tools')+1].split(',')\n print(json.dumps(e))\n")
 
     def run_leg(self, leg, mode, macos, **extra):
         # Replace the probe only in a disposable deployment, never in production.
@@ -62,7 +63,7 @@ raise SystemExit(86)
             capture_output=True, text=True, env=env, timeout=30)
 
     def test_mac_readers_start_without_ro_wrapper_in_both_modes(self):
-        for leg in ('subkimi', 'submimo'):
+        for leg in ('subkimi', 'submimo', 'subdeepseek-agent'):
             for mode in ('review', 'explore'):
                 with self.subTest(leg=leg, mode=mode):
                     result = self.run_leg(leg, mode, True)
@@ -129,8 +130,7 @@ raise SystemExit(95)
         for name in ('git', 'mkdir', 'mktemp', 'cp', 'realpath', 'aiwork-config',
                      'codex', 'claude', 'cursor-agent'):
             self.fixture._write(name, poison)
-        for leg, reason in (('subdeepseek-agent', 'DeepSeek 的 Claude Code 沙箱'),
-                            ('subcursor', 'Cursor 收残留进程')):
+        for leg, reason in (('subcursor', 'Cursor 收残留进程'),):
             for mode in ('review', 'explore'):
                 with self.subTest(leg=leg, mode=mode):
                     result = self.run_leg(leg, mode, True, PREP_MARKER=str(unexpected),
@@ -142,6 +142,26 @@ raise SystemExit(95)
                     self.assertFalse(self.marker.exists())
                     self.assertFalse((self.root / 'logs').exists())
                     self.assertFalse((self.root / 'absent-data').exists())
+
+    def test_native_sandbox_failure_never_dispatches_either_provider(self):
+        invoked = self.root / 'model-dispatched'
+        self.fixture._write('claude', '#!/usr/bin/env python3\nfrom pathlib import Path\nPath(' + repr(str(invoked)) + ').touch()\n')
+        original = self.fixture._env
+
+        def failed_preflight_environment():
+            env = original()
+            launcher = self.root / 'settings/programs/_claude-fixture'
+            launcher.write_text(launcher.read_text().replace('AIWORK_NATIVE_SANDBOX_READY', 'NATIVE_SANDBOX_FAILED'))
+            return env
+
+        self.fixture._env = failed_preflight_environment
+        for leg in ('submimo', 'subdeepseek-agent'):
+            for mode in ('review', 'explore'):
+                with self.subTest(leg=leg, mode=mode):
+                    result = self.run_leg(leg, mode, True)
+                    self.assertEqual(result.returncode, 78, result.stderr)
+                    self.assertIn('native sandbox preflight failed', result.stderr)
+                    self.assertFalse(invoked.exists(), 'provider must not start after native sandbox failure')
 
     def _codex_output_attack(self, attack):
         # The CLI is outside its command sandbox. Model actions below only

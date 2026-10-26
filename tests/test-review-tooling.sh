@@ -102,7 +102,7 @@ v9_claude_shell_base() {
   # 这一组问的是**claude 壳这条底座本身**(env 注入、工具白名单、裁决 gate),
   # 它对 deepseek 仍然完全有效,断言一条不删、一条不弱。GLM 那条底座由 V28 问。
   # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/_reader_tools.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
@@ -118,6 +118,8 @@ out = {"argv": sys.argv[1:],
        "cwd": os.getcwd()}
 open(os.environ["CAPTURE"], "w").write(json.dumps(out))
 # 真 claude 在 --output-format stream-json 下吐的是 JSONL;stub 照同一个契约说话。
+if '--tools' in sys.argv:
+    print(json.dumps({'type':'system','subtype':'init','tools':sys.argv[sys.argv.index('--tools')+1].split(',')}))
 text = os.environ.get("STUB_REVIEW_OUT", "stub review\nConclusion: PASS")
 print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}))
 print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": text}))
@@ -171,9 +173,13 @@ PYEOF
   else
     bad "agent: no write-capable tool in allowlist"
   fi
+  if review_platform_is_macos; then
+    argvhas "$d/a1.json" "--tools"; check "agent: exact native tool selection present" $?
+  else
   argvhas "$d/a1.json" "--disallowedTools"; check "agent: --disallowedTools present" $?
   argvhas "$d/a1.json" "Write";             check "agent: Write explicitly disallowed" $?
   argvhas "$d/a1.json" "Agent";             check "agent: subagent tool (Agent) disallowed" $?
+  fi
   # 2026-08-18 晚收紧(track deepseek-leg-bash-hole):**allowlist 里不许再有任何 Bash**。
   # 实测:`Bash(git diff:*)` 放行了 `git diff --output=<仓内文件> HEAD`,文件真写出来了
   # ⇒ 评审腿能往被评审的仓里写 ⇒ **能写 tests/,也就是能动判据**。
@@ -204,6 +210,8 @@ sys.exit(0 if any(t.startswith('Bash') for t in seg) else 1)" "$d/a1.json" 2>/de
   if python3 -c "
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
+if '--disallowedTools' not in a:
+    sys.exit(1)
 i=a.index('--disallowedTools'); rest=a[i+1:]
 j=[k for k,x in enumerate(rest) if x.startswith('--')]
 seg=rest[:j[0]] if j else rest
@@ -234,7 +242,9 @@ PY_LOCAL_BASH
   # 08-18 宣称了没有的工具(腿当场顶回来、白花几轮)、08-19 瞒着有的(腿不会去用)。
   python3 -c "
 import json,sys
-sys.exit(0 if 'tests' in json.load(open(sys.argv[1])).get('stdin','') and 'Bash' in json.load(open(sys.argv[1])).get('stdin','') else 1)" \
+record=json.load(open(sys.argv[1])); prompt=record.get('stdin',''); native='--tools' in record['argv']
+honest=('local diagnostics' in prompt and 'aiwork test suite cannot run' in prompt) if native else 'tests' in prompt
+sys.exit(0 if honest and 'Bash' in prompt else 1)" \
     "$d/a1.json" 2>/dev/null
   check "agent: 提示词如实写明可用 Bash 做本地诊断/测试" $?
 
@@ -242,6 +252,9 @@ sys.exit(0 if 'tests' in json.load(open(sys.argv[1])).get('stdin','') and 'Bash'
   if python3 -c "
 import json,sys
 a=json.load(open(sys.argv[1]))['argv']
+if '--tools' in a:
+    selected=a[a.index('--tools')+1].split(',')
+    sys.exit(1 if any(t in selected for t in ('Write','Edit','NotebookEdit','Task','Agent')) else 0)
 i=a.index('--disallowedTools'); rest=a[i+1:]
 j=[k for k,x in enumerate(rest) if x.startswith('--')]
 seg=rest[:j[0]] if j else rest
@@ -252,7 +265,12 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
     bad "agent: 写口仍全禁(Write/Edit/NotebookEdit/Task/Agent)—— 零成本,不跟着 Bash 一起放"
   fi
   argvhas "$d/a1.json" "--model sonnet";    check "agent: --model sonnet (mapped slot)" $?
-  argvhas "$d/a1.json" "--setting-sources project"; check "agent: user settings not loaded" $?
+  if review_platform_is_macos; then
+    python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];sys.exit(a[a.index('--setting-sources')+1]!='')" "$d/a1.json"
+  else
+    argvhas "$d/a1.json" "--setting-sources project"
+  fi
+  check "agent: user settings not loaded" $?
   argvhas "$d/a1.json" "--max-turns";       check "agent: turn cap present" $?
 
   # settings-file fallback: the key comes from deepseek.env in a temp settings dir.
@@ -487,12 +505,14 @@ v21_agent_leg_body_is_single_source() {
 
   local d; d="$(test_mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   fixture_git_repo "$d/repo"
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/_reader_tools.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"
   cat > "$ab/claude" <<'CAPEOF'
 #!/usr/bin/env python3
 import sys, os, json
 open(os.environ["CAPTURE"], "w").write(json.dumps({"argv": sys.argv[1:]}))
+if '--tools' in sys.argv:
+    print(json.dumps({'type':'system','subtype':'init','tools':sys.argv[sys.argv.index('--tools')+1].split(',')}))
 print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Conclusion: PASS"}]}}))
 print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Conclusion: PASS"}))
 CAPEOF
@@ -703,7 +723,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
@@ -724,7 +744,7 @@ printf 'model=%s\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" >> "$PWN_OUT"
 # 每条腿只认自己命令行的最后一条消息。claude 是 result 事件，kimi 是 role=assistant，
 case "$(basename "$0")" in
   claude)
-    echo '{"type":"system","subtype":"init","tools":["Read","Glob","Grep"]}'
+    python3 -c 'import json,sys; a=sys.argv; print(json.dumps({"type":"system","subtype":"init","tools":a[a.index("--tools")+1].split(",") if "--tools" in a else []}))' "$@"
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
     echo '{"type":"result","subtype":"success","is_error":false,"result":"stub\nConclusion: PASS"}'
     ;;
@@ -880,7 +900,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -888,7 +908,7 @@ v37_wrappers_open_no_write_hole() {
 if touch "$PWN_REPO/PWNED_BY_LEG" 2>/dev/null; then echo WROTE > "$PWN_OUT"; else echo BLOCKED > "$PWN_OUT"; fi
 case "$(basename "$0")" in
   claude)
-    echo '{"type":"system","subtype":"init","tools":["Read","Glob","Grep"]}'
+    python3 -c 'import json,sys; a=sys.argv; print(json.dumps({"type":"system","subtype":"init","tools":a[a.index("--tools")+1].split(",") if "--tools" in a else []}))' "$@"
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stub\nConclusion: PASS"}]}}'
     echo '{"type":"result","subtype":"success","is_error":false,"result":"stub\nConclusion: PASS"}'
     ;;
@@ -1436,7 +1456,7 @@ v46_final_report_is_the_last_message() {
   local d b rc; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
   fixture_git_repo "$d/repo"
   printf '# t\n' > "$d/t.md"
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
     "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" \
     "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/ro-repo-exec" "$b/"
   printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"
@@ -1452,9 +1472,12 @@ sys.stdin.read()
 noise = ("## 过程\n\n```python\n# 注释\nconclusion: pending ? null : value\n```\n\n"
          "  → Bash sed -n '1,40p' gate/decide.mjs\necho hi\n\nkimi> \n\nConclusion: BLOCK")
 last = open(os.environ["FINAL_LAST"], encoding="utf-8").read()
+if '--tools' in sys.argv:
+    print(json.dumps({'type':'system','subtype':'init','tools':sys.argv[sys.argv.index('--tools')+1].split(',')}))
 print(json.dumps({"type":"assistant","message":{"content":[
     {"type":"text","text":noise},
-    {"type":"tool_use","name":"Bash","input":{"command":"sed -n '1,40p' gate/decide.mjs\n# 注释\necho hi"}}]}}))
+    {"type":"tool_use","id":"fixture-bash","name":"Bash","input":{"command":"sed -n '1,40p' gate/decide.mjs\n# 注释\necho hi"}}]}}))
+print(json.dumps({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-bash","content":""}]}}))
 print(json.dumps({"type":"result","subtype":"success","is_error":False,"result":last}))
 PY
   cat > "$b/kimi" <<'PY'
@@ -1522,7 +1545,12 @@ PY
 #!/usr/bin/env python3
 import os, sys
 sys.stdin.read()
-sys.stdout.write(open(os.environ["MIMO_JSON_FIXTURE"], encoding="utf-8").read())
+import json
+for line in open(os.environ["MIMO_JSON_FIXTURE"], encoding="utf-8"):
+    event = json.loads(line)
+    if event.get('type') == 'system' and event.get('subtype') == 'init':
+        event['tools'] = sys.argv[sys.argv.index('--tools')+1].split(',')
+    print(json.dumps(event))
 PY
   printf '%s' $'Shared fixture checked.\n\nConclusion: PASS' > "$d/mimo-want.txt"
   env PATH="$b:$PATH" MIMO_JSON_FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/claude-mimo-stream.jsonl" \
