@@ -8,6 +8,7 @@
 评审与修复规则：[aiwork main 的 REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md)。
 项目已接受风险见项目 main 的 `.aiwork/accepted-risks.md`；正式评审与合并条件见项目关卡策略。
 需要判断时读取这些来源，说明文件只提供入口。
+记录待办或业主决定前，必读 REVIEW-RULES 第二节第 1 条「待办与业主决定」。
 
 ## 一个任务的走法
 
