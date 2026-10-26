@@ -143,6 +143,21 @@ raise SystemExit(95)
                     self.assertFalse((self.root / 'logs').exists())
                     self.assertFalse((self.root / 'absent-data').exists())
 
+    def test_native_behavior_passes_with_a_different_cli_version(self):
+        original = self.fixture._env
+        def different_version_environment():
+            env = original()
+            launcher = self.root / 'settings/programs/_claude-fixture'
+            launcher.write_text(launcher.read_text().replace('2.1.301', 'future-cli-version'))
+            return env
+        self.fixture._env = different_version_environment
+        for leg in ('submimo', 'subdeepseek-agent'):
+            for mode in ('review', 'explore'):
+                with self.subTest(leg=leg, mode=mode):
+                    result = self.run_leg(leg, mode, True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('Conclusion: PASS', (self.root / 'report.md').read_text())
+
     def test_native_sandbox_failure_never_dispatches_either_provider(self):
         invoked = self.root / 'model-dispatched'
         self.fixture._write('claude', '#!/usr/bin/env python3\nfrom pathlib import Path\nPath(' + repr(str(invoked)) + ').touch()\n')
