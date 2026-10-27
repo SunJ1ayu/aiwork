@@ -275,4 +275,7 @@ else
   printf 'subkimi: %s\n' "$AUDIT_OUT" >&2
   exit 78
 fi
+# The CLI stream supplies no response model; keep the fact null rather than
+# substituting the requested alias (owner decision in issue #79).
+printf 'reported_model: CLI 未提供\n' >> "$LOG_FILE"
 review_workspace_finish subkimi "$RC" "$MODE" "$MODEL" subscription "" "" "$AUDIT_MSG" "$AUDIT_RC"

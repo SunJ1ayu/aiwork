@@ -190,6 +190,17 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             f"stderr={result.stderr[-800:]!r} stdout={result.stdout[-400:]!r}")
         return json.loads(path.read_text())
 
+    def test_kimi_missing_reported_model_is_explicit_and_publishable(self):
+        for mode, case in (("review", "pass"), ("explore", "explore_ok")):
+            with self.subTest(mode=mode):
+                result = self._run("subkimi", mode, case)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                facts = self._facts("subkimi", case, result)
+                self.assertIsNone(facts["model"]["reported"])
+                self.assertEqual(facts["evidence_completeness"], "complete")
+                log = (self.root / f"subkimi-{case}.log").read_text()
+                self.assertIn("reported_model: CLI 未提供", log)
+
     def _signature(self, result, facts, log):
         marker = str(log)
         finish = []
