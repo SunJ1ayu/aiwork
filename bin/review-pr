@@ -5,7 +5,6 @@ Review one repository's PR head and publish a scoped App COMMENT review."""
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 from pathlib import Path
@@ -14,7 +13,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
@@ -146,6 +144,13 @@ def github(token: str, endpoint: str, payload: dict | None = None, *,
     return value
 
 
+def review_token(repository: str) -> str:
+    token = _leg_session.run([str(BIN / "gh-app-token"), "review", "--repo", repository]).strip()
+    if not token:
+        raise ReviewError("review App returned an empty token")
+    return token
+
+
 def pr_state(token: str, number: int, *, repository: str, preview: bool = False) -> dict:
     value = github(token, f"repos/{repository}/pulls/{number}")
     head = value.get("head") or {}
@@ -168,8 +173,9 @@ def check_current_head(expected: str, current: dict) -> None:
         raise ReviewError(f"PR head changed since review of {expected}; no review posted, rerun")
 
 
-def main_document(repo: Path, path: str, *, required: bool = True) -> str:
-    entry = _leg_session.run(["git", "-C", str(repo), "ls-tree", "refs/aiwork/main", "--", path]).strip()
+def main_document(repo: Path, path: str, *, required: bool = True,
+                  ref: str = "refs/aiwork/main") -> str:
+    entry = _leg_session.run(["git", "-C", str(repo), "ls-tree", ref, "--", path]).strip()
     if not entry:
         if required:
             raise ReviewError(f"required review document main:{path} is missing; no review run")
@@ -177,23 +183,8 @@ def main_document(repo: Path, path: str, *, required: bool = True) -> str:
     if not entry.startswith(("100644 blob ", "100755 blob ")):
         raise ReviewError(f"main:{path} is not a regular file")
     raw = _leg_session.run(
-        ["git", "-C", str(repo), "show", f"refs/aiwork/main:{path}"], binary=True)
+        ["git", "-C", str(repo), "show", f"{ref}:{path}"], binary=True)
     return raw.decode("utf-8")
-
-
-def public_github(endpoint: str) -> dict:
-    # Rules are public; the target-scoped review token must not be used here.
-    request = urllib.request.Request(f"https://api.github.com/{endpoint}", headers={
-        "User-Agent": "aiwork-review-pr", "Accept": "application/vnd.github+json",
-    })
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            value = json.load(response)
-    except (OSError, ValueError) as exc:
-        raise ReviewError(f"cannot read public review source {endpoint}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise ReviewError(f"GitHub returned a non-object for {endpoint}")
-    return value
 
 
 def aiwork_main_commit() -> str:
@@ -201,25 +192,23 @@ def aiwork_main_commit() -> str:
     repository, _path = REVIEW_RULES_SOURCE
     unread = "review-pr 只能从最新 main 的 aiwork 检出跑\n读不到 aiwork 的 main"
     try:
-        commit = public_github(f"repos/{repository}/commits/main").get("sha")
+        output = _leg_session.run([
+            "git", "-C", str(BIN), "ls-remote", "--exit-code", "--refs",
+            f"https://github.com/{repository}.git", "refs/heads/main"])
     except ReviewError as exc:
-        raise ReviewError(unread) from exc
-    if not isinstance(commit, str) or not SHA.fullmatch(commit):
-        raise ReviewError(unread)
-    return commit
+        raise ReviewError(f"{unread}\n{exc}") from exc
+    fields = output.strip().split()
+    if len(fields) != 2 or not SHA.fullmatch(fields[0]) or fields[1] != "refs/heads/main":
+        raise ReviewError(f"{unread}\ngit ls-remote 没有返回有效的 refs/heads/main 提交")
+    return fields[0]
 
 
 def aiwork_main_rules(commit: str) -> tuple[str, str]:
-    repository, path = REVIEW_RULES_SOURCE
-    document = public_github(f"repos/{repository}/contents/{path}?ref={commit}")
-    content = document.get("content")
-    if (document.get("type") != "file" or document.get("encoding") != "base64"
-            or not isinstance(content, str)):
-        raise ReviewError(f"{repository} main:{path} is not a readable regular file")
-    raw = base64.b64decode(content.replace("\n", ""), validate=True)
-    if not raw or len(raw) != document.get("size"):
-        raise ReviewError(f"{repository} main:{path} content is empty or incomplete")
-    return commit, raw.decode("utf-8")
+    _repository, path = REVIEW_RULES_SOURCE
+    rules = main_document(BIN.parent, path, ref=commit)
+    if not rules:
+        raise ReviewError(f"aiwork main:{path} content is empty")
+    return commit, rules
 
 
 def place_review_diff(repo: Path, diff: str) -> str:
@@ -415,9 +404,7 @@ def main() -> int:
         repository = args.repo or repository_from_origin()
         if not args.dry_run:
             prune_data()
-        token = _leg_session.run([str(BIN / "gh-app-token"), "review", "--repo", repository]).strip()
-        if not token:
-            raise ReviewError("review App returned an empty token")
+        token = review_token(repository)
         pr = (pr_state(token, args.pr, repository=repository, preview=True) if args.dry_run
               else pr_state(token, args.pr, repository=repository))
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
@@ -477,6 +464,7 @@ def main() -> int:
                             and result["failure_kind"] in {"no_verdict", "output_truncated"}):
                         report_failure(directory, run_id + "-attempt-1")
                         try:
+                            token = review_token(repository)
                             task, repo, attempt_directory = rebuild_retry_view(
                                 directory, token=token, pr=pr, repository=repository,
                                 merge_base=merge_base, files=files, diff=diff, changes=changes,
@@ -506,6 +494,7 @@ def main() -> int:
                 if privacy.returncode:
                     raise PrivacyError("privacy-check refused review publication:\n"
                                        + privacy.stdout + privacy.stderr)
+                token = review_token(repository)
                 check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=repository))
                 response = github(token, f"repos/{repository}/pulls/{args.pr}/reviews",
                                   {"commit_id": pr["head"]["sha"], "event": "COMMENT", "body": body})

@@ -6,7 +6,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
 
-import base64
 import errno
 import importlib.machinery
 import importlib.util
@@ -130,6 +129,58 @@ class ReviewPrTests(unittest.TestCase):
 
     def choose(self, name):
         return self.session.choose_leg(name, self.review.BIN)
+
+    def test_main_and_committed_rules_need_no_public_api_or_credentials(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            tool = Path(temporary) / 'tool'
+            tool.mkdir()
+            (tool / 'bin').mkdir()
+            def git(*args):
+                return subprocess.check_output(
+                    ['git', '-C', str(tool), '-c', 'user.name=Test',
+                     '-c', 'user.email=test@example.invalid', *args], text=True).strip()
+            git('init', '-q', '-b', 'main')
+            rules = '# committed rules\n'
+            (tool / 'REVIEW-RULES.md').write_text(rules)
+            git('add', 'REVIEW-RULES.md')
+            git('commit', '-qm', 'rules')
+            head = git('rev-parse', 'HEAD')
+            real_run = self.session.run
+            reads = []
+            def run(command, **kwargs):
+                self.assertFalse(command[0].endswith('gh-app-token'))
+                if 'ls-remote' in command:
+                    reads.append(command)
+                    self.assertIn('https://github.com/SunJ1ayu/aiwork.git', command)
+                    return real_run(['git', 'ls-remote', str(tool), 'refs/heads/main'])
+                return real_run(command, **kwargs)
+            with patch.object(self.review, 'BIN', tool / 'bin'), \
+                    patch.object(self.session, 'run', side_effect=run), \
+                    patch('urllib.request.urlopen', side_effect=AssertionError('anonymous API used')):
+                source = self.review.aiwork_main_commit()
+                self.assertEqual(source, head)
+                self.review.require_latest_aiwork_main(source)
+                (tool / 'REVIEW-RULES.md').write_text('uncommitted decoy\n')
+                self.assertEqual(self.review.aiwork_main_rules(source), (head, rules))
+            self.assertEqual(len(reads), 1)
+
+    def test_main_read_failure_keeps_reason_and_redacts_credentials(self):
+        for reason in ('Could not resolve host: github.com',
+                       'SSL certificate problem: certificate verify failed',
+                       'Failed to connect to github.com'):
+            with self.subTest(reason=reason):
+                secret = 'ghs' + '_' + 'a' * 36
+                failure = subprocess.CompletedProcess(
+                    ['git'], 128, '', f'fatal: {reason}\nGH_TOKEN={secret}')
+                with patch.object(self.review.subprocess, 'run', return_value=failure):
+                    with self.assertRaises(self.review.ReviewError) as caught:
+                        self.review.aiwork_main_commit()
+                message = str(caught.exception)
+                self.assertIn('读不到 aiwork 的 main', message)
+                self.assertIn(reason, message)
+                self.assertIn('git failed (rc=128)', message)
+                self.assertNotIn(secret, message)
+                self.assertIn('[redacted]', message)
 
     def test_checks_precede_pruning_and_credentials_follow_it(self):
         for stage in ('checkout', 'pr_number', 'leg', 'credentials'):
@@ -502,42 +553,34 @@ class ReviewPrTests(unittest.TestCase):
                                  repository="SunJ1ayu/aiwork", source_failure=None, project_rules=False,
                                  local_rules="LOCAL WORKSPACE RULES", risks_present=True,
                                  leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False,
-                                 report="Finding\nConclusion: PASS", private_terms='unused\n', data_setup=None, ci=None, checkout_error=False):
-        """Exercise the real source readers and task, with offline HTTP and review leg."""
-        calls = {"github_writes": [], "public_reads": [], "leg_runs": 0}
+                                 report="Finding\nConclusion: PASS", private_terms='unused\n', data_setup=None, ci=None,
+                                 checkout_error=False, expire_during_leg=False):
+        """Exercise committed source readers and task, with offline Git transport and review leg."""
+        calls = {"github_writes": [], "public_reads": [], "source_reads": [], "leg_runs": 0}
         rules = "# aiwork main 规则\r\n必须以此为准。\r\n"
         risks = "# project main 风险\r\n业主接受的平台上限。\r\n"
         source_sha = "d" * 40
         calls.update(rules=rules, risks=risks, source_sha=source_sha)
         real_run = self.session.run
         real_subprocess_run = subprocess.run
+        clock = 0
+        grants = {}
+        calls['token_grants'] = []
+
+        def require_live_token(token):
+            if expire_during_leg and clock >= grants[token]:
+                raise self.review.ReviewError('HTTP 401: installation token expired')
+
+        def fake_pr_state(token, *_args, **_kwargs):
+            require_live_token(token)
+            return pr
 
         def fake_public_read(request, **kwargs):
-            url = request.full_url
-            calls["public_reads"].append(url)
-            self.assertNotIn("authorization", {key.lower() for key in request.headers})
-            self.assertGreater(kwargs["timeout"], 0)
-            if source_failure == "main_unreadable":
-                raise HTTPError(url, 403, "Forbidden", {}, None)
-            if url == "https://api.github.com/repos/SunJ1ayu/aiwork/commits/main":
-                value = {"sha": "invalid" if source_failure == "invalid_sha" else source_sha}
-            elif url == f"https://api.github.com/repos/SunJ1ayu/aiwork/contents/REVIEW-RULES.md?ref={source_sha}":
-                if source_failure == "rules_unreadable":
-                    raise HTTPError(url, 404, "Not Found", {}, None)
-                raw = rules.encode("utf-8")
-                value = {"type": "file", "encoding": "base64", "size": len(raw),
-                         "content": base64.encodebytes(raw).decode("ascii")}
-                if source_failure == "not_file":
-                    value["type"] = "symlink"
-                if source_failure == "invalid_content":
-                    value["content"] = "not base64!"
-                if source_failure == "truncated_content":
-                    value["size"] += 1
-            else:
-                self.fail(f"unexpected public source read: {url}")
-            return io.BytesIO(json.dumps(value).encode("utf-8"))
+            calls["public_reads"].append(request.full_url)
+            self.fail('anonymous source API must not be used')
 
         def fake_github(token, endpoint, payload=None, **kwargs):
+            require_live_token(token)
             if payload is None and ci is not None:
                 return ci.api(endpoint, **kwargs)
             if payload is not None:
@@ -549,8 +592,17 @@ class ReviewPrTests(unittest.TestCase):
         def fake_run(command, **kwargs):
             if command[0].endswith("gh-app-token"):
                 calls["token_command"] = command
-                return FAKE_TOKEN
+                token = FAKE_TOKEN + str(len(grants))
+                grants[token] = clock + 3600
+                calls['token_grants'].append((command, clock))
+                return token
             if command[0] == "git":
+                if 'ls-remote' in command:
+                    calls['source_reads'].append(command)
+                    self.assertIn('https://github.com/SunJ1ayu/aiwork.git', command)
+                    if source_failure == 'main_unreadable':
+                        raise self.review.ReviewError('git failed: source offline')
+                    return ('invalid' if source_failure == 'invalid_sha' else source_sha) + '\trefs/heads/main\n'
                 return real_run(command, **kwargs)
             calls["emit"] = command
             if emit_failure:
@@ -558,6 +610,7 @@ class ReviewPrTests(unittest.TestCase):
             return ""
 
         def fake_leg(command, **kwargs):
+            nonlocal clock
             if command[0] != str(bin_dir / "subcursor"):
                 return real_subprocess_run(command, **kwargs)
             calls["leg_runs"] += 1
@@ -567,6 +620,8 @@ class ReviewPrTests(unittest.TestCase):
             Path(command[3]).write_text("# fake review log\n\nConclusion: PASS\n")
             Path(kwargs['env']['AIWORK_REVIEW_FACTS_PATH']).write_text('{"fixture":true}\n')
             os.environ["CURSOR_MODEL"] = "gpt-other"
+            if expire_during_leg:
+                clock += 3601
             return subprocess.CompletedProcess(command, leg_exit, "", leg_stderr.replace("$LOG", command[3]))
 
         result = {
@@ -593,7 +648,27 @@ class ReviewPrTests(unittest.TestCase):
             else:
                 (config / 'private-terms').unlink()
             (bin_dir / "subcursor").touch()
-            (workspace / "REVIEW-RULES.md").write_text(local_rules, encoding="utf-8")
+            def tool_git(*args):
+                return real_subprocess_run(
+                    ['git', '-C', str(workspace), '-c', 'core.autocrlf=false',
+                     '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', *args],
+                    check=True, capture_output=True, text=True)
+            tool_git('init', '-q')
+            rules_file = workspace / 'REVIEW-RULES.md'
+            if source_failure == 'not_file':
+                rules_file.symlink_to('decoy')
+            elif source_failure != 'rules_unreadable':
+                raw = (b'\xff' if source_failure == 'invalid_content' else
+                       b'' if source_failure == 'empty_rules' else rules.encode('utf-8'))
+                rules_file.write_bytes(raw)
+            if rules_file.exists() or rules_file.is_symlink():
+                tool_git('add', '--all', '--', 'REVIEW-RULES.md')
+            tool_git('commit', '--allow-empty', '-qm', 'source rules')
+            source_sha = tool_git('rev-parse', 'HEAD').stdout.strip()
+            calls['source_sha'] = source_sha
+            if rules_file.is_symlink():
+                rules_file.unlink()
+            rules_file.write_text(local_rules, encoding='utf-8')
             repo = workspace / "project"
             repo.mkdir()
             def git(*args):
@@ -626,7 +701,7 @@ class ReviewPrTests(unittest.TestCase):
                     patch.object(self.session, "run", side_effect=fake_run), \
                     patch("urllib.request.urlopen", side_effect=fake_public_read), \
                     patch.object(self.review, "github", side_effect=fake_github), \
-                    patch.object(self.review, "pr_state", return_value=pr) as state, \
+                    patch.object(self.review, "pr_state", side_effect=fake_pr_state) as state, \
                     patch.object(self.session, "snapshot", return_value=(
                         repo, "c" * 40, ["src/a.py"], "diff", [])) as snapshot, \
                     patch.object(self.session, "load_result", return_value=result), \
@@ -643,6 +718,17 @@ class ReviewPrTests(unittest.TestCase):
             calls['archive_modes'] = [p.stat().st_mode & 0o777 for p in failures.iterdir()] if failures.exists() else []
             calls['temporary_exists'] = Path(calls.get('temporary', '/nonexistent')).exists()
         return rc, calls, stdout.getvalue(), stderr.getvalue()
+
+    def test_expired_startup_token_does_not_prevent_review_publication(self):
+        rc, calls, _stdout, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', repository='Example/other', expire_during_leg=True)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls['leg_runs'], 1)
+        self.assertEqual(calls['github_writes'], ['repos/Example/other/pulls/12/reviews'])
+        self.assertEqual([time for _command, time in calls['token_grants']], [0, 3601])
+        for command, _time in calls['token_grants']:
+            self.assertEqual(command[1:], ['review', '--repo', 'Example/other'])
+        self.assertNotIn('GH_TOKEN', calls['leg_env'])
 
     def test_extreme_mtime_does_not_stop_review_publication(self):
         with ExitStack() as stack:
@@ -1049,10 +1135,8 @@ grep -q -F -- "$3" "$clone/$4"
     def test_task_rules_are_aiwork_main_verbatim_with_commit(self):
         rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", project_rules=True)
         self.assertEqual(rc, 0, stderr)
-        self.assertEqual(calls["public_reads"], [
-            "https://api.github.com/repos/SunJ1ayu/aiwork/commits/main",
-            f"https://api.github.com/repos/SunJ1ayu/aiwork/contents/REVIEW-RULES.md?ref={calls['source_sha']}",
-        ])
+        self.assertEqual(calls["public_reads"], [])
+        self.assertEqual(len(calls['source_reads']), 1)
         self.assertIn("SunJ1ayu/aiwork main", calls["task"])
         self.assertIn("REVIEW-RULES.md", calls["task"])
         self.assertIn(calls["source_sha"], calls["task"])
@@ -1067,7 +1151,7 @@ grep -q -F -- "$3" "$clone/$4"
 
     def test_unreadable_aiwork_rules_never_run_or_publish(self):
         for failure in ("main_unreadable", "rules_unreadable", "invalid_sha",
-                        "not_file", "invalid_content", "truncated_content"):
+                        "not_file", "invalid_content", "empty_rules"):
             with self.subTest(failure=failure):
                 rc, calls, stdout, stderr = self.run_main_with_leg_result(
                     "gpt-5.6", dry_run=False, source_failure=failure, project_rules=True)
@@ -1076,7 +1160,8 @@ grep -q -F -- "$3" "$clone/$4"
                 self.assertEqual(calls["github_writes"], [])
                 self.assertEqual(stdout, "")
                 self.assertTrue(stderr)
-                self.assertTrue(calls["public_reads"])
+                self.assertTrue(calls["source_reads"])
+                self.assertEqual(calls["public_reads"], [])
 
     def test_modified_local_rules_do_not_change_task(self):
         rc, calls, _, stderr = self.run_main_with_leg_result(
@@ -1527,19 +1612,7 @@ grep -q -F -- "$3" "$clone/$4"
                 check=check, capture_output=True, text=True)
 
         def fake_public_read(request, **kwargs):
-            if case == "unreadable":
-                raise OSError("authoritative main is offline")
-            url = request.full_url
-            source_sha = authority["sha"]
-            if url == "https://api.github.com/repos/SunJ1ayu/aiwork/commits/main":
-                value = {"sha": source_sha}
-            elif url == f"https://api.github.com/repos/SunJ1ayu/aiwork/contents/REVIEW-RULES.md?ref={source_sha}":
-                raw = b"rules\n"
-                value = {"type": "file", "encoding": "base64", "size": len(raw),
-                         "content": base64.encodebytes(raw).decode("ascii")}
-            else:
-                self.fail(f"unexpected public source read: {url}")
-            return io.BytesIO(json.dumps(value).encode("utf-8"))
+            self.fail('anonymous source API must not be used')
 
         def fake_github(token, endpoint, payload=None, **kwargs):
             if payload is not None:
@@ -1551,6 +1624,11 @@ grep -q -F -- "$3" "$clone/$4"
                 calls["token_calls"] += 1
                 return FAKE_TOKEN
             if command[0] == "git":
+                if 'ls-remote' in command:
+                    self.assertIn('https://github.com/SunJ1ayu/aiwork.git', command)
+                    if case == 'unreadable':
+                        raise self.review.ReviewError('git failed: authoritative main is offline')
+                    return authority['sha'] + '\trefs/heads/main\n'
                 return real_run(command, **kwargs)
             return ""
 
@@ -1563,8 +1641,9 @@ grep -q -F -- "$3" "$clone/$4"
             shutil.copytree(ROOT / "bin", tool / "bin", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
             write_platform_probe(tool / "bin")
             shutil.copy2(ROOT / ".gitignore", tool / ".gitignore")
+            (tool / 'REVIEW-RULES.md').write_text('rules\n')
             git(tool, "init", "-q", "-b", "main")
-            git(tool, "add", "bin", ".gitignore")
+            git(tool, "add", "bin", ".gitignore", 'REVIEW-RULES.md')
             git(tool, "commit", "-qm", "tool")
             bare = root / "origin.git"
             real_subprocess_run(["git", "init", "--bare", "-q", str(bare)], check=True)
