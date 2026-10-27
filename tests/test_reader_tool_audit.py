@@ -127,6 +127,8 @@ class ReaderToolAuditTests(unittest.TestCase):
         tools = json.loads(next(line.removeprefix("tools: ") for line in
                                 profile.read_text().splitlines() if line.startswith("tools: ")))
         self.assertCountEqual([name for name, _ in schemas], tools)
+        sys.path.insert(0, str(ROOT / "bin"))
+        policy = _load("_reader_tools.py")
 
         def audit(name, arguments, expected):
             stream = self.root / "schema-stream.jsonl"
@@ -139,6 +141,9 @@ class ReaderToolAuditTests(unittest.TestCase):
 
         for name, body in schemas:
             with self.subTest(tool=name):
+                native_keys = {quoted or plain for quoted, plain in re.findall(
+                    r'^\t\t(?:"([^"]+)"|(\w+)):', body, re.M)}
+                self.assertEqual(policy.KIMI_TOOL_INPUTS[name], native_keys)
                 fields = [(key, ".optional()" in modifiers, json.loads(description))
                           for key, modifiers, description in re.findall(
                               r'^\t\t(\w+): string\(\)(.*?)\.describe\((".*")\),?$', body, re.M)]
@@ -460,7 +465,7 @@ class ReaderToolAuditTests(unittest.TestCase):
         self.task.write_text("# brief\n", encoding="utf-8")
         self.home = self.root / "kimi-home"
         (self.home / "hooks").mkdir(parents=True)
-        (self.home / "hooks" / "guard.mjs").write_text("process.exit(2)\n", encoding="utf-8")
+        shutil.copyfile(ROOT / "kimi-review-home/hooks/guard.mjs", self.home / "hooks/guard.mjs")
         (self.home / "credentials").mkdir()
         (self.home / "credentials" / "kimi-code.json").write_text("{}\n", encoding="utf-8")
         write_kimi_config(self.home, self.config)
@@ -833,6 +838,85 @@ sys.stdout.write(pathlib.Path(os.environ['CLAUDE_STREAM']).read_text())
                     self.assertIn(item,result.stderr)
                     self.assertNotIn('fixture-mimo-secret',result.stderr)
                     self.assertFalse(self.capture.exists())
+
+
+
+class KimiPreToolGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        (self.repo / "inside.txt").write_text("inside\n")
+        self.outside = self.root / "outside.txt"
+        self.outside.write_text("outside\n")
+        (self.repo / "escape.txt").symlink_to(self.outside)
+        self.env = dict(os.environ, AIWORK_KIMI_READER_GUARD=json.dumps([
+            sys.executable, str(ROOT / "bin/_reader_tools.py"),
+            "kimi-hook", str(self.repo)]))
+
+    def guard(self, tool, arguments, *, env=None):
+        # Envelope and parameter names come from the installed 0.36.1 CLI's
+        # externalHooks runner; the native local-provider probe checks wiring.
+        event = {"hook_event_name": "PreToolUse", "cwd": str(self.repo),
+                 "tool_name": tool, "tool_input": arguments}
+        return subprocess.run(["node", str(ROOT / "kimi-review-home/hooks/guard.mjs")],
+                              input=json.dumps(event), cwd=self.repo,
+                              env=self.env if env is None else env,
+                              text=True, capture_output=True)
+
+    def test_readers_deny_outside_paths_before_execution(self):
+        for tool in ("Read", "ReadMediaFile", "Glob", "Grep"):
+            for path in (str(self.outside), "../outside.txt", "escape.txt"):
+                with self.subTest(tool=tool, path=path):
+                    arguments = {"path": path}
+                    if tool in ("Glob", "Grep"):
+                        arguments["pattern"] = "*"
+                    result = self.guard(tool, arguments)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]
+                                     ["permissionDecision"], "deny")
+
+    def test_readers_allow_inside_paths_and_search_defaults(self):
+        for tool, arguments in (("Read", {"path": "inside.txt"}),
+                                ("ReadMediaFile", {"path": "inside.txt"}),
+                                ("Glob", {"pattern": "*.txt"}),
+                                ("Grep", {"pattern": "inside"})):
+            with self.subTest(tool=tool):
+                result = self.guard(tool, arguments)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_unrecognized_reader_arguments_fail_closed_before_and_after(self):
+        for tool in ("Read", "ReadMediaFile", "Glob", "Grep"):
+            with self.subTest(tool=tool):
+                arguments = {"path": "inside.txt", "pattern": "inside",
+                             "renamed_path": str(self.outside)}
+                if tool in ("Read", "ReadMediaFile"):
+                    arguments.pop("pattern")
+                with self.subTest(phase="before execution"):
+                    self.assertEqual(self.guard(tool, arguments).returncode, 2)
+                events = [json.loads(line) for line in KIMI_READ.split("\n") if line]
+                call = events[1]["tool_calls"][0]["function"]
+                call.update(name=tool, arguments=json.dumps(arguments))
+                stream = self.root / "unknown-argument.jsonl"
+                stream.write_text("\n".join(json.dumps(event) for event in events) + "\n")
+                audit = subprocess.run([sys.executable, str(ROOT / "bin/_reader_tools.py"),
+                                        "audit-kimi", str(stream), str(self.repo)],
+                                       text=True, capture_output=True)
+                self.assertEqual(audit.returncode, 3, audit.stdout + audit.stderr)
+
+    def test_unknown_tools_and_unusable_policy_fail_closed(self):
+        for tool in ("Bash", "Write", "ReadRenamed"):
+            self.assertEqual(self.guard(tool, {}).returncode, 2)
+        for command in (None, "invalid json", json.dumps(["/missing/python"])):
+            with self.subTest(command=command):
+                env = dict(self.env)
+                if command is None:
+                    env.pop("AIWORK_KIMI_READER_GUARD")
+                else:
+                    env["AIWORK_KIMI_READER_GUARD"] = command
+                self.assertEqual(self.guard("Read", {"path": "inside.txt"}, env=env).returncode, 2)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@ SUITES=(
   "review-platform|python3|$ROOT/tests/test_review_platform.py"
   "claude-sandbox|python3|$ROOT/tests/test_claude_sandbox.py"
   "reader-tool-audit|python3|$ROOT/tests/test_reader_tool_audit.py"
+  "kimi-preflight|python3|$ROOT/tests/test_kimi_preflight.py"
   "review-homes|python3|$ROOT/tests/test_review_homes.py"
   "review-tooling|bash|$ROOT/tests/test-review-tooling.sh"
   "subcodex|bash|$ROOT/tests/test-subcodex.sh"

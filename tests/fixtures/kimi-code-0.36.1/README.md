@@ -48,3 +48,10 @@ optionality from this evidence, passes them through the production
 path rejection. It does not require an installed Kimi package or network.
 This evidence pins 0.36.1; it makes no claim about later CLI versions or
 execution-time guards.
+
+`reader-tools.json` retains the tool names and JSON input schemas captured from
+the real installed 0.36.1 CLI against a local HTTP provider on 2026-10-27.
+Only descriptions outside the parameter schemas and unrelated request data
+were omitted. The provider used harmless temporary files and no real
+credentials; the existing no-egress test guard blocked external traffic.
+This captures the CLI request contract, not a vendor model response.

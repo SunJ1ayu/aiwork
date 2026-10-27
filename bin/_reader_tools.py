@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Reader policies and Claude Code tool trace checks.
+"""Reader policies and tool trace checks.
 
-Read-only configuration and post-run checks share the definitions here.
+Reader profiles, Kimi's execution-time hook and post-run checks share policy.
 The Mac command inventory comes from _claude_sandbox.py.
 """
 
@@ -11,8 +11,16 @@ from pathlib import Path
 
 from _paths import inside
 
-# Kimi's agent profile `tools` field, in the order the prompt names them.
-KIMI_TOOLS = ("Read", "ReadMediaFile", "Glob", "Grep")
+# An unknown input may be a renamed path. Reject it in both the hook and audit.
+KIMI_TOOL_INPUTS = {
+    "Read": frozenset(("path", "line_offset", "n_lines")),
+    "ReadMediaFile": frozenset(("path", "region", "full_resolution")),
+    "Glob": frozenset(("pattern", "path", "include_ignored", "include_dirs")),
+    "Grep": frozenset(("pattern", "path", "glob", "type", "output_mode",
+                       "-i", "-n", "-A", "-B", "-C", "head_limit", "offset",
+                       "multiline", "include_ignored")),
+}
+KIMI_TOOLS = tuple(KIMI_TOOL_INPUTS)
 
 # Claude Code's exact built-in tool selection and post-run allowlist.
 CLAUDE_READER_TOOLS = ("Read", "Glob", "Grep")
@@ -61,6 +69,14 @@ def english_list(names):
     if len(names) == 2:
         return f"{names[0]} and {names[1]}"
     return ", ".join(names[:-1]) + ", and " + names[-1]
+
+
+def check_kimi_reader_path(name, arguments, repo):
+    if name not in KIMI_TOOL_INPUTS:
+        return
+    if arguments.keys() - KIMI_TOOL_INPUTS[name]:
+        raise ReaderScopeError(name)
+    check_reader_path(name, arguments, repo, "path")
 
 
 def kimi_profile():
@@ -141,7 +157,7 @@ def check_recorded_paths(text, repo, *, claude):
                 except (TypeError, json.JSONDecodeError):
                     continue
                 if isinstance(arguments, dict):
-                    check_reader_path(function.get("name"), arguments, repo, "path")
+                    check_kimi_reader_path(function.get("name"), arguments, repo)
 
 
 def audit_kimi(text, repo):
@@ -332,6 +348,14 @@ def main(argv):
             print(english_list(KIMI_TOOLS))
         elif cmd == "kimi-profile":
             Path(argv[2]).write_text(kimi_profile(), encoding="utf-8")
+        elif cmd == "kimi-hook":
+            event = json.load(sys.stdin)
+            repo = Path(argv[2]).resolve(strict=True)
+            if (not isinstance(event, dict) or Path.cwd().resolve() != repo
+                    or event.get("tool_name") not in KIMI_TOOLS
+                    or not isinstance(event.get("tool_input"), dict)):
+                return 2
+            check_kimi_reader_path(event["tool_name"], event["tool_input"], repo)
         elif cmd == "claude-tools":
             print(",".join(CLAUDE_READER_TOOLS))
         elif cmd == "claude-prompt":

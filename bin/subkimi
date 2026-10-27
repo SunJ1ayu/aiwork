@@ -173,6 +173,12 @@ if (hook["event"] != "PreToolUse" or hook["matcher"] != ".*"
 PYCHECK
 
 # kimi-code fails open on hook errors. Both canaries must be denied before launch.
+AIWORK_KIMI_READER_GUARD="$("$AIWORK_PROGRAMS/python3" - "$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" "$REPO_DIR" <<'PYGUARD'
+import json, sys
+print(json.dumps([sys.argv[1], sys.argv[2], "kimi-hook", sys.argv[3]]))
+PYGUARD
+)" || config_die 'cannot configure reader guard'
+export AIWORK_KIMI_READER_GUARD
 for CANARY in Write Bash; do
   GUARD_RC=0
   printf '{"tool_name":"%s","tool_input":{}}\n' "$CANARY" | "$AIWORK_PROGRAMS/node" "$GUARD" >/dev/null 2>&1 || GUARD_RC=$?
@@ -186,6 +192,10 @@ AGENT_FILE="$REVIEW_HOME/aiwork-review.md"
   || config_die 'cannot write read-only agent profile'
 READER_TOOLS="$("$AIWORK_PROGRAMS/python3" "$BIN_DIR/_reader_tools.py" kimi-tools)" \
   || config_die 'cannot read reader tool list'
+
+[[ -f "$BIN_DIR/_kimi_preflight.py" ]] || config_die 'native reader preflight is missing'
+"$AIWORK_PROGRAMS/python3" "$BIN_DIR/_kimi_preflight.py" "$AIWORK_PROGRAMS/kimi" "$REVIEW_HOME" "$AGENT_FILE" \
+  || config_die 'native reader compatibility preflight failed'
 
 review_workspace_write_facts "$MODEL" "$MODEL" subscription || exit 78
 
@@ -224,6 +234,8 @@ STREAM="${LOG_FILE}.stream.jsonl"
   cd "$REPO_DIR"
   KIMI_CODE_HOME="$REVIEW_HOME" \
   KIMI_CODE_NO_AUTO_UPDATE=1 \
+  RIPGREP_CONFIG_PATH= \
+  AIWORK_KIMI_GUARD_PROBE_TAG= \
     ${RO_EXEC[@]+"${RO_EXEC[@]}"} "$BIN_DIR/aiwork-timeout" "$TIMEOUT_SECONDS" "$AIWORK_PROGRAMS/kimi" --agent-file "$AGENT_FILE" --output-format stream-json -m "$MODEL" -p "$PROMPT"
 ) > "$STREAM" 2>>"$LOG_FILE" || RC=$?
 if [[ -s "$STREAM" ]]; then cat "$STREAM" >> "$LOG_FILE"; fi

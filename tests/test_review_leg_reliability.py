@@ -566,7 +566,7 @@ class ReaderFailureClassificationTests(LegCase):
         (home / 'hooks').mkdir(parents=True)
         (home / 'credentials').mkdir()
         write_kimi_config(home, self.config)
-        (home / 'hooks/guard.mjs').write_text('process.exit(2); // offline deny fixture\n')
+        shutil.copyfile(BIN.parent / 'kimi-review-home/hooks/guard.mjs', home / 'hooks/guard.mjs')
         (home / 'credentials/kimi-code.json').write_text('{}')
         for leg in ('subdeepseek-agent', 'subkimi'):
             with self.subTest(leg=leg):

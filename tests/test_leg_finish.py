@@ -29,7 +29,7 @@ class LegFinish(unittest.TestCase):
         self.bin.mkdir()
         for name in ("_python", "_programs.sh", "aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
                      "_paths.py", "_review-platform.sh", "_claude_sandbox.py",
-                     "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_reader_tools.py", "_cursor-stream.py",
+                     "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_reader_tools.py", "_kimi_preflight.py", "_cursor-stream.py",
                      "ro-repo-exec",
                      "subagent", "subkimi", "submimo", "subcodex", "subcursor"):
             shutil.copy(ROOT / "bin" / name, self.bin / name)
@@ -94,7 +94,7 @@ print('{"type":"result","subtype":"success","is_error":false,"result":' + __impo
         home = self.root / "kimi-home"
         (home / "hooks").mkdir(parents=True)
         (home / "credentials").mkdir()
-        (home / "hooks" / "guard.mjs").write_text("process.exit(2)\n")
+        shutil.copyfile(ROOT / "kimi-review-home/hooks/guard.mjs", home / "hooks/guard.mjs")
         (home / "credentials" / "kimi-code.json").write_text("{}\n")
         write_kimi_config(home, self.root / "settings")
         self._write("kimi", """#!/usr/bin/env python3

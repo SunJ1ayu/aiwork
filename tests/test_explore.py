@@ -701,7 +701,7 @@ class ExploreLegContractTests(unittest.TestCase):
     def _kimi_home(self):
         home = self.root / "kimi-home"
         (home / "hooks").mkdir(parents=True)
-        (home / "hooks" / "guard.mjs").write_text("process.exit(2)\n", encoding="utf-8")
+        shutil.copyfile(ROOT / "kimi-review-home/hooks/guard.mjs", home / "hooks/guard.mjs")
         (home / "credentials").mkdir()
         (home / "credentials" / "kimi-code.json").write_text("{}\n", encoding="utf-8")
         write_kimi_config(home, self.config)

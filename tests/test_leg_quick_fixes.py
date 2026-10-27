@@ -141,6 +141,7 @@ record["diff"] = pathlib.Path("aiwork-review.diff").read_text()
 record["context"] = pathlib.Path("aiwork-git-context.txt").read_text() if pathlib.Path("aiwork-git-context.txt").exists() else ""
 if pathlib.Path(sys.argv[0]).name == "kimi":
     record["profile"] = pathlib.Path(args[args.index("--agent-file")+1]).read_text() if "--agent-file" in args else ""
+    record["ripgrep_config"] = os.environ.get("RIPGREP_CONFIG_PATH")
     print(json.dumps({"role": "assistant", "content": "Conclusion: PASS"}))
 else:
     record["prompt"] = sys.stdin.read()
@@ -152,11 +153,28 @@ pathlib.Path(os.environ["CAPTURE"]).write_text(json.dumps(record))
             self.fake(cli, stub)
         (self.repo / "aiwork-review.diff").write_text("deleted-line-evidence\n")
 
-    def invoke(self, leg, mode):
+    def invoke(self, leg, mode, **extra):
         self.cap.unlink(missing_ok=True)
         self.started.unlink(missing_ok=True)
         return self.run_cmd([str(self.bin / leg), mode, str(self.task), str(self.d / (leg + ".log")), str(self.repo)],
-                            CAPTURE=str(self.cap), CLI_STARTED=str(self.started), KIMI_REVIEW_HOME=str(self.home))
+                            CAPTURE=str(self.cap), CLI_STARTED=str(self.started), KIMI_REVIEW_HOME=str(self.home), **extra)
+
+    def test_kimi_does_not_inherit_ripgrep_configuration(self):
+        config = self.d / "ripgrep.conf"
+        config.write_text("--follow\n")
+        for mode in ("review", "explore"):
+            with self.subTest(mode=mode):
+                result = self.invoke("subkimi", mode, RIPGREP_CONFIG_PATH=str(config))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(self.cap.read_text())["ripgrep_config"], "")
+
+    def test_kimi_native_preflight_failure_stops_both_modes_before_vendor(self):
+        (self.home / "hooks/guard.mjs").write_text("process.exit(2)\n")
+        for mode in ("review", "explore"):
+            with self.subTest(mode=mode):
+                result = self.invoke("subkimi", mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.started.exists(), result.stderr)
 
     def test_kimi_large_task_is_read_from_snapshot_not_argv_in_both_modes(self):
         self.task.write_text("context line\n" * 20000 + TASK_MARKER)

@@ -40,7 +40,7 @@ GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；�
 仓库里的这些命令服务 `review-pr`。同一个 PR 要换一家评审，由关卡判断。
 
 - `bin/subdeepseek-agent` — DeepSeek，经 Claude Code headless 读仓库。模型来自 `~/.config/aiwork/models.env` 的 deepseek 行。
-- `bin/subkimi` — Kimi，kimi-code CLI。review、explore 的 agent profile 和跑完核对读 `bin/_reader_tools.py`。派发前的 hook 是 `kimi-review-home/hooks/guard.mjs`，放行名单是另一份。清单以外的工具（含被 CLI 拒掉的尝试），或者输出里看不出用了哪些工具，只在这次本来会成功时记成 `readonly_tools`：不发评审，这个失败原因不重试。没有结论的那次仍是 `no_verdict`，会重试一次。任务复制进快照，由 Read 读取，正文不进命令行参数。模型来自 kimi 行。
+- `bin/subkimi` — Kimi，kimi-code CLI。review、explore 的 agent profile、读取前 hook 和跑完核对共用 `bin/_reader_tools.py`。`kimi-review-home/hooks/guard.mjs` 将事件交给共享策略；副本外路径、未知工具或未知参数在读取前拒绝。Kimi 不继承 ripgrep 配置，避免搜索时跟随副本外链接。 供应商调用前，`bin/_kimi_preflight.py` 用独立临时 HOME、本机假接口和无害文件检查当前 CLI 的实际工具参数、正常读取、guard 越界拒绝及搜索遍历；不使用真实凭证或额度，不按 CLI 版本号放行。检查失败或证据不完整就拒派。清单以外的工具（含被 CLI 拒掉的尝试），或者输出里看不出用了哪些工具，只在这次本来会成功时记成 `readonly_tools`：不发评审，这个失败原因不重试。没有结论的那次仍是 `no_verdict`，会重试一次。任务复制进快照，由 Read 读取，正文不进命令行参数。模型来自 kimi 行。
 - `bin/submimo <review|explore>` — MiMo，经 `bin/subagent` 复用 Claude Code headless，连接小米的 Anthropic 兼容接口。模型读 `models.env` 的 mimo 行（API 原生 `mimo-…` 名称）；接口地址和密钥读 `mimo.env`。Linux 上两个模式只提供读取工具，配置和跑完核对共用 `bin/_reader_tools.py`；Mac 的命令策略见下方 Claude Code 外壳一节。看不出实际工具或出现其他工具时记为 `readonly_tools`，不发评审、不因这个原因重试。超时使用 `MIMO_TIMEOUT`，轮次上限使用 `MIMO_MAX_TURNS`。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。两个平台的原生沙箱设置见 `bin/subcodex` 的 `CODEX_CFG`；Linux 外层另经 `ro-repo-exec`。副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
@@ -173,7 +173,7 @@ bin/aiwork-config runtime subcodex effort
 `kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。
 每次渲染配置和 guard，另写 CLI 的只读 agent profile；credentials 链接到 Kimi CLI 自己的凭证目录。缺少 `kimi-code.json` 时拒跑并提示先用 kimi 登录。
 `submimo` 和 `subdeepseek-agent` 每次创建临时 `CLAUDE_CONFIG_DIR`，禁用会话持久化，随评审副本一起删除；凭证只经子进程环境传入，不写 Claude Code 设置。Linux MiMo 也禁用项目设置、MCP 和技能。
-`KIMI_REVIEW_HOME` 指定的目录由调用方管理：不渲染种子、不删除，仍经过 `review_home_guard`；Kimi 仍重写只读 agent profile。
+`KIMI_REVIEW_HOME` 指定的目录由调用方管理：不渲染种子、不删除，仍经过 `review_home_guard`；Kimi 仍重写只读 agent profile；自管 home 的 guard 也须支持当前的原生预检证明。
 
 ### 加新评审腿的规矩
 
