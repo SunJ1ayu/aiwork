@@ -341,7 +341,16 @@ v13_subkimi_leg() {
   if [[ -f "$guard" ]]; then
     echo '{"tool_name":"Write","tool_input":{}}' | node "$guard" >/dev/null 2>&1
     check "guard: Write denied (rc=2)" $([[ $? -eq 2 ]]; echo $?)
-    echo '{"tool_name":"Read","tool_input":{}}' | node "$guard" >/dev/null 2>&1
+    (
+      cd "$d/repo" || exit 1
+      AIWORK_KIMI_READER_GUARD="$(python3 - "$BIN/_reader_tools.py" "$d/repo" <<'PYGUARD'
+import json, sys
+print(json.dumps([sys.executable, sys.argv[1], "kimi-hook", sys.argv[2]]))
+PYGUARD
+)" || exit 1
+      export AIWORK_KIMI_READER_GUARD
+      echo '{"tool_name":"Read","tool_input":{"path":".fixture"}}' | node "$guard"
+    ) >/dev/null 2>&1
     check "guard: Read allowed (rc=0)" $?
 
     # 命令工具完全禁用；不能靠匹配命令字符串限制能力。
@@ -362,11 +371,11 @@ v13_subkimi_leg() {
   fi
 
   # --- subkimi wrapper against a stub kimi + fixture review home
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subkimi" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
-  cp "$guard" "$rh/hooks/guard.mjs" 2>/dev/null || printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
+  cp "$guard" "$rh/hooks/guard.mjs"
   echo '{}' > "$rh/credentials/kimi-code.json"
   cat > "$b/kimi" <<'PYEOF'
 #!/usr/bin/env python3
@@ -723,7 +732,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
@@ -823,7 +832,7 @@ PY
   # 是夹具的洞。**红也要红在该红的地方**,本仓为这条记过账。
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
-  printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
+  cp "$BIN/../kimi-review-home/hooks/guard.mjs" "$rh/hooks/guard.mjs"
   echo '{}' > "$rh/credentials/kimi-code.json"
   rm -f "$d/o3" "$repo/PWNED_IN_SOURCE" "$repo/PWNED_IN_WORKSPACE"
   env PATH="$b:$PATH" PWN_REPO="$repo" PWN_OUT="$d/o3" KIMI_REVIEW_HOME="$rh" \
@@ -900,7 +909,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -1014,7 +1023,7 @@ v38_leg_runtime_home_outside_repo() {
   _mk_kimi_home() {   # $1 = home 路径
     mkdir -p "$1/hooks" "$1/credentials"
     python3 "$BIN/../tests/_test_settings.py" kimi-config "$1"
-    printf 'process.exit(2)\n' > "$1/hooks/guard.mjs"
+    cp "$BIN/../kimi-review-home/hooks/guard.mjs" "$1/hooks/guard.mjs"
     echo '{}' > "$1/credentials/kimi-code.json"
   }
   # ⚠️ **"非零退出"问不出任何东西**:这个 stub 环境里 subkimi 因为守卫 / 凭证 /
@@ -1458,11 +1467,11 @@ v46_final_report_is_the_last_message() {
   printf '# t\n' > "$d/t.md"
   cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
     "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" \
-    "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/ro-repo-exec" "$b/"
+    "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$BIN/ro-repo-exec" "$b/"
   printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"
   local rh="$d/review-home"; mkdir -p "$rh/hooks" "$rh/credentials"
   python3 "$BIN/../tests/_test_settings.py" kimi-config "$rh"
-  printf 'process.exit(2)\n' > "$rh/hooks/guard.mjs"
+  cp "$BIN/../kimi-review-home/hooks/guard.mjs" "$rh/hooks/guard.mjs"
   echo '{}' > "$rh/credentials/kimi-code.json"
 
   cat > "$b/claude" <<'PY'

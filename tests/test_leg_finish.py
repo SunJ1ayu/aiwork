@@ -29,7 +29,7 @@ class LegFinish(unittest.TestCase):
         self.bin.mkdir()
         for name in ("_python", "_programs.sh", "aiwork-config", "_aiwork_config.py", "_review-workspace.sh", "aiwork-timeout",
                      "_paths.py", "_review-platform.sh", "_claude_sandbox.py",
-                     "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_reader_tools.py", "_cursor-stream.py",
+                     "_review-home-guard.sh", "_review-reader-context.sh", "_review_result.py", "_reader_tools.py", "_kimi_preflight.py", "_cursor-stream.py",
                      "ro-repo-exec",
                      "subagent", "subkimi", "submimo", "subcodex", "subcursor"):
             shutil.copy(ROOT / "bin" / name, self.bin / name)
@@ -94,7 +94,7 @@ print('{"type":"result","subtype":"success","is_error":false,"result":' + __impo
         home = self.root / "kimi-home"
         (home / "hooks").mkdir(parents=True)
         (home / "credentials").mkdir()
-        (home / "hooks" / "guard.mjs").write_text("process.exit(2)\n")
+        shutil.copyfile(ROOT / "kimi-review-home/hooks/guard.mjs", home / "hooks/guard.mjs")
         (home / "credentials" / "kimi-code.json").write_text("{}\n")
         write_kimi_config(home, self.root / "settings")
         self._write("kimi", """#!/usr/bin/env python3
@@ -189,6 +189,17 @@ emit({"type": "result", "subtype": "success", "is_error": False, "session_id": s
             f"FAIL {leg} {case} rc={result.returncode} "
             f"stderr={result.stderr[-800:]!r} stdout={result.stdout[-400:]!r}")
         return json.loads(path.read_text())
+
+    def test_kimi_missing_reported_model_is_explicit_and_publishable(self):
+        for mode, case in (("review", "pass"), ("explore", "explore_ok")):
+            with self.subTest(mode=mode):
+                result = self._run("subkimi", mode, case)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                facts = self._facts("subkimi", case, result)
+                self.assertIsNone(facts["model"]["reported"])
+                self.assertEqual(facts["evidence_completeness"], "complete")
+                log = (self.root / f"subkimi-{case}.log").read_text()
+                self.assertIn("reported_model: CLI 未提供", log)
 
     def _signature(self, result, facts, log):
         marker = str(log)

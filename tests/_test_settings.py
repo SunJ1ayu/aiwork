@@ -106,9 +106,17 @@ def fixture_directory(directory):
     return path
 
 
+def _fixture_launcher(programs, name, source):
+    with tempfile.NamedTemporaryFile(mode='w', dir=programs, delete=False) as temporary:
+        temporary.write(source)
+        os.chmod(temporary.name, 0o755)
+    launcher = programs / name
+    os.replace(temporary.name, launcher)
+    return launcher
+
+
 def claude_fixture_launcher(programs, target):
     """Model stubs also implement the native CLI's offline MCP startup protocol."""
-    launcher = programs / '_claude-fixture'
     source = '#!' + sys.executable + '\n' + """
 import json, os, sys
 if sys.argv[-2:] == ['mcp', 'serve']:
@@ -125,11 +133,21 @@ if sys.argv[-2:] == ['mcp', 'serve']:
         print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
     raise SystemExit(0)
 """ + 'os.execv(' + repr(str(target)) + ', [' + repr(str(target)) + '] + sys.argv[1:])\n'
-    with tempfile.NamedTemporaryFile(mode='w', dir=programs, delete=False) as temporary:
-        temporary.write(source)
-        os.chmod(temporary.name, 0o755)
-    os.replace(temporary.name, launcher)
-    return launcher
+    return _fixture_launcher(programs, '_claude-fixture', source)
+
+
+def kimi_fixture_launcher(programs, target):
+    """Exercise native reader preflight separately from the scenario's vendor stub."""
+    fixture_directory(target)
+    fixture = Path(__file__).resolve().with_name('_kimi_cli.py')
+    schemas = fixture.parent / 'fixtures/kimi-code-0.36.1/reader-tools.json'
+    command = [sys.executable, str(fixture), '--native-fixture', str(schemas),
+               'valid', str(programs / 'kimi-probe-capture.json')]
+    source = ('#!' + sys.executable + '\nimport os,sys\n'
+              + 'if os.environ.get("AIWORK_KIMI_GUARD_PROBE_TAG"):\n'
+              + '    os.execv(' + repr(sys.executable) + ', ' + repr(command) + ' + sys.argv[1:])\n'
+              + 'os.execv(' + repr(str(target)) + ', [' + repr(str(target)) + '] + sys.argv[1:])\n')
+    return _fixture_launcher(programs, '._kimi-fixture', source)
 
 
 def write_programs(directory, fake=None):
@@ -146,6 +164,8 @@ def write_programs(directory, fake=None):
             target = Path(fake) / name
             if name == 'claude':
                 target = claude_fixture_launcher(programs, target)
+            elif name == 'kimi':
+                target = kimi_fixture_launcher(programs, target)
         link = programs / name
         link.unlink(missing_ok=True)
         link.symlink_to(target)
@@ -171,7 +191,11 @@ def run_with_programs(command):
                 except ValueError:
                     continue
                 (programs / name).unlink(missing_ok=True)
-                (programs / name).symlink_to(claude_fixture_launcher(programs, target) if name == 'claude' else target)
+                if name == 'claude':
+                    target = claude_fixture_launcher(programs, target)
+                elif name == 'kimi':
+                    target = kimi_fixture_launcher(programs, target)
+                (programs / name).symlink_to(target)
         return subprocess.call(command)
     finally:
         for name, target in saved.items():
