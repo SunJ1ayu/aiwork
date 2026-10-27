@@ -102,10 +102,10 @@ check "W3: README 列出留下的五条评审命令" $?
 grep -q 'Codex、Cursor、DeepSeek、Kimi、MiMo' "$SOURCE/CLAUDE.md" \
   && grep -q '每个通道都能写代码也能评审；同一个 PR 的评审要换一家，由关卡判断' "$SOURCE/CLAUDE.md"
 check "W3: 主工作流只列留下的五家，并写明换评审由关卡判断" $?
-grep -q 'DEFAULT_MAX_TURNS=200' "$ROOT/bin/subagent" \
+[[ "$(env -u DEEPSEEK_MAX_TURNS "$ROOT/bin/aiwork-config" runtime subdeepseek-agent max_turns)" == 200 ]] \
   && bash "$ROOT/bin/subagent" -h 2>&1 | grep -q 'deepseek.env'
 check "W3: DeepSeek 默认轮次是 200，帮助文本指向本机凭证" $?
-grep -q 'KIMI_TIMEOUT:-1500' "$ROOT/bin/subkimi"
+[[ "$(env -u KIMI_TIMEOUT "$ROOT/bin/aiwork-config" runtime subkimi timeout)" == 1500 ]]
 check "W3: Kimi 超时默认 1500 秒" $?
 grep -q 'MODEL_LEG=mimo' "$ROOT/bin/subagent" \
   && grep -Fq 'model "$MODEL_LEG"' "$ROOT/bin/subagent" \

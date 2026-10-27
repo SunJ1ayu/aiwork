@@ -5,7 +5,8 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
-from _test_settings import write_kimi_config, write_platform_probe
+from _test_settings import write_kimi_config, write_platform_probe, write_settings
+from _runtime_cases import RUNTIME_CASES
 
 from contextlib import redirect_stderr, redirect_stdout
 import http.server
@@ -146,7 +147,7 @@ class ReliabilityTests(unittest.TestCase):
             return {'html_url': 'https://github.com/example/repo/pull/1#pullrequestreview-1'}
 
         clean = {k: v for k, v in os.environ.items() if not k.startswith(
-            ('MIMO_', 'DEEPSEEK_', 'ZHIPU_'))}
+            ('MIMO_', 'DEEPSEEK_', 'ZHIPU_', 'SUBCODEX_', 'CURSOR_', 'KIMI_'))}
         clean.update(DEEPSEEK_API_KEY='fixture-key',
                      DEEPSEEK_API_BASE=endpoint, CURSOR_MODEL='gpt-6-sol',
                      AIWORK_DATA_DIR=str(self.directory / 'data'))
@@ -256,18 +257,53 @@ class ReliabilityTests(unittest.TestCase):
         block = json.loads(posted[0]['body'].split('```json\n')[1].split('\n```')[0])
         self.assertEqual(block['completeness'], 'complete')
 
-    def test_all_repository_readers_get_2400_seconds_unless_caller_overrides(self):
-        timeouts = {'subdeepseek-agent': 'DEEPSEEK_TIMEOUT',
-                    'subcodex': 'SUBCODEX_TIMEOUT', 'subcursor': 'CURSOR_TIMEOUT',
-                    'submimo': 'MIMO_TIMEOUT', 'subkimi': 'KIMI_TIMEOUT'}
-        for leg, variable in timeouts.items():
+    def test_all_repository_readers_keep_fallbacks_unless_caller_overrides(self):
+        config = write_settings(self.directory / 'settings')
+        for leg, option, variable, _, reader, _ in RUNTIME_CASES:
             for override in (None, '', '317'):
                 with self.subTest(leg=leg, override=override):
-                    env = {} if override is None else {variable: override}
+                    if option == 'effort' and override:
+                        override = 'xhigh'
+                    env = {'AIWORK_CONFIG_DIR': str(config)}
+                    if override is not None:
+                        env[variable] = override
                     rc, _, posted, _, stderr = self.run_review(leg, env=env, fake_attempts=[{}])
                     self.assertEqual(rc, 0, stderr)
-                    self.assertEqual(self.leg_calls[0][1].get(variable), override or '2400')
+                    self.assertEqual(self.leg_calls[0][1].get(variable), override or reader)
                     self.assertEqual(len(posted), 1)
+
+    def test_reader_runtime_file_and_environment_reach_all_legs(self):
+        config = write_settings(self.directory / 'settings')
+        configured = {variable: sample for _, _, variable, _, _, sample in RUNTIME_CASES}
+        (config / 'runtime.env').write_text(''.join(f'{k}={v}\n' for k,v in configured.items()))
+        for override in (False, True):
+            env = {'AIWORK_CONFIG_DIR': str(config)}
+            expected = configured
+            if override:
+                expected = {variable: 'xhigh' if option == 'effort' else '7201'
+                            for _, option, variable, *_ in RUNTIME_CASES}
+                env.update(expected)
+            for leg in dict.fromkeys(row[0] for row in RUNTIME_CASES):
+                with self.subTest(leg=leg, override=override):
+                    rc, _, posted, _, stderr = self.run_review(leg, env=env, fake_attempts=[{}])
+                    self.assertEqual(rc, 0, stderr)
+                    self.assertEqual(len(posted), 1)
+                    for adapter, _, variable, *_ in RUNTIME_CASES:
+                        if adapter == leg:
+                            self.assertEqual(self.leg_calls[0][1].get(variable), expected[variable])
+
+    def test_bad_runtime_setting_stops_review_without_invocation_or_publication(self):
+        config = write_settings(self.directory / 'settings')
+        for bad_file in (True, False):
+            with self.subTest(bad_file=bad_file):
+                (config / 'runtime.env').write_text('MIMO_TIMEOUT=bad\n' if bad_file else '')
+                env = {'AIWORK_CONFIG_DIR': str(config), 'MIMO_TIMEOUT': '7201' if bad_file else 'bad'}
+                rc, _, posted, _, stderr = self.run_review('submimo', env=env, fake_attempts=[{}])
+                self.assertEqual(rc, 1)
+                self.assertEqual(self.leg_calls, [])
+                self.assertEqual(posted, [])
+                self.assertIn(str(config / 'runtime.env') if bad_file else 'environment MIMO_TIMEOUT', stderr)
+                self.assertNotIn('Traceback', stderr)
 
     def test_last_message_without_conclusion_is_not_published(self):
         earlier = 'P1 remains.\n\nConclusion: BLOCK\n'

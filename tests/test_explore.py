@@ -23,6 +23,7 @@ import io
 
 from _test_settings import write_programs, write_settings, write_kimi_config, write_platform_probe
 from _test_retention import extreme_mtime
+from _runtime_cases import RUNTIME_CASES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,11 +49,13 @@ def load_script(name):
 
 STUB = textwrap.dedent(r'''
     #!/usr/bin/env python3
-    import os, pathlib, subprocess, sys, time
+    import json, os, pathlib, subprocess, sys, time
     leg = pathlib.Path(sys.argv[0]).name
     task, repo = sys.argv[2], sys.argv[4]
     obs = pathlib.Path(os.environ["EXPLORE_OBS"])
     obs.mkdir(parents=True, exist_ok=True)
+    (obs / (leg + ".runtime")).write_text(json.dumps({k:v for k,v in os.environ.items()
+        if k.endswith(('_TIMEOUT', '_MAX_TURNS', '_EFFORT'))}), encoding="utf-8")
     (obs / (leg + ".task")).write_text(pathlib.Path(task).read_text(encoding="utf-8"), encoding="utf-8")
     head = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     names = sorted(p.name for p in pathlib.Path(repo).iterdir() if p.name != ".git")
@@ -111,6 +114,8 @@ class ExploreTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.env = dict(os.environ)
+        for _, _, variable, *_ in RUNTIME_CASES:
+            self.env.pop(variable, None)
         self.env.update(
             AIWORK_DATA_DIR=str(self.data),
             EXPLORE_OBS=str(self.obs),
@@ -300,6 +305,43 @@ class ExploreTests(unittest.TestCase):
             if cwd is not None:
                 os.chdir(previous)
         return rc, stdout.getvalue(), stderr.getvalue()
+
+    def test_runtime_parameters_reach_all_explore_legs(self):
+        config = write_settings(self.root / 'settings')
+        self.env['AIWORK_CONFIG_DIR'] = str(config)
+        legs = list(dict.fromkeys(row[0] for row in RUNTIME_CASES))
+        self._link(*legs)
+        self.env['EXPLORE_PEERS'] = ' '.join(legs)
+        for source in ('fallback', 'file', 'environment'):
+            expected = {variable: reader for _, _, variable, _, reader, _ in RUNTIME_CASES}
+            if source != 'fallback':
+                expected = {variable: sample for _, _, variable, _, _, sample in RUNTIME_CASES}
+                (config / 'runtime.env').write_text(''.join(f'{k}={v}\n' for k,v in expected.items()))
+            if source == 'environment':
+                expected = {variable: 'xhigh' if option == 'effort' else '7201'
+                            for _, option, variable, *_ in RUNTIME_CASES}
+                self.env.update(expected)
+            with self.subTest(source=source):
+                rc, _, stderr = self._run(legs)
+                self.assertEqual(rc, 0, stderr)
+                for leg, _, variable, *_ in RUNTIME_CASES:
+                    actual = json.loads((self.obs / (leg + '.runtime')).read_text())
+                    self.assertEqual(actual.get(variable), expected[variable], (leg, variable, source))
+
+    def test_invalid_runtime_stops_explore_before_invoking_leg(self):
+        config = write_settings(self.root / 'settings')
+        self.env.update(AIWORK_CONFIG_DIR=str(config), EXPLORE_PEERS='submimo')
+        self._link('submimo')
+        for bad_file in (True, False):
+            with self.subTest(bad_file=bad_file):
+                (config / 'runtime.env').write_text('MIMO_TIMEOUT=bad\n' if bad_file else '')
+                self.env['MIMO_TIMEOUT'] = '7201' if bad_file else 'bad'
+                rc, stdout, stderr = self._run(['submimo'])
+                self.assertNotEqual(rc, 0)
+                self.assertEqual(stdout, '')
+                self.assertFalse((self.barrier / 'submimo.started').exists())
+                self.assertIn(str(config / 'runtime.env') if bad_file else 'environment MIMO_TIMEOUT', stderr)
+                self.assertNotIn('Traceback', stderr)
 
     def _saved(self):
         root = self.data / "explore"

@@ -13,17 +13,20 @@ from typing import NamedTuple, cast
 from _review_result import load_result, sha256_file
 
 
-READER_TIMEOUT_ENV = {
-    "subdeepseek-agent": "DEEPSEEK_TIMEOUT",
-    "subcodex": "SUBCODEX_TIMEOUT", "subcursor": "CURSOR_TIMEOUT",
-    "submimo": "MIMO_TIMEOUT", "subkimi": "KIMI_TIMEOUT",
-}
-READER_TIMEOUT_SECONDS = "2400"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ReviewError(ValueError):
     pass
+
+
+def reader_environment(leg: str, env: dict[str, str]) -> dict[str, str]:
+    """Freeze resolved reader parameters before the direct wrapper sees them."""
+    from _aiwork_config import ConfigError, runtime_settings
+    try:
+        return dict(env, **runtime_settings(leg, context="reader", environ=env))
+    except ConfigError as exc:
+        raise ReviewError(str(exc)) from exc
 
 
 class Change(NamedTuple):
