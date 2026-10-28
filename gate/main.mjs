@@ -1,6 +1,6 @@
 // aiwork 放行关卡入口:由调用方仓库的 aiwork-gate workflow 调用。代码在 SunJ1ayu/aiwork 的 gate/，永远是那边 main 上的这一份。
 // 这里只管"接线":真实的 GitHub API、aiwork-gate App 的令牌、发 / 改检查。流程和失败处理在 run.mjs。
-// 读数据、拨保险丝用 GITHUB_TOKEN(除 checks: write 外只读);发检查结果用 aiwork-gate App 的临时令牌 ——
+// 读数据、拨保险丝用 GITHUB_TOKEN(权限见 templates/aiwork-gate.yml 的 permissions);发检查结果用 aiwork-gate App 的临时令牌 ——
 // 分支规则只认这个 App 发的结果,PR 自己加的 workflow 用 GITHUB_TOKEN 发一个同名检查也冒充不了。
 // 保险丝故意不靠 App 私钥:私钥坏了 App 就改不了自己发过的旧 success,只能靠它挡(见 run.mjs 文件头)。
 // 合并(run.mjs 第 4 步)另换一张 App 令牌,只在真要合并时才换:发检查的那张始终只有 checks: write。

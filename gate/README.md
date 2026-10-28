@@ -28,6 +28,8 @@
 
 `aiwork-gate.yml` 先检出本仓库默认分支（拿 `.aiwork/policy.json`），再检出 `SunJ1ayu/aiwork` 的 `main`（拿 `gate/`），然后在后者的目录里运行 `node gate/main.mjs`。策略路径由 `AIWORK_POLICY_PATH` 传入。触发方式、并发组 `aiwork-gate`、environment、权限和 `persist-credentials: false` 都在模板里，不要另写一套。
 
+关卡 workflow 的 `GITHUB_TOKEN` 权限见 `templates/aiwork-gate.yml` 的 `permissions`；保险丝的运行方式见下方「两道信号」。已接入仓库按 [#98 的业主上线决定](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6465439618) 分阶段切换，合并前提和分支规则操作见 [PR #100 的切换清单](https://github.com/SunJ1ayu/aiwork/pull/100)。无需新密钥或 App 权限。
+
 ## 一次性设置
 
 - `aiwork-gate` App(App ID 写在 `policy.json` 的 `gate_app_id`):只装在本仓库。权限 Checks 读写(发检查),

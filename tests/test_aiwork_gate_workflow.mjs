@@ -161,12 +161,9 @@ test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwor
   assert.match(text, /workflows: \[ci, aiwork-review-ping\]/);
   assert.match(text, /types: \[requested, in_progress, completed\]/);
   assert.doesNotMatch(text, /^ {2}pull_request:/m);
-  assert.match(text, /contents: read/);
-  assert.match(text, /pull-requests: read/);
-  assert.match(text, /actions: read/);
-  assert.match(text, /issues: read/);
-  assert.match(text, /checks: write/);
-  assert.doesNotMatch(text, /statuses: write/);
+  assert.deepEqual(text.match(/^permissions:\n((?: {2}[^\n]+\n)+)/m)?.[1].trim().split("\n").map((line) => line.trim()).sort(), [
+    "actions: read", "checks: write", "contents: read", "issues: read", "pull-requests: read",
+  ], "检查式保险丝只留所需权限，不再授权旧 status 写入");
   assert.ok(read("gate/README.md").includes(`check run \`${FUSE_CHECK_NAME}\``), "文档里的新保险丝名称要与实现一致");
   assert.match(text, /group: aiwork-gate/);
   assert.match(text, /cancel-in-progress: false/);
