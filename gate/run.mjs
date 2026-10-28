@@ -18,7 +18,7 @@
 //      带上判过的 head —— 合并用的就是这次刚读到的数据,判完之后又推了新提交,合并接口会拒。
 //      没放行的请求留着,等哪次运行判为放行再合。这就是"合并那一刻再判一次":不另起一套判定。
 //
-// 两道信号:App 检查(分支规则只认它,PR 冒充不了)+ 保险丝(GITHUB_TOKEN 发的 commit status `aiwork-gate/fuse`,
+// 两道信号:App 检查(分支规则只认它,PR 冒充不了)+ 保险丝(GITHUB_TOKEN 发的检查,名称见 FUSE_CHECK_NAME,
 // 不靠 App 私钥)。只有 App 自己改得动它发过的检查 —— App 私钥坏了,旧 success 就一直挂着,这时靠保险丝挡。
 // 保险丝谁有写权限的 workflow 都能拨,所以只能多挡、不能单独放行:转真拦截时两道都设为必过。
 //   · 每个提交要么写上这次算出的结论,要么保险丝 failure(App 发不出占位 / 写不回结论、策略不合法);
@@ -48,7 +48,7 @@ export function validatePolicy(p) {
   if (bad.length) throw new Error(`.aiwork/policy.json 不完整或不合法:${bad.join("、")}`);
 }
 
-export const FUSE_CONTEXT = "aiwork-gate/fuse";
+export const FUSE_CHECK_NAME = "aiwork-gate/fuse-check";
 const SHA_RE = /^[0-9a-f]{40}$/;
 const fuseState = (r) => (r.status !== "completed" ? "pending" : r.conclusion === "success" ? "success" : "failure");
 

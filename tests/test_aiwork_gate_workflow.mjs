@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { globToRegExp, matchAny } from "../gate/decide.mjs";
-import { validatePolicy } from "../gate/run.mjs";
+import { FUSE_CHECK_NAME, validatePolicy } from "../gate/run.mjs";
 
 const ROOT = new URL("../", import.meta.url);
 const read = (path) => readFileSync(new URL(path, ROOT), "utf8");
@@ -165,7 +165,9 @@ test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwor
   assert.match(text, /pull-requests: read/);
   assert.match(text, /actions: read/);
   assert.match(text, /issues: read/);
-  assert.match(text, /statuses: write/);
+  assert.match(text, /checks: write/);
+  assert.doesNotMatch(text, /statuses: write/);
+  assert.ok(read("gate/README.md").includes(`check run \`${FUSE_CHECK_NAME}\``), "文档里的新保险丝名称要与实现一致");
   assert.match(text, /group: aiwork-gate/);
   assert.match(text, /cancel-in-progress: false/);
   assert.match(text, /environment: aiwork-gate/);

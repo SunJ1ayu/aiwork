@@ -197,8 +197,8 @@ test("R14c App 写不回结论(PATCH 失败)→ 保险丝 failure,运行失败",
 
 test("R14f 保险丝本身拨不动(GITHUB_TOKEN 出错)→ App 照常写回结论,运行最后报错", async () => {
   const r = recorder();
-  const fuse = { async set() { throw new Error("HTTP 403 statuses"); } };
-  await assert.rejects(run(r, prsApi(r.calls, one()), { fuse }), /statuses/);
+  const fuse = { async set() { throw new Error("HTTP 403 checks"); } };
+  await assert.rejects(run(r, prsApi(r.calls, one()), { fuse }), /checks/);
   assert.deepEqual(finishes(r.calls).map((f) => f.slice(0, 3)), [[HEAD, "completed", "failure"]], "App 的新结论照样写回");
 });
 
@@ -349,7 +349,7 @@ test("M7 策略:merge_label 必须是非空字符串,merge_requesters 必须是�
 
 test("M8 放行的结论没写全(保险丝拨不动)→ 不合并;运行照常报错", async () => {
   const r = recorder();
-  const fuse = { async set(sha, state) { r.calls.push(["fuse", sha, state]); if (state === "success") throw new Error("HTTP 502 statuses"); } };
+  const fuse = { async set(sha, state) { r.calls.push(["fuse", sha, state]); if (state === "success") throw new Error("HTTP 502 checks"); } };
   const api = prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events: [labeled(policy.owner)] } });
   await assert.rejects(run(r, api, { fuse, merger: mergeRecorder(r) }), /502/);
   assert.deepEqual(merges(r.calls), []);

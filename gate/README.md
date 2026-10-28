@@ -42,8 +42,11 @@
 ## 两道信号:App 检查 + 保险丝
 
 - **App 检查**(`aiwork-gate`;shadow 阶段叫 `aiwork-gate-shadow`):结论本身。只有 `aiwork-gate` App 发得出,PR 冒充不了。
-- **保险丝**(commit status `aiwork-gate/fuse`):用 workflow 自带的 `GITHUB_TOKEN` 发,**不靠 App 私钥**。
-  每次重算先拨到 pending,App 把结论写回之后才跟着结论走;App 发不出 / 写不回、策略不合法 → failure。
+- **保险丝**(check run `aiwork-gate/fuse-check`):用 workflow 自带的 `GITHUB_TOKEN` 和 `checks: write` 发,**不靠 App 私钥**。
+  每次重算先新建 `in_progress` 占位,App 把结论写回之后再 PATCH 同一条检查为结论;
+  App 发不出 / 写不回、策略不合法 → failure。策略不合法时直接新建失败检查,也不需要 App 可用。
+  不再写旧的 commit status `aiwork-gate/fuse`，也不复用它的名字：GitHub 对同名的 status 和 check 可能要求两者都通过。
+  现有仓库的分支规则切换见 [PR #100 的迁移清单](https://github.com/SunJ1ayu/aiwork/pull/100)，不能只更新代码就当保险丝已接通。
 - 为什么要两道:GitHub 上只有 App 自己改得动它发过的检查。App 私钥坏了(被撤、过期、secret 被删)时,
   同一个提交上的旧 success 会一直挂着,之后来的 BLOCK、业主撤回批准都盖不掉它 —— 这时靠保险丝挡。
 - 保险丝**只能多挡、不能单独放行**:任何有写权限的 workflow 都拨得动它,所以它必须和 App 检查一起设为必过。
@@ -60,8 +63,20 @@
   拨了 failure、较早的运行又拨回 success。同名检查后发的一定后写完,GitHub 按创建还是按完成时间取"最新",取到的都是
   最后一次运行的;运行半路死掉时它的占位停在 in_progress、保险丝停在 pending,照样挡着,下一次运行全部重算。
 - job 上**不许**按事件过滤(比如只认某个标签):排队时被顶掉的运行,要靠顶掉它的那次来算。
-- 代价:每次运行读每个开着的 PR 约 6–8 次 API。`GITHUB_TOKEN` 每小时 1000 次;开着的 PR 多、事件又密时会先撞上它,
-  撞上就是 G8 不放行(不会误放行)。到时再按实际用量优化。
+- 代价:稳定列表、各接口只需一页、不合并时，设开着的 PR 数为 P、不同 head 数为 H：
+  每次 `GITHUB_TOKEN` 要两次读 PR 列表、每 PR 六次 REST 读取和一次 GraphQL 查询、每 head 两次保险丝检查写入，
+  即约 `2 + 6P + 2H` 次 REST 请求和 P 次 GraphQL 查询；分页或列表不稳定会更多。
+  App 另有每 head 两次检查写入，以及每次运行一次安装查询和一次换检查令牌请求；没有 head 时不换 App 令牌。
+  合并时还会另查安装、换合并令牌并逐 PR 发合并请求，这些不算进上述 `GITHUB_TOKEN` REST 数。
+  定时门铃每小时四次、每天 96 次，事件触发另加；例如 P=H=30 时，光定时就约 968 次 `GITHUB_TOKEN` REST 请求/小时。
+  `GITHUB_TOKEN` 的 REST 限额为每仓库每小时 1000 次，GraphQL 另按查询成本计额，不把 App 请求混进这一额度。
+  每个 head 每天还会有约 192 次保险丝写入、192 次 App 检查写入及各 96 条新检查，Actions 的运行和 runner 占用也增加。
+  限流、分页读不全会按失败处理；请求失败到两道信号写回之间仍有下文说明的最终一致窗口。
+- 同一提交反复写入：不再追加 commit status（同一 SHA/context 到 1000 条会拒绝继续写）；
+  App 检查和保险丝都在单次运行内创建再改写，同一 check suite 内同名检查超过 1000 条时 GitHub 自动删除旧检查，不会因历史次数写满。
+  旧检查历史可能被淘汰，不能把 GitHub 检查列表当永久审计存档。平台上限见
+  [status 文档](https://docs.github.com/en/rest/commits/statuses#create-a-commit-status)和
+  [check run 文档](https://docs.github.com/en/rest/checks/runs#create-a-check-run)。
 - 一次运行里先把所有 head 的保险丝拨到 pending(快、不靠 App),再发 App 占位,之后才读 PR 的数据;单个请求最多等
   30 秒(`AIWORK_GATE_TIMEOUT_MS`),卡住的请求拖不垮整次运行。开着的 PR 的列表连读两遍一致才算数(翻页期间有 PR 关掉,
   后面的会往前挪、漏掉一个)。
@@ -142,7 +157,7 @@ Actions 被关、environment 等审批、检出/API 失败也仍可能让旧结�
 | S6 | 测试 PR 改 `judging_surface` 里的一个文件 / 改 `high` 里的一个文件 | 分别要业主批准(G2)/ `high_min_families` 家不同家族 PASS + 业主批准(G6) | 判卷面与 high 路径 |
 | S7 | 给 PR 加标签 `aiwork:recheck` | 重算一次;算的时候合并框里这条检查显示"重算中",保险丝变黄 | 手动重算可用;占位压得住上一次的结论 |
 | S8 | 编辑测试 PR 的标题;再改一次目标分支 | 各重算一次;改目标分支后 G1 ❌「目标分支在这次 CI 之后改过」,推一个新提交(或关掉再重开 PR)让 CI 重跑后恢复 | edited 事件会触发重判;旧目标上的 CI 不算数 |
-| S9 | 任选上面一次重算,看测试 PR 的检查列表;再连着触发两次(比如先后加两个标签),看 Actions 里 aiwork-gate 的运行 | `aiwork-gate/fuse` 先变黄(pending),算完与 `aiwork-gate-shadow` 同结论,发出者是 GitHub Actions;两次运行一个跑完另一个才开始 | 保险丝接通,不靠 App 私钥;同一时间只有一次运行 |
+| S9 | 任选上面一次重算,看测试 PR 的检查列表;再连着触发两次(比如先后加两个标签),看 Actions 里 aiwork-gate 的运行 | `aiwork-gate/fuse-check` 先变黄(in_progress),算完与 `aiwork-gate-shadow` 同结论,发出者是 GitHub Actions;两次运行一个跑完另一个才开始 | 保险丝接通,不靠 App 私钥;同一时间只有一次运行 |
 
 合并(本节在「合并」上线后补做,同样用无害的测试 PR):
 
@@ -162,7 +177,7 @@ S0–S13 全部符合预期,且之后至少 5 个真实 PR 上 shadow 的结论�
 1. 发一个 PR 把 `policy.json` 的 `check_name` 改为 `aiwork-gate`(连同钉住它的那条测试;判卷面,要业主批准);
 2. 业主在 main 的规则集里:
    - 必过检查从 `ci` 换成**两条**:`aiwork-gate`(来源限定 `aiwork-gate` App)和
-     `aiwork-gate/fuse`(来源限定 GitHub Actions)。只设第一条,App 私钥坏了时旧 success 仍能合并。
+     `aiwork-gate/fuse-check`(来源限定 GitHub Actions)。只设第一条,App 私钥坏了时旧 success 仍能合并。
      「合并前分支必须和 main 同步」留着(见「合并」);
    - **另建**一个规则集,目标 main,只勾 Restrict updates;绕过名单:Repository admin(业主自己还能合)和
      `aiwork-gate` App(选 For pull requests only:只能合 PR,不能直接推)。这样别人只能贴标签请关卡合。
