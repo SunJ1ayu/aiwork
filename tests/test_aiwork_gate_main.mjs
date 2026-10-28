@@ -23,7 +23,6 @@ const PEM = privateKey.export({ type: "pkcs8", format: "pem" });
 function fakeGitHub(opts = {}) {
   const log = [];
   const checks = new Map();
-  const statuses = new Map();
   let nextCheck = 4242;
   const server = createServer((req, res) => {
     let body = "";
@@ -44,9 +43,6 @@ function fakeGitHub(opts = {}) {
         const check = { ...record.body, id, auth };
         checks.set(id, check);
         record.checkId = id;
-        // GitHub 对同一 suite/同名检查超过 1000 条时自动淘汰旧项，不拒绝创建。
-        const same = [...checks.values()].filter((c) => c.auth === auth && c.head_sha === check.head_sha && c.name === check.name);
-        if (same.length > 1000) checks.delete(same[0].id);
         return send(201, { id });
       }
       if (u.startsWith("/repos/o/r/check-runs/") && req.method === "PATCH") {
@@ -58,11 +54,7 @@ function fakeGitHub(opts = {}) {
         return send(200, { id });
       }
       if (u.startsWith("/repos/o/r/statuses/") && req.method === "POST") {
-        const key = u + ":" + record.body.context;
-        const count = statuses.get(key) ?? 0;
-        if (count >= 1000) return send(422, { message: "1000 statuses per sha and context" });
-        statuses.set(key, count + 1);
-        return send(201, { id: count + 1 });
+        return send(422, { message: "status history already full" });
       }
       if (opts.prFails && u === "/repos/o/r/pulls/10") return send(502, { message: "bad gateway" });
       // mergeReady:有合格 PASS、业主贴了合并标签 → 放行并合并
@@ -83,7 +75,7 @@ function fakeGitHub(opts = {}) {
       send(404, { message: `fake: no route ${u}` });
     });
   });
-  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, log, checks, statuses, url: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, log, checks, url: `http://127.0.0.1:${server.address().port}` })));
 }
 
 function runMain(apiUrl, extraEnv = {}, main = MAIN, event = { pull_request: { number: 10, head: { sha: HEAD } } }) {
@@ -111,26 +103,39 @@ function runMain(apiUrl, extraEnv = {}, main = MAIN, event = { pull_request: { n
   });
 }
 
-test("整机:同一 head 重算超过 status 和同名检查上限后仍能判定并合并", async () => {
+// 不在替身里模拟 GitHub 的历史淘汰。平台保留规则见 README 的官方出处；
+// 本测试钉住程序不读历史、不追加 status，每次新建并只 PATCH 本次 id 的请求契约。
+test("整机:重算不访问历史或已满的 status，每次用新检查，放行后仍能合并", async () => {
   const opts = {};
   const gh = await fakeGitHub(opts);
+  const previousIds = new Set();
   try {
-    for (let round = 0; round < 1001; round++) {
+    for (const ready of [false, true]) {
+      opts.mergeReady = ready;
+      const start = gh.log.length;
       const { code, out } = await runMain(gh.url);
-      assert.equal(code, 0, `round=${round + 1}: ${out}`);
+      assert.equal(code, 0, out);
+      const round = gh.log.slice(start);
+      assert.equal(round.filter((r) => r.auth === "Bearer read_token" && r.url !== "/graphql").length, 10,
+        "P=H=1 时，GITHUB_TOKEN 单轮 REST 为 2+6P+2H；合并的 App 请求不混入");
+      assert.equal(round.filter((r) => r.url === "/graphql").length, 1);
+      for (const writes of [fuseWrites(round), appWrites(round)]) {
+        assert.equal(writes.length, 2, "历史多少条都只创建/改写本轮检查，不扫描或重写历史");
+        const [create, finish] = writes;
+        assert.equal(create.method, "POST");
+        assert.equal(create.body.head_sha, HEAD);
+        assert.equal(create.body.status, "in_progress");
+        assert.ok(!previousIds.has(create.checkId), "新一轮不能复用上一轮的检查");
+        assert.equal(finish.method, "PATCH");
+        assert.equal(finish.url, `/repos/o/r/check-runs/${create.checkId}`);
+        assert.equal(finish.body.conclusion, ready ? "success" : "failure");
+        previousIds.add(create.checkId);
+      }
+      assert.equal(round.filter((r) => r.url === "/repos/o/r/pulls/10/merge").length, ready ? 1 : 0);
     }
-    opts.mergeReady = true;
-    const { code, out } = await runMain(gh.url);
-    assert.equal(code, 0, out);
-    assert.equal(gh.log.filter((r) => r.url === "/repos/o/r/pulls/10/merge").length, 1);
-    assert.equal(gh.statuses.size, 0, "不再向只能追加的 status 写入");
-    const names = new Set([...gh.checks.values()].map((c) => c.name));
-    assert.equal(names.size, 2, "App 结论和独立保险丝都用检查");
-    for (const name of names) {
-      const checks = [...gh.checks.values()].filter((c) => c.name === name);
-      assert.equal(checks.length, 1000, "自动淘汰旧检查后仍能写入新结论");
-      assert.equal(checks.at(-1).conclusion, "success");
-    }
+    assert.equal(gh.log.filter((r) => r.url.includes("/statuses/")).length, 0, "旧 status 即使已满也不访问");
+    assert.equal(gh.log.filter((r) => r.method === "GET" && r.url.includes("check-runs")).length, 0,
+      "结果不依赖检查历史的长度、分页或淘汰规则");
   } finally {
     gh.server.close();
   }
@@ -243,7 +248,7 @@ test("量具:检查角色不能按令牌筛选，否则身份断言会空转", (
   assert.deepEqual(fuseWrites(log), fuse, "保险丝误用了 App 令牌也不能被过滤掉");
 });
 
-test("整机:保险丝只用 GITHUB_TOKEN 发,先 pending、App 写回之后跟结论走", async () => {
+test("整机:保险丝只用 GITHUB_TOKEN 发,先 in_progress、App 写回之后跟结论走", async () => {
   const gh = await fakeGitHub();
   try {
     const { code, out } = await runMain(gh.url, { GITHUB_SERVER_URL: "https://github.com", GITHUB_RUN_ID: "123" });
@@ -335,7 +340,7 @@ test("整机:没传 AIWORK_POLICY_PATH → 不读 main.mjs 相对路径上的 po
 });
 
 // aiwork-review[bot] 评审(PR #10 review 5362031164,@ a190849)第 3 个阻断点:一个请求卡住,整次运行被拖到超时。
-test("整机:发占位的请求卡住 → 按单个请求的超时放弃,保险丝已先拨 pending、再拨 failure,进程报错结束", async () => {
+test("整机:发占位的请求卡住 → 按单个请求的超时放弃,保险丝已先建 in_progress、再改为 failure,进程报错结束", async () => {
   const gh = await fakeGitHub({ hang: true });
   try {
     const started = Date.now();

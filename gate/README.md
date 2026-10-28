@@ -63,24 +63,35 @@
   (GitHub 自己会把更早排队的取消),它开始时读到的一定不比被它顶掉的旧,而它又会重算全部 PR,所以顶掉的不会漏算。
   于是同一提交上后写的结论一定出自后读的数据 —— 不会有慢一步的旧运行盖掉新结论,也不会有较新的运行 App 出错
   拨了 failure、较早的运行又拨回 success。同名检查后发的一定后写完,GitHub 按创建还是按完成时间取"最新",取到的都是
-  最后一次运行的;运行半路死掉时它的占位停在 in_progress、保险丝停在 pending,照样挡着,下一次运行全部重算。
+  最后一次运行的;运行半路死掉时,已创建且未完成的占位检查(包括保险丝)停在 in_progress,照样挡着,下一次运行全部重算。
 - job 上**不许**按事件过滤(比如只认某个标签):排队时被顶掉的运行,要靠顶掉它的那次来算。
 - 代价:稳定列表、各接口只需一页、不合并时，设开着的 PR 数为 P、不同 head 数为 H：
   每次 `GITHUB_TOKEN` 要两次读 PR 列表、每 PR 六次 REST 读取和一次 GraphQL 查询、每 head 两次保险丝检查写入，
   即约 `2 + 6P + 2H` 次 REST 请求和 P 次 GraphQL 查询；分页或列表不稳定会更多。
   App 另有每 head 两次检查写入，以及每次运行一次安装查询和一次换检查令牌请求；没有 head 时不换 App 令牌。
   合并时还会另查安装、换合并令牌并逐 PR 发合并请求，这些不算进上述 `GITHUB_TOKEN` REST 数。
-  定时门铃每小时四次、每天 96 次，事件触发另加；例如 P=H=30 时，光定时就约 968 次 `GITHUB_TOKEN` REST 请求/小时。
-  `GITHUB_TOKEN` 的 REST 限额为每仓库每小时 1000 次，GraphQL 另按查询成本计额，不把 App 请求混进这一额度。
-  每个 head 每天还会有约 192 次保险丝写入、192 次 App 检查写入及各 96 条新检查，Actions 的运行和 runner 占用也增加。
+  设 T 为模板 cron 每小时的分钟刻度数，D=24T；定时的 REST 用量为 `T × (2 + 6P + 2H)`/小时，
+  每个 head 每天的保险丝写入和 App 检查写入各为 2D 次、新检查各为 D 条；事件触发另加，Actions 和 runner 占用也增加。
+  `GITHUB_TOKEN` 的 REST 限额 L 为每仓库每小时 1000 次（[GitHub 官方配额](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-github_token-in-github-actions)），
+  GraphQL 另按查询成本计额，不把 App 请求混进这一额度。
+  下表按实际 cron 推导，由 workflow 测试比对；示例假设每 PR 不同 head（P=H），单轮 REST 为 `R=2+8P`：
+
+| 依据 | 每小时轮数 T | 每天轮数 D | P=H=30 时 REST/小时 | 每 head 每天保险丝 / App 写入（各） | 每 head 每天新检查（各） | 加 1 轮事件即超额的最小 P=H | 光定时即用满/超额的最小 P=H |
+|---|---|---|---|---|---|---|---|
+| 当前 cron | 4 | 96 | 968 | 192 | 96 | 25 | 31 |
+
+  示例规模已接近额度；达到倒数第二列的规模后，定时加一轮完整事件重算就会超过 L，事件重算已无足够预算；
+  达到最后一列时，光定时就用满或超过 L。一般情况下，R 取实际单轮 REST 用量，额外完整事件轮数的预算是 `max(0, floor(L/R) - T)`。
+  这些边界只按计划的定时轮数计算，未留分页、合并、列表不稳定或其他 workflow 的余量，实际应更早降频或减少用量；
+  队列合并/取消不作为节省配额的保证。限额打满会让后续事件读取或写回失败，不代表事件有优先保留的额度。
   限流、分页读不全会按失败处理；请求失败到两道信号写回之间仍有下文说明的最终一致窗口。
 - 同一提交反复写入：不再追加 commit status（同一 SHA/context 到 1000 条会拒绝继续写）；
   App 检查和保险丝都在单次运行内创建再改写，同一 check suite 内同名检查超过 1000 条时 GitHub 自动删除旧检查，不会因历史次数写满。
   旧检查历史可能被淘汰，不能把 GitHub 检查列表当永久审计存档。平台上限见
   [status 文档](https://docs.github.com/en/rest/commits/statuses#create-a-commit-status)和
   [check run 文档](https://docs.github.com/en/rest/checks/runs#create-a-check-run)。
-- 一次运行里先把所有 head 的保险丝拨到 pending(快、不靠 App),再发 App 占位,之后才读 PR 的数据;单个请求最多等
-  30 秒(`AIWORK_GATE_TIMEOUT_MS`),卡住的请求拖不垮整次运行。开着的 PR 的列表连读两遍一致才算数(翻页期间有 PR 关掉,
+- 一次运行里先给所有 head 的保险丝创建 in_progress 占位(快、不靠 App),再发 App 占位,之后才读 PR 的数据;单个请求的
+  超时配置见 `main.mjs` 的 `AIWORK_GATE_TIMEOUT_MS`，卡住的请求拖不垮整次运行。开着的 PR 的列表连读两遍一致才算数(翻页期间有 PR 关掉,
   后面的会往前挪、漏掉一个)。
 
 ## 每样输入的门铃

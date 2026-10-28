@@ -208,6 +208,17 @@ test("关卡代码更新有定时门铃，间隔与文档一致，定时事件�
   const row = read("gate/README.md").split("\n").find((line) => line.startsWith("| 关卡代码"));
   assert.ok(row, "门铃表要包含关卡代码本身");
   assert.equal(Number(row.match(/计划间隔 (\d+) 分钟/)?.[1]), maxGap, "文档不能另维护一个间隔");
+  const readme = read("gate/README.md");
+  const limit = Number(readme.match(/每仓库每小时 (\d+) 次/)?.[1]);
+  const sample = Number(readme.match(/P=H=(\d+) 时 REST\/小时/)?.[1]);
+  assert.ok(limit > 0 && sample > 0, "开销表要给出额度与示例规模");
+  const perHour = ticks.length;
+  const perDay = 24 * perHour;
+  const eventExhaustion = Math.floor((limit / (perHour + 1) - 2) / 8) + 1;
+  const scheduleExhaustion = Math.ceil((limit / perHour - 2) / 8);
+  assert.equal(readme.split("\n").find((line) => line.startsWith("| 当前 cron |")),
+    `| 当前 cron | ${perHour} | ${perDay} | ${perHour * (2 + 8 * sample)} | ${2 * perDay} | ${perDay} | ${eventExhaustion} | ${scheduleExhaustion} |`,
+    "频率、用量和额度阈值都必须从模板 cron 推出，不能只改门铃间隔");
   assert.match(row, /延迟|丢弃/);
   assert.match(read("gate/README.md"), /60 天/);
   assert.doesNotMatch(text.split(/^jobs:/m)[1], /^\s+if:/m, "定时触发必须走完整关卡，不能依赖 PR 事件字段过滤");
