@@ -78,8 +78,17 @@
 | CI(以最后开始的那次执行为准) | `workflow_run`(ci):`requested` / `in_progress` / `completed`(重跑不一定发 `requested`,开始跑时会发 `in_progress`) |
 | 评审(读当前正文;机器人评审发出后被改写过一律按 BLOCK、时刻按改写那一刻;人的评审被撤销按撤销那一刻) | `aiwork-review-ping`:`submitted` / `edited` / `dismissed` → `workflow_run` |
 | 策略 `.aiwork/policy.json`(只认 main 上的) | 改 main 之后 CI 跑完的 `workflow_run` |
+| 关卡代码（aiwork main 的 `gate/`） | `schedule`：计划间隔 15 分钟，具体 cron 见模板；每次重新检出 aiwork main 并重算全部开放 PR。GitHub 延迟、丢弃或停用时不能保证这一时限，见下方限制 |
 | 合并请求(PR 上有没有 `aiwork:merge`、最后是谁贴的) | `pull_request_target`:`labeled`(撤掉标签不用叫醒:只会少合并,下一次运行自然读到) |
 | 手动重算 | 给 PR 加任何标签(如 `aiwork:recheck`) |
+
+定时门铃的计划等待上限就是表中的间隔，不是检查写回的硬性完成上限。成功运行还要经过并发队列、
+runner 分配、检出和重算；job 的执行超时见模板。GitHub 高负载时可能延迟甚至丢弃定时任务，
+不能保证按实际经过时间在某个固定上限内完成。定时任务只使用默认分支上的 workflow；公开仓库
+**60 天**没有活动会自动停用定时任务，恢复活动后也要确认 workflow 已重新启用。相关平台行为见
+[GitHub 的 schedule 说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
+Actions 被关、environment 等审批、检出/API 失败也仍可能让旧结论留在网页上；这些情况下先别直接合并，
+恢复运行后用已有的手动门铃重算。运行成功但下一次重算尚未发生的窗口仍然存在；定时器不能消除最终一致的限制。
 
 ## 已知限制:状态检查只能"最终一致"
 

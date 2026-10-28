@@ -195,6 +195,25 @@ test("aiwork-review-ping：无权限，只敲门，不把事件内容拼进 shel
   assert.doesNotMatch(run, /\$\{\{/);
 });
 
+test("关卡代码更新有定时门铃，间隔与文档一致，定时事件不被过滤", () => {
+  const text = read("templates/aiwork-gate.yml");
+  const cron = text.match(/^  schedule:\n    - cron: ['"]([^'"]+)['"]$/m)?.[1];
+  assert.ok(cron, "不能只靠调用方事件等待关卡代码更新");
+  const [minutes, ...rest] = cron.split(/\s+/);
+  assert.deepEqual(rest, ["*", "*", "*", "*"], "每天每小时都要重算");
+  const ticks = minutes.split(",").map(Number);
+  assert.ok(ticks.length > 1 && ticks.every((n, i) => Number.isInteger(n) && n > 0 && n < 60 && (!i || n > ticks[i - 1])),
+    "避开整点，分钟必须有序且不重复");
+  const maxGap = Math.max(...ticks.map((n, i) => (ticks[(i + 1) % ticks.length] + (i === ticks.length - 1 ? 60 : 0)) - n));
+  assert.ok(maxGap <= 15, "关卡代码变化后的计划等待不得超过 15 分钟");
+  const row = read("gate/README.md").split("\n").find((line) => line.startsWith("| 关卡代码"));
+  assert.ok(row, "门铃表要包含关卡代码本身");
+  assert.equal(Number(row.match(/计划间隔 (\d+) 分钟/)?.[1]), maxGap, "文档不能另维护一个间隔");
+  assert.match(row, /延迟|丢弃/);
+  assert.match(read("gate/README.md"), /60 天/);
+  assert.doesNotMatch(text.split(/^jobs:/m)[1], /^\s+if:/m, "定时触发必须走完整关卡，不能依赖 PR 事件字段过滤");
+});
+
 test("aiwork 自己的策略：真拦截，不登记共用的 build 账号，罩住密钥、发布和判卷面", () => {
   const policy = JSON.parse(read(".aiwork/policy.json"));
   validatePolicy(policy);

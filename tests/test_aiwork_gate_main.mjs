@@ -58,10 +58,10 @@ function fakeGitHub(opts = {}) {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, log, url: `http://127.0.0.1:${server.address().port}` })));
 }
 
-function runMain(apiUrl, extraEnv = {}, main = MAIN) {
+function runMain(apiUrl, extraEnv = {}, main = MAIN, event = { pull_request: { number: 10, head: { sha: HEAD } } }) {
   const dir = mkdtempSync(join(tmpdir(), "gate-main-"));
   const eventPath = join(dir, "event.json");
-  writeFileSync(eventPath, JSON.stringify({ pull_request: { number: 10, head: { sha: HEAD } } }));
+  writeFileSync(eventPath, JSON.stringify(event));
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [main], {
       timeout: 20_000, // 卡住就杀掉,测试红而不是挂住
@@ -116,6 +116,25 @@ test("整机:JWT 验得过、只要 checks:write、读用 GITHUB_TOKEN、先占�
     assert.equal(last.body.status, "completed");
     assert.equal(last.body.conclusion, "failure", "没有评审 ⇒ 不放行");
     assert.match(last.body.output.title, /缺合格评审/);
+  } finally {
+    gh.server.close();
+  }
+});
+
+test("整机:定时事件没有 PR/head，仍用既有凭证读取开放 PR、拨保险丝、重写检查", async () => {
+  const gh = await fakeGitHub();
+  try {
+    const { code, out } = await runMain(gh.url, { GITHUB_EVENT_NAME: "schedule" }, MAIN, { schedule: "scheduled" });
+    assert.equal(code, 0, out);
+    assert.ok(gh.log.some((r) => r.url === "/repos/o/r/pulls/10" && r.auth === "Bearer read_token"));
+    assert.deepEqual(fuseWrites(gh.log).map((r) => r.body.state), ["pending", "failure"]);
+    const writes = gh.log.filter((r) => r.url.startsWith("/repos/o/r/check-runs"));
+    assert.equal(writes[0].body.head_sha, HEAD);
+    assert.equal(writes[0].body.status, "in_progress");
+    assert.equal(writes.at(-1).body.conclusion, "failure");
+    assert.match(writes.at(-1).body.output.title, /缺合格评审/);
+    assert.deepEqual(gh.log.filter((r) => r.url === "/app/installations/777/access_tokens").map((r) => r.body),
+      [{ repositories: ["r"], permissions: { checks: "write" } }]);
   } finally {
     gh.server.close();
   }
