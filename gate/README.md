@@ -28,6 +28,8 @@
 
 `aiwork-gate.yml` 先检出本仓库默认分支（拿 `.aiwork/policy.json`），再检出 `SunJ1ayu/aiwork` 的 `main`（拿 `gate/`），然后在后者的目录里运行 `node gate/main.mjs`。策略路径由 `AIWORK_POLICY_PATH` 传入。触发方式、并发组 `aiwork-gate`、environment、权限和 `persist-credentials: false` 都在模板里，不要另写一套。
 
+关卡 workflow 的 `GITHUB_TOKEN` 权限以模板为准：当前 `statuses: write` 继续供 commit status 保险丝使用，`checks: write` 预先授予后续检查式保险丝；本阶段关卡代码、保险丝名称和分支必过规则不变。上线顺序见 [#98 的业主决定](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6465439618)。本次模板合入后，OpenDesign 须先按正常流程同步两份 workflow；同步前其副本一致性 CI 会报红，完成同步后才轮到 PR #100 换代码。无需新密钥或 App 权限。
+
 ## 一次性设置
 
 - `aiwork-gate` App(App ID 写在 `policy.json` 的 `gate_app_id`):只装在本仓库。权限 Checks 读写(发检查),

@@ -161,11 +161,9 @@ test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwor
   assert.match(text, /workflows: \[ci, aiwork-review-ping\]/);
   assert.match(text, /types: \[requested, in_progress, completed\]/);
   assert.doesNotMatch(text, /^ {2}pull_request:/m);
-  assert.match(text, /contents: read/);
-  assert.match(text, /pull-requests: read/);
-  assert.match(text, /actions: read/);
-  assert.match(text, /issues: read/);
-  assert.match(text, /statuses: write/);
+  assert.deepEqual(text.match(/^permissions:\n((?: {2}[^\n]+\n)+)/m)?.[1].trim().split("\n").map((line) => line.trim()).sort(), [
+    "actions: read", "checks: write", "contents: read", "issues: read", "pull-requests: read", "statuses: write",
+  ], "先授予检查写权限，同时保留现有 status 保险丝权限；不增加其他权限");
   assert.match(text, /group: aiwork-gate/);
   assert.match(text, /cancel-in-progress: false/);
   assert.match(text, /environment: aiwork-gate/);
