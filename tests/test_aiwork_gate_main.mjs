@@ -212,16 +212,36 @@ test("整机:没有私钥 → 进程失败,App 检查不发、PR 的数据一条
   try {
     const { code } = await runMain(gh.url, { AIWORK_GATE_PRIVATE_KEY: "" });
     assert.notEqual(code, 0);
-    assert.equal(gh.log.filter((r) => appWrites([r]).length || r.url.startsWith("/repos/o/r/pulls/")).length, 0);
+    assert.equal(appWrites(gh.log).length + gh.log.filter((r) => r.url.startsWith("/repos/o/r/pulls/")).length, 0);
   } finally {
     gh.server.close();
   }
 });
 
 const checkWrites = (log) => log.filter((r) => r.url.startsWith("/repos/o/r/check-runs") && ["POST", "PATCH"].includes(r.method));
-const appWrites = (log) => checkWrites(log).filter((r) => r.auth === "Bearer app-check-token");
-const fuseWrites = (log) => checkWrites(log).filter((r) => r.auth === "Bearer read_token");
+function namedWrites(log, name) {
+  const writes = checkWrites(log);
+  const starts = writes.filter((r) => r.method === "POST" && r.body.name === name);
+  const ids = new Set(starts.map((r) => r.checkId).filter(Number.isSafeInteger));
+  return writes.filter((r) => starts.includes(r) || (r.method === "PATCH" && ids.has(Number(r.url.split("/").at(-1)))));
+}
+const fuseWrites = (log) => namedWrites(log, FUSE_CHECK_NAME);
+const appWrites = (log) => {
+  const fuse = fuseWrites(log);
+  return checkWrites(log).filter((r) => !fuse.includes(r));
+};
 const fuseStates = (log) => fuseWrites(log).map((r) => r.body.conclusion ?? r.body.status);
+
+test("量具:检查角色不能按令牌筛选，否则身份断言会空转", () => {
+  const create = (name, id, auth) => ({ method: "POST", url: "/repos/o/r/check-runs", body: { name }, checkId: id, auth });
+  const patch = (id, auth) => ({ method: "PATCH", url: `/repos/o/r/check-runs/${id}`, body: {}, auth });
+  const app = [create(policy.check_name, 1, "Bearer read_token"), patch(1, "Bearer read_token"),
+    create("unexpected-app-name", 3, "Bearer read_token"), patch(3, "Bearer read_token")];
+  const fuse = [create(FUSE_CHECK_NAME, 2, "Bearer app-check-token"), patch(2, "Bearer app-check-token")];
+  const log = [...app, ...fuse];
+  assert.deepEqual(appWrites(log), app, "App 检查即使用了错误的 Actions 令牌也必须被身份断言看到");
+  assert.deepEqual(fuseWrites(log), fuse, "保险丝误用了 App 令牌也不能被过滤掉");
+});
 
 test("整机:保险丝只用 GITHUB_TOKEN 发,先 pending、App 写回之后跟结论走", async () => {
   const gh = await fakeGitHub();
@@ -282,7 +302,7 @@ test("整机:策略文件不是合法 JSON → 不发 App 检查、不读 PR 的
     assert.notEqual(code, 0);
     assert.match(out, /policy\.json/);
     assert.deepEqual(fuseStates(gh.log), ["failure"]);
-    assert.equal(gh.log.filter((r) => appWrites([r]).length || r.url.startsWith("/repos/o/r/pulls/")).length, 0);
+    assert.equal(appWrites(gh.log).length + gh.log.filter((r) => r.url.startsWith("/repos/o/r/pulls/")).length, 0);
   } finally {
     gh.server.close();
     rmSync(root, { recursive: true, force: true });
