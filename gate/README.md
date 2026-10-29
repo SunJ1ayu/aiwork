@@ -28,7 +28,7 @@
 
 `aiwork-gate.yml` 先检出本仓库默认分支（拿 `.aiwork/policy.json`），再检出 `SunJ1ayu/aiwork` 的 `main`（拿 `gate/`），然后在后者的目录里运行 `node gate/main.mjs`。策略路径由 `AIWORK_POLICY_PATH` 传入。触发方式、并发组 `aiwork-gate`、environment、权限和 `persist-credentials: false` 都在模板里，不要另写一套。
 
-关卡 workflow 的 `GITHUB_TOKEN` 权限以模板为准：当前 `statuses: write` 继续供 commit status 保险丝使用，`checks: write` 预先授予后续检查式保险丝；本阶段关卡代码、保险丝名称和分支必过规则不变。上线顺序见 [#98 的业主决定](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6465439618)。本次模板合入后，OpenDesign 须先按正常流程同步两份 workflow；同步前其副本一致性 CI 会报红，完成同步后才轮到 PR #100 换代码。无需新密钥或 App 权限。
+关卡 workflow 的 `GITHUB_TOKEN` 权限见 `templates/aiwork-gate.yml` 的 `permissions`；保险丝的运行方式见下方「两道信号」。已接入仓库按 [#98 的业主上线决定](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6465439618) 分阶段切换，合并前提和分支规则操作见 [PR #100 的切换清单](https://github.com/SunJ1ayu/aiwork/pull/100)。无需新密钥或 App 权限。
 
 ## 一次性设置
 
@@ -44,8 +44,11 @@
 ## 两道信号:App 检查 + 保险丝
 
 - **App 检查**(`aiwork-gate`;shadow 阶段叫 `aiwork-gate-shadow`):结论本身。只有 `aiwork-gate` App 发得出,PR 冒充不了。
-- **保险丝**(commit status `aiwork-gate/fuse`):用 workflow 自带的 `GITHUB_TOKEN` 发,**不靠 App 私钥**。
-  每次重算先拨到 pending,App 把结论写回之后才跟着结论走;App 发不出 / 写不回、策略不合法 → failure。
+- **保险丝**(check run `aiwork-gate/fuse-check`):用 workflow 自带的 `GITHUB_TOKEN` 和 `checks: write` 发,**不靠 App 私钥**。
+  每次重算先新建 `in_progress` 占位,App 把结论写回之后再 PATCH 同一条检查为结论;
+  App 发不出 / 写不回、策略不合法 → failure。策略不合法时直接新建失败检查,也不需要 App 可用。
+  不再写旧的 commit status `aiwork-gate/fuse`，也不复用它的名字：GitHub 对同名的 status 和 check 可能要求两者都通过。
+  现有仓库的分支规则切换见 [PR #100 的迁移清单](https://github.com/SunJ1ayu/aiwork/pull/100)，不能只更新代码就当保险丝已接通。
 - 为什么要两道:GitHub 上只有 App 自己改得动它发过的检查。App 私钥坏了(被撤、过期、secret 被删)时,
   同一个提交上的旧 success 会一直挂着,之后来的 BLOCK、业主撤回批准都盖不掉它 —— 这时靠保险丝挡。
 - 保险丝**只能多挡、不能单独放行**:任何有写权限的 workflow 都拨得动它,所以它必须和 App 检查一起设为必过。
@@ -60,12 +63,35 @@
   (GitHub 自己会把更早排队的取消),它开始时读到的一定不比被它顶掉的旧,而它又会重算全部 PR,所以顶掉的不会漏算。
   于是同一提交上后写的结论一定出自后读的数据 —— 不会有慢一步的旧运行盖掉新结论,也不会有较新的运行 App 出错
   拨了 failure、较早的运行又拨回 success。同名检查后发的一定后写完,GitHub 按创建还是按完成时间取"最新",取到的都是
-  最后一次运行的;运行半路死掉时它的占位停在 in_progress、保险丝停在 pending,照样挡着,下一次运行全部重算。
+  最后一次运行的;运行半路死掉时,已创建且未完成的占位检查(包括保险丝)停在 in_progress,照样挡着,下一次运行全部重算。
 - job 上**不许**按事件过滤(比如只认某个标签):排队时被顶掉的运行,要靠顶掉它的那次来算。
-- 代价:每次运行读每个开着的 PR 约 6–8 次 API。`GITHUB_TOKEN` 每小时 1000 次;开着的 PR 多、事件又密时会先撞上它,
-  撞上就是 G8 不放行(不会误放行)。到时再按实际用量优化。
-- 一次运行里先把所有 head 的保险丝拨到 pending(快、不靠 App),再发 App 占位,之后才读 PR 的数据;单个请求最多等
-  30 秒(`AIWORK_GATE_TIMEOUT_MS`),卡住的请求拖不垮整次运行。开着的 PR 的列表连读两遍一致才算数(翻页期间有 PR 关掉,
+- 代价:稳定列表、各接口只需一页、不合并时，设开着的 PR 数为 P、不同 head 数为 H：
+  每次 `GITHUB_TOKEN` 要两次读 PR 列表、每 PR 六次 REST 读取和一次 GraphQL 查询、每 head 两次保险丝检查写入，
+  即约 `2 + 6P + 2H` 次 REST 请求和 P 次 GraphQL 查询；分页或列表不稳定会更多。
+  App 另有每 head 两次检查写入，以及每次运行一次安装查询和一次换检查令牌请求；没有 head 时不换 App 令牌。
+  合并时还会另查安装、换合并令牌并逐 PR 发合并请求，这些不算进上述 `GITHUB_TOKEN` REST 数。
+  设 T 为模板 cron 每小时的分钟刻度数，D=24T；定时的 REST 用量为 `T × (2 + 6P + 2H)`/小时，
+  每个 head 每天的保险丝写入和 App 检查写入各为 2D 次、新检查各为 D 条；事件触发另加，Actions 和 runner 占用也增加。
+  `GITHUB_TOKEN` 的 REST 限额 L 为每仓库每小时 1000 次（[GitHub 官方配额](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-github_token-in-github-actions)），
+  GraphQL 另按查询成本计额，不把 App 请求混进这一额度。
+  下表按实际 cron 推导，由 workflow 测试比对；示例假设每 PR 不同 head（P=H），单轮 REST 为 `R=2+8P`：
+
+| 依据 | 每小时轮数 T | 每天轮数 D | P=H=30 时 REST/小时 | 每 head 每天保险丝 / App 写入（各） | 每 head 每天新检查（各） | 加 1 轮事件即超额的最小 P=H | 光定时即用满/超额的最小 P=H |
+|---|---|---|---|---|---|---|---|
+| 当前 cron | 4 | 96 | 968 | 192 | 96 | 25 | 31 |
+
+  将示例的 REST/小时列与 L 比较即可判断余量；达到倒数第二列的规模后，定时加一轮完整事件重算就会超过 L，事件重算已无足够预算；
+  达到最后一列时，光定时就用满或超过 L。一般情况下，R 取实际单轮 REST 用量，额外完整事件轮数的预算是 `max(0, floor(L/R) - T)`。
+  这些边界只按计划的定时轮数计算，未留分页、合并、列表不稳定或其他 workflow 的余量，实际应更早降频或减少用量；
+  队列合并/取消不作为节省配额的保证。限额打满会让后续事件读取或写回失败，不代表事件有优先保留的额度。
+  限流、分页读不全会按失败处理；请求失败到两道信号写回之间仍有下文说明的最终一致窗口。
+- 同一提交反复写入：不再追加 commit status（同一 SHA/context 到 1000 条会拒绝继续写）；
+  App 检查和保险丝都在单次运行内创建再改写，同一 check suite 内同名检查超过 1000 条时 GitHub 自动删除旧检查，不会因历史次数写满。
+  旧检查历史可能被淘汰，不能把 GitHub 检查列表当永久审计存档。平台上限见
+  [status 文档](https://docs.github.com/en/rest/commits/statuses#create-a-commit-status)和
+  [check run 文档](https://docs.github.com/en/rest/checks/runs#create-a-check-run)。
+- 一次运行里先给所有 head 的保险丝创建 in_progress 占位(快、不靠 App),再发 App 占位,之后才读 PR 的数据;单个请求的
+  超时配置见 `main.mjs` 的 `AIWORK_GATE_TIMEOUT_MS`，卡住的请求拖不垮整次运行。开着的 PR 的列表连读两遍一致才算数(翻页期间有 PR 关掉,
   后面的会往前挪、漏掉一个)。
 
 ## 每样输入的门铃
@@ -80,8 +106,17 @@
 | CI(以最后开始的那次执行为准) | `workflow_run`(ci):`requested` / `in_progress` / `completed`(重跑不一定发 `requested`,开始跑时会发 `in_progress`) |
 | 评审(读当前正文;机器人评审发出后被改写过一律按 BLOCK、时刻按改写那一刻;人的评审被撤销按撤销那一刻) | `aiwork-review-ping`:`submitted` / `edited` / `dismissed` → `workflow_run` |
 | 策略 `.aiwork/policy.json`(只认 main 上的) | 改 main 之后 CI 跑完的 `workflow_run` |
+| 关卡代码（aiwork main 的 `gate/`） | `schedule`：计划间隔 15 分钟，具体 cron 见模板；每次重新检出 aiwork main 并重算全部开放 PR。GitHub 延迟、丢弃或停用时不能保证这一时限，见下方限制 |
 | 合并请求(PR 上有没有 `aiwork:merge`、最后是谁贴的) | `pull_request_target`:`labeled`(撤掉标签不用叫醒:只会少合并,下一次运行自然读到) |
 | 手动重算 | 给 PR 加任何标签(如 `aiwork:recheck`) |
+
+定时门铃的计划等待上限就是表中的间隔，不是检查写回的硬性完成上限。成功运行还要经过并发队列、
+runner 分配、检出和重算；job 的执行超时见模板。GitHub 高负载时可能延迟甚至丢弃定时任务，
+不能保证按实际经过时间在某个固定上限内完成。定时任务只使用默认分支上的 workflow；公开仓库
+**60 天**没有活动会自动停用定时任务，恢复活动后也要确认 workflow 已重新启用。相关平台行为见
+[GitHub 的 schedule 说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
+Actions 被关、environment 等审批、检出/API 失败也仍可能让旧结论留在网页上；这些情况下先别直接合并，
+恢复运行后用已有的手动门铃重算。运行成功但下一次重算尚未发生的窗口仍然存在；定时器不能消除最终一致的限制。
 
 ## 已知限制:状态检查只能"最终一致"
 
@@ -135,7 +170,7 @@
 | S6 | 测试 PR 改 `judging_surface` 里的一个文件 / 改 `high` 里的一个文件 | 分别要业主批准(G2)/ `high_min_families` 家不同家族 PASS + 业主批准(G6) | 判卷面与 high 路径 |
 | S7 | 给 PR 加标签 `aiwork:recheck` | 重算一次;算的时候合并框里这条检查显示"重算中",保险丝变黄 | 手动重算可用;占位压得住上一次的结论 |
 | S8 | 编辑测试 PR 的标题;再改一次目标分支 | 各重算一次;改目标分支后 G1 ❌「目标分支在这次 CI 之后改过」,推一个新提交(或关掉再重开 PR)让 CI 重跑后恢复 | edited 事件会触发重判;旧目标上的 CI 不算数 |
-| S9 | 任选上面一次重算,看测试 PR 的检查列表;再连着触发两次(比如先后加两个标签),看 Actions 里 aiwork-gate 的运行 | `aiwork-gate/fuse` 先变黄(pending),算完与 `aiwork-gate-shadow` 同结论,发出者是 GitHub Actions;两次运行一个跑完另一个才开始 | 保险丝接通,不靠 App 私钥;同一时间只有一次运行 |
+| S9 | 任选上面一次重算,看测试 PR 的检查列表;再连着触发两次(比如先后加两个标签),看 Actions 里 aiwork-gate 的运行 | `aiwork-gate/fuse-check` 先变黄(in_progress),算完与 `aiwork-gate-shadow` 同结论,发出者是 GitHub Actions;两次运行一个跑完另一个才开始 | 保险丝接通,不靠 App 私钥;同一时间只有一次运行 |
 
 合并(本节在「合并」上线后补做,同样用无害的测试 PR):
 
@@ -155,7 +190,7 @@ S0–S13 全部符合预期,且之后至少 5 个真实 PR 上 shadow 的结论�
 1. 发一个 PR 把 `policy.json` 的 `check_name` 改为 `aiwork-gate`(连同钉住它的那条测试;判卷面,要业主批准);
 2. 业主在 main 的规则集里:
    - 必过检查从 `ci` 换成**两条**:`aiwork-gate`(来源限定 `aiwork-gate` App)和
-     `aiwork-gate/fuse`(来源限定 GitHub Actions)。只设第一条,App 私钥坏了时旧 success 仍能合并。
+     `aiwork-gate/fuse-check`(来源限定 GitHub Actions)。只设第一条,App 私钥坏了时旧 success 仍能合并。
      「合并前分支必须和 main 同步」留着(见「合并」);
    - **另建**一个规则集,目标 main,只勾 Restrict updates;绕过名单:Repository admin(业主自己还能合)和
      `aiwork-gate` App(选 For pull requests only:只能合 PR,不能直接推)。这样别人只能贴标签请关卡合。

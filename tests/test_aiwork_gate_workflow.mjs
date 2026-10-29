@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { globToRegExp, matchAny } from "../gate/decide.mjs";
-import { validatePolicy } from "../gate/run.mjs";
+import { FUSE_CHECK_NAME, validatePolicy } from "../gate/run.mjs";
 
 const ROOT = new URL("../", import.meta.url);
 const read = (path) => readFileSync(new URL(path, ROOT), "utf8");
@@ -162,8 +162,9 @@ test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwor
   assert.match(text, /types: \[requested, in_progress, completed\]/);
   assert.doesNotMatch(text, /^ {2}pull_request:/m);
   assert.deepEqual(text.match(/^permissions:\n((?: {2}[^\n]+\n)+)/m)?.[1].trim().split("\n").map((line) => line.trim()).sort(), [
-    "actions: read", "checks: write", "contents: read", "issues: read", "pull-requests: read", "statuses: write",
-  ], "先授予检查写权限，同时保留现有 status 保险丝权限；不增加其他权限");
+    "actions: read", "checks: write", "contents: read", "issues: read", "pull-requests: read",
+  ], "检查式保险丝只留所需权限，不再授权旧 status 写入");
+  assert.ok(read("gate/README.md").includes(`check run \`${FUSE_CHECK_NAME}\``), "文档里的新保险丝名称要与实现一致");
   assert.match(text, /group: aiwork-gate/);
   assert.match(text, /cancel-in-progress: false/);
   assert.match(text, /environment: aiwork-gate/);
@@ -191,6 +192,36 @@ test("aiwork-review-ping：无权限，只敲门，不把事件内容拼进 shel
   assert.match(text, /^ {6}- run: echo "有新评审,触发 aiwork-gate 重算"$/m);
   const run = text.split(/^ {6}- run: /m).slice(1).join("\n");
   assert.doesNotMatch(run, /\$\{\{/);
+});
+
+test("关卡代码更新有定时门铃，间隔与文档一致，定时事件不被过滤", () => {
+  const text = read("templates/aiwork-gate.yml");
+  const cron = text.match(/^  schedule:\n    - cron: ['"]([^'"]+)['"]$/m)?.[1];
+  assert.ok(cron, "不能只靠调用方事件等待关卡代码更新");
+  const [minutes, ...rest] = cron.split(/\s+/);
+  assert.deepEqual(rest, ["*", "*", "*", "*"], "每天每小时都要重算");
+  const ticks = minutes.split(",").map(Number);
+  assert.ok(ticks.length > 1 && ticks.every((n, i) => Number.isInteger(n) && n > 0 && n < 60 && (!i || n > ticks[i - 1])),
+    "避开整点，分钟必须有序且不重复");
+  const maxGap = Math.max(...ticks.map((n, i) => (ticks[(i + 1) % ticks.length] + (i === ticks.length - 1 ? 60 : 0)) - n));
+  assert.ok(maxGap <= 15, "关卡代码变化后的计划等待不得超过 15 分钟");
+  const row = read("gate/README.md").split("\n").find((line) => line.startsWith("| 关卡代码"));
+  assert.ok(row, "门铃表要包含关卡代码本身");
+  assert.equal(Number(row.match(/计划间隔 (\d+) 分钟/)?.[1]), maxGap, "文档不能另维护一个间隔");
+  const readme = read("gate/README.md");
+  const limit = Number(readme.match(/每仓库每小时 (\d+) 次/)?.[1]);
+  const sample = Number(readme.match(/P=H=(\d+) 时 REST\/小时/)?.[1]);
+  assert.ok(limit > 0 && sample > 0, "开销表要给出额度与示例规模");
+  const perHour = ticks.length;
+  const perDay = 24 * perHour;
+  const eventExhaustion = Math.floor((limit / (perHour + 1) - 2) / 8) + 1;
+  const scheduleExhaustion = Math.ceil((limit / perHour - 2) / 8);
+  assert.equal(readme.split("\n").find((line) => line.startsWith("| 当前 cron |")),
+    `| 当前 cron | ${perHour} | ${perDay} | ${perHour * (2 + 8 * sample)} | ${2 * perDay} | ${perDay} | ${eventExhaustion} | ${scheduleExhaustion} |`,
+    "频率、用量和额度阈值都必须从模板 cron 推出，不能只改门铃间隔");
+  assert.match(row, /延迟|丢弃/);
+  assert.match(read("gate/README.md"), /60 天/);
+  assert.doesNotMatch(text.split(/^jobs:/m)[1], /^\s+if:/m, "定时触发必须走完整关卡，不能依赖 PR 事件字段过滤");
 });
 
 test("aiwork 自己的策略：真拦截，不登记共用的 build 账号，罩住密钥、发布和判卷面", () => {

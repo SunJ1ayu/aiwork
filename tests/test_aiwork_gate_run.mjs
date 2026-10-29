@@ -197,8 +197,8 @@ test("R14c App 写不回结论(PATCH 失败)→ 保险丝 failure,运行失败",
 
 test("R14f 保险丝本身拨不动(GITHUB_TOKEN 出错)→ App 照常写回结论,运行最后报错", async () => {
   const r = recorder();
-  const fuse = { async set() { throw new Error("HTTP 403 statuses"); } };
-  await assert.rejects(run(r, prsApi(r.calls, one()), { fuse }), /statuses/);
+  const fuse = { async set() { throw new Error("HTTP 403 checks"); } };
+  await assert.rejects(run(r, prsApi(r.calls, one()), { fuse }), /checks/);
   assert.deepEqual(finishes(r.calls).map((f) => f.slice(0, 3)), [[HEAD, "completed", "failure"]], "App 的新结论照样写回");
 });
 
@@ -230,22 +230,29 @@ test("R20b 同一提交上的 PR 都放行 → 放行;其中一个读不全 → 
 // ── aiwork-review[bot] 评审(PR #10 review 5361623557,@ 8f010fa)第 4 个阻断点 ─────────────────────
 // 以前从事件推"该算哪个 PR":workflow_run 没带 PR 时按提交、再按分支查,指向默认分支就查不到被评审的 PR。
 // 现在事件只是门铃:同样的现状,不管谁叫醒,写下的结论都一样。
-test("R25 事件只是门铃:PR 事件、带 / 不带 PR 的 workflow_run、指向默认分支的、main 上 push 的 CI → 写下的结论完全一样", async () => {
+test("R25 事件只是门铃:PR、workflow_run、无 PR/head 的定时事件 → 所有开放 PR 的结论完全一样", async () => {
   const events = [
     prtEvent,
     { pull_request: { number: 10, head: { sha: OTHER } }, action: "labeled", label: { name: "随便一个标签" } },
     { workflow_run: { event: "pull_request_review", head_sha: HEAD, pull_requests: [{ number: 10 }] } },
     { workflow_run: { event: "pull_request_review", head_sha: MAIN, head_branch: "main", pull_requests: [], head_repository: { owner: { login: "o" } } } },
     { workflow_run: { event: "push", head_sha: MAIN, head_branch: "main", pull_requests: [] } },
+    { schedule: "scheduled" },
   ];
   const seen = [];
   for (const event of events) {
     const r = recorder();
-    await run(r, prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], verdict: "BLOCK" } }), { event });
+    await run(r, prsApi(r.calls, {
+      10: { head: HEAD, files: ["web/a.ts"], verdict: "BLOCK" },
+      11: { head: OTHER, files: ["web/b.ts"], verdict: "BLOCK" },
+    }), { event });
     seen.push(JSON.stringify(r.calls.filter((c) => c[0] !== "get" && c[0] !== "getPage" && c[0] !== "graphql")));
   }
   assert.ok(seen.every((s) => s === seen[0]), "写下的东西与事件无关");
-  assert.match(seen[0], /"finish","a{40}","completed","failure"/, "被评审的 PR 的 head 重算成 failure(BLOCK)");
+  for (const head of [HEAD, OTHER]) {
+    assert.ok(JSON.parse(seen[0]).some((c) => c[0] === "finish" && c[1] === head && c[2] === "completed" && c[3] === "failure"),
+      "每个开放 PR 的 head 都要重算成 failure(BLOCK)");
+  }
 });
 
 // ── 合并那一刻再判一次(gate/README.md「合并」)──────────────────────────────────────
@@ -342,7 +349,7 @@ test("M7 策略:merge_label 必须是非空字符串,merge_requesters 必须是�
 
 test("M8 放行的结论没写全(保险丝拨不动)→ 不合并;运行照常报错", async () => {
   const r = recorder();
-  const fuse = { async set(sha, state) { r.calls.push(["fuse", sha, state]); if (state === "success") throw new Error("HTTP 502 statuses"); } };
+  const fuse = { async set(sha, state) { r.calls.push(["fuse", sha, state]); if (state === "success") throw new Error("HTTP 502 checks"); } };
   const api = prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events: [labeled(policy.owner)] } });
   await assert.rejects(run(r, api, { fuse, merger: mergeRecorder(r) }), /502/);
   assert.deepEqual(merges(r.calls), []);
