@@ -312,7 +312,7 @@ export function decide(facts, policy) {
     status: pending ? "in_progress" : "completed",
     conclusion: pending ? null : pass ? "success" : "failure",
     title: verdictLine,
-    summary: [`head \`${head}\``, "", ...lines, ...(roundLine ? ["", roundLine] : [])].join("\n"),
+    summary: [`head \`${head}\``, "", ...(roundLine ? [roundLine, ""] : []), ...lines].join("\n"),
     ...(roundLine ? { round_line: roundLine } : {}),
     author,
     passes,

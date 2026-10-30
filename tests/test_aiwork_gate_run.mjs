@@ -404,3 +404,21 @@ test("轮数显示复用既有读取和分页，不增接口；同 head 每个 P
     assert.deepEqual(merged, [10], "包括停信号和读不清都不挡原有的合并请求");
   }
 });
+
+test("同 head 的未选中 PR 停信号排在长详情之前，GitHub 摘要截断也不丢", async () => {
+  const at = "2026-09-29T10:00:00Z";
+  const prs = {
+    10: { head: HEAD, files: [], verdict: "PASS", summaries: [{ id: 22, user: { login: policy.reviewer_bot, type: "Bot" },
+      state: "COMMENTED", commit_id: HEAD, submitted_at: at, body: reviewBody(HEAD, "PASS").replace("gpt-x", "x".repeat(65000)) }] },
+    11: { head: HEAD, files: [], verdict: "PASS", summaries: [{ id: 23, user: { login: "summary-user", type: "User" },
+      state: "COMMENTED", commit_id: HEAD, submitted_at: at, body: '```aiwork-summary\n' + JSON.stringify({
+        head_sha: HEAD, next_step: "照单修", has_p1: true, modification_task: "修复问题",
+      }) + '\n```' }] },
+  };
+  const result = await run(recorder(), prsApi([], prs), {
+    policy: { ...policy, modification_rounds: { limit: 1, summary_account: "summary-user" } },
+  });
+  const posted = result[0].summary.slice(0, 60000);
+  assert.match(posted, /PR #10[^\n]*轮数：未知/);
+  assert.match(posted, /PR #11[^\n]*第 1 轮[^\n]*停：交业主/);
+});

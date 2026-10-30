@@ -74,10 +74,14 @@ function combine(verdicts) {
     verdicts.find((v) => v.r.status !== "completed") ??
     verdicts[0];
   const list = verdicts.map((v) => `- PR #${v.number}:${v.r.title}${v.r.round_line ? `；${v.r.round_line}` : ""}`).join("\n");
+  const overview = `这个提交是 ${verdicts.length} 个开着的 PR 的 head(检查挂在提交上,全都放行才放行):\n${list}`;
   return {
     ...pick.r,
     title: `PR #${pick.number}:${pick.r.title}`,
-    summary: `${pick.r.summary}\n\n---\n这个提交是 ${verdicts.length} 个开着的 PR 的 head(检查挂在提交上,全都放行才放行):\n${list}`,
+    // GitHub 会截断长摘要；逐 PR 的轮数/停信号先写，不能被某个 PR 的长详情挤掉。
+    summary: verdicts.some((v) => v.r.round_line)
+      ? `${overview}\n\n---\n${pick.r.summary}`
+      : `${pick.r.summary}\n\n---\n${overview}`,
   };
 }
 

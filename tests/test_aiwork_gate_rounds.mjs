@@ -79,7 +79,7 @@ test("所有汇总输入只追加显示，不改变任何 G1–G8 结果；未�
       const f = facts(reviews, over);
       const before = decide(f, baseline), after = decide(f, policy);
       assert.deepEqual({ ...after, summary: before.summary, round_line: undefined }, { ...before, round_line: undefined });
-      assert.ok(after.summary.startsWith(before.summary));
+      assert.equal(after.summary.replace(`${after.round_line}\n\n`, ""), before.summary);
       assert.deepEqual(decide(f, { ...baseline }), before);
     }
   }
