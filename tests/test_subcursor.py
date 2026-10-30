@@ -324,7 +324,7 @@ class CursorTest(unittest.TestCase):
         self.assertEqual(prose, last)
         body = review.build_body('subcursor', 'composer-2.5', prose, {
             'verdict': 'PASS', 'head_sha': 'a' * 40, 'model': 'composer-2.5',
-            'family': 'cursor', 'completeness': 'complete', 'files_read': ['gate/decide.mjs']})
+            'family': 'cursor', 'completeness': 'complete'})
         self.assertIn(last, body)
         self.assertNotIn('## 过程', body)
         self.assertNotIn('pending ? null', body)

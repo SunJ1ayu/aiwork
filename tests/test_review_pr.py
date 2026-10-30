@@ -517,7 +517,7 @@ class ReviewPrTests(unittest.TestCase):
         body = self.review.build_body(
             "subcodex", "gpt-6-sol", "Finding\n```json\n{}\n```\nConclusion: PASS",
             {"verdict": "PASS", "head_sha": "a" * 40, "model": "gpt-6-sol",
-             "family": "openai", "completeness": "complete", "files_read": ["src/a.py"]},
+             "family": "openai", "completeness": "complete"},
         )
         self.assertEqual(body.count("```json"), 1)
         self.assertIn("```text", body)
@@ -770,7 +770,7 @@ class ReviewPrTests(unittest.TestCase):
         self.assertNotIn(secret, stderr)
 
     def test_privacy_check_covers_machine_block_and_missing_wordlist_refuses_publication(self):
-        for terms in ('src/a.py\n', None):
+        for terms in ('"model":"gpt-5.6"\n', None):
             with self.subTest(terms=terms):
                 rc, calls, stdout, stderr = self.run_main_with_leg_result(
                     'gpt-5.6', dry_run=False, private_terms=terms)
@@ -779,7 +779,7 @@ class ReviewPrTests(unittest.TestCase):
                 self.assertEqual(stdout, '')
                 if terms:
                     self.assertIn('review-body.md:7 私人词第 1 条', stderr)
-                    self.assertNotIn('src/a.py', stderr)
+                    self.assertNotIn(terms.strip(), stderr)
                 else:
                     self.assertIn('请建立并填写本机私人词表', stderr)
 
@@ -1295,6 +1295,11 @@ grep -q -F -- "$3" "$clone/$4"
         self.assertEqual(calls["github_writes"], ["repos/SunJ1ayu/aiwork/pulls/12/reviews"])
         self.assertEqual(stdout.strip(), "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1")
 
+    def test_published_block_does_not_claim_changed_files_were_read(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result("gpt-5.6", dry_run=False)
+        self.assertEqual(rc, 0, stderr)
+        self.assertNotIn("files_read", calls["posted_block"])
+
     def test_missing_report_file_is_not_published(self):
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary) / "report.md"
@@ -1318,7 +1323,7 @@ grep -q -F -- "$3" "$clone/$4"
             body = self.review.build_body(
                 "subkimi", "kimi-code/kimi-for-coding", last,
                 {"verdict": "PASS", "head_sha": "a" * 40, "model": "kimi-code/kimi-for-coding",
-                 "family": "moonshot", "completeness": "complete", "files_read": ["gate/decide.mjs"]},
+                 "family": "moonshot", "completeness": "complete"},
                 notices=["retry 2/2 for subkimi: no_verdict; first failure artifacts preserved"],
             )
             self.assertIn(last, body)

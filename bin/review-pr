@@ -484,8 +484,7 @@ def main() -> int:
                 if identity is None or identity[0] != family or not model.startswith(identity[1]):
                     raise ReviewError("review leg model does not match selected family")
                 block = {"verdict": result["verdict"], "head_sha": pr["head"]["sha"],
-                         "model": model, "family": family, "completeness": completeness(result),
-                         "files_read": files}
+                         "model": model, "family": family, "completeness": completeness(result)}
                 body = build_body(selected_leg, model, report, block, notices=notices)
                 body_file = directory / "review-body.md"
                 body_file.write_text(body, encoding="utf-8")
