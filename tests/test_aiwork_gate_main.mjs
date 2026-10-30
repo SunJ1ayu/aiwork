@@ -63,7 +63,7 @@ function fakeGitHub(opts = {}) {
       if (u === "/repos/o/r/pulls?state=open&per_page=100") return send(200, [pr10]);
       if (u === "/repos/o/r/pulls/10") return send(200, pr10);
       if (u.startsWith("/repos/o/r/pulls/10/files")) return send(200, [{ filename: "web/a.ts" }]);
-      const pass = "```json\n" + JSON.stringify({ verdict: "PASS", head_sha: HEAD, model: "gpt-x", family: "openai", completeness: "complete", files_read: ["web/a.ts"] }) + "\n```";
+      const pass = "```json\n" + JSON.stringify({ verdict: "PASS", head_sha: HEAD, model: "gpt-x", family: "openai", completeness: "complete" }) + "\n```";
       const reviews = opts.mergeReady ? [{ id: 1, user: { login: policy.reviewer_bot, type: "Bot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-09-29T09:00:00Z", body: pass }] : [];
       if (u.startsWith("/repos/o/r/pulls/10/reviews")) return send(200, reviews);
       if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: [{ id: 1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", pull_requests: [{ number: 10 }] }] });

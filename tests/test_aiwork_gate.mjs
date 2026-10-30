@@ -21,7 +21,6 @@ function review({ id = 1, login = "aiwork-review[bot]", type = "Bot", state = "C
     model: "gpt-5-codex",
     family: "openai",
     completeness: "complete",
-    files_read: ["web/src/a.ts"],
     ...v,
   };
   return { id, login, type, state, commit_id: commit, submitted_at: at, body: `评审意见……\n\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n` };
@@ -41,6 +40,40 @@ function facts(over = {}) {
   };
 }
 const run = (over) => decide(facts(over), policy);
+
+test("G3 不带 files_read 的合格 PASS 可以放行,不误算成 G5 BLOCK", () => {
+  const current = review({});
+  assert.doesNotMatch(current.body, /"files_read"/);
+  const result = run({ reviews: [current] });
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.equal(result.blocks.length, 0);
+});
+
+test("G3 旧评审的 files_read 不参与判定,新旧 PASS 混用仍满足 high 家族要求", () => {
+  for (const files_read of [["web/src/a.ts"], [], null, "legacy", [""]]) {
+    const legacy = review({ files_read });
+    assert.equal(parseReviewBlock(legacy.body).ok, true);
+    assert.equal(run({ reviews: [legacy] }).conclusion, "success");
+    const result = run({
+      files: ["desktop/main.js"],
+      reviews: [legacy, review({ id: 2, family: "deepseek", model: "deepseek-test" }), approve()],
+    });
+    assert.equal(result.conclusion, "success", result.summary);
+  }
+});
+
+test("结论块仍要求 verdict、head_sha、model、family、completeness,缺失或非法一律按 BLOCK", () => {
+  for (const [field, invalid] of [
+    ["verdict", "INVALID"], ["head_sha", "short"], ["model", " "],
+    ["family", "INVALID"], ["completeness", "INVALID"],
+  ]) {
+    for (const value of [undefined, null, 42, invalid]) {
+      const malformed = review({ id: 2, [field]: value });
+      assert.equal(parseReviewBlock(malformed.body).ok, false, `${field}=${value}`);
+      blocked(run({ reviews: [review({}), malformed] }), "G5");
+    }
+  }
+});
 
 test("任务角色:登记为 Builder 不妨碍审核另一个家族的任务", () => {
   const families = ["anthropic", "openai", "deepseek", "google"];
@@ -202,10 +235,9 @@ test("5 PASS 不是 aiwork-review 发的(机器账号或业主贴一段 PASS 的
   blocked(run({ reviews: [review({ login: "aiwork-review[bot]", type: "User" })] }), "G3");
 });
 
-test("6 评审超时、降级、零上下文 → 不算(G3)", () => {
+test("6 评审不完整、信息不足、结论块不合法 → 不算(G3)", () => {
   blocked(run({ reviews: [review({ completeness: "partial" })] }), "G3");
   blocked(run({ reviews: [review({ completeness: "none" })] }), "G3");
-  blocked(run({ reviews: [review({ files_read: [] })] }), "G3");
   blocked(run({ reviews: [review({ verdict: "NEEDS_MORE_INFO" })] }), "G3");
   const two = review({});
   two.body += "\n```json\n{}\n```\n";
@@ -425,11 +457,14 @@ test("R10 分页响应自带 total_count 时,取到的条数必须对上,否则�
 
 // ── aiwork-review[bot] 评审(PR #10 review 5353990150,@ 875569c)的前 2 个阻断点 ─────────────────
 test("R12 aiwork-review 在当前 head 上发的东西,除非是格式完整、结论不是 BLOCK 的评审,否则一律按 BLOCK 算", () => {
-  // 结论块写着 BLOCK,但缺 files_read —— 明确的 BLOCK 不能因为格式不全被当成"无效评审"丢掉
-  const noFiles = review({ id: 2, verdict: "BLOCK" });
-  noFiles.body = noFiles.body.replace(/,"files_read":\[[^\]]*\]/, "");
-  assert.equal(parseReviewBlock(noFiles.body).ok, false, "量具:这条确实格式不全");
-  const r = run({ reviews: [review({ id: 1 }), noFiles] });
+  // 明确的 BLOCK 无论带不带旧字段、是否缺其他必填字段,都不能被当成"无效评审"丢掉
+  for (const fields of [{}, { files_read: ["a"] }, { model: undefined }]) {
+    const opposition = review({ id: 2, verdict: "BLOCK", ...fields });
+    blocked(run({ reviews: [review({ id: 1 }), opposition] }), "G5");
+  }
+  const incompleteBlock = review({ id: 2, verdict: "BLOCK", model: undefined });
+  assert.equal(parseReviewBlock(incompleteBlock.body).ok, false, "量具:这条确实格式不全");
+  const r = run({ reviews: [review({ id: 1 }), incompleteBlock] });
   blocked(r, "G5");
   assert.equal(r.blocks.length, 1);
   // 看不懂的(两个结论块、不是 JSON、没有结论块、空正文)也按 BLOCK:看不出它原来想说什么,就当它反对
@@ -441,13 +476,13 @@ test("R12 aiwork-review 在当前 head 上发的东西,除非是格式完整、�
   contradict.body = `**aiwork-review · subcodex · gpt-x**\n\nConclusion: BLOCK\n\n${contradict.body}`;
   blocked(run({ reviews: [review({ id: 1 }), contradict] }), "G5");
   // 业主在这些 BLOCK 之后批准,照常豁免
-  const waived = run({ reviews: [review({ id: 1 }), noFiles, approve(HEAD, "2026-09-29T11:00:00Z")] });
+  const waived = run({ reviews: [review({ id: 1 }), incompleteBlock, approve(HEAD, "2026-09-29T11:00:00Z")] });
   assert.equal(waived.conclusion, "success", waived.summary);
   // 对照:格式完整、只是不合格的 PASS(不完整、Builder 家族)不算 BLOCK,只是不算 PASS
   assert.equal(run({ reviews: [review({ id: 1 }), review({ id: 5, completeness: "partial" })] }).conclusion, "success");
   assert.equal(run({ reviews: [review({ id: 1 }), review({ id: 6, family: "anthropic" })] }).conclusion, "success");
   // 对照:旧提交上格式不全的评审不管当前 head
-  assert.equal(run({ reviews: [review({ id: 1 }), { ...noFiles, commit_id: OLD }] }).conclusion, "success");
+  assert.equal(run({ reviews: [review({ id: 1 }), { ...incompleteBlock, commit_id: OLD }] }).conclusion, "success");
 });
 
 

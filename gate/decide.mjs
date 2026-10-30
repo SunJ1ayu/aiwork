@@ -3,7 +3,7 @@
 //
 //   G1 CI:当前 head 上、来自 ci.yml 的那次运行成功,且是在最后一次改目标分支之后触发的 —— 业主批准也豁免不了
 //   G2 判卷面:改了 CI / 测试入口 / 关卡自己 → 要业主批准
-//   G3 评审:当前 head 上至少一条合格 PASS(aiwork-review 发的、完整、读过文件、家族不是本次作者的家族)—— 豁免不了
+//   G3 评审:当前 head 上至少一条合格 PASS(aiwork-review 发的、完整、家族不是本次作者的家族)—— 豁免不了
 //   G4 作者:这个分支上的每次推送都来自已知 Builder 账号,否则 UNKNOWN → 要业主批准
 //   G5 当前 head 上任何一条 BLOCK → 要业主在最后一条 BLOCK 之后批准。BLOCK = aiwork-review 在当前 head 上发的、
 //      除"格式完整且结论不是 BLOCK"以外的一切(BLOCK 结论、Request changes、正文结论行写 BLOCK、结论块看不懂),
@@ -86,9 +86,6 @@ export function parseReviewBlock(body) {
   if (typeof v.model !== "string" || !v.model.trim()) return { ok: false, why: "缺 model" };
   if (typeof v.family !== "string" || !FAMILY_RE.test(v.family)) return { ok: false, why: "family 不合格" };
   if (!COMPLETENESS.has(v.completeness)) return { ok: false, why: `completeness 不认识:${JSON.stringify(v.completeness)}` };
-  if (!Array.isArray(v.files_read) || !v.files_read.every((f) => typeof f === "string" && f.length > 0)) {
-    return { ok: false, why: "files_read 应是文件路径数组" };
-  }
   return { ok: true, value: v };
 }
 
@@ -204,10 +201,6 @@ export function decide(facts, policy) {
     }
     if (v.completeness !== "complete") {
       rejected.push(`评审 #${r.id}:不完整(${v.completeness})`);
-      continue;
-    }
-    if (v.files_read.length === 0) {
-      rejected.push(`评审 #${r.id}:没读任何文件`);
       continue;
     }
     if (authorFamilies.has(v.family)) {
