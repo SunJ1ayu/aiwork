@@ -46,10 +46,11 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 - 结论行在前：写法见 REVIEW-RULES 第二节第 2 条。
 - 下一步行在后：填 REVIEW-RULES 第三节第 5 条里的一档。
 
-启用 `modification_rounds` 的项目在同一条评审正文中放恰好一个 `aiwork-summary` 围栏代码块，块内写符合下列定义的 JSON；这是机器记录格式的唯一定义。评审的 `commit_id` 必须与 `head_sha` 一致，正文的下一步和 P1 清单必须与块内一致。`modification_task` 放完整修改单正文（含换行时按 JSON 转义），不再只在聊天里转发；没有修改单时写空字符串。其他核实证据和表格仍写在块外。
+启用 `modification_rounds` 的项目在同一条评审正文中放恰好一个围栏代码块，语言名取下列定义的 `title`，块内写符合定义的 JSON；这是机器记录格式的唯一定义。评审的 `commit_id` 必须与 `head_sha` 一致，正文的下一步和 P1 清单必须与块内一致。`modification_task` 放完整修改单正文（含换行时按 JSON 转义），不再只在聊天里转发；没有修改单时写空字符串。其他核实证据和表格仍写在块外。
 
 ```aiwork-summary-schema
 {
+  "title": "aiwork-summary",
   "type": "object",
   "additionalProperties": false,
   "required": ["head_sha", "next_step", "has_p1", "modification_task"],

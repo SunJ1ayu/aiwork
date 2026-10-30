@@ -5,6 +5,7 @@ import { decide } from "../gate/decide.mjs";
 import { validatePolicy } from "../gate/run.mjs";
 
 const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
+const definition = JSON.parse(/```aiwork-summary-schema\n([\s\S]*?)\n```/.exec(read("../workflow/skills/summary/SKILL.md"))[1]);
 const baseline = JSON.parse(read("./fixtures/gate-logic-policy.json"));
 const rounds = { limit: 2, summary_account: "summary-user" };
 const policy = { ...baseline, modification_rounds: rounds };
@@ -18,7 +19,7 @@ const record = (head = HEAD, next_step = "照单修", has_p1 = true, modificatio
 const summary = (value = record(), over = {}) => ({
   id: 20, login: rounds.summary_account, type: "User", state: "COMMENTED", commit_id: value.head_sha,
   submitted_at: "2026-10-30T02:00:00Z", edited_at: null,
-  body: '```aiwork-summary\n' + JSON.stringify(value) + '\n```', ...over,
+  body: '```' + definition.title + '\n' + JSON.stringify(value) + '\n```', ...over,
 });
 const facts = (reviews = [], over = {}) => ({
   pr: { number: 10, state: "open", head_sha: HEAD }, files: ["web/a.ts"],
@@ -130,6 +131,7 @@ test("summary skill 的唯一定义直接生成格式对照用例", () => {
     return true;
   }
   const candidates = [];
+  for (const size of [0, 7, 39, 40, 41]) candidates.push({ ...record(), head_sha: "a".repeat(size) });
   for (const next of ["交业主", "照单修", "合并", "invalid"]) {
     for (const p1 of [true, false, "true"]) {
       for (const task of ["修改单\n完整正文", "", "   ", null]) candidates.push(record(HEAD, next, p1, task));
