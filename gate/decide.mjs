@@ -147,6 +147,42 @@ export function mergeRequester(facts, policy) {
   return by !== null && (by === policy.owner || policy.merge_requesters.includes(by)) ? by : null;
 }
 
+// 只追加派单提示，不参与放行。格式源在 summary skill；测试从该定义生成对照用例。
+function modificationRoundLine(reviews, config) {
+  const byHead = new Map();
+  const records = [];
+  const unclear = (r, why) => `轮数：读不清（汇总 #${r.id}：${why}）`;
+  for (const r of reviews) {
+    if (r.login?.toLowerCase() !== config.summary_account.toLowerCase()) continue;
+    if (r.edited_at) return unclear(r, "发出后被改写过");
+    // 没有标记的旧式汇总不当成新记录，也不当成零轮。
+    if (!r.body.includes("aiwork-summary")) continue;
+    const blocks = [...r.body.matchAll(/```aiwork-summary[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
+    if (blocks.length !== 1) return unclear(r, "记录块应恰好一个");
+    let v;
+    try { v = JSON.parse(blocks[0][1]); } catch { return unclear(r, "记录不是合法 JSON"); }
+    if (!v || typeof v !== "object" || Array.isArray(v) ||
+        Object.keys(v).sort().join(",") !== "has_p1,head_sha,modification_task,next_step" ||
+        typeof v.head_sha !== "string" || !SHA_RE.test(v.head_sha) ||
+        !["交业主", "照单修", "合并"].includes(v.next_step) || typeof v.has_p1 !== "boolean" ||
+        typeof v.modification_task !== "string" ||
+        (v.next_step === "照单修" && (!v.has_p1 || !v.modification_task.trim())) ||
+        (v.next_step === "合并" && v.has_p1)) return unclear(r, "记录字段或字段组合不合法");
+    if (r.state !== "COMMENTED" || r.commit_id !== v.head_sha || !Number.isFinite(Date.parse(r.submitted_at))) {
+      return unclear(r, "不是 COMMENT 评审、head 对不上或缺发出时间");
+    }
+    const key = JSON.stringify([v.next_step, v.has_p1, v.modification_task]);
+    const previous = byHead.get(v.head_sha);
+    if (previous && previous.key !== key) return unclear(r, "同一个 head 的记录互相冲突");
+    byHead.set(v.head_sha, { key, value: v });
+    records.push({ ...v, at: r.submitted_at, id: r.id });
+  }
+  if (!records.length) return "轮数：未知（没有新格式的汇总记录）";
+  const count = [...byHead.values()].filter((r) => r.value.next_step === "照单修").length;
+  const latest = records.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id).at(-1);
+  return `轮数：第 ${count} 轮 / 上限 ${config.limit}${count >= config.limit && latest.has_p1 ? "；停：交业主" : ""}`;
+}
+
 export function decide(facts, policy) {
   const head = facts.pr.head_sha;
   const lines = [];
@@ -271,11 +307,13 @@ export function decide(facts, policy) {
     return "放行";
   })();
   const pass = verdictLine === "放行";
+  const roundLine = policy.modification_rounds ? modificationRoundLine(facts.reviews, policy.modification_rounds) : null;
   return {
     status: pending ? "in_progress" : "completed",
     conclusion: pending ? null : pass ? "success" : "failure",
     title: verdictLine,
-    summary: [`head \`${head}\``, "", ...lines].join("\n"),
+    summary: [`head \`${head}\``, "", ...lines, ...(roundLine ? ["", roundLine] : [])].join("\n"),
+    ...(roundLine ? { round_line: roundLine } : {}),
     author,
     passes,
     blocks,

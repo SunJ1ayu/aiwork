@@ -19,6 +19,14 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 `tests/test_aiwork_gate_main.mjs`(假 GitHub API 上真跑 `main.mjs`)、`tests/test_aiwork_gate_workflow.mjs`(workflow 形状和本仓库策略)。
 从 OpenDesign 仓库内容推导 policy 清单的测试留在 OpenDesign。
 
+## 修改轮数显示
+
+项目可在策略中配置 `modification_rounds`，其中 `limit` 是正整数上限，`summary_account` 是独立汇总账号，不能兼任 Builder、评审机器人或合并申请人（含业主）。未配置时，关卡输出和行为保持原样。aiwork 启用此项；其他项目要用时修改自己的策略。
+
+记录格式和计数约定见 `workflow/skills/summary/SKILL.md`「汇总的格式」，由 `tests/test_aiwork_gate_rounds.mjs` 从定义读取并对照。关卡复用已经取全的 PR 评审与 GraphQL 改写时间，不增加请求；`decide.mjs` 只追加显示，`run.mjs` 在共享 head 的结论中保留每个 PR 的轮数和停信号，G1–G8 和合并条件不变。新汇总通过已有评审门铃重算。
+
+启用后的已有 PR 没有新格式记录时显示「未知」。汇总从合并后的下一次起使用新格式，不回填历史修改单。
+
 ## 新项目接入
 
 只有一种接法。

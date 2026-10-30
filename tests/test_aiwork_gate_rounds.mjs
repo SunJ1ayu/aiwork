@@ -1,0 +1,162 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { decide } from "../gate/decide.mjs";
+import { validatePolicy } from "../gate/run.mjs";
+
+const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
+const baseline = JSON.parse(read("./fixtures/gate-logic-policy.json"));
+const rounds = { limit: 2, summary_account: "summary-user" };
+const policy = { ...baseline, modification_rounds: rounds };
+const HEAD = "a".repeat(40), OLD = "b".repeat(40), OLDER = "c".repeat(40);
+const pass = { id: 1, login: baseline.reviewer_bot, type: "Bot", state: "COMMENTED", commit_id: HEAD,
+  submitted_at: "2026-10-30T01:00:00Z", body: '```json\n' + JSON.stringify({
+    verdict: "PASS", head_sha: HEAD, family: "openai", model: "test", completeness: "complete",
+  }) + '\n```' };
+const record = (head = HEAD, next_step = "照单修", has_p1 = true, modification_task = "修复已复现的问题") =>
+  ({ head_sha: head, next_step, has_p1, modification_task });
+const summary = (value = record(), over = {}) => ({
+  id: 20, login: rounds.summary_account, type: "User", state: "COMMENTED", commit_id: value.head_sha,
+  submitted_at: "2026-10-30T02:00:00Z", edited_at: null,
+  body: '```aiwork-summary\n' + JSON.stringify(value) + '\n```', ...over,
+});
+const facts = (reviews = [], over = {}) => ({
+  pr: { number: 10, state: "open", head_sha: HEAD }, files: ["web/a.ts"],
+  ci: { state: "success", detail: "ok" }, pushes: { covers_head: true, actors: ["SunJ1ayuBoT"] },
+  reviews: [pass, ...reviews], ...over,
+});
+const run = (reviews, over) => decide(facts(reviews, over), policy);
+
+test("轮数按修改单的不同 head 数，其他推送和评审不加轮；最新 P1 触发停信号", () => {
+  const reviews = [summary(record(OLD)), summary(record(OLDER)), summary(record(HEAD, "交业主", true, ""))];
+  const result = run(reviews);
+  assert.match(result.summary, /第 2 轮 \/ 上限 2/);
+  assert.match(result.summary, /停：交业主/);
+  assert.match(run([summary(record(OLD)), summary(record(OLD), { id: 21 })]).summary, /第 1 轮/);
+  assert.doesNotMatch(run([summary(record(OLD))]).summary, /停：交业主/);
+  assert.doesNotMatch(run([...reviews.slice(0, 2), summary(record(HEAD, "合并", false, ""))]).summary, /停：交业主/);
+  assert.match(run([summary(record(OLD))], { pr: { number: 10, head_sha: HEAD } }).summary, /第 1 轮/);
+  assert.match(run([summary(record(HEAD, "合并", false, ""))]).summary, /第 0 轮/);
+  // REST 返回次序不是“最新”；相同时刻按评审 id 排。
+  assert.doesNotMatch(run([summary(record(HEAD, "合并", false, ""), { id: 30 }), ...reviews.slice(0, 2)]).summary, /停：交业主/);
+});
+
+test("旧 PR 和冒充者是未知；改写、格式错误、同 head 冲突一律读不清", () => {
+  for (const reviews of [[], [summary(record(), { login: "builder" })], [summary(record(), { body: "旧式汇总" })]]) {
+    assert.match(run(reviews).summary, /轮数：未知/);
+    assert.doesNotMatch(run(reviews).summary, /第 0 轮/);
+  }
+  const valid = summary();
+  const malformed = [
+    { ...valid, edited_at: "2026-10-30T03:00:00Z" },
+    { ...valid, edited_at: "2026-10-30T03:00:00Z", body: "改掉了标记" },
+    { ...valid, body: "```aiwork-summary\n{\n```" },
+    { ...valid, body: valid.body + "\n" + valid.body },
+    { ...valid, commit_id: OLD },
+    { ...valid, state: "DISMISSED" },
+    { ...valid, submitted_at: "" },
+    summary({ ...record(), next_step: "随便" }),
+    summary({ ...record(), has_p1: "true" }),
+    summary({ ...record(), head_sha: "short" }),
+    summary({ ...record(), modification_task: "" }),
+    summary(record(HEAD, "合并", true, "")),
+    summary(record(HEAD, "照单修", false)),
+    summary({ ...record(), extra: true }),
+  ];
+  for (const r of malformed) assert.match(run([r]).summary, /轮数：读不清/, JSON.stringify(r));
+  for (const value of [record(HEAD, "交业主", true, ""), record(HEAD, "合并", false, ""), { ...record(), modification_task: "另一张单" }]) {
+    assert.match(run([valid, summary(value, { id: 21 })]).summary, /轮数：读不清/);
+  }
+});
+
+test("所有汇总输入只追加显示，不改变任何 G1–G8 结果；未配置时整个返回值相同", () => {
+  const cases = [[], [summary()], [summary(record(), { edited_at: "edited" })],
+    [summary(record(OLD)), summary(record(OLDER))], [summary(record(HEAD, "合并", false, ""))]];
+  for (const over of [{}, { ci: { state: "pending" } }, { ci: { state: "failure" } },
+    { files: [".github/a.yml"] }, { files: ["desktop/main.js"] },
+    { pushes: { covers_head: false, actors: [] } }]) {
+    for (const reviews of cases) {
+      const f = facts(reviews, over);
+      const before = decide(f, baseline), after = decide(f, policy);
+      assert.deepEqual({ ...after, summary: before.summary, round_line: undefined }, { ...before, round_line: undefined });
+      assert.ok(after.summary.startsWith(before.summary));
+      assert.deepEqual(decide(f, { ...baseline }), before);
+    }
+  }
+  for (const extra of [
+    { ...pass, id: 2, body: pass.body.replace('"PASS"', '"BLOCK"') },
+    { id: 3, login: baseline.owner, type: "User", state: "CHANGES_REQUESTED", commit_id: HEAD, submitted_at: "2026-10-30T03:00:00Z", body: "" },
+    { id: 4, login: baseline.owner, type: "User", state: "APPROVED", commit_id: HEAD, submitted_at: "2026-10-30T03:00:00Z", body: "" },
+  ]) {
+    for (const reviews of cases) {
+      const f = facts([...reviews, extra], { files: [".github/a.yml", "desktop/main.js"] });
+      const before = decide(f, baseline), after = decide(f, policy);
+      assert.deepEqual({ ...after, summary: before.summary, round_line: undefined }, { ...before, round_line: undefined });
+    }
+  }
+});
+
+test("策略隔离汇总身份，允许没有专属 Builder，轮数功能可选且必须完整", () => {
+  assert.doesNotThrow(() => validatePolicy(baseline));
+  assert.doesNotThrow(() => validatePolicy({ ...policy, builders: {} }));
+  for (const modification_rounds of [null, {}, { ...rounds, limit: 0 }, { ...rounds, limit: 1.5 },
+    { ...rounds, limit: "2" }, { ...rounds, summary_account: "" },
+    { ...rounds, summary_account: baseline.reviewer_bot }, { ...rounds, summary_account: "sunj1ayubot" }]) {
+    assert.throws(() => validatePolicy({ ...baseline, modification_rounds }), /modification_rounds/);
+  }
+  assert.throws(() => validatePolicy({ ...policy, merge_requesters: ["SUMMARY-USER"] }), /modification_rounds/);
+  assert.throws(() => validatePolicy({ ...policy, modification_rounds: { ...rounds, summary_account: baseline.owner } }), /modification_rounds/);
+});
+
+test("summary skill 的唯一定义直接生成格式对照用例", () => {
+  const skill = read("../workflow/skills/summary/SKILL.md");
+  const match = /```aiwork-summary-schema\n([\s\S]*?)\n```/.exec(skill);
+  assert.ok(match, "格式必须在 summary skill 定义");
+  const schema = JSON.parse(match[1]);
+  // 按定义解释 JSON Schema 的结构，和生产解析器逐个对照；没有第三份字段/枚举定义。
+  function accepts(spec, value) {
+    if (spec.type === "object" && (!value || typeof value !== "object" || Array.isArray(value))) return false;
+    if (spec.type && spec.type !== "object" && typeof value !== spec.type) return false;
+    if (Object.hasOwn(spec, "const") && value !== spec.const) return false;
+    if (spec.enum && !spec.enum.includes(value)) return false;
+    if (spec.pattern && (typeof value !== "string" || !new RegExp(spec.pattern).test(value))) return false;
+    if (spec.required?.some((key) => !Object.hasOwn(value, key))) return false;
+    if (spec.additionalProperties === false && Object.keys(value).some((key) => !Object.hasOwn(spec.properties, key))) return false;
+    for (const [key, child] of Object.entries(spec.properties ?? {})) {
+      if (Object.hasOwn(value, key) && !accepts(child, value[key])) return false;
+    }
+    if (spec.allOf?.some((child) => !accepts(child, value))) return false;
+    if (spec.if && accepts(spec.if, value) && !accepts(spec.then, value)) return false;
+    return true;
+  }
+  const candidates = [];
+  for (const next of ["交业主", "照单修", "合并", "invalid"]) {
+    for (const p1 of [true, false, "true"]) {
+      for (const task of ["修改单\n完整正文", "", "   ", null]) candidates.push(record(HEAD, next, p1, task));
+    }
+  }
+  for (const value of candidates) {
+    assert.equal(!/读不清/.test(run([summary(value)]).summary), accepts(schema, value), JSON.stringify(value));
+  }
+  assert.deepEqual(schema.required.toSorted(), Object.keys(record()).toSorted());
+  for (const next_step of schema.properties.next_step.enum) {
+    const value = record(HEAD, next_step, next_step !== "合并", next_step === "照单修" ? "修改单正文" : "");
+    assert.doesNotMatch(run([summary(value)]).summary, /读不清|未知/);
+  }
+  for (const field of schema.required) {
+    const value = record(); delete value[field];
+    assert.match(run([summary(value)]).summary, /读不清/, field);
+  }
+  for (const [field, spec] of Object.entries(schema.properties)) {
+    assert.equal(typeof record()[field], spec.type);
+    if (spec.pattern) assert.ok(new RegExp(spec.pattern).test(record()[field]));
+    const invalid = spec.type === "boolean" ? "true" : true;
+    assert.match(run([summary({ ...record(), [field]: invalid })]).summary, /读不清/, field);
+  }
+  assert.equal(schema.additionalProperties, false);
+  const current = JSON.parse(read("../.aiwork/policy.json"));
+  assert.ok(current.modification_rounds.limit > 0);
+  assert.equal(current.modification_rounds.summary_account, "SunJ1ayuBoT");
+  assert.deepEqual(current.builders, {});
+  validatePolicy(current);
+});

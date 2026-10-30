@@ -8,9 +8,7 @@
   "check_name": "aiwork-gate",
   "gate_app_id": 5121026,
   "owner": "SunJ1ayu",
-  "builders": {
-    "SunJ1ayuBoT": "anthropic"
-  },
+  "builders": {},
   "reviewer_bot": "aiwork-review[bot]",
   "merge_label": "aiwork:merge",
   "merge_requesters": [],
@@ -39,6 +37,10 @@
     "templates/aiwork-review-ping.yml"
   ],
   "high_min_families": 3,
+  "modification_rounds": {
+    "limit": 3,
+    "summary_account": "SunJ1ayuBoT"
+  },
   "high": [
     "bin/gh-app-token",
     "bin/aiwork-config",
