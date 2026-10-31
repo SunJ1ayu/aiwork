@@ -39,6 +39,9 @@
     "templates/aiwork-review-ping.yml"
   ],
   "high_min_families": 3,
+  "modification_rounds": {
+    "summary_account": "SunJ1ayuBoT"
+  },
   "high": [
     "bin/gh-app-token",
     "bin/aiwork-config",

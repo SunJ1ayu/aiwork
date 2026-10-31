@@ -27,7 +27,7 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 2. 核实：复现各家报的 P1、跑和这次改动相关的测试、补 CI 覆盖不到的检查（比如要在 PR 分支上真跑的、要先红的）。CI 在当前 head 上绿时，只做这三件事，不重跑全套；CI 没绿或者拿不到结果时，还要在断网的隔离副本里跑全套测试。算不算 P1，见 REVIEW-RULES 第二节第 1 条；复现不了还说不清时，见第四节「多条评审腿审同一个 PR」第 3 条。新测试先红怎么算，见 REVIEW-RULES 第一节第 3 条第 1 步；要真机才能确认的，标成待业主确认。上述核实按本 skill「汇总核对清单」逐条对照。
 3. 定级：见 REVIEW-RULES 第二节第 1 条。
 4. 决定下一步：按 REVIEW-RULES 第三节第 5 条的优先顺序。选「合并」之前，先看关卡在当前 head 上的结论：除了业主批准还缺别的（比如额度不够、凑不齐几家不同家族的 PASS），就选交业主，写明缺什么。派修改单的规则和格式见 `delegate` skill。P2 放不放进这张单，见 REVIEW-RULES 第三节第 4 条。
-5. 发到 PR 上：用一个不是项目策略里 `reviewer_bot` 的账号发一条 COMMENT 评审（没有结论块的机器人评审，关卡会算成 BLOCK）。关卡不读汇总。汇总不批准、不贴合并标签、不推代码。
+5. 发到 PR 上：使用项目策略 `modification_rounds.summary_account` 登记的账号，向这次核实的完整 head 提交一条 COMMENT 评审，正文按本 skill「汇总的格式」。发出后不编辑；纠错先交业主，不用改写或再发一条相互冲突的记录覆盖。关卡复用评审和改写记录读取它；汇总不批准、不贴合并标签、不推代码。未启用该策略的项目保持原来的非 `reviewer_bot` 账号 COMMENT 做法，关卡不显示轮数。
 6. 下一步写「合并」或「交业主」的那次汇总，当场把这个 PR 历次汇总里还没记的 P2 都按 REVIEW-RULES 第二节第 1 条「待办与业主决定」记入项目待办。
 
 ## 汇总核对清单
@@ -41,7 +41,37 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 - 汇总核对清单及核对结果，见本 skill「汇总核对清单」；
 - 每条 P1：要写的项见 REVIEW-RULES 第二节第 2 条，再补哪家提的；派修改单的规则和格式见 `delegate` skill；
 - P2、P3；
-- 刹车：已发几张修改单（怎么数见 REVIEW-RULES 开头「一轮」），到没到上限见第三节第 1 条；
+- 刹车：引用关卡算出的轮数与停信号，上限与停的定义见 REVIEW-RULES 第三节第 1 条；未知或读不清时交业主核实，不自行填零或猜数；
 - 「评审的处理」表：来源 | 处理；
 - 结论行在前：写法见 REVIEW-RULES 第二节第 2 条。
 - 下一步行在后：填 REVIEW-RULES 第三节第 5 条里的一档。
+
+启用 `modification_rounds` 的项目在同一条评审正文中放恰好一个下列定义 `title` 命名的记录围栏，块内是符合定义的 JSON 元数据；这是机器记录格式的唯一定义。评审的 `commit_id` 必须与 `head_sha` 一致，正文下一步和是否有 P1 必须与元数据一致。
+
+完整修改单是记录围栏结束后的全部 Markdown，直接写标题、换行、列表和代码块，不放进 JSON 字符串，也不另抄一份；机器读取这段原文。`next_step` 为「照单修」时，这段正文必须非空。没有修改单时围栏后留空；核实证据、结论、表格等都放在记录围栏前。
+
+```aiwork-summary-schema
+{
+  "title": "aiwork-summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["head_sha", "next_step", "has_p1"],
+  "properties": {
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "next_step": {"type": "string", "enum": ["交业主", "照单修", "合并"]},
+    "has_p1": {"type": "boolean"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"next_step": {"const": "照单修"}}},
+      "then": {"properties": {"has_p1": {"const": true}}}
+    },
+    {
+      "if": {"properties": {"next_step": {"const": "合并"}}},
+      "then": {"properties": {"has_p1": {"const": false}}}
+    }
+  ]
+}
+```
+
+关卡只认登记账号发出且未改写的记录，按不同 `head_sha` 的「照单修」计数；同一 head 的重复记录只计一次，字段不同则读不清。合入 main、失败腿重派和小改本身不加轮。最新汇总按提交时间、再按评审编号确定；停的定义见 REVIEW-RULES 第三节第 1 条。没新记录的旧 PR 显示未知；带记录围栏的评审被改写、格式错误、head 不一致或记录冲突显示读不清；无记录围栏的评审不参与计数。此显示不改变 G1–G8 或合并结果。

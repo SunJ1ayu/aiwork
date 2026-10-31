@@ -229,7 +229,8 @@ test("aiwork 自己的策略：真拦截，不登记共用的 build 账号，罩
   validatePolicy(policy);
   assert.equal(policy.check_name, "aiwork-gate");
   assert.equal(policy.builders["aiwork-build[bot]"], undefined);
-  assert.equal(policy.builders.SunJ1ayuBoT, "anthropic");
+  assert.equal(policy.modification_rounds.summary_account, "SunJ1ayuBoT");
+  assert.equal(policy.builders[policy.modification_rounds.summary_account], "anthropic");
   assert.equal(policy.high_min_families, 3);
   for (const path of [
     ".github/workflows/ci.yml",
