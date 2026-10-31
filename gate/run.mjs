@@ -34,7 +34,8 @@ export function validatePolicy(p) {
   if (typeof p?.check_name !== "string" || !p.check_name) bad.push("check_name");
   if (!Number.isInteger(p?.gate_app_id) || p.gate_app_id <= 0) bad.push("gate_app_id");
   if (typeof p?.owner !== "string" || !p.owner) bad.push("owner");
-  if (!p?.builders || typeof p.builders !== "object" || !Object.keys(p.builders).length) bad.push("builders");
+  if (!p?.builders || typeof p.builders !== "object" ||
+      Array.isArray(p.builders) || !Object.keys(p.builders).length) bad.push("builders");
   if (typeof p?.reviewer_bot !== "string" || !p.reviewer_bot.endsWith("[bot]")) bad.push("reviewer_bot");
   if (typeof p?.ci?.workflow_path !== "string" || typeof p?.ci?.event !== "string") bad.push("ci");
   if (!Array.isArray(p?.judging_surface) || !Array.isArray(p?.high)) bad.push("judging_surface/high");
@@ -44,6 +45,16 @@ export function validatePolicy(p) {
   const requesters = p?.merge_requesters;
   if (!Array.isArray(requesters) || !requesters.every((m) => typeof m === "string" && m && !Object.hasOwn(p?.builders ?? {}, m))) {
     bad.push("merge_requesters");
+  }
+  if (p && Object.hasOwn(p, "modification_rounds")) {
+    const c = p.modification_rounds;
+    const account = c?.summary_account;
+    const otherRoles = [p.reviewer_bot, p.owner, ...(Array.isArray(requesters) ? requesters : [])];
+    if ((Object.hasOwn(c ?? {}, "limit") && (!Number.isSafeInteger(c.limit) || c.limit <= 0)) || typeof account !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?$/.test(account) ||
+        otherRoles.some((r) => typeof r === "string" && r.toLowerCase() === account.toLowerCase())) {
+      bad.push("modification_rounds");
+    }
   }
   if (bad.length) throw new Error(`.aiwork/policy.json 不完整或不合法:${bad.join("、")}`);
 }
@@ -62,11 +73,15 @@ function combine(verdicts) {
     verdicts.find((v) => v.r.status === "completed" && v.r.conclusion !== "success") ??
     verdicts.find((v) => v.r.status !== "completed") ??
     verdicts[0];
-  const list = verdicts.map((v) => `- PR #${v.number}:${v.r.title}`).join("\n");
+  const list = verdicts.map((v) => `- PR #${v.number}:${v.r.title}${v.r.round_line ? `；${v.r.round_line}` : ""}`).join("\n");
+  const overview = `这个提交是 ${verdicts.length} 个开着的 PR 的 head(检查挂在提交上,全都放行才放行):\n${list}`;
   return {
     ...pick.r,
     title: `PR #${pick.number}:${pick.r.title}`,
-    summary: `${pick.r.summary}\n\n---\n这个提交是 ${verdicts.length} 个开着的 PR 的 head(检查挂在提交上,全都放行才放行):\n${list}`,
+    // GitHub 会截断长摘要；逐 PR 的轮数/停信号先写，不能被某个 PR 的长详情挤掉。
+    summary: verdicts.some((v) => v.r.round_line)
+      ? `${overview}\n\n---\n${pick.r.summary}`
+      : `${pick.r.summary}\n\n---\n${overview}`,
   };
 }
 

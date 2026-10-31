@@ -46,7 +46,10 @@ function prsApi(calls, prs, { fail = () => false, lists = null } = {}) {
   return {
     async graphql(query, { number }) {
       calls.push(["graphql", number]);
-      const nodes = prs[number].verdict === null ? [] : [{ databaseId: 1, submittedAt: "2026-09-29T09:00:00Z", lastEditedAt: null }];
+      const nodes = [
+        ...(prs[number].verdict === null ? [] : [{ databaseId: 1, submittedAt: "2026-09-29T09:00:00Z", lastEditedAt: null }]),
+        ...(prs[number].summaries ?? []).map((r) => ({ databaseId: r.id, submittedAt: r.submitted_at, lastEditedAt: r.lastEditedAt ?? null })),
+      ];
       return { repository: { pullRequest: { reviews: { totalCount: nodes.length, pageInfo: { hasNextPage: false }, nodes } } } };
     },
     async get(p) {
@@ -67,7 +70,10 @@ function prsApi(calls, prs, { fail = () => false, lists = null } = {}) {
       if (m && m[2] === "files") return { data: prs[m[1]].files.map((f) => ({ filename: f })), next: null };
       if (m && m[2] === "reviews") {
         const { head, verdict = "PASS" } = prs[m[1]];
-        return { data: verdict === null ? [] : [{ id: 1, user: { login: "aiwork-review[bot]", type: "Bot" }, state: "COMMENTED", commit_id: head, submitted_at: "2026-09-29T09:00:00Z", body: reviewBody(head, verdict) }], next: null };
+        return { data: [
+          ...(verdict === null ? [] : [{ id: 1, user: { login: "aiwork-review[bot]", type: "Bot" }, state: "COMMENTED", commit_id: head, submitted_at: "2026-09-29T09:00:00Z", body: reviewBody(head, verdict) }]),
+          ...(prs[m[1]].summaries ?? []),
+        ], next: null };
       }
       const ci = /\/actions\/runs\?head_sha=([0-9a-f]{40})/.exec(p);
       if (ci) {
@@ -89,6 +95,7 @@ const run = (r, api, over = {}) => gate({ repo: "o/r", event: prtEvent, policy, 
 test("R4 策略缺 App ID(或其他必填项)→ 不读 PR 的数据、不发 App 检查,每个开着的 PR 的 head 保险丝 failure", async () => {
   assert.throws(() => validatePolicy({ ...policy, gate_app_id: null }), /gate_app_id/);
   assert.throws(() => validatePolicy({ ...policy, check_name: "" }), /check_name/);
+  assert.throws(() => validatePolicy({ ...policy, builders: [] }), /builders/);
   assert.throws(() => validatePolicy({ ...policy, builders: {} }), /builders/);
   assert.doesNotThrow(() => validatePolicy(policy));
   const dropMin = { ...policy };
@@ -372,4 +379,51 @@ test("M10 只看合并标签自己的记录:业主贴了之后 Builder 又贴了
   const r = recorder();
   await run(r, prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE, "aiwork:recheck"], events: [labeled(policy.owner), recheck] } }), { merger: mergeRecorder(r) });
   assert.deepEqual(merges(r.calls), [[10, HEAD]]);
+});
+
+test("轮数显示复用既有读取和分页，不增接口；同 head 每个 PR 的信号都保留，不挡合并", async () => {
+  const roundPolicy = { ...policy, modification_rounds: { limit: 1, summary_account: "summary-user" } };
+  const summary = (head, id = 20, body = null) => ({ id, user: { login: "summary-user", type: "User" },
+    state: "COMMENTED", commit_id: head, submitted_at: "2026-09-29T10:00:00Z",
+    body: body ?? '```aiwork-summary\n' + JSON.stringify({ head_sha: head, next_step: "照单修", has_p1: true }) + '\n```\n\n修复问题' });
+  const stopped = [summary(OTHER), summary(HEAD, 21, '```aiwork-summary\n' + JSON.stringify({ head_sha: HEAD, next_step: "交业主", has_p1: true }) + '\n```')];
+  for (const variant of [[], [summary(HEAD)], stopped, [summary(HEAD, 21, '```aiwork-summary\ninvalid\n```')],
+    [{ ...summary(HEAD), lastEditedAt: "2026-09-29T11:00:00Z" }]]) {
+    const prs = {
+      10: { head: HEAD, files: [], verdict: "PASS", summaries: variant, labels: [policy.merge_label],
+        events: [{ event: "labeled", label: { name: policy.merge_label }, actor: { login: policy.owner }, created_at: "t", id: 2 }] },
+      11: { head: HEAD, files: [], verdict: "PASS", summaries: [] },
+    };
+    const oldCalls = [], newCalls = [], merged = [];
+    const before = await run(recorder(), prsApi(oldCalls, prs));
+    const after = await run(recorder(), prsApi(newCalls, prs), { policy: roundPolicy, merger: { async merge(n) { merged.push(n); } } });
+    assert.deepEqual(newCalls, oldCalls, "包括请求数量、路径、顺序都和旧策略相同");
+    assert.equal(after[0].title, before[0].title);
+    assert.match(after[0].summary, /PR #10[^\n]*轮数：/);
+    assert.match(after[0].summary, /PR #11[^\n]*轮数：未知/);
+    if (variant === stopped) assert.match(after[0].summary, /PR #10[^\n]*停：交业主/);
+    else assert.doesNotMatch(after[0].summary, /停：交业主/);
+    assert.deepEqual(merged, [10], "包括停信号和读不清都不挡原有的合并请求");
+  }
+});
+
+test("同 head 的未选中 PR 停信号排在长详情之前，GitHub 摘要截断也不丢", async () => {
+  const at = "2026-09-29T10:00:00Z";
+  const prs = {
+    10: { head: HEAD, files: [], verdict: "PASS", summaries: [{ id: 22, user: { login: policy.reviewer_bot, type: "Bot" },
+      state: "COMMENTED", commit_id: HEAD, submitted_at: at, body: reviewBody(HEAD, "PASS").replace("gpt-x", "x".repeat(65000)) }] },
+    11: { head: HEAD, files: [], verdict: "PASS", summaries: [{ id: 23, user: { login: "summary-user", type: "User" },
+      state: "COMMENTED", commit_id: HEAD, submitted_at: at, body: '```aiwork-summary\n' + JSON.stringify({
+        head_sha: HEAD, next_step: "照单修", has_p1: true,
+      }) + '\n```\n\n修复问题' }, { id: 24, user: { login: "summary-user", type: "User" },
+      state: "COMMENTED", commit_id: OTHER, submitted_at: "2026-09-29T11:00:00Z", body: '```aiwork-summary\n' + JSON.stringify({
+        head_sha: OTHER, next_step: "交业主", has_p1: true,
+      }) + '\n```' }] },
+  };
+  const result = await run(recorder(), prsApi([], prs), {
+    policy: { ...policy, modification_rounds: { limit: 1, summary_account: "summary-user" } },
+  });
+  const posted = result[0].summary.slice(0, 60000);
+  assert.match(posted, /PR #10[^\n]*轮数：未知/);
+  assert.match(posted, /PR #11[^\n]*第 1 轮[^\n]*停：交业主/);
 });
