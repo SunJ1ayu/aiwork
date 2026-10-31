@@ -41,29 +41,30 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 - 汇总核对清单及核对结果，见本 skill「汇总核对清单」；
 - 每条 P1：要写的项见 REVIEW-RULES 第二节第 2 条，再补哪家提的；派修改单的规则和格式见 `delegate` skill；
 - P2、P3；
-- 刹车：引用关卡算出的轮数与停信号，上限见项目 `.aiwork/policy.json` 的 `modification_rounds.limit`；未知或读不清时交业主核实，不自行填零或猜数；
+- 刹车：引用关卡算出的轮数与停信号，上限与停的定义见 REVIEW-RULES 第三节第 1 条；未知或读不清时交业主核实，不自行填零或猜数；
 - 「评审的处理」表：来源 | 处理；
 - 结论行在前：写法见 REVIEW-RULES 第二节第 2 条。
 - 下一步行在后：填 REVIEW-RULES 第三节第 5 条里的一档。
 
-启用 `modification_rounds` 的项目在同一条评审正文中放恰好一个围栏代码块，语言名取下列定义的 `title`，块内写符合定义的 JSON；这是机器记录格式的唯一定义。评审的 `commit_id` 必须与 `head_sha` 一致，正文的下一步和 P1 清单必须与块内一致。`modification_task` 放完整修改单正文（含换行时按 JSON 转义），不再只在聊天里转发；没有修改单时写空字符串。其他核实证据和表格仍写在块外。
+启用 `modification_rounds` 的项目在同一条评审正文中放恰好一个下列定义 `title` 命名的记录围栏，块内是符合定义的 JSON 元数据；这是机器记录格式的唯一定义。评审的 `commit_id` 必须与 `head_sha` 一致，正文下一步和是否有 P1 必须与元数据一致。
+
+完整修改单是记录围栏结束后的全部 Markdown，直接写标题、换行、列表和代码块，不放进 JSON 字符串，也不另抄一份；机器读取这段原文。`next_step` 为「照单修」时，这段正文必须非空。没有修改单时围栏后留空；核实证据、结论、表格等都放在记录围栏前。
 
 ```aiwork-summary-schema
 {
   "title": "aiwork-summary",
   "type": "object",
   "additionalProperties": false,
-  "required": ["head_sha", "next_step", "has_p1", "modification_task"],
+  "required": ["head_sha", "next_step", "has_p1"],
   "properties": {
     "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "next_step": {"type": "string", "enum": ["交业主", "照单修", "合并"]},
-    "has_p1": {"type": "boolean"},
-    "modification_task": {"type": "string"}
+    "has_p1": {"type": "boolean"}
   },
   "allOf": [
     {
       "if": {"properties": {"next_step": {"const": "照单修"}}},
-      "then": {"properties": {"has_p1": {"const": true}, "modification_task": {"pattern": "\\S"}}}
+      "then": {"properties": {"has_p1": {"const": true}}}
     },
     {
       "if": {"properties": {"next_step": {"const": "合并"}}},
@@ -73,4 +74,4 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 }
 ```
 
-关卡只认登记账号发出且未改写的记录，按不同 `head_sha` 的「照单修」计数；同一 head 的重复记录只计一次，字段不同则读不清。合入 main、失败腿重派和小改本身不加轮。最新汇总按提交时间、再按评审编号确定；到上限且最新汇总仍有 P1 时显示停信号。没新记录的旧 PR 显示未知；改写、格式错误、head 不一致或记录冲突显示读不清。此显示不改变 G1–G8 或合并结果。
+关卡只认登记账号发出且未改写的记录，按不同 `head_sha` 的「照单修」计数；同一 head 的重复记录只计一次，字段不同则读不清。合入 main、失败腿重派和小改本身不加轮。最新汇总按提交时间、再按评审编号确定；停的定义见 REVIEW-RULES 第三节第 1 条。没新记录的旧 PR 显示未知；带记录围栏的评审被改写、格式错误、head 不一致或记录冲突显示读不清；无记录围栏的评审不参与计数。此显示不改变 G1–G8 或合并结果。

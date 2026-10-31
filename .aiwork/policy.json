@@ -8,7 +8,9 @@
   "check_name": "aiwork-gate",
   "gate_app_id": 5121026,
   "owner": "SunJ1ayu",
-  "builders": {},
+  "builders": {
+    "SunJ1ayuBoT": "anthropic"
+  },
   "reviewer_bot": "aiwork-review[bot]",
   "merge_label": "aiwork:merge",
   "merge_requesters": [],
@@ -38,7 +40,6 @@
   ],
   "high_min_families": 3,
   "modification_rounds": {
-    "limit": 3,
     "summary_account": "SunJ1ayuBoT"
   },
   "high": [

@@ -15,6 +15,9 @@
 //
 // 放不放行只由 decide() 说了算;合不合并 = 放行 且 合并请求算数(mergeRequester;run.mjs 第 4 步)。
 
+// 通用默认上限；项目策略只在需要覆盖时提供 limit。
+export const DEFAULT_MODIFICATION_ROUND_LIMIT = 3;
+
 const SHA_RE = /^[0-9a-f]{40}$/;
 const VERDICTS = new Set(["PASS", "BLOCK", "NEEDS_MORE_INFO", "UNKNOWN"]);
 const COMPLETENESS = new Set(["complete", "partial", "none"]);
@@ -149,29 +152,33 @@ export function mergeRequester(facts, policy) {
 
 // 只追加派单提示，不参与放行。格式源在 summary skill；测试从该定义生成对照用例。
 function modificationRoundLine(reviews, config) {
+  const limit = config.limit ?? DEFAULT_MODIFICATION_ROUND_LIMIT;
   const byHead = new Map();
   const records = [];
   const unclear = (r, why) => `轮数：读不清（汇总 #${r.id}：${why}）`;
   for (const r of reviews) {
     if (r.login?.toLowerCase() !== config.summary_account.toLowerCase()) continue;
+    // 只处理记录围栏；旧式汇总和普通评审的改写不污染轮数。
+    const openings = [...r.body.matchAll(/^```aiwork-summary[ \t]*(?:\r?\n|$)/gm)];
+    if (!openings.length) continue;
     if (r.edited_at) return unclear(r, "发出后被改写过");
-    // 没有标记的旧式汇总不当成新记录，也不当成零轮。
-    if (!r.body.includes("aiwork-summary")) continue;
-    const blocks = [...r.body.matchAll(/```aiwork-summary[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
-    if (blocks.length !== 1) return unclear(r, "记录块应恰好一个");
+    if (openings.length !== 1) return unclear(r, "记录块应恰好一个");
+    const remainder = r.body.slice(openings[0].index + openings[0][0].length);
+    const block = /^([\s\S]*?)\r?\n```[ \t]*\r?$/m.exec(remainder);
+    if (!block) return unclear(r, "记录围栏没有结束");
     let v;
-    try { v = JSON.parse(blocks[0][1]); } catch { return unclear(r, "记录不是合法 JSON"); }
+    try { v = JSON.parse(block[1]); } catch { return unclear(r, "记录不是合法 JSON"); }
+    const task = remainder.slice(block[0].length).trim();
     if (!v || typeof v !== "object" || Array.isArray(v) ||
-        Object.keys(v).sort().join(",") !== "has_p1,head_sha,modification_task,next_step" ||
+        Object.keys(v).sort().join(",") !== "has_p1,head_sha,next_step" ||
         typeof v.head_sha !== "string" || !SHA_RE.test(v.head_sha) ||
         !["交业主", "照单修", "合并"].includes(v.next_step) || typeof v.has_p1 !== "boolean" ||
-        typeof v.modification_task !== "string" ||
-        (v.next_step === "照单修" && (!v.has_p1 || !v.modification_task.trim())) ||
+        (v.next_step === "照单修" && (!v.has_p1 || !task)) ||
         (v.next_step === "合并" && v.has_p1)) return unclear(r, "记录字段或字段组合不合法");
     if (r.state !== "COMMENTED" || r.commit_id !== v.head_sha || !Number.isFinite(Date.parse(r.submitted_at))) {
       return unclear(r, "不是 COMMENT 评审、head 对不上或缺发出时间");
     }
-    const key = JSON.stringify([v.next_step, v.has_p1, v.modification_task]);
+    const key = JSON.stringify([v.next_step, v.has_p1, task]);
     const previous = byHead.get(v.head_sha);
     if (previous && previous.key !== key) return unclear(r, "同一个 head 的记录互相冲突");
     byHead.set(v.head_sha, { key, value: v });
@@ -180,7 +187,9 @@ function modificationRoundLine(reviews, config) {
   if (!records.length) return "轮数：未知（没有新格式的汇总记录）";
   const count = [...byHead.values()].filter((r) => r.value.next_step === "照单修").length;
   const latest = records.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id).at(-1);
-  return `轮数：第 ${count} 轮 / 上限 ${config.limit}${count >= config.limit && latest.has_p1 ? "；停：交业主" : ""}`;
+  // 停的定义见 REVIEW-RULES 第三节第 1 条。
+  const stop = latest.has_p1 && (count > limit || (count === limit && latest.next_step !== "照单修"));
+  return `轮数：第 ${count} 轮 / 上限 ${limit}${stop ? "；停：交业主" : ""}`;
 }
 
 export function decide(facts, policy) {

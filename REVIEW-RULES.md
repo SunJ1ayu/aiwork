@@ -22,7 +22,9 @@
 汇总要修改时,修改方照修改单一次修完、推一次。下一步有哪几档,见第三节第 5 条。
 缺了几家还能不能合,由关卡按项目策略判断。
 第 N 张修改单就是第 N 轮修改。轮数按 PR 算,跟有几条腿无关；以关卡算出的数为准，
-上限见项目 `.aiwork/policy.json` 的 `modification_rounds.limit`，汇总记录格式见 `workflow/skills/summary/SKILL.md`。
+上限与停的定义见第三节第 1 条，汇总记录格式见 `workflow/skills/summary/SKILL.md`。
+
+第三节说的「上限那轮修完还有 P1」，指上限那张修改单修完以后的那次汇总。
 
 来历:OpenDesign PR #10(放行关卡)评审修改了 13 轮、修了 37 个问题。前几轮找到的都是真漏洞;
 越往后越窄,而且好几轮是在补丁上再补丁,直到第 9 轮换掉错的前提,代码反而少了约 60 行。这份规则就是那次的教训。
@@ -143,7 +145,7 @@
 > 防的是:评审和修改一轮接一轮,谁也不知道什么时候算完。
 > 删掉会怎样:PR #10 那样的 13 轮。
 
-1. **修改轮数上限见项目 `.aiwork/policy.json` 的 `modification_rounds.limit`**，轮数与停信号以关卡结论为准。上限对应的修改单修完以后汇总仍有 P1 ⇒ **停,交业主**，不再派单；不改变放行条件（[业主决定](https://github.com/SunJ1ayu/aiwork/issues/107#issuecomment-6525601278)）。附一段说明:
+1. **修改轮数上限**：项目配置了 `.aiwork/policy.json` 的 `modification_rounds.limit` 时用该值；未配置的项目用 [aiwork main 的共享默认上限](https://github.com/SunJ1ayu/aiwork/blob/main/gate/decide.mjs) `DEFAULT_MODIFICATION_ROUND_LIMIT`，数字只在那里定义。启用轮数显示时，轮数与停信号以关卡结论为准。**停的条件**：上限那张修改单修完以后的汇总仍有 P1，或超过上限又派出修改单且最新汇总仍有 P1 ⇒ **停,交业主**，不再派单；不改变放行条件（[业主决定](https://github.com/SunJ1ayu/aiwork/issues/107#issuecomment-6525601278)）。附一段说明:
    每轮找到几条、是不是在收敛、剩下的是什么。业主从三条里选一条:
    - 再给几轮;
    - 剩下的记为已接受风险(写进 `.aiwork/accepted-risks.md`,业主批准),直接合;

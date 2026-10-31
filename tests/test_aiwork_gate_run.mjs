@@ -385,8 +385,9 @@ test("轮数显示复用既有读取和分页，不增接口；同 head 每个 P
   const roundPolicy = { ...policy, modification_rounds: { limit: 1, summary_account: "summary-user" } };
   const summary = (head, id = 20, body = null) => ({ id, user: { login: "summary-user", type: "User" },
     state: "COMMENTED", commit_id: head, submitted_at: "2026-09-29T10:00:00Z",
-    body: body ?? '```aiwork-summary\n' + JSON.stringify({ head_sha: head, next_step: "照单修", has_p1: true, modification_task: "修复问题" }) + '\n```' });
-  for (const variant of [[], [summary(HEAD)], [summary(HEAD, 21, '```aiwork-summary\ninvalid\n```')],
+    body: body ?? '```aiwork-summary\n' + JSON.stringify({ head_sha: head, next_step: "照单修", has_p1: true }) + '\n```\n\n修复问题' });
+  const stopped = [summary(OTHER), summary(HEAD, 21, '```aiwork-summary\n' + JSON.stringify({ head_sha: HEAD, next_step: "交业主", has_p1: true }) + '\n```')];
+  for (const variant of [[], [summary(HEAD)], stopped, [summary(HEAD, 21, '```aiwork-summary\ninvalid\n```')],
     [{ ...summary(HEAD), lastEditedAt: "2026-09-29T11:00:00Z" }]]) {
     const prs = {
       10: { head: HEAD, files: [], verdict: "PASS", summaries: variant, labels: [policy.merge_label],
@@ -400,7 +401,8 @@ test("轮数显示复用既有读取和分页，不增接口；同 head 每个 P
     assert.equal(after[0].title, before[0].title);
     assert.match(after[0].summary, /PR #10[^\n]*轮数：/);
     assert.match(after[0].summary, /PR #11[^\n]*轮数：未知/);
-    if (variant[0]?.id === 20 && !variant[0].lastEditedAt) assert.match(after[0].summary, /PR #10[^\n]*停：交业主/);
+    if (variant === stopped) assert.match(after[0].summary, /PR #10[^\n]*停：交业主/);
+    else assert.doesNotMatch(after[0].summary, /停：交业主/);
     assert.deepEqual(merged, [10], "包括停信号和读不清都不挡原有的合并请求");
   }
 });
@@ -412,7 +414,10 @@ test("同 head 的未选中 PR 停信号排在长详情之前，GitHub 摘要截
       state: "COMMENTED", commit_id: HEAD, submitted_at: at, body: reviewBody(HEAD, "PASS").replace("gpt-x", "x".repeat(65000)) }] },
     11: { head: HEAD, files: [], verdict: "PASS", summaries: [{ id: 23, user: { login: "summary-user", type: "User" },
       state: "COMMENTED", commit_id: HEAD, submitted_at: at, body: '```aiwork-summary\n' + JSON.stringify({
-        head_sha: HEAD, next_step: "照单修", has_p1: true, modification_task: "修复问题",
+        head_sha: HEAD, next_step: "照单修", has_p1: true,
+      }) + '\n```\n\n修复问题' }, { id: 24, user: { login: "summary-user", type: "User" },
+      state: "COMMENTED", commit_id: OTHER, submitted_at: "2026-09-29T11:00:00Z", body: '```aiwork-summary\n' + JSON.stringify({
+        head_sha: OTHER, next_step: "交业主", has_p1: true,
       }) + '\n```' }] },
   };
   const result = await run(recorder(), prsApi([], prs), {

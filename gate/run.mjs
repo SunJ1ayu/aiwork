@@ -35,7 +35,7 @@ export function validatePolicy(p) {
   if (!Number.isInteger(p?.gate_app_id) || p.gate_app_id <= 0) bad.push("gate_app_id");
   if (typeof p?.owner !== "string" || !p.owner) bad.push("owner");
   if (!p?.builders || typeof p.builders !== "object" ||
-      (!Object.keys(p.builders).length && !p.modification_rounds)) bad.push("builders");
+      Array.isArray(p.builders) || !Object.keys(p.builders).length) bad.push("builders");
   if (typeof p?.reviewer_bot !== "string" || !p.reviewer_bot.endsWith("[bot]")) bad.push("reviewer_bot");
   if (typeof p?.ci?.workflow_path !== "string" || typeof p?.ci?.event !== "string") bad.push("ci");
   if (!Array.isArray(p?.judging_surface) || !Array.isArray(p?.high)) bad.push("judging_surface/high");
@@ -49,8 +49,8 @@ export function validatePolicy(p) {
   if (p && Object.hasOwn(p, "modification_rounds")) {
     const c = p.modification_rounds;
     const account = c?.summary_account;
-    const otherRoles = [...Object.keys(p.builders ?? {}), p.reviewer_bot, p.owner, ...(Array.isArray(requesters) ? requesters : [])];
-    if (!Number.isSafeInteger(c?.limit) || c.limit <= 0 || typeof account !== "string" ||
+    const otherRoles = [p.reviewer_bot, p.owner, ...(Array.isArray(requesters) ? requesters : [])];
+    if ((Object.hasOwn(c ?? {}, "limit") && (!Number.isSafeInteger(c.limit) || c.limit <= 0)) || typeof account !== "string" ||
         !/^[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?$/.test(account) ||
         otherRoles.some((r) => typeof r === "string" && r.toLowerCase() === account.toLowerCase())) {
       bad.push("modification_rounds");
