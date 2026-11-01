@@ -63,10 +63,10 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
    这条规则必须独立于必需检查：绕过名单绕过的是整个规则集，放在一起会让 App 连必需检查也绕过。
 3. 确认两项规则均已保存，再让新的关卡代码进入 aiwork main。
    调用仓库每次运行都从 aiwork main 取代码，不能等代码生效后再补前两步。
-4. 代码生效后，各调用仓库按「新项目接入」同步两份 workflow；同步前的一致性 CI 会红。按 S15 验收管理员网页合并被拒。
+4. 代码生效后，各调用仓库按「新项目接入」同步两份 workflow；已配置模板一致性检查的仓库在同步前会红。按 S15 验收管理员网页合并被拒。
 
 依据见 [业主决定](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552793090)。aiwork 和 OpenDesign
-已完成前两步，见[规则补记](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552923695)；管理员网页被拒的实测记录见 `ACCEPTANCE.md` 的 S15。
+已完成前两步，见[规则补记](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552923695)；管理员网页合并的验收状态见 `ACCEPTANCE.md` 的 S15。
 新接入仓库转真拦截时也按第 1–2 步配置规则；已有规则就更新，不另建一套。
 
 ## 事件只是门铃;同一时间只有一次运行
