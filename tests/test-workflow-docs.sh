@@ -152,6 +152,33 @@ grep -q 'aiwork-config data-path worktrees' "$SOURCE/CLAUDE.md" \
   && grep -q 'PR 合并后删掉这个工作树' "$SOURCE/CLAUDE.md"
 check "W4: 开工先在本机数据目录建工作树，不在共享检出里改" $?
 
+python3 - "$ROOT" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+workflow = (root / 'workflow/CLAUDE.md').read_text()
+assert '\n## 机器人推送与开 PR\n' in workflow, '缺少机器人推送的唯一说明'
+assert 'workflow/CLAUDE.md#机器人推送与开-pr' in (root / 'AGENTS.md').read_text(), 'AGENTS 缺少指向'
+
+# 防的是把认证数据放进命令参数，或直接打印到日志的示例。
+unsafe = re.compile(
+    r'http(?:\.[^\s=]+)?\.extraheader\s*='
+    r'|https?://[^\s/]+@'
+    r'|\benv\s+[^\n]*\b(?:GH_TOKEN|GITHUB_TOKEN)='
+    r'|(?:--header|-H)\s+[\'"]?Authorization:'
+    r'|--(?:token|password|oauth-token)(?:[ =]|$)'
+    r'|\b(?:echo|printf|printenv)\b[^\n]*\$\{?(?:GH_TOKEN|GITHUB_TOKEN|token)\b',
+    re.I,
+)
+docs = [root / 'AGENTS.md', root / 'README.md', *sorted((root / 'workflow').rglob('*.md'))]
+for path in docs:
+    for command in re.findall(r'^```(?:bash|sh|shell)\n(.*?)^```', path.read_text(), re.M | re.S):
+        assert not unsafe.search(command.replace('\\\n', ' ')), f'{path.relative_to(root)} 有不安全的认证示例'
+PY
+check "W4: 机器人推送说明有唯一入口，命令示例不把令牌放进参数或日志" $?
+
 echo "[W5] 旧 track 流程不留在仓库里"
 for gone in bin/track bin/track-guard bin/track-record bin/track-commit-msg \
             bin/runlog bin/_evidence.sh bin/_review_delivery.py bin/_ephemeral-refs.sh \

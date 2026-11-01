@@ -7,4 +7,4 @@
 
 开发分支从最新 main 拉，开 PR 前先同步 main。
 
-推送和开 PR 只用机器人身份，令牌只从 `bin/gh-app-token` 换，不用任何个人账号。
+推送和开 PR 见 [workflow/CLAUDE.md「机器人推送与开 PR」](workflow/CLAUDE.md#机器人推送与开-pr)。
