@@ -7,24 +7,21 @@
 //     一定不比被它顶掉的旧一些)。所以同一提交上后写的结论一定出自后读的数据,不会有慢一步的旧运行盖掉新结论,
 //     也用不着猜 GitHub 在同名检查里按什么取"最新"(后发的一定后写完)。
 //   · **一个提交上的结论 = 以它为 head 的所有开着的 PR 的结论合在一起;读不全就不放行(G8)。**
-//     检查和保险丝都挂在提交上;同一提交可以是几个 PR 的 head,目标分支不同 ⇒ 改动、要求都不同。
+//     检查挂在提交上;同一提交可以是几个 PR 的 head,目标分支不同 ⇒ 改动、要求都不同。
 //
 // 一次运行:
 //   1. 列出所有开着的 PR(连读两遍一致才算数),按 head 提交分组;
-//   2. 先给每个 head 的保险丝创建 in_progress 占位(快、不靠 App),再给每个 head 发 App 占位,之后才读 PR 的数据 ——
+//   2. 先给每个 head 发 App 的 in_progress 占位,之后才读 PR 的数据 ——
 //      半路卡住或死掉,已创建且未完成的检查停在 in_progress,压住上一次的结论;
-//   3. 每个 head:把以它为 head 的 PR 全判一遍,合成一个结论写一次(App 先写,保险丝跟着);
+//   3. 每个 head:把以它为 head 的 PR 全判一遍,合成一个结论写一次;
 //   4. 结论写上且是放行,就当场合并这个 head 上有合并请求的 PR(见 decide.mjs 的 mergeRequester),
 //      带上判过的 head —— 合并用的就是这次刚读到的数据,判完之后又推了新提交,合并接口会拒。
 //      没放行的请求留着,等哪次运行判为放行再合。这就是"合并那一刻再判一次":不另起一套判定。
 //
-// 两道信号:App 检查(分支规则只认它,PR 冒充不了)+ 保险丝(GITHUB_TOKEN 发的检查,名称见 FUSE_CHECK_NAME,
-// 不靠 App 私钥)。只有 App 自己改得动它发过的检查 —— App 私钥坏了,旧 success 就一直挂着,这时靠保险丝挡。
-// 保险丝谁有写权限的 workflow 都能拨,所以只能多挡、不能单独放行:转真拦截时两道都设为必过。
-//   · 每个提交要么写上这次算出的结论,要么保险丝 failure(App 发不出占位 / 写不回结论、策略不合法);
-//   · 连开着的 PR 都列不出来 → 不知道该挡哪些提交,只能把事件里带的提交(PR 的 head、运行的提交)拨到 failure;
-//   · 运行被取消或超时 → 已创建且未完成的 App / 保险丝检查停在 in_progress,同样挡着;下一次运行全部重算。
-// 这种"事件来了再重算"的做法本身补不死的窗口,见 README「已知限制」;经合并请求合并的 PR 由第 4 步补上。
+// App 发不出占位、写不回结论或策略不合法时,本次运行不会合并该 head。
+// main 只许关卡合并,因此网页上的旧 success 不能被借来手动合并;规则依据见 README「合并」。
+// 运行被取消或超时:已创建且未完成的 App 检查停在 in_progress;下一次运行全部重算。
+// 这种"事件来了再重算"的做法本身补不死的窗口,见 README「已知限制」。
 
 import { collect, paginate } from "./collect.mjs";
 import { decide, mergeRequester } from "./decide.mjs";
@@ -59,9 +56,7 @@ export function validatePolicy(p) {
   if (bad.length) throw new Error(`.aiwork/policy.json 不完整或不合法:${bad.join("、")}`);
 }
 
-export const FUSE_CHECK_NAME = "aiwork-gate/fuse-check";
 const SHA_RE = /^[0-9a-f]{40}$/;
-const fuseState = (r) => (r.status !== "completed" ? "pending" : r.conclusion === "success" ? "success" : "failure");
 
 const g8 = (message) => ({ status: "completed", conclusion: "failure", title: "不放行:数据不全(G8)", summary: `读 GitHub 数据出错,按失败处理:\n\n${message}` });
 const moved = { status: "completed", conclusion: "failure", title: "这个提交已不是开着的 PR 的 head", summary: "列出 PR 之后它又推进或关闭了;新的 head 由它的事件叫醒的下一次运行来算。" };
@@ -85,11 +80,6 @@ function combine(verdicts) {
   };
 }
 
-// 事件里带的提交:只在连开着的 PR 都列不出来时用(不知道该挡哪些,至少挡住这些)
-const eventShas = (event) =>
-  [event?.pull_request?.head?.sha, event?.workflow_run?.head_sha, ...(event?.workflow_run?.pull_requests ?? []).map((p) => p?.head?.sha)]
-    .filter((sha, i, all) => typeof sha === "string" && SHA_RE.test(sha) && all.indexOf(sha) === i);
-
 // 开着的 PR 的快照。列表不是一次拍下的:翻页期间有 PR 关掉,后面的会往前挪、漏掉一个 —— 连读两遍一致才算数
 async function openPrs(api, repo) {
   let seen = null;
@@ -102,51 +92,23 @@ async function openPrs(api, repo) {
   throw new Error("开着的 PR 连读四遍都对不上(一直有 PR 在开关或推送)");
 }
 
-export async function gate({ repo, event, policy, api, poster, fuse, merger = null, log = () => {} }) {
+export async function gate({ repo, policy, api, poster, merger = null, log = () => {} }) {
   const errors = [];
-  // 拨到 failure 是最后一道保底:它自己再出错也只记日志,不盖掉原本的错误
-  const blow = async (sha, why) => {
-    try {
-      await fuse.set(sha, "failure", why);
-    } catch (e) {
-      log(`保险丝也拨不动(${sha.slice(0, 7)}):${e.message}`);
-    }
-  };
-
   // 1. 所有开着的 PR,按 head 提交分组
   const heads = new Map();
-  try {
-    for (const { number, sha } of await openPrs(api, repo)) {
-      if (typeof sha !== "string" || !SHA_RE.test(sha)) throw new Error(`PR #${number} 的 head 不是提交号`);
-      if (!heads.has(sha)) heads.set(sha, []);
-      heads.get(sha).push(number);
-    }
-  } catch (e) {
-    for (const sha of eventShas(event)) await blow(sha, "列不出开着的 PR,这个提交上的旧结论作废");
-    throw e;
+  for (const { number, sha } of await openPrs(api, repo)) {
+    if (typeof sha !== "string" || !SHA_RE.test(sha)) throw new Error(`PR #${number} 的 head 不是提交号`);
+    if (!heads.has(sha)) heads.set(sha, []);
+    heads.get(sha).push(number);
   }
+  validatePolicy(policy);
 
-  try {
-    validatePolicy(policy);
-  } catch (e) {
-    for (const sha of heads.keys()) await blow(sha, "关卡策略不合法,这个提交上的旧结论作废");
-    throw e;
-  }
-
-  // 2. 先给每个 head 的保险丝都创建 in_progress 占位,再逐个发 App 占位,之后才读 PR 的数据
-  for (const sha of heads.keys()) {
-    try {
-      await fuse.set(sha, "pending", "重算中,算完之前不放行");
-    } catch (e) {
-      log(`保险丝拨不到 pending(${sha.slice(0, 7)}):${e.message};App 检查照发,算完还会再拨一次`);
-    }
-  }
+  // 2. 先给每个 head 发 App 占位,之后才读 PR 的数据
   const ids = new Map();
   for (const sha of heads.keys()) {
     try {
       ids.set(sha, await poster.start(sha));
     } catch (e) {
-      await blow(sha, "关卡 App 发不出检查,这个提交上的旧结论作废");
       errors.push(e);
     }
   }
@@ -176,27 +138,19 @@ export async function gate({ repo, event, policy, api, poster, fuse, merger = nu
     try {
       await poster.finish(sha, result, ids.get(sha));
     } catch (e) {
-      await blow(sha, "关卡 App 写不回结论,这个提交上的旧结论作废");
       errors.push(e);
       continue;
     }
-    let written = true;
-    try {
-      await fuse.set(sha, fuseState(result), result.title);
-    } catch (e) {
-      errors.push(e);
-      written = false;
-    }
     log(`${sha.slice(0, 7)}:${result.title}\n${result.summary}`);
     results.push({ sha, title: result.title, summary: result.summary });
-    // 4. 合并:只在这个提交上的放行结论(App 检查和保险丝)都写上了的时候;
+    // 4. 合并:只在这个提交上的 App 放行结论写上了的时候;
     //    合并出错(判完又推了新提交、有冲突)只记下,请求留着
     for (const v of verdicts) {
       if (v.request && !v.mergeBy) {
         const who = v.request.by ? `是 ${v.request.by} 提的` : "在 PR 事件里找不到是谁提的";
         log(`PR #${v.number}:贴着合并标签,但合并请求${who},不算数(只认业主和 merge_requesters)`);
       }
-      if (!v.mergeBy || !written || fuseState(result) !== "success") continue;
+      if (!v.mergeBy || result.status !== "completed" || result.conclusion !== "success") continue;
       try {
         if (!merger) throw new Error("没有合并接口");
         await merger.merge(v.number, sha);

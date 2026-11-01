@@ -1,7 +1,6 @@
 // aiwork 放行关卡入口 main.mjs 的整机冒烟:起一个假的 GitHub API,真跑 main.mjs 子进程。
 // 钉住接线本身:JWT 用 App ID 签、公钥验得过;换令牌只要 checks:write;读数据用 GITHUB_TOKEN;
 // 先发 in_progress 占位,再把同一条检查 PATCH 成结论;读 PR 出错时占位被改成 failure;
-// 保险丝检查只用 GITHUB_TOKEN 发,App 私钥坏了也拨得动;
 // 合并用另换的一张令牌(只在要合并时才换),带上判过的 head。
 // 跑法:node --test tests/test_aiwork_gate_main.mjs
 import { test } from "node:test";
@@ -12,7 +11,6 @@ import { spawn } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUSE_CHECK_NAME } from "../gate/run.mjs";
 
 const policy = JSON.parse(readFileSync(new URL("./fixtures/gate-logic-policy.json", import.meta.url), "utf8"));
 const MAIN = new URL("../gate/main.mjs", import.meta.url).pathname;
@@ -23,6 +21,7 @@ const PEM = privateKey.export({ type: "pkcs8", format: "pem" });
 function fakeGitHub(opts = {}) {
   const log = [];
   const checks = new Map();
+  if (opts.previousSuccess) checks.set(4241, { id: 4241, name: policy.check_name, status: "completed", conclusion: "success" });
   let nextCheck = 4242;
   const server = createServer((req, res) => {
     let body = "";
@@ -33,11 +32,15 @@ function fakeGitHub(opts = {}) {
       log.push(record);
       const send = (code, data) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(data)); };
       const u = req.url;
+      if (opts.pauseAt === u && (!opts.pausePermission || record.body?.permissions?.[opts.pausePermission])) {
+        opts.onPause(); return;
+      }
       if (u === "/repos/o/r/installation") return send(200, { id: 777 });
       // 按要的权限发不同的令牌,好分清哪个请求用的是哪张
       if (u === "/app/installations/777/access_tokens") return send(201, { token: JSON.parse(body).permissions.checks ? "app-check-token" : "app-merge-token" });
       if (u === "/repos/o/r/pulls/10/merge" && req.method === "PUT") return send(200, { merged: true });
       if (u === "/repos/o/r/check-runs" && req.method === "POST") {
+        if (opts.appStartFails) return send(502, { message: "App start failed" });
         if (opts.hang && auth === "Bearer app-check-token") return; // 一直不回
         const id = nextCheck++;
         const check = { ...record.body, id, auth };
@@ -51,6 +54,7 @@ function fakeGitHub(opts = {}) {
         if (checks.get(id).auth !== auth) return send(403, { message: "wrong check owner" });
         if (opts.appFinishFails && auth === "Bearer app-check-token") return send(502, { message: "App write failed" });
         Object.assign(checks.get(id), record.body);
+        if (opts.appFinishResponseLost) { req.socket.destroy(); return; }
         return send(200, { id });
       }
       if (u.startsWith("/repos/o/r/statuses/") && req.method === "POST") {
@@ -78,7 +82,7 @@ function fakeGitHub(opts = {}) {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, log, checks, url: `http://127.0.0.1:${server.address().port}` })));
 }
 
-function runMain(apiUrl, extraEnv = {}, main = MAIN, event = { pull_request: { number: 10, head: { sha: HEAD } } }) {
+function runMain(apiUrl, extraEnv = {}, main = MAIN, event = { pull_request: { number: 10, head: { sha: HEAD } } }, onSpawn = () => {}) {
   const dir = mkdtempSync(join(tmpdir(), "gate-main-"));
   const eventPath = join(dir, "event.json");
   writeFileSync(eventPath, JSON.stringify(event));
@@ -93,12 +97,13 @@ function runMain(apiUrl, extraEnv = {}, main = MAIN, event = { pull_request: { n
         ...extraEnv,
       },
     });
+    onSpawn(child);
     let out = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (out += d));
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       rmSync(dir, { recursive: true, force: true });
-      resolve({ code, out });
+      resolve({ code, signal, out });
     });
   });
 }
@@ -109,28 +114,34 @@ test("整机:重算不访问历史或已满的 status，每次用新检查，放
   const opts = {};
   const gh = await fakeGitHub(opts);
   const previousIds = new Set();
+  const budget = readFileSync(new URL("../gate/README.md", import.meta.url), "utf8")
+    .match(/即约 `(\d+) \+ (\d+)P` 次 REST 请求/);
   try {
+    assert.ok(budget, "README 要给出 GITHUB_TOKEN 的单轮 REST 公式");
     for (const ready of [false, true]) {
       opts.mergeReady = ready;
       const start = gh.log.length;
       const { code, out } = await runMain(gh.url);
       assert.equal(code, 0, out);
       const round = gh.log.slice(start);
-      assert.equal(round.filter((r) => r.auth === "Bearer read_token" && r.url !== "/graphql").length, 10,
-        "P=H=1 时，GITHUB_TOKEN 单轮 REST 为 2+6P+2H；合并的 App 请求不混入");
+      assert.equal(round.filter((r) => r.auth === "Bearer read_token" && r.url !== "/graphql").length, Number(budget[1]) + Number(budget[2]),
+        "P=1 的实际 REST 请求数必须与 README 公式一致；合并的 App 请求不混入");
       assert.equal(round.filter((r) => r.url === "/graphql").length, 1);
-      for (const writes of [fuseWrites(round), appWrites(round)]) {
-        assert.equal(writes.length, 2, "历史多少条都只创建/改写本轮检查，不扫描或重写历史");
-        const [create, finish] = writes;
-        assert.equal(create.method, "POST");
-        assert.equal(create.body.head_sha, HEAD);
-        assert.equal(create.body.status, "in_progress");
-        assert.ok(!previousIds.has(create.checkId), "新一轮不能复用上一轮的检查");
-        assert.equal(finish.method, "PATCH");
-        assert.equal(finish.url, `/repos/o/r/check-runs/${create.checkId}`);
-        assert.equal(finish.body.conclusion, ready ? "success" : "failure");
-        previousIds.add(create.checkId);
-      }
+      assert.ok(round.filter((r) => r.auth === "Bearer read_token").every((r) =>
+        r.method === "GET" || r.url === "/graphql"), "workflow 凭证只读事实，不写检查");
+      assert.deepEqual(checkWrites(round).filter((r) => r.method === "POST").map((r) => r.body.name),
+        [policy.check_name], "每轮只新建 App 检查");
+      const writes = appWrites(round);
+      assert.equal(writes.length, 2, "历史多少条都只创建/改写本轮检查，不扫描或重写历史");
+      const [create, finish] = writes;
+      assert.equal(create.method, "POST");
+      assert.equal(create.body.head_sha, HEAD);
+      assert.equal(create.body.status, "in_progress");
+      assert.ok(!previousIds.has(create.checkId), "新一轮不能复用上一轮的检查");
+      assert.equal(finish.method, "PATCH");
+      assert.equal(finish.url, `/repos/o/r/check-runs/${create.checkId}`);
+      assert.equal(finish.body.conclusion, ready ? "success" : "failure");
+      previousIds.add(create.checkId);
       assert.equal(round.filter((r) => r.url === "/repos/o/r/pulls/10/merge").length, ready ? 1 : 0);
     }
     assert.equal(gh.log.filter((r) => r.url.includes("/statuses/")).length, 0, "旧 status 即使已满也不访问");
@@ -179,13 +190,12 @@ test("整机:JWT 验得过、只要 checks:write、读用 GITHUB_TOKEN、先占�
   }
 });
 
-test("整机:定时事件没有 PR/head，仍用既有凭证读取开放 PR、拨保险丝、重写检查", async () => {
+test("整机:定时事件没有 PR/head，仍用既有凭证读取开放 PR、重写 App 检查", async () => {
   const gh = await fakeGitHub();
   try {
     const { code, out } = await runMain(gh.url, { GITHUB_EVENT_NAME: "schedule" }, MAIN, { schedule: "scheduled" });
     assert.equal(code, 0, out);
     assert.ok(gh.log.some((r) => r.url === "/repos/o/r/pulls/10" && r.auth === "Bearer read_token"));
-    assert.deepEqual(fuseStates(gh.log), ["in_progress", "failure"]);
     const writes = appWrites(gh.log);
     assert.equal(writes[0].body.head_sha, HEAD);
     assert.equal(writes[0].body.status, "in_progress");
@@ -224,89 +234,37 @@ test("整机:没有私钥 → 进程失败,App 检查不发、PR 的数据一条
 });
 
 const checkWrites = (log) => log.filter((r) => r.url.startsWith("/repos/o/r/check-runs") && ["POST", "PATCH"].includes(r.method));
-function namedWrites(log, name) {
-  const writes = checkWrites(log);
-  const starts = writes.filter((r) => r.method === "POST" && r.body.name === name);
-  const ids = new Set(starts.map((r) => r.checkId).filter(Number.isSafeInteger));
-  return writes.filter((r) => starts.includes(r) || (r.method === "PATCH" && ids.has(Number(r.url.split("/").at(-1)))));
-}
-const fuseWrites = (log) => namedWrites(log, FUSE_CHECK_NAME);
-const appWrites = (log) => {
-  const fuse = fuseWrites(log);
-  return checkWrites(log).filter((r) => !fuse.includes(r));
-};
-const fuseStates = (log) => fuseWrites(log).map((r) => r.body.conclusion ?? r.body.status);
+// 不按令牌过滤，误用 workflow 凭证的检查也必须被身份断言看到。
+const appWrites = checkWrites;
 
-test("量具:检查角色不能按令牌筛选，否则身份断言会空转", () => {
-  const create = (name, id, auth) => ({ method: "POST", url: "/repos/o/r/check-runs", body: { name }, checkId: id, auth });
-  const patch = (id, auth) => ({ method: "PATCH", url: `/repos/o/r/check-runs/${id}`, body: {}, auth });
-  const app = [create(policy.check_name, 1, "Bearer read_token"), patch(1, "Bearer read_token"),
-    create("unexpected-app-name", 3, "Bearer read_token"), patch(3, "Bearer read_token")];
-  const fuse = [create(FUSE_CHECK_NAME, 2, "Bearer app-check-token"), patch(2, "Bearer app-check-token")];
-  const log = [...app, ...fuse];
-  assert.deepEqual(appWrites(log), app, "App 检查即使用了错误的 Actions 令牌也必须被身份断言看到");
-  assert.deepEqual(fuseWrites(log), fuse, "保险丝误用了 App 令牌也不能被过滤掉");
-});
-
-test("整机:保险丝只用 GITHUB_TOKEN 发,先 in_progress、App 写回之后跟结论走", async () => {
-  const gh = await fakeGitHub();
-  try {
-    const { code, out } = await runMain(gh.url, { GITHUB_SERVER_URL: "https://github.com", GITHUB_RUN_ID: "123" });
-    assert.equal(code, 0, out);
-    const fw = fuseWrites(gh.log);
-    assert.deepEqual(fuseStates(gh.log), ["in_progress", "failure"]);
-    assert.equal(fw[0].method, "POST");
-    assert.equal(fw[0].body.head_sha, HEAD);
-    assert.equal(fw[0].body.name, FUSE_CHECK_NAME);
-    assert.equal(fw[1].method, "PATCH");
-    assert.equal(fw[1].url, `/repos/o/r/check-runs/${fw[0].checkId}`);
-    assert.ok(fw.every((r) => r.auth === "Bearer read_token"), "保险丝不靠 App 令牌");
-    assert.ok(fw.every((r) => r.body.output.title && r.body.output.summary));
-    assert.equal(fw[0].body.details_url, "https://github.com/o/r/actions/runs/123");
-    assert.ok(gh.log.indexOf(fw[0]) < gh.log.findIndex((r) => r.url === "/repos/o/r/installation"), "先拨保险丝,再去换 App 令牌");
-    assert.ok(gh.log.indexOf(fw[1]) > gh.log.indexOf(appWrites(gh.log).at(-1)), "App 写回之后才跟结论");
-  } finally {
-    gh.server.close();
+test("整机:App 写回失败不合并；服务端已写但响应丢失时也不合并", async () => {
+  for (const opts of [{ appFinishFails: true }, { appFinishResponseLost: true }]) {
+    const gh = await fakeGitHub({ mergeReady: true, ...opts });
+    try {
+      const { code, out } = await runMain(gh.url);
+      assert.notEqual(code, 0, out);
+      const latest = [...gh.checks.values()].at(-1);
+      if (opts.appFinishFails) assert.equal(latest.status, "in_progress");
+      else assert.equal(latest.conclusion, "success");
+      assert.equal(gh.log.filter((r) => r.url.endsWith("/merge")).length, 0);
+    } finally {
+      gh.server.close();
+    }
   }
 });
 
-test("整机:没有私钥 → App 检查一条都发不出,但保险丝用 GITHUB_TOKEN 拨到 failure,旧 success 挡不住", async () => {
-  const gh = await fakeGitHub();
-  try {
-    const { code } = await runMain(gh.url, { AIWORK_GATE_PRIVATE_KEY: "" });
-    assert.notEqual(code, 0);
-    assert.deepEqual(fuseStates(gh.log), ["in_progress", "failure"]);
-    assert.ok(fuseWrites(gh.log).every((r) => r.auth === "Bearer read_token"));
-  } finally {
-    gh.server.close();
-  }
-});
-
-test("整机:App 结论写不回时独立保险丝改为 failure，不能合并", async () => {
-  const gh = await fakeGitHub({ mergeReady: true, appFinishFails: true });
-  try {
-    const { code, out } = await runMain(gh.url);
-    assert.notEqual(code, 0, out);
-    assert.deepEqual(fuseStates(gh.log), ["in_progress", "failure"]);
-    assert.equal([...gh.checks.values()].find((c) => c.name === FUSE_CHECK_NAME).conclusion, "failure");
-    assert.equal(gh.log.filter((r) => r.url.endsWith("/merge")).length, 0);
-  } finally {
-    gh.server.close();
-  }
-});
-
-// aiwork-review[bot] 评审(PR #10 review 5354768826,@ ae8c58f)第 4 个阻断点:main 上的策略文件不是合法 JSON 时,
-// 进程在进 gate() 之前就崩了,保险丝没被拨到 failure。
-test("整机:策略文件不是合法 JSON → 不发 App 检查、不读 PR 的数据,但保险丝照样拨到 failure", async () => {
-  const gh = await fakeGitHub();
+test("整机:策略文件不是合法 JSON → 不发 App 检查、不读 PR 的数据、不合并", async () => {
+  const gh = await fakeGitHub({ mergeReady: true, previousSuccess: true });
   const root = mkdtempSync(join(tmpdir(), "gate-policy-"));
   const policyPath = join(root, "policy.json");
   try {
     writeFileSync(policyPath, '{ "check_name": "aiwork-gate-shadow", ');
     const { code, out } = await runMain(gh.url, { AIWORK_POLICY_PATH: policyPath });
     assert.notEqual(code, 0);
+    assert.equal(gh.checks.size, 1);
+    assert.equal([...gh.checks.values()][0].conclusion, "success");
+    assert.ok(!gh.log.some((r) => r.url.endsWith("/merge")));
     assert.match(out, /policy\.json/);
-    assert.deepEqual(fuseStates(gh.log), ["failure"]);
     assert.equal(appWrites(gh.log).length + gh.log.filter((r) => r.url.startsWith("/repos/o/r/pulls/")).length, 0);
   } finally {
     gh.server.close();
@@ -332,7 +290,6 @@ test("整机:没传 AIWORK_POLICY_PATH → 不读 main.mjs 相对路径上的 po
     assert.match(out, /AIWORK_POLICY_PATH/);
     const checks = appWrites(gh.log);
     assert.equal(checks.length, 0, out);
-    assert.deepEqual(fuseStates(gh.log), ["failure"]);
   } finally {
     gh.server.close();
     rmSync(root, { recursive: true, force: true });
@@ -340,14 +297,14 @@ test("整机:没传 AIWORK_POLICY_PATH → 不读 main.mjs 相对路径上的 po
 });
 
 // aiwork-review[bot] 评审(PR #10 review 5362031164,@ a190849)第 3 个阻断点:一个请求卡住,整次运行被拖到超时。
-test("整机:发占位的请求卡住 → 按单个请求的超时放弃,保险丝已先建 in_progress、再改为 failure,进程报错结束", async () => {
+test("整机:发占位的请求卡住 → 按单个请求的超时放弃,不读 PR 的数据、不合并,进程报错结束", async () => {
   const gh = await fakeGitHub({ hang: true });
   try {
     const started = Date.now();
     const { code } = await runMain(gh.url, { AIWORK_GATE_TIMEOUT_MS: "300" });
     assert.notEqual(code, 0);
     assert.ok(Date.now() - started < 10_000, "没被卡住的请求拖住");
-    assert.deepEqual(fuseStates(gh.log), ["in_progress", "failure"]);
+    assert.ok(!gh.log.some((r) => r.url.startsWith("/repos/o/r/pulls/")), "未占位就不读数据或合并");
   } finally {
     gh.server.closeAllConnections();
     gh.server.close();
@@ -370,8 +327,47 @@ test("整机:业主贴了合并标签、判为放行 → 结论写完之后,用�
     const tok = gh.log.find((r) => r.url === "/app/installations/777/access_tokens" && !r.body.permissions.checks);
     assert.deepEqual(tok.body, { repositories: ["r"], permissions: { contents: "write", pull_requests: "write", workflows: "write" } });
     assert.ok(checkWrites(gh.log).every((r) => r.auth !== "Bearer app-merge-token"), "发检查不用合并令牌");
-    const fuseOk = gh.log.indexOf(fuseWrites(gh.log).find((r) => r.body.conclusion === "success"));
-    assert.ok(fuseOk >= 0 && fuseOk < gh.log.indexOf(merge[0]), "先写放行的结论,再合并");
+    const written = gh.log.indexOf(last);
+    assert.ok(written >= 0 && written < gh.log.indexOf(merge[0]), "先写放行的结论,再合并");
+  } finally {
+    gh.server.close();
+  }
+});
+
+test("整机:旧 success 在重算开始时被新占位压住，取消不会发合并请求", async () => {
+  // 已写的 success 不会因取消而撤销，但合并不会复用上轮结论。
+  for (const [pauseAt, expected, pausePermission] of [
+    ["/repos/o/r/installation", "success"],
+    ["/repos/o/r/pulls/10", "in_progress"],
+    ["/repos/o/r/check-runs/4242", "in_progress"],
+    ["/app/installations/777/access_tokens", "success", "contents"],
+  ]) {
+    const opts = { mergeReady: true, previousSuccess: true, pauseAt, pausePermission };
+    const gh = await fakeGitHub(opts);
+    try {
+      const { signal, out } = await runMain(gh.url, {}, MAIN, {}, (child) => {
+        opts.onPause = () => child.kill("SIGTERM");
+      });
+      assert.equal(signal, "SIGTERM", out);
+      const latest = [...gh.checks.values()].at(-1);
+      assert.equal(latest.status === "completed" ? latest.conclusion : latest.status, expected);
+      assert.ok(!gh.log.some((r) => r.url.endsWith("/merge")), "未完成本轮写回就不能合并");
+      assert.ok(!gh.log.some((r) => r.auth === "Bearer read_token" && r.method !== "GET" && r.url !== "/graphql"));
+    } finally {
+      gh.server.closeAllConnections();
+      gh.server.close();
+    }
+  }
+});
+
+test("整机:App 发不出占位时旧 success 可能保留，但本轮不读事实、不合并", async () => {
+  const gh = await fakeGitHub({ mergeReady: true, previousSuccess: true, appStartFails: true });
+  try {
+    const { code, out } = await runMain(gh.url);
+    assert.notEqual(code, 0, out);
+    assert.equal(gh.checks.size, 1);
+    assert.equal([...gh.checks.values()][0].conclusion, "success");
+    assert.ok(!gh.log.some((r) => r.url.startsWith("/repos/o/r/pulls/")), "占位失败的 head 不读事实或合并");
   } finally {
     gh.server.close();
   }

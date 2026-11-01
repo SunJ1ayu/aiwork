@@ -1,5 +1,5 @@
-// aiwork 放行关卡的流程(gate/run.mjs):任何一步出错都不许留下旧的"放行"。
-// 每次运行把所有开着的 PR 全重算一遍(事件只是门铃);同一时间只有一次运行(workflow 并发组,见 test_aiwork_gate_workflow.py)。
+// aiwork 放行关卡的流程(gate/run.mjs):只有本轮 App 放行结论写回后才允许合并。
+// 每次运行把所有开着的 PR 全重算一遍(事件只是门铃);同一时间只有一次运行(workflow 并发组,见 test_aiwork_gate_workflow.mjs)。
 // 跑法:node --test tests/test_aiwork_gate_run.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -18,10 +18,8 @@ function recorder() {
     async start(sha) { calls.push(["start", sha]); return ++n; },
     async finish(sha, result, id) { calls.push(["finish", sha, result.status, result.conclusion, result.title, id]); },
   };
-  const fuse = { async set(sha, state, description) { calls.push(["fuse", sha, state, description]); } };
-  return { calls, poster, fuse };
+  return { calls, poster };
 }
-const fuses = (calls, sha) => calls.filter((c) => c[0] === "fuse" && (!sha || c[1] === sha)).map((c) => c[2]);
 const finishes = (calls) => calls.filter((c) => c[0] === "finish").map((c) => c.slice(1, 5));
 const isPrData = (c) => c[0] === "graphql" || ((c[0] === "get" || c[0] === "getPage") && !c[1].startsWith("/repos/o/r/pulls?"));
 
@@ -90,9 +88,9 @@ function prsApi(calls, prs, { fail = () => false, lists = null } = {}) {
 }
 const one = (over = {}) => ({ 10: { head: HEAD, files: ["web/a.ts"], verdict: null, ...over } });
 const prtEvent = { pull_request: { number: 10, head: { sha: HEAD } } };
-const run = (r, api, over = {}) => gate({ repo: "o/r", event: prtEvent, policy, api, poster: r.poster, fuse: r.fuse, ...over });
+const run = (r, api, over = {}) => gate({ repo: "o/r", event: prtEvent, policy, api, poster: r.poster, ...over });
 
-test("R4 策略缺 App ID(或其他必填项)→ 不读 PR 的数据、不发 App 检查,每个开着的 PR 的 head 保险丝 failure", async () => {
+test("R4 策略缺 App ID(或其他必填项)→ 不读 PR 的数据、不发 App 检查,本次运行失败且不合并", async () => {
   assert.throws(() => validatePolicy({ ...policy, gate_app_id: null }), /gate_app_id/);
   assert.throws(() => validatePolicy({ ...policy, check_name: "" }), /check_name/);
   assert.throws(() => validatePolicy({ ...policy, builders: [] }), /builders/);
@@ -106,56 +104,43 @@ test("R4 策略缺 App ID(或其他必填项)→ 不读 PR 的数据、不发 Ap
   }
   const r = recorder();
   const api = prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"] }, 11: { head: OTHER, files: ["web/b.ts"] } });
-  await assert.rejects(run(r, api, { policy: { ...policy, gate_app_id: null } }), /gate_app_id/);
+  await assert.rejects(run(r, api, { policy: { ...policy, gate_app_id: null }, merger: mergeRecorder(r) }), /gate_app_id/);
+  assert.deepEqual(merges(r.calls), []);
   assert.ok(!r.calls.some(isPrData), "只列了 PR,没读任何 PR 的数据");
   assert.ok(!r.calls.some((c) => c[0] === "start" || c[0] === "finish"), "不发 App 检查");
-  assert.deepEqual(fuses(r.calls, HEAD), ["failure"]);
-  assert.deepEqual(fuses(r.calls, OTHER), ["failure"]);
 });
 
-test("R5 先在每个 head 上占位(保险丝 pending → App in_progress),再读任何 PR 的数据", async () => {
+test("R5 先在每个 head 上发 App in_progress 占位,再读任何 PR 的数据", async () => {
   const r = recorder();
   await run(r, prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"] }, 11: { head: OTHER, files: ["web/b.ts"] } }));
   const firstData = r.calls.findIndex(isPrData);
   for (const sha of [HEAD, OTHER]) {
-    const pending = r.calls.findIndex((c) => c[0] === "fuse" && c[1] === sha && c[2] === "pending");
     const start = r.calls.findIndex((c) => c[0] === "start" && c[1] === sha);
-    assert.ok(pending >= 0 && pending < start && start < firstData, `${sha.slice(0, 1)}:保险丝 pending、App 占位都在读 PR 数据之前`);
+    assert.ok(start >= 0 && start < firstData, `${sha.slice(0, 1)}:App 占位在读任何 PR 数据之前`);
   }
   assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[HEAD, "success"], [OTHER, "success"]]);
 });
 
-// 评审 5362031164 第 1 条:列不出 PR 时只拨了运行的提交(评审敲门的运行可能指向 main),被评审 PR 的 head 没挡住。
-test("R5b 连开着的 PR 都列不出来 → 事件里带的提交(PR 的 head、运行的提交)全拨 failure,不发检查,运行报错", async () => {
+test("R5b 连开着的 PR 都列不出来 → 不读 PR 数据、不发检查、不合并,运行报错", async () => {
   const r = recorder();
   const api = prsApi(r.calls, one(), { fail: (p) => p.startsWith("/repos/o/r/pulls?") });
   const event = { workflow_run: { event: "pull_request_review", head_sha: MAIN, pull_requests: [{ number: 10, head: { sha: HEAD } }] } };
-  await assert.rejects(run(r, api, { event }), /502/);
-  assert.deepEqual(r.calls.filter((c) => c[0] === "fuse").map((c) => c.slice(1, 3)), [[MAIN, "failure"], [HEAD, "failure"]]);
+  await assert.rejects(run(r, api, { event, merger: mergeRecorder(r) }), /502/);
+  assert.deepEqual(merges(r.calls), []);
+  assert.ok(!r.calls.some(isPrData));
   assert.ok(!r.calls.some((c) => c[0] === "start"));
 });
 
 // 评审 5362031164 第 2 条:列表不是一次拍下的,翻页期间有 PR 关掉,后面的往前挪,一个仍开着的 PR 被漏掉。
-test("R26 开着的 PR 连读两遍一致才算数:第一遍漏了的,第二、三遍读到了就照算;一直对不上 → 事件里的提交 failure", async () => {
+test("R26 开着的 PR 连读两遍一致才算数:第一遍漏了的,第二、三遍读到了就照算;一直对不上 → 报错且不发检查", async () => {
   const r = recorder();
   const prs = { 10: { head: HEAD, files: ["web/a.ts"] }, 11: { head: OTHER, files: ["web/b.ts"], verdict: "BLOCK" } };
   await run(r, prsApi(r.calls, prs, { lists: [[10], [10, 11], [10, 11]] }));
   assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[HEAD, "success"], [OTHER, "failure"]], "第一遍漏掉的 #11 也重算了");
   const r2 = recorder();
-  await assert.rejects(run(r2, prsApi(r2.calls, prs, { lists: [[10], [10, 11], [10], [10, 11], [10]] })), /对不上/);
-  assert.deepEqual(r2.calls.filter((c) => c[0] === "fuse").map((c) => c.slice(1, 3)), [[HEAD, "failure"]]);
-});
-
-// 评审 5362031164 第 3 条:逐个 head"拨 pending → 发占位",第一个 head 的占位卡住时后面的 head 连 pending 都没有,
-// 这时超时或取消,后面的提交留着上一次的 success。现在先把所有 head 的保险丝拨到 pending(快、不靠 App),再发占位;
-// 单个请求另有超时(main.mjs),卡住的请求拖不垮整次运行。
-test("R27 先把所有 head 的保险丝拨到 pending,再发任何 App 占位", async () => {
-  const r = recorder();
-  await run(r, prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"] }, 11: { head: OTHER, files: ["web/b.ts"] } }));
-  const lastPending = r.calls.findLastIndex((c) => c[0] === "fuse" && c[2] === "pending");
-  const firstStart = r.calls.findIndex((c) => c[0] === "start");
-  assert.ok(lastPending < firstStart, "所有 pending 都在第一个 App 占位之前");
-  assert.deepEqual(fuses(r.calls, OTHER)[0], "pending");
+  await assert.rejects(run(r2, prsApi(r2.calls, prs, { lists: [[10], [10, 11], [10], [10, 11], [10]] }), { merger: mergeRecorder(r2) }), /对不上/);
+  assert.ok(!r2.calls.some((c) => c[0] === "start" || c[0] === "finish"));
+  assert.deepEqual(merges(r2.calls), []);
 });
 
 test("R5c 读某个 PR 的数据出错 → 它的 head 判 G8 failure,别的 head 照常", async () => {
@@ -166,14 +151,12 @@ test("R5c 读某个 PR 的数据出错 → 它的 head 判 G8 failure,别的 hea
   assert.deepEqual(onHead.slice(0, 3), [HEAD, "completed", "failure"]);
   assert.match(onHead[3], /G8/);
   assert.deepEqual(onOther.slice(0, 3), [OTHER, "completed", "success"]);
-  assert.equal(fuses(r.calls, HEAD).at(-1), "failure");
 });
 
-test("R5d App 发不出占位(私钥坏了)→ 该提交保险丝 failure、不读它的数据;其余提交照算,运行最后报错", async () => {
+test("R5d App 发不出占位(私钥坏了)→ 不读该提交的数据、不合并;其余提交照算,运行最后报错", async () => {
   const r = recorder();
   const poster = { ...r.poster, async start(sha) { r.calls.push(["start", sha]); if (sha === HEAD) throw new Error("缺 aiwork-gate App 的私钥"); return 7; } };
   await assert.rejects(run(r, prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"] }, 11: { head: OTHER, files: ["web/b.ts"] } }), { poster }), /私钥/);
-  assert.deepEqual(fuses(r.calls, HEAD), ["pending", "failure"]);
   assert.ok(!r.calls.some((c) => c[0] === "get" && c[1].endsWith("/pulls/10")), "不读它的数据");
   assert.deepEqual(finishes(r.calls).map((f) => f[0]), [OTHER]);
 });
@@ -188,29 +171,14 @@ test("R5e 列出之后 PR 又推进 / 关了 → 这个提交判 failure(已不�
   }
 });
 
-test("R14b 正常重算:保险丝先 pending,App 写回结论之后才跟着结论走", async () => {
-  const r = recorder();
-  await run(r, prsApi(r.calls, one()));
-  assert.deepEqual(fuses(r.calls, HEAD), ["pending", "failure"], "没有评审 ⇒ App 判 failure,保险丝同样 failure");
-  assert.ok(r.calls.findIndex((c) => c[0] === "finish") < r.calls.findLastIndex((c) => c[0] === "fuse"), "App 写回之后才拨保险丝");
-});
-
-test("R14c App 写不回结论(PATCH 失败)→ 保险丝 failure,运行失败", async () => {
+test("R14c App 写不回结论(PATCH 失败)→ 运行失败", async () => {
   const r = recorder();
   const poster = { async start() { return 1; }, async finish() { throw new Error("HTTP 401 Bad credentials"); } };
   await assert.rejects(run(r, prsApi(r.calls, one({ verdict: "PASS" })), { poster }), /401/);
-  assert.equal(fuses(r.calls, HEAD).at(-1), "failure");
-});
-
-test("R14f 保险丝本身拨不动(GITHUB_TOKEN 出错)→ App 照常写回结论,运行最后报错", async () => {
-  const r = recorder();
-  const fuse = { async set() { throw new Error("HTTP 403 checks"); } };
-  await assert.rejects(run(r, prsApi(r.calls, one()), { fuse }), /checks/);
-  assert.deepEqual(finishes(r.calls).map((f) => f.slice(0, 3)), [[HEAD, "completed", "failure"]], "App 的新结论照样写回");
 });
 
 // ── aiwork-review[bot] 补充评审(PR #10 review 5360728878,@ 0ce3f73)─────────────────────────────
-// 同一提交可能同时是几个开着的 PR 的 head(目标分支不同 ⇒ 改动、要求都不同),而检查和保险丝都挂在提交上。
+// 同一提交可能同时是几个开着的 PR 的 head(目标分支不同 ⇒ 改动、要求都不同),而检查挂在提交上。
 const sameHead = (files10, files11) => ({ 10: { head: HEAD, files: files10 }, 11: { head: HEAD, files: files11 } });
 
 test("R20 同一提交上另一个开着的 PR 不放行 → 这个提交上的结论就是不放行,标题点名拦住它的 PR", async () => {
@@ -219,7 +187,6 @@ test("R20 同一提交上另一个开着的 PR 不放行 → 这个提交上的�
   const [f] = finishes(r.calls);
   assert.equal(f[2], "failure");
   assert.match(f[3], /#11/);
-  assert.equal(fuses(r.calls, HEAD).at(-1), "failure");
   assert.equal(r.calls.filter((c) => c[0] === "start").length, 1, "一个提交只占一次位、写一次");
 });
 
@@ -282,7 +249,7 @@ test("M1 业主贴了 aiwork:merge、PR 放行 → 结论写完之后,带着判�
   await run(r, api, { merger: mergeRecorder(r) });
   assert.deepEqual(merges(r.calls), [[10, HEAD]]);
   const merged = r.calls.findIndex((c) => c[0] === "merge");
-  const wrote = r.calls.findIndex((c) => c[0] === "fuse" && c[1] === HEAD && c[2] === "success");
+  const wrote = r.calls.findIndex((c) => c[0] === "finish" && c[1] === HEAD && c[2] === "completed" && c[3] === "success");
   assert.ok(wrote >= 0 && wrote < merged, "先把放行的结论写到提交上,再合并");
 });
 
@@ -354,11 +321,18 @@ test("M7 策略:merge_label 必须是非空字符串,merge_requesters 必须是�
   assert.ok(!policy.merge_requesters.includes(policy.owner), "业主一直算,不在名单里再写一遍");
 });
 
-test("M8 放行的结论没写全(保险丝拨不动)→ 不合并;运行照常报错", async () => {
+test("M8 App 放行结论写回失败 → 不合并;其余 head 照算,运行最后报错", async () => {
   const r = recorder();
-  const fuse = { async set(sha, state) { r.calls.push(["fuse", sha, state]); if (state === "success") throw new Error("HTTP 502 checks"); } };
-  const api = prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events: [labeled(policy.owner)] } });
-  await assert.rejects(run(r, api, { fuse, merger: mergeRecorder(r) }), /502/);
+  const poster = { ...r.poster, async finish(sha, result, id) {
+    if (sha === HEAD) throw new Error("HTTP 502 checks");
+    await r.poster.finish(sha, result, id);
+  } };
+  const api = prsApi(r.calls, {
+    10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events: [labeled(policy.owner)] },
+    11: { head: OTHER, files: ["web/b.ts"] },
+  });
+  await assert.rejects(run(r, api, { poster, merger: mergeRecorder(r) }), /502/);
+  assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[OTHER, "success"]]);
   assert.deepEqual(merges(r.calls), []);
 });
 
