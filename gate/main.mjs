@@ -1,18 +1,17 @@
 // aiwork 放行关卡入口:由调用方仓库的 aiwork-gate workflow 调用。代码在 SunJ1ayu/aiwork 的 gate/，永远是那边 main 上的这一份。
 // 这里只管"接线":真实的 GitHub API、aiwork-gate App 的令牌、发 / 改检查。流程和失败处理在 run.mjs。
-// 读数据、拨保险丝用 GITHUB_TOKEN(权限见 templates/aiwork-gate.yml 的 permissions);发检查结果用 aiwork-gate App 的临时令牌 ——
+// 读数据用 GITHUB_TOKEN(权限见 templates/aiwork-gate.yml 的 permissions);发检查结果用 aiwork-gate App 的临时令牌 ——
 // 分支规则只认这个 App 发的结果,PR 自己加的 workflow 用 GITHUB_TOKEN 发一个同名检查也冒充不了。
-// 保险丝故意不靠 App 私钥:私钥坏了 App 就改不了自己发过的旧 success,只能靠它挡(见 run.mjs 文件头)。
 // 合并(run.mjs 第 4 步)另换一张 App 令牌,只在真要合并时才换:发检查的那张始终只有 checks: write。
 import { createSign } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
-import { FUSE_CHECK_NAME, gate } from "./run.mjs";
+import { gate } from "./run.mjs";
 
 const env = process.env;
 const API = env.GITHUB_API_URL || "https://api.github.com";
 const repo = env.GITHUB_REPOSITORY;
 // 策略在调用方项目的检出里。路径只认 workflow 传入的 AIWORK_POLICY_PATH，不按本文件的位置去找。
-// 读不出 / 不是合法 JSON 也不在这里崩:交给 gate() 按"策略不合法"处理,它会先把保险丝拨到 failure
+// 读不出 / 不是合法 JSON 交给 gate() 的策略校验拒绝,不会判定或合并 PR
 let policy = null;
 try {
   const policyPath = env.AIWORK_POLICY_PATH;
@@ -58,29 +57,6 @@ const api = {
     const { data } = await request("POST", env.GITHUB_GRAPHQL_URL || `${API}/graphql`, actionsToken, { query, variables });
     if (data?.errors?.length) throw new Error(`GraphQL:${data.errors.map((e) => e.message).join(";").slice(0, 300)}`);
     return data?.data;
-  },
-};
-
-const runUrl = env.GITHUB_SERVER_URL && env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${repo}/actions/runs/${env.GITHUB_RUN_ID}` : null;
-const fuseIds = new Map();
-const fuse = {
-  async set(sha, state, description) {
-    // 每次运行创建新占位，再改写同一条；commit status 的追加上限不能支撑定时重算。
-    const body = {
-      status: state === "pending" ? "in_progress" : "completed",
-      ...(state === "pending" ? {} : { conclusion: state }),
-      output: output({ title: String(description), summary: String(description) }),
-      ...(runUrl ? { details_url: runUrl } : {}),
-    };
-    if (fuseIds.has(sha)) {
-      await request("PATCH", `/repos/${repo}/check-runs/${fuseIds.get(sha)}`, actionsToken, body);
-    } else {
-      const { data } = await request("POST", `/repos/${repo}/check-runs`, actionsToken, {
-        ...body, name: FUSE_CHECK_NAME, head_sha: sha,
-      });
-      if (!Number.isSafeInteger(data?.id) || data.id <= 0) throw new Error("保险丝检查没有有效 id");
-      fuseIds.set(sha, data.id);
-    }
   },
 };
 
@@ -134,14 +110,11 @@ const merger = {
   },
 };
 
-const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
 await gate({
   repo,
-  event,
   policy,
   api,
   poster,
-  fuse,
   merger,
   log: (line) => {
     console.log(line);
