@@ -17,7 +17,7 @@
 1. 从最新 main 拉分支。开工先在本机数据目录建自己的工作树，在里面拉分支干活，不在共享检出（如 /root/aiwork）里直接改。路径用 `aiwork-config data-path worktrees` 取。PR 合并后删掉这个工作树。
 2. 改代码时，先写先红的测试，再实现（怎么算见 REVIEW-RULES 第一节第 3 条第 1 步）。
 3. 全跑项目 `tests/`，核对结果及已明确允许的例外。
-4. 用机器人提交和推送，以机器人身份开 PR，然后停下。
+4. 提交后按下文「机器人推送与开 PR」操作，然后停下。
 5. PR 开好、CI 绿了以后，用 `review-pr` 派评审腿。
    `review-pr` 必须在沙箱外运行；使用目标仓库当前 PR head 和 main 的规则来源。
    `review-pr` 从共享检出跑，跑之前先把共享检出更新到最新 main。
@@ -25,6 +25,32 @@
    各腿出结果后，由汇总处理（见 `summary` skill）。
 6. 修改方怎么修，见 REVIEW-RULES 开头的「一轮」。
    合并由项目关卡或业主完成。合并后用 `sync-workflow-docs` 同步部署出去的工作流文档。
+
+## 机器人推送与开 PR
+
+执行方推送和开 PR 只用构建机器人身份，令牌只从仓库的 `bin/gh-app-token` 换，不用个人账号。
+防的是 PR #44 首次推送把令牌放进命令行参数，进程列表能看到；来历见 [#43](https://github.com/SunJ1ayu/aiwork/issues/43)。
+
+先确认自己的工作树继承了该仓库现有的 Git 凭证助手。服务器上 aiwork 的仓库配置先清空助手列表，再登记一个在 Git 请求凭证时调用 `gh-app-token build --repo SunJ1ayu/aiwork` 的助手；令牌经助手的标准输出交给 Git，不经过参数。工具已在 PATH 中，直接 `git push` 就用它。助手缺失、身份或目标仓库不对时，停下报告，不临时拼认证参数或改用个人登录。
+
+下面在自己的工作树里运行，以 aiwork 为例；先把本次 PR 说明写到 `/tmp/aiwork-pr-body.md`，替换标题。其他仓库使用各自的远端、助手和 `--repo` 作用域。
+
+```bash
+(
+  set +x
+  export GIT_TERMINAL_PROMPT=0
+  git push --set-upstream origin HEAD || exit
+  GH_TOKEN="$(gh-app-token build --repo SunJ1ayu/aiwork)" || exit
+  test -n "$GH_TOKEN" || exit 1
+  export GH_TOKEN
+  gh pr create --repo SunJ1ayu/aiwork --base main \
+    --title '本次改动的标题' --body-file /tmp/aiwork-pr-body.md
+)
+```
+
+开 PR 的令牌只在这个子 shell 的环境中交给 `gh`；换取失败或返回空值就退出，不能回退到 `gh` 已登录的个人账号。令牌不放进 URL、认证头选项或助手配置的字符串，也不打印环境、开启认证调试或把令牌写进日志、提交和 PR 说明；示例先关闭 shell 跟踪，避免展开的值进入日志。
+
+验证推送时，用 `git ls-remote origin refs/heads/分支名` 的结果对照本地 `git rev-parse HEAD`；开 PR 后核对远端 PR 的 head 和作者是本次提交、构建机器人。记录分支、提交号、PR 链接和验证结果，不记录令牌。身份与助手的实际行为需要真推送核实，文档扫描不能证明它们。
 
 ## 做事的方法
 

@@ -7,7 +7,7 @@ Multi-model implementation and PR review tooling.
 任务的操作步骤见 [workflow/CLAUDE.md](workflow/CLAUDE.md)；工具用法在 `workflow/skills/`。
 `~/CLAUDE.md` 和 `~/.claude/skills/delegate` 是由 `bin/sync-workflow-docs` 管理的部署副本。
 
-GitHub `main` 是 aiwork 的源码准本。改动使用机器人分支和 PR；本机资料的存放位置见[「本机设置」](#本机设置)。
+GitHub `main` 是 aiwork 的源码准本。改动流程见 [workflow/CLAUDE.md](workflow/CLAUDE.md#一个任务的走法)；本机资料的存放位置见[「本机设置」](#本机设置)。
 
 ## History
 
