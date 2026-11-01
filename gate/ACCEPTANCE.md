@@ -19,6 +19,12 @@ aiwork 的共用关卡（gate/）在只报不拦期间的验收结果。判据�
 | S12 | 符合 | PR #31 挂着业主的 `aiwork:merge`，合并 main 后的新提交 `33eae5b` 上缺评审时「不放行:缺合格评审」，没有合并：[检查](https://github.com/SunJ1ayu/aiwork/runs/114712141613)；补上 PASS 后「放行」，由 aiwork-gate[bot] 合并：[检查](https://github.com/SunJ1ayu/aiwork/runs/114713596225)。业主没有在新提交上重新批准：GitHub 把合并 main 之前的批准挪到了新提交上，见下面「发现」 |
 | S13 | 符合 | 业主给 PR #31、#32 都贴 `aiwork:merge`，关卡合并了 #32；#31 落后于 main，没有合并，标签留着：[运行](https://github.com/SunJ1ayu/aiwork/actions/runs/38218861885) |
 
+## 管理员网页合并验收
+
+| # | 结果 | 看到的结果和链接 |
+|---|---|---|
+| S15 | 待验收 | [#111 的规则补记](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552923695)记录了规则已保存，尚无管理员网页合并被拒的实测链接；不能把配置记录当成此项验收通过。操作与预期见 README 的 S15。 |
+
 ## 发现
 
 - PR #31：业主 07:27:54（UTC）在 `83dcdb2` 上批准；07:41:27 推了合并 main 的 `33eae5b` 之后，GitHub 返回的这条批准的 `commit_id` 变成了 `33eae5b`。关卡按 `commit_id` 认定「当前 head 上的批准」，所以把它算成了新提交上的批准。评审机器人的 PASS 没有被挪。

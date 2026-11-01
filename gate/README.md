@@ -48,9 +48,26 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
   Workflows 才让 App 合)。改了 App 的权限,要在仓库的安装处接受新权限才生效。
   私钥能合并 PR 之后,它和 main 本身一样要紧。
 - 标签 `aiwork:merge`(`policy.json` 的 `merge_label`)。
-- main 的规则集保留「合并前分支必须和 main 同步」(Require branches to be up to date,现在已开;不能关,见「合并」)。
+- main 的分支规则见下方「已接入仓库迁移」。
 - environment `aiwork-gate`:部署分支只许 `main`,**不设审批人**;私钥放在它的 secret `AIWORK_GATE_PRIVATE_KEY`。
   设了审批人,关卡每次都要等人点,等的时候检查停在旧值。
+
+## 已接入仓库迁移
+
+按旧说明接入、仍要求保险丝或允许管理员绕过的仓库，必须先改规则，再让不写保险丝的新关卡代码生效：
+
+1. 业主在 main 的必需检查中摘掉 `aiwork-gate/fuse-check`，只留 `aiwork-gate`（来源限定 `aiwork-gate` App）。
+   保留「合并前分支必须和 main 同步」（Require branches to be up to date），原因见下方「合并」。
+2. 业主创建或收紧独立的 `main-gate-merge-only` 规则集：目标 main，只勾 Restrict updates；绕过名单只留
+   `aiwork-gate` App（For pull requests only），移出 Repository admin 和其他绕过者。
+   这条规则必须独立于必需检查：绕过名单绕过的是整个规则集，放在一起会让 App 连必需检查也绕过。
+3. 确认两项规则均已保存，再让新的关卡代码进入 aiwork main。
+   调用仓库每次运行都从 aiwork main 取代码，不能等代码生效后再补前两步。
+4. 代码生效后，各调用仓库按「新项目接入」同步两份 workflow；同步前的一致性 CI 会红。按 S15 验收管理员网页合并被拒。
+
+依据见 [业主决定](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552793090)。aiwork 和 OpenDesign
+已完成前两步，见[规则补记](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552923695)；管理员网页被拒的实测记录见 `ACCEPTANCE.md` 的 S15。
+新接入仓库转真拦截时也按第 1–2 步配置规则；已有规则就更新，不另建一套。
 
 ## 事件只是门铃;同一时间只有一次运行
 
@@ -103,17 +120,23 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 | CI(以最后开始的那次执行为准) | `workflow_run`(ci):`requested` / `in_progress` / `completed`(重跑不一定发 `requested`,开始跑时会发 `in_progress`) |
 | 评审(读当前正文;机器人评审发出后被改写过一律按 BLOCK、时刻按改写那一刻;人的评审被撤销按撤销那一刻) | `aiwork-review-ping`:`submitted` / `edited` / `dismissed` → `workflow_run` |
 | 策略 `.aiwork/policy.json`(只认 main 上的) | 改 main 之后 CI 跑完的 `workflow_run` |
-| 关卡代码（aiwork main 的 `gate/`） | `schedule`：计划间隔 15 分钟，具体 cron 见模板；每次重新检出 aiwork main 并重算全部开放 PR。GitHub 延迟、丢弃或停用时不能保证这一时限，见下方限制 |
+| 关卡代码（aiwork main 的 `gate/`） | `schedule`：计划间隔 15 分钟，具体 cron 见模板；[2026-10-30 实测](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6526765438)约每 4–7 小时一次。GitHub 可能延迟、丢弃或停用定时任务，不能保证准时；用途与限制见下方「定时重算」 |
 | 合并请求(PR 上有没有 `aiwork:merge`、最后是谁贴的) | `pull_request_target`:`labeled`(撤掉标签不用叫醒:只会少合并,下一次运行自然读到) |
 | 手动重算 | 给 PR 加任何标签(如 `aiwork:recheck`) |
 
-定时门铃的计划等待上限就是表中的间隔，不是检查写回的硬性完成上限。成功运行还要经过并发队列、
-runner 分配、检出和重算；job 的执行超时见模板。GitHub 高负载时可能延迟甚至丢弃定时任务，
-不能保证按实际经过时间在某个固定上限内完成。定时任务只使用默认分支上的 workflow；公开仓库
+### 定时重算：门铃漏响时的补救
+
+按[业主决定](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6554312340)，保留定时重算，不追求准时，也不另加跨仓库叫醒机制。
+它在其他门铃漏响时自动补算：重新检出最新的 aiwork main，按现状重算全部开放 PR、补写结论，
+并为已有有效合并请求、且本次判为放行的 PR 补上合并。正常合并路径见下方「合并」；在该路径的分支规则前提下，
+PR 上挂着的旧结论只影响显示。旧放行残留的场景及已接受风险见 `.aiwork/accepted-risks.md` 第 7 条。
+
+计划与实测频率见上表。计划间隔不是实际等待或写回的时限；成功运行还要经过并发队列、runner 分配、检出和重算，
+job 的执行超时见模板。定时任务只使用默认分支上的 workflow；公开仓库
 **60 天**没有活动会自动停用定时任务，恢复活动后也要确认 workflow 已重新启用。相关平台行为见
 [GitHub 的 schedule 说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
-Actions 被关、environment 等审批、检出/API 失败也仍可能让旧结论留在网页上；这些情况下本轮不会合并受影响的 head，
-恢复运行后用已有的手动门铃重算。运行成功但下一次重算尚未发生的窗口仍然存在；定时器不能消除最终一致的限制。
+Actions 被关、environment 等审批、检出/API 失败时，定时任务也无法完成补算；恢复运行后可用上表的手动门铃重算。
+定时器不能消除下方「已知限制」所述的最终一致窗口。
 
 ## 已知限制:状态检查只能"最终一致"
 
@@ -137,13 +160,8 @@ Actions 被关、environment 等审批、检出/API 失败也仍可能让旧结�
 - **合并没成**(分支落后于 main、有冲突、评审讨论没解决完、刚推了新提交):原因写在那次运行的摘要里,请求留着。
   处理完之后,推送、评审都会叫醒下一次运行再合;没有门铃的(比如把讨论标为已解决),加个 `aiwork:recheck`。
 - 合并用 App 另换的一张令牌(Contents / Pull requests / Workflows 写权限),只在真要合并时才换;发检查的那张始终只有 Checks。
-- main 只许 `aiwork-gate` App 通过 PR 合并；`main-gate-merge-only` 的绕过名单只留这个 App，管理员也不能直接合并。
-  依据见 [业主决定](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552793090)和[规则补记](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552923695)。
-  App 发不出占位或策略不合法时，旧 success 可能留在网页上，但本轮不合并该 head；App 写回请求失败时，本轮也不合并该 head。
-  服务端未接受写回时，占位留在 in_progress；服务端写成 success 后响应丢失时，网页可能显示 success，仍不能手动合并。
-  运行在占位前被取消时可能留下旧结论；占位后尚未写完的检查停在 in_progress，已经写完的结论保留。
-  取消不撤销已经完成的合并；未合并的 PR 只能由下次运行重新判定后合并。
-  恢复运行后按现状重算，不复用旧放行。
+- main 的规则与迁移顺序见上方「已接入仓库迁移」；本轮写不了新结论时的显示结果与已接受风险见 `.aiwork/accepted-risks.md` 第 7 条。
+  取消不撤销已经完成的合并；未合并的 PR 由下次运行重新判定后合并。
 
 ## 同一提交上有几个 PR
 
@@ -183,18 +201,16 @@ Actions 被关、environment 等审批、检出/API 失败也仍可能让旧结�
 | S11 | 机器账号(Builder)给另一个会放行的测试 PR 贴 `aiwork:merge` | 不合并;运行摘要里写"是 SunJ1ayuBoT 提的,不算数" | Builder 合不了自己的 PR |
 | S12 | 业主给一个还缺评审的测试 PR 贴 `aiwork:merge`,之后补上 PASS | 贴的时候不合;PASS 之后那次运行合并 | 请求留着,放行时才合 |
 | S13 | 两个都会放行、都指向 main 的测试 PR,业主都贴上 `aiwork:merge` | 合进去一个;另一个被 GitHub 拒(分支落后于 main),摘要里写明,请求留着 | 连着合并时,后一个必须先和新的 main 一起测过 |
+| S15 | 用已满足其他合并条件、未贴 `aiwork:merge` 的测试 PR，以仓库管理员身份在网页上尝试合并 | 被 `main-gate-merge-only` 拒绝更新 main，PR 未合并 | 管理员不能借提交上的放行绕过关卡合并 |
+
+S14 是历史上的批准迁移样本，见 `ACCEPTANCE.md`「发现」；保留编号，不复用。
 
 失败注入(API 出错、限流、App 私钥坏了、PR 中途推进、合并接口拒绝)在线上没法安全制造,由 `test_aiwork_gate_run.mjs`(R4–R5e、R14c、R20、R25–R26、M1–M10)与 `test_aiwork_gate_main.mjs`(含请求卡住)覆盖;几次运行不会交错由 workflow 的并发组保证(`test_aiwork_gate_workflow.mjs`)。
 
 ## 从 shadow 转为真拦截
 
-上述验收全部符合预期,且之后至少 5 个真实 PR 上 shadow 的结论都和业主的判断一致、没见过过时的 success,再:
+S0–S13 验收全部符合预期,且之后至少 5 个真实 PR 上 shadow 的结论都和业主的判断一致、没见过过时的 success,再:
 
 1. 发一个 PR 把 `policy.json` 的 `check_name` 改为 `aiwork-gate`(连同钉住它的那条测试;判卷面,要业主批准);
-2. 业主在 main 的规则集里:
-   - 必过检查只留 `aiwork-gate`（来源限定 `aiwork-gate` App）。
-     「合并前分支必须和 main 同步」留着(见「合并」);
-   - **另建**规则集 `main-gate-merge-only`，目标 main，只勾 Restrict updates；绕过名单只留
-     `aiwork-gate` App（选 For pull requests only：只能合 PR，不能直接推），管理员也不放进名单。
-     必须另建：绕过名单绕过的是整个规则集，和必过检查放在一起，App 合并时连必过检查也绕过了;
-3. 确认:故意缺评审的 PR 合并按钮被挡住;机器账号在网页上合并被拒;贴了标签、放行的 PR 由 App 合进去。
+2. 业主按「已接入仓库迁移」第 1–2 步配置 main 规则。
+3. 确认:故意缺评审的 PR 合并按钮被挡住;机器账号在网页上合并被拒;按 S15 验收;贴了标签、放行的 PR 由 App 合进去。
