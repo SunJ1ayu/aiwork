@@ -150,25 +150,52 @@ export function mergeRequester(facts, policy) {
   return by !== null && (by === policy.owner || policy.merge_requesters.includes(by)) ? by : null;
 }
 
+// 围栏和引用的格式源在 summary skill；测试直接读取其中的引用示例对照。
+function summaryBlocks(body) {
+  const blocks = [];
+  let fence = null, offset = 0;
+  for (const raw of body.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (m && m[1][0] === fence.marker && m[1].length >= fence.length && /^[ \t]*$/.test(m[2])) {
+        if (fence.record) {
+          fence.record.valid &&= /^```[ \t]*$/.test(line);
+          fence.record.json = body.slice(fence.start, offset);
+          fence.record.task = body.slice(offset + raw.length + 1).trim();
+        }
+        fence = null;
+      }
+    } else if (m) {
+      const record = /^[ \t]*aiwork-summary[ \t]*$/.test(m[2])
+        ? { valid: /^```aiwork-summary[ \t]*$/.test(line) } : null;
+      if (record) blocks.push(record);
+      fence = { marker: m[1][0], length: m[1].length, start: offset + raw.length + 1, record };
+    }
+    offset += raw.length + 1;
+  }
+  return blocks;
+}
+
 // 只追加派单提示，不参与放行。格式源在 summary skill；测试从该定义生成对照用例。
 function modificationRoundLine(reviews, config) {
   const limit = config.limit ?? DEFAULT_MODIFICATION_ROUND_LIMIT;
   const byHead = new Map();
-  const records = [];
+  const order = (a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id;
   const unclear = (r, why) => `轮数：读不清（汇总 #${r.id}：${why}）`;
   for (const r of reviews) {
     if (r.login?.toLowerCase() !== config.summary_account.toLowerCase()) continue;
     // 只处理记录围栏；旧式汇总和普通评审的改写不污染轮数。
-    const openings = [...r.body.matchAll(/^```aiwork-summary[ \t]*(?:\r?\n|$)/gm)];
-    if (!openings.length) continue;
+    const blocks = summaryBlocks(r.body);
+    if (!blocks.length) continue;
     if (r.edited_at) return unclear(r, "发出后被改写过");
-    if (openings.length !== 1) return unclear(r, "记录块应恰好一个");
-    const remainder = r.body.slice(openings[0].index + openings[0][0].length);
-    const block = /^([\s\S]*?)\r?\n```[ \t]*\r?$/m.exec(remainder);
-    if (!block) return unclear(r, "记录围栏没有结束");
+    if (blocks.length !== 1) return unclear(r, "记录块应恰好一个");
+    const [block] = blocks;
+    if (block.json === undefined) return unclear(r, "记录围栏没有结束");
+    if (!block.valid) return unclear(r, "记录围栏格式不合法");
     let v;
-    try { v = JSON.parse(block[1]); } catch { return unclear(r, "记录不是合法 JSON"); }
-    const task = remainder.slice(block[0].length).trim();
+    try { v = JSON.parse(block.json); } catch { return unclear(r, "记录不是合法 JSON"); }
+    const task = block.task;
     if (!v || typeof v !== "object" || Array.isArray(v) ||
         Object.keys(v).sort().join(",") !== "has_p1,head_sha,next_step" ||
         typeof v.head_sha !== "string" || !SHA_RE.test(v.head_sha) ||
@@ -181,12 +208,13 @@ function modificationRoundLine(reviews, config) {
     const key = JSON.stringify([v.next_step, v.has_p1, task]);
     const previous = byHead.get(v.head_sha);
     if (previous && previous.key !== key) return unclear(r, "同一个 head 的记录互相冲突");
-    byHead.set(v.head_sha, { key, value: v });
-    records.push({ ...v, at: r.submitted_at, id: r.id });
+    const record = { key, value: v, at: r.submitted_at, id: r.id };
+    if (!previous || order(record, previous) < 0) byHead.set(v.head_sha, record);
   }
+  const records = [...byHead.values()];
   if (!records.length) return "轮数：未知（没有新格式的汇总记录）";
-  const count = [...byHead.values()].filter((r) => r.value.next_step === "照单修").length;
-  const latest = records.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id).at(-1);
+  const count = records.filter((r) => r.value.next_step === "照单修").length;
+  const latest = records.sort(order).at(-1).value;
   // 停的定义见 REVIEW-RULES 第三节第 1 条。
   const stop = latest.has_p1 && (count > limit || (count === limit && latest.next_step !== "照单修"));
   return `轮数：第 ${count} 轮 / 上限 ${limit}${stop ? "；停：交业主" : ""}`;
