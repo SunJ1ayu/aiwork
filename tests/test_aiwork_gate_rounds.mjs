@@ -45,6 +45,71 @@ test("轮数按修改单的不同 head 数，其他推送和评审不加轮；�
   assert.doesNotMatch(run([summary(record(HEAD, "合并", false, ""), { id: 30 }), ...reviews.slice(0, 2)]).summary, /停：交业主/);
 });
 
+test("迟到的重复修改单不改变最新汇总，输入次序也不改变停信号", () => {
+  const tasks = [OLD, OLDER].map((head, i) => summary(record(head), {
+    id: 20 + i, submitted_at: `2026-10-30T0${i + 1}:00:00Z`,
+  }));
+  const stopped = summary(record(HEAD, "交业主", true, ""), { id: 30, submitted_at: "2026-10-30T03:00:00Z" });
+  const duplicate = { ...tasks[0], id: 40, submitted_at: "2026-10-30T04:00:00Z" };
+  for (const reviews of [[...tasks, stopped, duplicate], [duplicate, stopped, ...tasks.toReversed()],
+    [tasks[1], duplicate, stopped, tasks[0]]]) {
+    assert.match(run(reviews).round_line, /第 2 轮 \/ 上限 2；停：交业主/);
+  }
+});
+
+test("缩进或围栏名之前有空白的记录显示读不清，不当成没有记录", () => {
+  const valid = summary();
+  for (const opening of [" ```", "  ```", "   ```", "``` ", "```\t"]) {
+    const body = valid.body.replace(/^```/, opening);
+    assert.match(run([{ ...valid, body }]).round_line, /轮数：读不清/, opening);
+  }
+});
+
+test("证据和修改单中的引用围栏不冒充真正的记录", () => {
+  const example = summary(record(OLD)).body;
+  for (const quoted of [example.split("\n").map((line) => `> ${line}`).join("\n"),
+    `\`\`\`\`markdown\n${example}\n\`\`\`\``, `~~~markdown\n${example}\n~~~`]) {
+    for (const body of [`核实证据\n${quoted}\n\n${summary().body}`, `${summary().body}\n\n举例\n${quoted}`]) {
+      assert.match(run([summary(record(), { body })]).round_line, /第 1 轮/);
+    }
+    assert.match(run([summary(record(), { body: quoted })]).round_line, /轮数：未知/);
+  }
+});
+
+test("summary skill 的引用示例直接交给关卡，引用前后和改写都不影响真记录", () => {
+  const examples = [...read("../workflow/skills/summary/SKILL.md").matchAll(/^`````markdown\n([\s\S]*?)\n`````$/gm)];
+  assert.ok(examples.length, "引用边界示例必须在 summary skill 定义");
+  for (const [, example] of examples) {
+    for (const body of [example, example.replaceAll("\n", "\r\n")]) {
+      for (const edited_at of [null, "2026-10-30T03:00:00Z"]) {
+        assert.match(run([summary(record(), { body, edited_at })]).round_line, /轮数：未知/);
+      }
+      for (const combined of [`${body}\n\n${summary().body}`, `${summary().body}\n\n${body}`]) {
+        assert.match(run([summary(record(), { body: combined })]).round_line, /第 1 轮/);
+      }
+    }
+  }
+});
+
+test("围栏扫描处理长围栏、不同标记、缩进、行尾空白和未结束的记录", () => {
+  const valid = summary();
+  for (const body of [valid.body, valid.body.replaceAll("\n", "\r\n"),
+    valid.body.replaceAll("\n", " \t\n"), `${valid.body}\n\n`]) {
+    assert.match(run([{ ...valid, body }]).round_line, /第 1 轮/);
+  }
+  for (const body of [valid.body.replace("\n```", "\n ```"),
+    valid.body.replaceAll("```", "````"), valid.body.replaceAll("```", "~~~"),
+    valid.body.slice(0, valid.body.indexOf("\n```")), `${valid.body}\n${valid.body}`]) {
+    assert.match(run([{ ...valid, body }]).round_line, /轮数：读不清/);
+  }
+  const example = summary(record(OLD)).body;
+  for (const body of [example.split("\n").map((line) => `    ${line}`).join("\n"),
+    `  \`\`\`\`\`markdown\n\`\`\`\`\n~~~\n${example}\n  \`\`\`\`\`\``,
+    `~~~markdown\n\`\`\`\n${example}\n  ~~~~`]) {
+    assert.match(run([{ ...valid, body: `${body}\n\n${valid.body}` }]).round_line, /第 1 轮/);
+  }
+});
+
 test("旧 PR 和冒充者是未知；改写、格式错误、同 head 冲突一律读不清", () => {
   for (const reviews of [[], [summary(record(), { login: "builder" })], [summary(record(), { body: "旧式汇总" })]]) {
     assert.match(run(reviews).summary, /轮数：未知/);
@@ -74,7 +139,11 @@ test("旧 PR 和冒充者是未知；改写、格式错误、同 head 冲突一�
 
 test("所有汇总输入只追加显示，不改变任何 G1–G8 结果；未配置时整个返回值相同", () => {
   const cases = [[], [summary()], [summary(record(), { edited_at: "edited" })],
-    [summary(record(OLD)), summary(record(OLDER))], [summary(record(HEAD, "合并", false, ""))]];
+    [summary(record(OLD)), summary(record(OLDER))], [summary(record(HEAD, "合并", false, ""))],
+    [summary(record(), { body: " " + summary().body })],
+    [summary(record(), { body: `\`\`\`\`markdown\n${summary(record(OLD)).body}\n\`\`\`\`\n${summary().body}` })],
+    [summary(record(OLD)), summary(record(OLDER)), summary(record(HEAD, "交业主", true, "")),
+      summary(record(OLD), { id: 40, submitted_at: "2026-10-30T04:00:00Z" })]];
   for (const over of [{}, { ci: { state: "pending" } }, { ci: { state: "failure" } },
     { files: [".github/a.yml"] }, { files: ["desktop/main.js"] },
     { pushes: { covers_head: false, actors: [] } }]) {
