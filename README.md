@@ -108,7 +108,7 @@ MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行
 
 仓库只保存工作流；本机设置统一放在 `~/.config/aiwork/`（目录权限 700）：
 
-- `models.env`：Codex、Cursor、DeepSeek、Kimi、MiMo 的模型选择，每条一行。可参考 `templates/models.env.example`。
+- `models.env`：Codex、Cursor、DeepSeek、Kimi、MiMo 的模型选择，以及 Kimi 的模型参数。字段与示例见 `templates/models.env.example`。
 - `runtime.env`：可选的时限、轮次上限和思考强度。写法与查询见下方；示例为 `templates/runtime.env.example`。
 - `deepseek.env`：DeepSeek 使用的 `DEEPSEEK_API_KEY`，保留文件权限 600。
 - `mimo.env`：两行 `MIMO_BASE_URL=…`、`MIMO_API_KEY=…`，文件权限 600。地址使用小米控制台给出的 Anthropic 兼容 Base URL：按量付费和 Token Plan 的地址、凭证不同，不能混用；地址须为 HTTPS、以 `/anthropic` 结尾，不带用户名、密码、查询串或片段。MiMo 不从环境变量补地址或密钥。
@@ -141,6 +141,12 @@ Kimi 自动生成的 hook 使用登记的 node 路径；自管 `KIMI_REVIEW_HOME
 `AIWORK_APPS_DIR` 仍可单独覆盖 App 配置目录。
 `models.env` 必须完整，包含每条腿的模型行；原有模型单次覆盖参数只是在完整设置的基础上换一次，不能代替文件或补缺行。
 缺少 `models.env` 或所需腿的模型行时明确报错并停止，不调用模型。
+Kimi 换模型时，在同一文件里一起修改模型名及其参数，按服务端 `/models` 的模型信息填写；
+`bin/aiwork-config kimi-settings` 查询校验后的完整配置。能力、思考强度的允许值由读取器校验，错误信息列出；
+上下文必须为 CLI 能精确表示的正整数，列表不含空项或重复项，默认强度必须在所声明的支持列表中。
+缺项、未知的 Kimi 参数名或非法参数，`subkimi` 在启动 CLI（含原生预检）前退 78，不使用兜底值。
+`KIMI_MODEL` 单次覆盖只改名称，参数仍读同一文件；调用方须保证它们对应。
+自管 `KIMI_REVIEW_HOME` 仍由调用方维护配置，不渲染种子；本机参数校验照常执行。
 
 `runtime.env` 的名字直接使用各腿已有的环境变量名；完整参数、单位和兜底值由
 `bin/aiwork-config runtime --help` 从 `bin/_aiwork_config.py` 的 `RUNTIME_OPTIONS` 生成。

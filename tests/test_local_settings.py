@@ -406,7 +406,7 @@ print('descendants share settings, data, programs and workspace')
         sources = {p.name: p.read_text() for p in (ROOT / 'bin').iterdir()
                    if p.is_file() and p.read_bytes().startswith(b'#!/usr/bin/env bash')}
         direct = {name for name, source in sources.items()
-                  if re.search(r'/aiwork-config" model ', source)}
+                  if re.search(r'/aiwork-config" (?:model |kimi-settings)', source)}
         shim = re.compile(r'^exec.*?/(?:' + '|'.join(map(re.escape, direct)) + r')"\s', re.M)
         actual = direct | {name for name, source in sources.items() if shim.search(source)}
         self.assertEqual(actual, set(callers))

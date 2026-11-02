@@ -7,7 +7,7 @@ import sys
 
 from _aiwork_config import (
     ConfigError, RUNTIME_OPTIONS, program, check_programs, app_key, apps_dir, data_path,
-    model, model_family, prune_data, runtime_value, setting_path, setting_value,
+    model, model_family, kimi_settings, prune_data, runtime_value, setting_path, setting_value,
 )
 
 
@@ -21,6 +21,8 @@ def main():
     models = commands.add_parser('model')
     models.add_argument('leg')
     models.add_argument('override', nargs='?')
+    kimi = commands.add_parser('kimi-settings', help='validated Kimi model profile from models.env (JSON)')
+    kimi.add_argument('override', nargs='?')
     defaults = '\n'.join(
         f'{adapter} {option}: {variable}; direct={direct}, reader={reader or direct}'
         for adapter, settings in RUNTIME_OPTIONS.items()
@@ -57,6 +59,8 @@ def main():
             return 0
         elif args.command == 'model':
             value = model(args.leg, args.override)
+        elif args.command == 'kimi-settings':
+            value = kimi_settings(args.override)
         elif args.command == 'runtime':
             value = runtime_value(args.adapter, args.option, context=args.context)
         elif args.command == 'data-path':
@@ -74,7 +78,7 @@ def main():
     except ConfigError as exc:
         print(f'aiwork-config: {exc}', file=sys.stderr)
         return 2
-    print(json.dumps(value, ensure_ascii=True, indent=2) if args.command == 'prune-data' else value)
+    print(json.dumps(value, ensure_ascii=True, indent=2) if args.command in ('prune-data', 'kimi-settings') else value)
     return 0
 
 
