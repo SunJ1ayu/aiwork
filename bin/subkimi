@@ -145,7 +145,7 @@ s = open(sys.argv[1]).read()
 s = s.replace("__KIMI_MODEL_ALIAS__", model).replace("__KIMI_MODEL_ID__", model.split("/", 1)[1])
 for name, value in json.loads(os.environ['KIMI_SETTINGS']).items():
     if name != 'model':
-        s = s.replace('__KIMI_' + name.upper() + '__', json.dumps(value))
+        s = s.replace('"__KIMI_' + name.upper() + '__"', json.dumps(value))
 s2 = s.replace('"__KIMI_GUARD_COMMAND__"', json.dumps(shlex.quote(os.environ['AIWORK_PROGRAMS'] + '/node') + ' ' + shlex.quote(home + '/hooks/guard.mjs')))
 tmp = p + ".tmp." + str(os.getpid())
 with open(tmp, "w") as fh:

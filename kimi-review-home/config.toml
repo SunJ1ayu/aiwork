@@ -14,13 +14,13 @@ key = "oauth/kimi-code"
 [models."__KIMI_MODEL_ALIAS__"]
 provider = "managed:kimi-code"
 model = "__KIMI_MODEL_ID__"
-max_context_size = __KIMI_MAX_CONTEXT_SIZE__
-capabilities = __KIMI_CAPABILITIES__
-support_efforts = __KIMI_SUPPORT_EFFORTS__
-default_effort = __KIMI_DEFAULT_EFFORT__
+max_context_size = "__KIMI_MAX_CONTEXT_SIZE__"
+capabilities = "__KIMI_CAPABILITIES__"
+support_efforts = "__KIMI_SUPPORT_EFFORTS__"
+default_effort = "__KIMI_DEFAULT_EFFORT__"
 
 [thinking]
-enabled = __KIMI_THINKING__
+enabled = "__KIMI_THINKING__"
 
 [[hooks]]
 event = "PreToolUse"
