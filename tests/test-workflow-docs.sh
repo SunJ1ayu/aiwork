@@ -179,6 +179,70 @@ for path in docs:
 PY
 check "W4: 机器人推送说明有唯一入口，命令示例不把令牌放进参数或日志" $?
 
+python3 - "$ROOT" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+rules = (root / 'REVIEW-RULES.md').read_text()
+definitions = re.findall(r'^### ([^\n]+五级证据)\n(.*?)(?=^## |^### |\Z)', rules, re.M | re.S)
+assert len(definitions) == 1, '五级证据应只有一处定义'
+heading, definition = definitions[0]
+levels = re.findall(r'^([1-5])\. \*\*(.+?)\*\*', definition, re.M)
+assert [int(n) for n, _ in levels] == list(range(1, 6)), '定义应含五个有序等级'
+assert f'至少到「{levels[3][1]}」' in definition and '待业主确认' in definition
+assert 'ci.workflow_path' in definition and '新测试先红' in definition
+assert '业主决定' in definition and '已接受风险' in definition and '逐个打开' in definition
+slug = re.sub(r'[^\w\s-]', '', heading.lower()).replace(' ', '-')
+target = 'https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md#' + slug
+summary = (root / 'workflow/skills/summary/SKILL.md').read_text()
+delegate = (root / 'workflow/skills/delegate/SKILL.md').read_text()
+references = [next(line for line in summary.splitlines() if line.startswith('2. 核实：')),
+              next(line for line in delegate.splitlines() if line.startswith('- 【完成标准】'))]
+for reference in references:
+    assert target in reference, '核实和完成标准应指向实际定义标题'
+    assert not any(label in reference for _, label in levels), '引用不应复述证据等级'
+for path in (root / 'workflow').rglob('*.md'):
+    assert not any(re.search(r'^\s*[1-5]\. \*\*' + re.escape(label) + r'\*\*', path.read_text(), re.M)
+                   for _, label in levels), f'{path.relative_to(root)} 重复定义证据等级'
+PY
+check "W4: 五级证据只有一处定义，核实与完成标准指向实际定义且不复述等级" $?
+
+python3 - "$ROOT" <<'PY'
+from pathlib import Path
+import sys
+
+rules = (Path(sys.argv[1]) / 'REVIEW-RULES.md').read_text()
+opening = rules.split('\n---\n', 1)[0]
+assert '以关卡算出的数为准' not in opening, '开头不应无条件要求关卡读数'
+assert '读数口径、上限与停的定义见第三节第 1 条' in opening
+rounds = next(line for line in rules.splitlines() if line.startswith('1. **修改轮数上限**'))
+assert '启用轮数显示时' in rounds and '未启用时' in rounds
+assert 'DEFAULT_MODIFICATION_ROUND_LIMIT' in rounds
+assert '2026-09-28' in rounds
+assert 'https://github.com/SunJ1ayu/aiwork/commit/bf94cbf98e100a30f0202a3db0c4a63a1d060979' in rounds, '丢失既有决定的历史出处'
+PY
+check "W4: 轮数读数按启用情况区分，默认上限保留共享定义及既有历史出处" $?
+
+python3 - "$ROOT" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+summary = (root / 'workflow/skills/summary/SKILL.md').read_text()
+checklist = summary.split('## 汇总核对清单\n', 1)[1].split('\n## ', 1)[0]
+assert '此前' in checklist and '已核实的坑' in checklist
+assert '第一次' in checklist and '为空' in checklist
+explore = (root / 'workflow/skills/explore/SKILL.md').read_text()
+assert '不按票数评判' in explore and '不按票数采纳' not in explore
+delegate = (root / 'workflow/skills/delegate/SKILL.md').read_text()
+assert '写单前' in re.search(r'^description: (.+)$', delegate, re.M).group(1)
+assert 'diff 原文' in delegate and '不能只给 PR 号' in delegate
+PY
+check "W4: PR #60 遗留的清单来源、首轮可空、方案评判和题面要求明确" $?
+
 echo "[W5] 旧 track 流程不留在仓库里"
 for gone in bin/track bin/track-guard bin/track-record bin/track-commit-msg \
             bin/runlog bin/_evidence.sh bin/_review_delivery.py bin/_ephemeral-refs.sh \
