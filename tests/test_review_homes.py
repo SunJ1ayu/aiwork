@@ -11,6 +11,7 @@ import shutil
 import signal
 import subprocess
 import time
+import tomllib
 import unittest
 
 import test_leg_finish as finish
@@ -202,6 +203,73 @@ class ReviewHomes(unittest.TestCase):
         self.assertNotEqual(*homes)
         self.assertEqual((self.credentials / 'kimi-code.json').read_text(), '{}\n')
         self.assertEqual((self.seed / 'credentials/marker').read_text(), 'do not copy')
+
+    def kimi_settings(self, **changes):
+        from _test_settings import set_model
+        values = dict(kimi='kimi-code/model-a', kimi_max_context_size='131072',
+                      kimi_capabilities='thinking,image_in,tool_use',
+                      kimi_support_efforts='low,high', kimi_default_effort='high',
+                      kimi_thinking='true')
+        values.update(changes)
+        path = self.fixture.root / 'settings/models.env'
+        for key, value in values.items():
+            if value is None:
+                path.write_text(''.join(line + '\n' for line in path.read_text().splitlines()
+                                        if not line.startswith(key + '=')))
+            else:
+                set_model(path.parent, key, value)
+        return path
+
+    def test_kimi_local_model_and_parameters_change_generated_config(self):
+        for model, context, caps, efforts, effort, thinking in (
+                ('model-a', 131072, ['thinking', 'image_in', 'tool_use'], ['low', 'high'], 'high', True),
+                ('model-b', 262144, ['thinking', 'tool_use'], ['medium', 'high'], 'medium', False)):
+            with self.subTest(model=model):
+                alias = 'kimi-code/' + model
+                self.kimi_settings(kimi=alias, kimi_max_context_size=str(context),
+                                   kimi_capabilities=','.join(caps), kimi_support_efforts=','.join(efforts),
+                                   kimi_default_effort=effort, kimi_thinking=str(thinking).lower())
+                result = self.run_leg('subkimi')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(Path(self.env['HOME_CAPTURE']).read_text())
+                config = tomllib.loads(record['config'])
+                self.assertEqual(config['default_model'], alias)
+                self.assertEqual(config['models'][alias], dict(
+                    provider='managed:kimi-code', model=model, max_context_size=context,
+                    capabilities=caps, support_efforts=efforts, default_effort=effort))
+                self.assertEqual(config['thinking']['enabled'], thinking)
+                self.assert_clean()
+
+    def test_kimi_missing_parameters_refuse_before_cli_even_with_override_home(self):
+        keys = ('kimi_max_context_size', 'kimi_capabilities', 'kimi_support_efforts',
+                'kimi_default_effort', 'kimi_thinking')
+        for key in keys:
+            for override in ({}, {'KIMI_REVIEW_HOME': str(self.d / 'kimi-home')}):
+                with self.subTest(key=key, override=bool(override)):
+                    path = self.kimi_settings(**{key: None})
+                    result = self.run_leg('subkimi', **override)
+                    self.assertEqual(result.returncode, 78, result.stderr)
+                    self.assertIn(key, result.stderr)
+                    self.assertIn(str(path), result.stderr)
+                    self.assertFalse(Path(self.env['HOME_CAPTURE']).exists())
+
+    def test_kimi_invalid_parameters_refuse_before_cli(self):
+        cases = [('kimi_max_context_size', value) for value in
+                 ('banana', '0', '-1', '1.5', '01', '9007199254740992', '9' * 5000)]
+        cases += [('kimi_capabilities', value) for value in
+                  ('thinkng,tool_use', 'thinking,,tool_use', 'thinking,thinking', 'image_in')]
+        cases += [('kimi_support_efforts', 'extreme'), ('kimi_support_efforts', 'low,low'),
+                  ('kimi_default_effort', 'max'), ('kimi_thinking', 'yes'),
+                  ('kimi_capabilites', 'thinking,tool_use')]
+        for key, value in cases:
+            with self.subTest(key=key, value=value[:40]):
+                path = self.kimi_settings(**{key: value})
+                result = self.run_leg('subkimi')
+                self.assertEqual(result.returncode, 78, result.stderr)
+                self.assertIn(key, result.stderr)
+                self.assertIn(str(path), result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+                self.assertFalse(Path(self.env['HOME_CAPTURE']).exists())
 
     def test_missing_kimi_credentials_refuses_before_model_and_cleans(self):
         (self.credentials / 'kimi-code.json').unlink()

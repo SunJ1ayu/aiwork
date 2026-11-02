@@ -362,7 +362,7 @@ def setting_value(filename: str, variable: str) -> str:
     raise ConfigError(f'{path}: missing {variable}')
 
 
-def model(leg: str, override: str | None = None) -> str:
+def _model_rows(leg: str) -> tuple[Path, dict[str, str]]:
     path = setting_path('models.env')
     try:
         _, rows_list = _assignments('models.env')
@@ -375,12 +375,70 @@ def model(leg: str, override: str | None = None) -> str:
         if not re.fullmatch(r'[a-z][a-z0-9_]*', name):
             raise ConfigError(f'{path}:{number}: invalid setting for leg {leg}')
         rows[name] = value
+    return path, rows
+
+
+def _selected_model(path: Path, rows: dict[str, str], leg: str, override: str | None) -> str:
     if not rows.get(leg):
         raise ConfigError(f'{path}: missing model for leg {leg}')
     selected = override or rows[leg]
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', selected):
         raise ConfigError(f'{path}: invalid model for leg {leg}')
     return selected
+
+
+def model(leg: str, override: str | None = None) -> str:
+    path, rows = _model_rows(leg)
+    return _selected_model(path, rows, leg, override)
+
+
+KIMI_CAPABILITIES = frozenset(('thinking', 'always_thinking', 'image_in', 'video_in', 'tool_use'))
+KIMI_EFFORTS = frozenset(('low', 'medium', 'high', 'xhigh', 'max'))
+
+
+def kimi_settings(override: str | None = None) -> dict:
+    """Read one complete model profile; no model-specific fallbacks in the seed."""
+    path, rows = _model_rows('kimi')
+    selected = _selected_model(path, rows, 'kimi', override)
+    model_family('subkimi', selected)
+    names = ('max_context_size', 'capabilities', 'support_efforts', 'default_effort', 'thinking')
+    for key in rows:
+        if key.startswith('kimi_') and key.removeprefix('kimi_') not in names:
+            raise ConfigError(f'{path}: unknown setting {key}')
+    for name in names:
+        if 'kimi_' + name not in rows:
+            raise ConfigError(f'{path}: missing kimi_{name}')
+
+    def invalid(name, reason):
+        raise ConfigError(f'{path}: kimi_{name}: {reason}')
+
+    def choices(name, allowed):
+        values = rows['kimi_' + name].split(',')
+        if len(values) != len(set(values)) or not set(values) <= allowed:
+            invalid(name, 'expected unique comma-separated values from ' + ','.join(sorted(allowed)))
+        return values
+
+    context = rows['kimi_max_context_size']
+    # TOML is consumed by a JavaScript CLI: reject numbers it cannot represent exactly.
+    if (not re.fullmatch(r'[1-9][0-9]*', context) or len(context) > 16
+            or int(context) > 2**53 - 1):
+        invalid('max_context_size', 'expected an integer in 1..9007199254740991')
+    capabilities = choices('capabilities', KIMI_CAPABILITIES)
+    if 'tool_use' not in capabilities:
+        invalid('capabilities', 'review requires tool_use')
+    efforts = choices('support_efforts', KIMI_EFFORTS)
+    effort = rows['kimi_default_effort']
+    if effort not in efforts:
+        invalid('default_effort', 'must belong to kimi_support_efforts')
+    thinking = rows['kimi_thinking']
+    if thinking not in ('true', 'false'):
+        invalid('thinking', 'expected true or false')
+    if thinking == 'true' and not set(capabilities) & {'thinking', 'always_thinking'}:
+        invalid('thinking', 'requires a thinking capability')
+    if thinking == 'false' and 'always_thinking' in capabilities:
+        invalid('thinking', 'cannot disable always_thinking')
+    return dict(model=selected, max_context_size=int(context), capabilities=capabilities,
+                support_efforts=efforts, default_effort=effort, thinking=thinking == 'true')
 
 
 _READER_TIMEOUT = '2400'

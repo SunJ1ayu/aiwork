@@ -208,6 +208,9 @@ def write_settings(directory):
     directory.mkdir(parents=True, exist_ok=True)
     write_programs(directory)
     (directory / 'models.env').write_text(''.join(f'{k}={v}\n' for k, v in MODELS.items()))
+    with (directory / 'models.env').open('a') as stream:
+        stream.write('kimi_max_context_size=131072\nkimi_capabilities=thinking,image_in,tool_use\n'
+                     'kimi_support_efforts=low,high\nkimi_default_effort=high\nkimi_thinking=true\n')
     (directory / 'mimo.env').write_text('MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/anthropic\nMIMO_API_KEY=fixture-mimo-key\n')
     (directory / 'private-terms').write_text('unused\n')
     return directory

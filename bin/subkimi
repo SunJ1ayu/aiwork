@@ -37,8 +37,7 @@ Shell and write tools are unavailable. Do not claim to have run tests.
 Environment:
   AIWORK_DATA_DIR  optional, overrides the common machine data directory
   KIMI_MODEL        optional, kimi-code/<model-id> (default from ~/.config/aiwork/models.env)
-                    (the seed config declares 1M context + effort=max for ANY model;
-                    check the server's /models before switching)
+                    (model parameters must also be set in models.env; see its example)
   KIMI_TIMEOUT      optional, seconds before timeout
   KIMI_REVIEW_HOME  optional, caller-owned home; default is a disposable workspace home
                     (override: no seed rendering or cleanup; reader profile still rewritten;
@@ -77,8 +76,8 @@ fi
 #    这里不依赖同步的任何结果。
 
 # 模型选择只有一个源；CLI alias 与 API model ID 均从它派生。
-MODEL="$("$BIN_DIR/aiwork-config" model kimi "${KIMI_MODEL:-}")" || exit 1
-"$BIN_DIR/aiwork-config" family subkimi "$MODEL" >/dev/null || die 'model must be one kimi-code/<model-id>'
+MODEL_SETTINGS="$("$BIN_DIR/aiwork-config" kimi-settings "${KIMI_MODEL:-}")" || exit 78
+MODEL="$("$AIWORK_PROGRAMS/python3" -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$MODEL_SETTINGS")" || exit 78
 
 # Platform source protection is separate from the CLI tool allowlist.
 review_platform_ro_exec "$SOURCE_REPO" || exit 78
@@ -137,13 +136,16 @@ if [[ -z "${KIMI_REVIEW_HOME:-}" ]]; then
   mkdir -p "$REVIEW_HOME/hooks" || config_die 'cannot create review hook directory'
   cp -f "$KIMI_SEED_HOME/hooks/guard.mjs" "$REVIEW_HOME/hooks/guard.mjs" || config_die 'cannot sync review guard'
   # 种子只声明占位符；命令渲染为运行期 home 自己那份 guard。
-  KIMI_RUNTIME_HOME="$REVIEW_HOME" "$AIWORK_PROGRAMS/python3" - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || config_die 'cannot render review config'
+  KIMI_RUNTIME_HOME="$REVIEW_HOME" KIMI_SETTINGS="$MODEL_SETTINGS" "$AIWORK_PROGRAMS/python3" - "$KIMI_SEED_HOME/config.toml" "$MODEL" <<'PYHOOK' || config_die 'cannot render review config'
 import json, os, shlex, sys
 home = os.environ["KIMI_RUNTIME_HOME"].rstrip("/")
 model = sys.argv[2]
 p = home + "/config.toml"
 s = open(sys.argv[1]).read()
 s = s.replace("__KIMI_MODEL_ALIAS__", model).replace("__KIMI_MODEL_ID__", model.split("/", 1)[1])
+for name, value in json.loads(os.environ['KIMI_SETTINGS']).items():
+    if name != 'model':
+        s = s.replace('__KIMI_' + name.upper() + '__', json.dumps(value))
 s2 = s.replace('"__KIMI_GUARD_COMMAND__"', json.dumps(shlex.quote(os.environ['AIWORK_PROGRAMS'] + '/node') + ' ' + shlex.quote(home + '/hooks/guard.mjs')))
 tmp = p + ".tmp." + str(os.getpid())
 with open(tmp, "w") as fh:
