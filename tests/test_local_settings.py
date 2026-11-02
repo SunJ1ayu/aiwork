@@ -735,8 +735,15 @@ class RuntimeAdapterTests(unittest.TestCase):
                 shutil.copy2(source, self.bin / source.name)
         write_platform_probe(self.bin, macos=False)
         self._program('ro-repo-exec', '#!/bin/sh\nshift 2\nexec "$@"\n')
+        shutil.copy2(ROOT / 'bin/aiwork-timeout', self.bin / 'real-aiwork-timeout')
         self._program('aiwork-timeout', '''#!/usr/bin/env python3
 import json,os,sys
+from pathlib import Path
+# Observe vendor parameters; Kimi's local compatibility probe has its own
+# supervisor and must finish before this capture boundary is reached.
+if len(sys.argv) > 4 and Path(sys.argv[3]).name == '_kimi_preflight.py' and sys.argv[4] == '--probe':
+    actual = str(Path(__file__).with_name('real-aiwork-timeout'))
+    os.execv(actual, [actual, *sys.argv[1:]])
 json.dump(sys.argv[1:],open(os.environ['RUNTIME_CAPTURE'],'w'))
 raise SystemExit(86)
 ''')

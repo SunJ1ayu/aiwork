@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import base64
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ import tomllib
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _reader_tools import KIMI_TOOL_INPUTS
+from _reader_tools import KIMI_TOOL_INPUTS, KIMI_TOOL_SCHEMAS, semantic_schema
 
 PROBE_MODEL = "aiwork-local-probe"
 
@@ -31,12 +32,8 @@ def _schema(tools):
         found[name] = function["parameters"]
     if found.keys() != KIMI_TOOL_INPUTS.keys():
         raise ValueError("native reader tool list changed")
-    for name, fields in KIMI_TOOL_INPUTS.items():
-        schema = found[name]
-        properties = schema["properties"]
-        required = {"pattern"} if name in ("Glob", "Grep") else {"path"}
-        if (set(properties) != fields or set(schema.get("required", [])) != required
-                or properties["path"].get("type") != "string"):
+    for name, schema in KIMI_TOOL_SCHEMAS.items():
+        if semantic_schema(found[name]) != schema:
             raise ValueError("native reader input schema changed: " + name)
 
 
@@ -48,6 +45,19 @@ def _png():
 
 
 def preflight(cli, home, profile, *, timeout=30):
+    # The inner CLI timeout cannot bound communicate()/HTTP-server cleanup.
+    # Reuse the shared process supervisor for the entire disposable probe.
+    result = subprocess.run([str(Path(__file__).with_name("aiwork-timeout")), str(timeout + 5),
+                             sys.executable, str(Path(__file__).resolve()), "--probe",
+                             str(cli), str(home), str(profile), str(timeout)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if result.returncode == 124:
+        raise ValueError("native Kimi preflight exceeded overall deadline")
+    if result.returncode:
+        raise ValueError("native Kimi preflight refused: " + result.stderr.strip())
+
+
+def _preflight(cli, home, profile, *, timeout):
     home, profile = Path(home), Path(profile)
     hooks = tomllib.loads((home / "config.toml").read_text())["hooks"]
     with tempfile.TemporaryDirectory(prefix="kimi-preflight-", dir=home.parent) as temporary:
@@ -62,6 +72,7 @@ def preflight(cli, home, profile, *, timeout=30):
         (outside / "outside.txt").write_text(outside_marker)
         for directory in (repo, outside):
             (directory / "image.png").write_bytes(_png())
+        outside_image = base64.b64encode((outside / "image.png").read_bytes()).decode()
         (repo / "escape").symlink_to(outside, target_is_directory=True)
         tag = secrets.token_hex(16)
         calls = []
@@ -101,6 +112,8 @@ def preflight(cli, home, profile, *, timeout=30):
                         for name in KIMI_TOOL_INPUTS:
                             if tag not in results[name + "-outside"] or tag in results[name + "-inside"]:
                                 raise ValueError("native hook did not prove both boundaries: " + name)
+                            if outside_marker in results[name + "-outside"] or outside_image in results[name + "-outside"]:
+                                raise ValueError("native hook returned outside content: " + name)
                         if (inside_marker not in results["Read-inside"]
                                 or inside_marker not in results["Grep-inside"]
                                 or outside_marker in results["Grep-inside"]
@@ -164,7 +177,10 @@ def preflight(cli, home, profile, *, timeout=30):
 
 if __name__ == "__main__":
     try:
-        preflight(*sys.argv[1:4])
+        if sys.argv[1:2] == ["--probe"]:
+            _preflight(*sys.argv[2:5], timeout=float(sys.argv[5]))
+        else:
+            preflight(*sys.argv[1:4])
     except (ValueError, OSError, KeyError) as exc:
         print("subkimi: " + str(exc), file=sys.stderr)
         raise SystemExit(78)

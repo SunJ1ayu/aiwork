@@ -33,6 +33,13 @@ def native_fixture():
         tool = next(tool["function"] for tool in tools if tool["function"]["name"] == "Read")
         tool["parameters"]["properties"]["file_path"] = tool["parameters"]["properties"].pop("path")
         tool["parameters"]["required"] = ["file_path"]
+    if mode in ("nested-schema", "description-field"):
+        tool = next(t["function"] for t in tools if t["function"]["name"] == "ReadMediaFile")
+        field = "description" if mode == "description-field" else "source_path"
+        tool["parameters"]["properties"]["region"]["properties"][field] = {"type": "string"}
+    if mode == "enum-schema":
+        tool = next(t["function"] for t in tools if t["function"]["name"] == "Grep")
+        tool["parameters"]["properties"]["output_mode"]["enum"].append("new-mode")
 
     def request(messages):
         body = json.dumps({"messages": messages, "tools": tools}).encode()
@@ -52,7 +59,7 @@ def native_fixture():
                  "tool_input": arguments, "cwd": os.getcwd()}
         hook = subprocess.run(shlex.split(config["hooks"][0]["command"]),
                               input=json.dumps(event), text=True, capture_output=True)
-        if hook.returncode and mode != "ignore-hook":
+        if hook.returncode and mode not in ("ignore-hook", "deny-and-read"):
             content = hook.stderr or hook.stdout
         else:
             path = Path(arguments.get("path", "."))
@@ -61,12 +68,21 @@ def native_fixture():
             elif name == "ReadMediaFile":
                 content = "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode()
             elif name == "Glob":
-                content = "\n".join(str(p) for p in path.rglob("*.txt"))
+                content = "\n".join(str(p) for p in search_files(path, follow=mode in ("follow-links", "glob-follow-links")))
             else:
-                content = "\n".join(p.read_text() for p in path.rglob("*.txt"))
+                content = "\n".join(p.read_text() for p in search_files(path, follow=mode in ("follow-links", "grep-follow-links")))
+            if hook.returncode and mode == "deny-and-read":
+                content += hook.stderr or hook.stdout
         messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
     request(messages)
     return 0
+
+
+def search_files(path, *, follow):
+    for directory, _dirs, files in os.walk(path, followlinks=follow):
+        for filename in files:
+            if filename.endswith(".txt"):
+                yield Path(directory) / filename
 
 
 if __name__ == "__main__":

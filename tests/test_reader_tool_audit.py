@@ -906,6 +906,72 @@ class KimiPreToolGuardTests(unittest.TestCase):
                                        text=True, capture_output=True)
                 self.assertEqual(audit.returncode, 3, audit.stdout + audit.stderr)
 
+    def test_nested_fields_enums_and_scalar_types_fail_closed_before_and_after(self):
+        cases = [
+            ("ReadMediaFile", {"path": "inside.txt", "region": {
+                "x": 0, "y": 0, "width": 1, "height": 1, "source_path": str(self.outside)}}),
+            ("ReadMediaFile", {"path": "inside.txt", "region": {"x": 0, "y": 0, "width": 1}}),
+            ("ReadMediaFile", {"path": "inside.txt", "region": {
+                "x": "../outside.txt", "y": 0, "width": 1, "height": 1}}),
+            ("ReadMediaFile", {"path": "inside.txt", "full_resolution": "true"}),
+            ("Grep", {"pattern": "inside", "output_mode": "new-mode"}),
+            ("Grep", {"pattern": "inside", "-n": "true"}),
+            ("Read", {"path": "inside.txt", "line_offset": True}),
+            ("Read", {"path": "inside.txt", "n_lines": 0}),
+        ]
+        for tool, arguments in cases:
+            with self.subTest(tool=tool, arguments=arguments):
+                self.assertEqual(self.guard(tool, arguments).returncode, 2)
+                stream = self.root / "invalid-input.jsonl"
+                stream.write_text(json.dumps({"role": "assistant", "tool_calls": [{"id": "invalid",
+                    "type": "function", "function": {"name": tool, "arguments": json.dumps(arguments)}}]}) + "\n")
+                audit = subprocess.run([sys.executable, str(ROOT / "bin/_reader_tools.py"),
+                                        "audit-kimi", str(stream), str(self.repo)], capture_output=True, text=True)
+                self.assertEqual(audit.returncode, 3, audit.stdout + audit.stderr)
+
+    def test_all_captured_native_parameters_remain_allowed_inside(self):
+        def example(schema):
+            if "enum" in schema:
+                return schema["enum"][0]
+            if "anyOf" in schema:
+                return example(schema["anyOf"][0])
+            if schema["type"] == "object":
+                return {key: example(value) for key, value in schema["properties"].items()}
+            if schema["type"] == "boolean":
+                return False
+            if schema["type"] == "integer":
+                return schema.get("minimum", schema.get("exclusiveMinimum", 0) + 1)
+            return "inside.txt"
+        captured = json.loads((ROOT / "tests/fixtures/kimi-code-0.36.1/reader-tools.json").read_text())
+        for tool in captured:
+            name = tool["function"]["name"]
+            arguments = example(tool["function"]["parameters"])
+            with self.subTest(tool=name):
+                self.assertEqual(self.guard(name, arguments).returncode, 0)
+
+    def test_glob_parent_segments_cannot_be_cancelled_by_wildcards(self):
+        for pattern in ("**/../*.txt", "*/../outside.txt", "sub/**/../../*.txt"):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(self.guard("Glob", {"pattern": pattern}).returncode, 2)
+
+    def test_historical_outside_spill_reads_still_refuse_before_and_after(self):
+        for number in (108, 112):
+            with self.subTest(pr=number):
+                text = (ROOT / f"tests/fixtures/kimi-pr-{number}-outside-result.jsonl").read_text()
+                text = text.replace("__RUNTIME_HOME__", str(self.root / "kimi-home"))
+                events = [json.loads(line) for line in text.split("\n") if line]
+                calls = [call for event in events for call in event.get("tool_calls", [])]
+                first, outside = (json.loads(call["function"]["arguments"]) for call in calls)
+                self.assertEqual(self.guard("Read", first).returncode, 0)
+                self.assertEqual(self.guard("Read", outside).returncode, 2)
+                self.assertIn("next_step: Use Read with output_path", events[2]["content"])
+                self.assertIn("[review-only sandbox]", events[4]["content"])
+                stream = self.root / "historical.jsonl"
+                stream.write_text(text)
+                result = subprocess.run([sys.executable, str(ROOT / "bin/_reader_tools.py"),
+                                         "audit-kimi", str(stream), str(self.repo)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+
     def test_unknown_tools_and_unusable_policy_fail_closed(self):
         for tool in ("Bash", "Write", "ReadRenamed"):
             self.assertEqual(self.guard(tool, {}).returncode, 2)
