@@ -11,15 +11,41 @@ from pathlib import Path
 
 from _paths import inside
 
-# An unknown input may be a renamed path. Reject it in both the hook and audit.
-KIMI_TOOL_INPUTS = {
-    "Read": frozenset(("path", "line_offset", "n_lines")),
-    "ReadMediaFile": frozenset(("path", "region", "full_resolution")),
-    "Glob": frozenset(("pattern", "path", "include_ignored", "include_dirs")),
-    "Grep": frozenset(("pattern", "path", "glob", "type", "output_mode",
-                       "-i", "-n", "-A", "-B", "-C", "head_limit", "offset",
-                       "multiline", "include_ignored")),
+# Unknown or changed nested inputs may be renamed paths. Native preflight,
+# execution-time hook and post-run audit all use this complete contract.
+def _object(properties, required):
+    return {"type": "object", "properties": properties, "required": required,
+            "additionalProperties": False}
+
+
+def _integer(minimum):
+    return {"type": "integer", "minimum": minimum, "maximum": 2**53 - 1}
+
+
+KIMI_TOOL_SCHEMAS = {
+    "Read": _object({
+        "path": {"type": "string"},
+        "line_offset": {"anyOf": [_integer(1), {"type": "integer", "minimum": -1000, "maximum": -1}]},
+        "n_lines": {"type": "integer", "exclusiveMinimum": 0, "maximum": 2**53 - 1},
+    }, ["path"]),
+    "ReadMediaFile": _object({
+        "path": {"type": "string"},
+        "region": _object({"x": _integer(0), "y": _integer(0),
+                           "width": _integer(1), "height": _integer(1)}, ["x", "y", "width", "height"]),
+        "full_resolution": {"type": "boolean"},
+    }, ["path"]),
+    "Glob": _object({
+        "pattern": {"type": "string"}, "path": {"type": "string"},
+        "include_ignored": {"type": "boolean"}, "include_dirs": {"type": "boolean"},
+    }, ["pattern"]),
+    "Grep": _object({
+        **{key: {"type": "string"} for key in ("pattern", "path", "glob", "type")},
+        "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count_matches"]},
+        **{key: {"type": "boolean"} for key in ("-i", "-n", "multiline", "include_ignored")},
+        **{key: _integer(0) for key in ("-A", "-B", "-C", "head_limit", "offset")},
+    }, ["pattern"]),
 }
+KIMI_TOOL_INPUTS = {name: frozenset(schema["properties"]) for name, schema in KIMI_TOOL_SCHEMAS.items()}
 KIMI_TOOLS = tuple(KIMI_TOOL_INPUTS)
 
 # Claude Code's exact built-in tool selection and post-run allowlist.
@@ -74,9 +100,44 @@ def english_list(names):
 def check_kimi_reader_path(name, arguments, repo):
     if name not in KIMI_TOOL_INPUTS:
         return
-    if arguments.keys() - KIMI_TOOL_INPUTS[name]:
+    if not _valid_input(KIMI_TOOL_SCHEMAS[name], arguments):
+        raise ReaderScopeError(name)
+    if name == "Glob" and ".." in Path(arguments["pattern"]).parts:
         raise ReaderScopeError(name)
     check_reader_path(name, arguments, repo, "path")
+
+
+def semantic_schema(value):
+    """Keep every constraint, excluding only documentation metadata."""
+    if isinstance(value, dict):
+        return {key: ({name: semantic_schema(spec) for name, spec in child.items()}
+                      if key == "properties" else semantic_schema(child)) for key, child in value.items()
+                if key not in ("description", "$schema")}
+    if isinstance(value, list):
+        return [semantic_schema(child) for child in value]
+    return value
+
+
+def _valid_input(schema, value):
+    if "anyOf" in schema:
+        return any(_valid_input(child, value) for child in schema["anyOf"])
+    kind = schema["type"]
+    if kind == "object":
+        return (isinstance(value, dict) and not (value.keys() - schema["properties"].keys())
+                and all(key in value for key in schema["required"])
+                and all(_valid_input(schema["properties"][key], child) for key, child in value.items()))
+    if kind == "integer":
+        if type(value) is not int and not (type(value) is float and value.is_integer()):
+            return False
+        return (value >= schema.get("minimum", 0) and value <= schema["maximum"]
+                and ("exclusiveMinimum" not in schema or value > schema["exclusiveMinimum"]))
+    if kind == "string" and not isinstance(value, str):
+        return False
+    if kind == "boolean" and type(value) is not bool:
+        return False
+    if kind not in ("string", "boolean"):
+        return False
+    return "enum" not in schema or value in schema["enum"]
 
 
 def kimi_profile():
@@ -89,7 +150,13 @@ def kimi_profile():
         "subagents: []\n"
         "---\n"
         "Read the task and repository files. Shell and write tools are unavailable. "
-        "Do not claim to have run tests.\n"
+        "Do not claim to have run tests. "
+        "Only read paths inside the working directory. Read text in small pages "
+        "(n_lines=200, then increment line_offset on the ORIGINAL repository file). "
+        "A truncated tool result may suggest an output_path in CLI session storage; "
+        "do not follow that path or read any session/tool-results file outside the working directory. "
+        "Continue paging the original file instead. If a page is still too large or context is missing, "
+        "return NEEDS_MORE_INFO and describe the missing context.\n"
     )
 
 

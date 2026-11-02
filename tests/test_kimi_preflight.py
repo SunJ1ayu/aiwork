@@ -10,6 +10,8 @@ from pathlib import Path
 import shlex
 import shutil
 import tempfile
+import subprocess
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +64,37 @@ class KimiPreflight(unittest.TestCase):
         for mode in ("renamed-path", "ignore-hook", "all-deny", "crash"):
             with self.subTest(mode=mode), self.assertRaises(ValueError):
                 helper.preflight(self.cli(mode), self.home, self.profile)
+
+    def test_nested_and_enum_schema_drift_refuses(self):
+        for mode in ("nested-schema", "enum-schema", "description-field"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                self.helper().preflight(self.cli(mode), self.home, self.profile)
+
+    def test_denial_text_does_not_excuse_leaked_outside_content(self):
+        with self.assertRaises(ValueError):
+            self.helper().preflight(self.cli("deny-and-read"), self.home, self.profile)
+
+    def test_search_that_follows_directory_links_refuses(self):
+        for mode in ("follow-links", "glob-follow-links", "grep-follow-links"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                self.helper().preflight(self.cli(mode), self.home, self.profile)
+
+    def test_cleanup_is_included_in_the_overall_deadline(self):
+        copied = self.root / "bin"
+        shutil.copytree(ROOT / "bin", copied)
+        helper = copied / "_kimi_preflight.py"
+        helper.write_text(helper.read_text().replace("server.shutdown()", "__import__('time').sleep(60)"))
+        script = ("import sys; sys.path.insert(0, sys.argv[1]); "
+                  "from _kimi_preflight import preflight\n"
+                  "try: preflight(*sys.argv[2:5], timeout=1)\n"
+                  "except ValueError as e: print(str(e)); sys.exit(0)\n"
+                  "sys.exit(1)\n")
+        started = time.monotonic()
+        result = subprocess.run([sys.executable, "-c", script, str(copied), str(self.cli("valid")),
+                                 str(self.home), str(self.profile)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("overall deadline", result.stdout)
+        self.assertLess(time.monotonic() - started, 10)
 
     def test_probe_environment_has_no_inherited_credentials_or_search_config(self):
         from unittest.mock import patch
