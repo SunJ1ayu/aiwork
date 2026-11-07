@@ -1,0 +1,40 @@
+{
+  "minimumLimaVersion": "2.3.0",
+  "vmType": "vz",
+  "arch": "aarch64",
+  "cpus": 2,
+  "memory": "4GiB",
+  "disk": "100GiB",
+  "images": [
+    {
+      "location": "https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-arm64.img",
+      "arch": "aarch64",
+      "digest": "sha256:50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e"
+    }
+  ],
+  "user": {
+    "name": "aiwork",
+    "comment": "aiwork guest",
+    "uid": 1000,
+    "home": "/home/aiwork",
+    "shell": "/bin/bash"
+  },
+  "mounts": [],
+  "additionalDisks": [],
+  "copyToHost": [],
+  "ssh": {
+    "forwardAgent": false,
+    "forwardX11": false,
+    "loadDotSSHPubKeys": false
+  },
+  "containerd": {"system": false, "user": false},
+  "portForwards": [{"guestPortRange": [1, 65535], "ignore": true}],
+  "propagateProxyEnv": false,
+  "hostResolver": {"enabled": true},
+  "provision": [
+    {
+      "mode": "system",
+      "script": "#!/bin/sh\nset -eu\napt-get update\nDEBIAN_FRONTEND=noninteractive apt-get install -y bash coreutils ca-certificates curl git gh jq openssl openssh-client procps python3 ripgrep iproute2 util-linux build-essential xz-utils\n"
+    }
+  ]
+}
