@@ -142,6 +142,8 @@ class ReliabilityTests(unittest.TestCase):
 
         def github(token, endpoint, payload=None, **kwargs):
             if payload is None:
+                if '/reviews?' in endpoint:
+                    return '[]'
                 return ci.api(endpoint, **kwargs)
             posted.append(payload)
             return {'html_url': 'https://github.com/example/repo/pull/1#pullrequestreview-1'}
