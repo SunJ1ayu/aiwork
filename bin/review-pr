@@ -59,6 +59,12 @@ def repository_name(value: str) -> str:
     return value
 
 
+def saved_run_id(value: str) -> str:
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', value):
+        raise argparse.ArgumentTypeError('must name one saved run, not an empty value or a path')
+    return value
+
+
 def drop_inherited_git_env() -> None:
     """Drop git settings inherited from the caller. This process sets its own."""
     for key in list(os.environ):
@@ -490,7 +496,7 @@ def main() -> int:
     parser.add_argument("--leg", default="subcodex")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the task only; allow previewing merged PRs; never run a leg or publish")
-    parser.add_argument('--retry-publish', metavar='RUN_ID',
+    parser.add_argument('--retry-publish', metavar='RUN_ID', type=saved_run_id,
                         help='publish saved review-failures/RUN_ID artifacts without running a model')
     args = parser.parse_args()
     try:
@@ -511,8 +517,6 @@ def main() -> int:
             family, frozen_model = _leg_session.choose_leg(args.leg, BIN)
         repository = args.repo or repository_from_origin()
         if args.retry_publish:
-            if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.retry_publish):
-                raise ReviewError('--retry-publish must name one saved run, not a path')
             directory = data_path('review-failures') / args.retry_publish
             print(publish_saved(directory, repository=repository, number=args.pr, leg=args.leg))
             return 0

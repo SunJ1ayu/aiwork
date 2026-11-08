@@ -834,6 +834,19 @@ class ReviewPrTests(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(calls['leg_runs'], 1)
 
+    def test_publication_retry_rejects_invalid_ids_before_any_work(self):
+        for run_id in ('', '../saved-run', '/tmp/saved-run'):
+            with self.subTest(run_id=run_id):
+                stderr = io.StringIO()
+                with patch('sys.argv', ['review-pr', '12', '--retry-publish', run_id]), \
+                        patch.object(self.session, 'check_leg_platform', side_effect=AssertionError('leg preflight ran')), \
+                        patch.object(self.review, 'aiwork_main_commit', side_effect=AssertionError('network read ran')), \
+                        redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit) as caught:
+                        self.review.main()
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn('saved run', stderr.getvalue())
+
     def test_publication_retry_checks_all_review_pages_and_other_heads(self):
         old = {'commit_id': 'b' * 40, 'state': 'COMMENTED',
                'body': '**aiwork-review · subcursor · gpt-5.6**\n'}
