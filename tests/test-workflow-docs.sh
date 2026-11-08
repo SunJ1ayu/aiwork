@@ -156,6 +156,10 @@ python3 - "$ROOT" <<'PY'
 from pathlib import Path
 import re
 import sys
+import shlex
+import subprocess
+import tempfile
+import os
 
 root = Path(sys.argv[1])
 workflow = (root / 'workflow/CLAUDE.md').read_text()
@@ -175,7 +179,39 @@ unsafe = re.compile(
 docs = [root / 'AGENTS.md', root / 'README.md', *sorted((root / 'workflow').rglob('*.md'))]
 for path in docs:
     for command in re.findall(r'^```(?:bash|sh|shell)\n(.*?)^```', path.read_text(), re.M | re.S):
-        assert not unsafe.search(command.replace('\\\n', ' ')), f'{path.relative_to(root)} 有不安全的认证示例'
+        command = command.replace(chr(92) + chr(10), ' ')
+        # 凭证助手的 stdout 交给 Git；配置它的单引号参数不会在配置时执行。
+        for quoted in re.findall(r"'(!f\(\).*?; f)'", command):
+            words = shlex.split(next(line for line in command.splitlines() if quoted in line))
+            assert words[:4] == ['git', 'config', '--local', '--add']
+            assert len(words) == 6 and words[4] == 'credential.https://github.com.helper'
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                tool = directory / 'gh-app-token'
+                tool.write_text('#!/bin/sh\nprintf "%s\\n" fixture-credential\n')
+                tool.chmod(0o700)
+                env = {**os.environ, 'PATH': str(directory) + os.pathsep + os.environ['PATH']}
+                helper = quoted[1:]
+                env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+                           GIT_TERMINAL_PROMPT='0')
+                subprocess.run(['git', 'init', '-q', str(directory)], env=env, check=True)
+                for value in ('', quoted):
+                    subprocess.run(['git', '-C', str(directory), 'config', '--add',
+                                    'credential.https://github.com.helper', value], env=env, check=True)
+                result = subprocess.run(['git', '-C', str(directory), 'credential', 'fill'],
+                                        input='protocol=https\nhost=github.com\n\n',
+                                        env=env, text=True, capture_output=True, check=True)
+                assert 'password=fixture-credential\n' in result.stdout
+                for operation in ('get', 'store', 'erase'):
+                    result = subprocess.run(['sh', '-c', helper + ' ' + operation],
+                                            env=env, text=True, capture_output=True, check=True)
+                    expected = 'username=x-access-token\npassword=fixture-credential\n' if operation == 'get' else ''
+                    assert result.stdout == expected
+                tool.write_text('#!/bin/sh\nexit 1\n')
+                result = subprocess.run(['sh', '-c', helper + ' get'], env=env, text=True, capture_output=True)
+                assert result.returncode != 0 and not result.stdout
+            command = command.replace("'" + quoted + "'", "''")
+        assert not unsafe.search(command), f'{path.relative_to(root)} 有不安全的认证示例'
 PY
 check "W4: 机器人推送说明有唯一入口，命令示例不把令牌放进参数或日志" $?
 
