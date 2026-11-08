@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _no_egress  # noqa: E402,F401
 
 import errno
+import base64
+from concurrent.futures import ThreadPoolExecutor
 import importlib.machinery
 import importlib.util
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
@@ -16,6 +18,7 @@ from pathlib import Path
 import subprocess
 import shutil
 import tempfile
+import threading
 import unittest
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
@@ -43,7 +46,20 @@ def load_script(name="review-pr"):
 CI_POLICY = {
     'ci': {'workflow_path': '.github/workflows/ci.yml', 'event': 'pull_request'},
     'check_name': 'aiwork-gate', 'gate_app_id': 5121026,
+    'reviewer_bot': 'aiwork-review[bot]',
 }
+
+
+def policy_response(policy):
+    return {'type': 'file', 'encoding': 'base64',
+            'content': base64.encodebytes(json.dumps(policy).encode()).decode()}
+
+
+def published_review(body, *, head='a' * 40, state='COMMENTED',
+                     login=CI_POLICY['reviewer_bot'], user_type='Bot'):
+    return {'commit_id': head, 'state': state, 'body': body,
+            'user': {'login': login, 'type': user_type},
+            'html_url': 'https://github.com/SunJ1ayu/aiwork/pull/12#pullrequestreview-101'}
 
 
 class CiFixture:
@@ -556,7 +572,7 @@ class ReviewPrTests(unittest.TestCase):
                                  report="Finding\nConclusion: PASS", private_terms='unused\n', data_setup=None, ci=None,
                                  checkout_error=False, expire_during_leg=False,
                                  publication_failure=None, retry_publish=False, retry_change=None,
-                                 existing_reviews=None):
+                                 existing_reviews=None, reviewer_policy=None):
         """Exercise committed source readers and task, with offline Git transport and review leg."""
         calls = {"github_writes": [], "public_reads": [], "source_reads": [], "leg_runs": 0}
         rules = "# aiwork main 规则\r\n必须以此为准。\r\n"
@@ -569,6 +585,7 @@ class ReviewPrTests(unittest.TestCase):
         grants = {}
         calls['token_grants'] = []
         calls['post_attempts'] = []
+        calls['policy_reads'] = []
         reviews = list(existing_reviews or [])
         failed = False
 
@@ -587,6 +604,9 @@ class ReviewPrTests(unittest.TestCase):
         def fake_github(token, endpoint, payload=None, **kwargs):
             nonlocal failed
             require_live_token(token)
+            if payload is None and '/contents/.aiwork/policy.json?' in endpoint:
+                calls['policy_reads'].append(endpoint)
+                return policy_response(CI_POLICY if reviewer_policy is None else reviewer_policy)
             if payload is None and '/reviews?' in endpoint:
                 calls.setdefault('review_reads', []).append(endpoint)
                 page = int(parse_qs(urlsplit(endpoint).query)['page'][0])
@@ -598,8 +618,7 @@ class ReviewPrTests(unittest.TestCase):
                 if publication_failure in ('post', 'lost_response') and not failed:
                     failed = True
                     if publication_failure == 'lost_response':
-                        reviews.append({'commit_id': payload['commit_id'], 'state': 'COMMENTED',
-                                        'body': payload['body']})
+                        reviews.append(published_review(payload['body'], head=payload['commit_id']))
                     raise self.review.ReviewError('POST EOF')
                 calls["github_writes"].append(endpoint)
                 calls["posted_body"] = payload["body"]
@@ -780,12 +799,117 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn('head changed', stderr)
         self.assertEqual(len(calls['post_attempts']), 1)
 
-    def test_publication_retry_refuses_a_post_with_lost_response(self):
-        rc, calls, _, stderr = self.run_main_with_leg_result(
+    def test_publication_retry_recovers_a_post_with_lost_response(self):
+        rc, calls, stdout, stderr = self.run_main_with_leg_result(
             'gpt-5.6', publication_failure='lost_response', retry_publish=True)
-        self.assertEqual(rc, 1)
-        self.assertIn('already published', stderr)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(stdout.strip(), published_review('')['html_url'])
+        self.assertEqual(calls['leg_runs'], 1)
         self.assertEqual(len(calls['post_attempts']), 1)
+
+    def test_publication_retry_does_not_recover_receipt_for_changed_head(self):
+        def change(_archive, pr, _config, _calls):
+            pr['head']['sha'] = 'e' * 40
+        rc, calls, _, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', publication_failure='lost_response', retry_publish=True, retry_change=change)
+        self.assertEqual(rc, 1)
+        self.assertIn('head changed', stderr)
+        self.assertEqual(len(calls['post_attempts']), 1)
+
+    def test_publication_dedup_allows_new_body_after_prior_conclusions(self):
+        rc, original, _, stderr = self.run_main_with_leg_result('gpt-5.6')
+        self.assertEqual(rc, 0, stderr)
+        cases = [('NEEDS_MORE_INFO', 'complete', 'COMMENTED'),
+                 ('PASS', 'partial', 'COMMENTED'), ('PASS', 'complete', 'DISMISSED'),
+                 ('PASS', 'complete', 'COMMENTED'), ('BLOCK', 'complete', 'COMMENTED')]
+        for verdict, complete, state in cases:
+            with self.subTest(verdict=verdict, completeness=complete, state=state):
+                body = self.review.build_body('subcursor', 'gpt-5.6',
+                    'Previous finding\nConclusion: ' + verdict,
+                    dict(original['posted_block'], verdict=verdict, completeness=complete))
+                rc, calls, _, stderr = self.run_main_with_leg_result(
+                    'gpt-5.6', existing_reviews=[published_review(body, state=state)])
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(len(calls['post_attempts']), 1)
+                self.assertNotEqual(body, calls['posted_body'])
+
+    def test_publication_dedup_ignores_other_authors_with_identical_body(self):
+        rc, original, _, stderr = self.run_main_with_leg_result('gpt-5.6')
+        self.assertEqual(rc, 0, stderr)
+        for login, user_type in [('human-reviewer', 'User'), ('other-review[bot]', 'Bot'),
+                                 (CI_POLICY['reviewer_bot'], 'User')]:
+            with self.subTest(login=login, user_type=user_type):
+                old = published_review(original['posted_body'], login=login, user_type=user_type)
+                rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', existing_reviews=[old])
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(len(calls['post_attempts']), 1)
+
+    def test_publication_dedup_reads_registered_reviewer_from_project_main(self):
+        rc, original, _, stderr = self.run_main_with_leg_result('gpt-5.6')
+        self.assertEqual(rc, 0, stderr)
+        policy = dict(CI_POLICY, reviewer_bot='project-review[bot]')
+        for login, expected in [(policy['reviewer_bot'], 1), (CI_POLICY['reviewer_bot'], 0)]:
+            with self.subTest(login=login):
+                old = published_review(original['posted_body'], login=login)
+                rc, calls, _, stderr = self.run_main_with_leg_result(
+                    'gpt-5.6', existing_reviews=[old], reviewer_policy=policy)
+                self.assertEqual(rc, expected, stderr)
+                self.assertEqual(calls['policy_reads'],
+                    ['repos/SunJ1ayu/aiwork/contents/.aiwork/policy.json?ref=main'])
+                self.assertEqual(len(calls['post_attempts']), 1 - expected)
+
+    def test_publication_dedup_refuses_missing_or_invalid_registered_reviewer(self):
+        for policy in ({}, {'reviewer_bot': 'human-reviewer'}, {'reviewer_bot': False}):
+            with self.subTest(policy=policy):
+                rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', reviewer_policy=policy)
+                self.assertEqual(rc, 1)
+                self.assertIn('reviewer_bot', stderr)
+                self.assertEqual(calls['post_attempts'], [])
+
+    def test_publication_retry_concurrent_retries_post_only_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.review.save_publication(directory, body='Finding\nConclusion: PASS\n',
+                repository='SunJ1ayu/aiwork', number=12, leg='subcursor', head='a' * 40)
+            reviews, posts = [], []
+            service_lock = threading.Lock()
+            second_read = threading.Event()
+            start = threading.Barrier(2)
+            reads = 0
+
+            def github(_token, endpoint, payload=None, **_kwargs):
+                nonlocal reads
+                if '/contents/' in endpoint:
+                    return policy_response(CI_POLICY)
+                if payload is None:
+                    with service_lock:
+                        snapshot = json.dumps(reviews)
+                        reads += 1
+                        first = reads == 1
+                    if first:
+                        second_read.wait(timeout=2)
+                    else:
+                        second_read.set()
+                    return snapshot
+                with service_lock:
+                    posts.append(payload)
+                    reviews.append(published_review(payload['body']))
+                return {'html_url': published_review('')['html_url']}
+
+            def retry():
+                start.wait(timeout=5)
+                return self.review.publish_saved(directory, repository='SunJ1ayu/aiwork',
+                    number=12, leg='subcursor', recover_published=True)
+
+            with patch.dict(os.environ, AIWORK_DATA_DIR=str(directory)), \
+                    patch.object(self.review, 'review_token', return_value=FAKE_TOKEN), \
+                    patch.object(self.review, 'pr_state', return_value={'state': 'open', 'head': {'sha': 'a' * 40}}), \
+                    patch.object(self.review, 'github', side_effect=github), \
+                    patch.object(self.review.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = [future.result(timeout=10) for future in [pool.submit(retry), pool.submit(retry)]]
+            self.assertEqual(results, [published_review('')['html_url']] * 2)
+            self.assertEqual(len(posts), 1)
 
     def test_publication_retry_checks_privacy_again(self):
         def change(_archive, _pr, config, _calls):
@@ -848,9 +972,11 @@ class ReviewPrTests(unittest.TestCase):
                 self.assertIn('saved run', stderr.getvalue())
 
     def test_publication_retry_checks_all_review_pages_and_other_heads(self):
-        old = {'commit_id': 'b' * 40, 'state': 'COMMENTED',
-               'body': '**aiwork-review · subcursor · gpt-5.6**\n'}
-        other_leg = dict(old, commit_id='a' * 40, body='**aiwork-review · subkimi · kimi-code/k3**\n')
+        rc, original, _, stderr = self.run_main_with_leg_result('gpt-5.6')
+        self.assertEqual(rc, 0, stderr)
+        old = published_review(original['posted_body'], head='b' * 40)
+        other_leg = published_review(self.review.build_body('subkimi', 'kimi-code/k3',
+            'Finding\nConclusion: PASS', dict(original['posted_block'], model='kimi-code/k3', family='moonshot')))
         rc, calls, _, stderr = self.run_main_with_leg_result(
             'gpt-5.6', existing_reviews=[old] * 100 + [other_leg])
         self.assertEqual(rc, 0, stderr)
@@ -860,6 +986,7 @@ class ReviewPrTests(unittest.TestCase):
             'gpt-5.6', existing_reviews=[other_leg] * 100 + [duplicate])
         self.assertEqual(rc, 1)
         self.assertIn('already published', stderr)
+        self.assertIn(duplicate['html_url'], stderr)
         self.assertEqual(calls['post_attempts'], [])
 
     def test_expired_startup_token_does_not_prevent_review_publication(self):
@@ -1763,6 +1890,8 @@ grep -q -F -- "$3" "$clone/$4"
             self.fail('anonymous source API must not be used')
 
         def fake_github(token, endpoint, payload=None, **kwargs):
+            if payload is None and '/contents/.aiwork/policy.json?' in endpoint:
+                return policy_response(CI_POLICY)
             if payload is None and '/reviews?' in endpoint:
                 return '[]'
             if payload is not None:

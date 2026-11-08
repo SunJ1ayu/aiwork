@@ -5,6 +5,7 @@ Review one repository's PR head and publish a scoped App COMMENT review."""
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import contextmanager
 import fcntl
 import json
@@ -392,12 +393,8 @@ def build_body(leg: str, model: str, report: str, block: dict,
     note = ""
     if notices:
         note = "\n\n".join(f"**Execution:** {item}" for item in notices) + "\n\n"
-    return (f"{review_prefix(leg)}{model}**\n\n{note}{clean}\n\n"
+    return (f"**aiwork-review · {leg} · {model}**\n\n{note}{clean}\n\n"
             f"```json\n{json.dumps(block, ensure_ascii=False, separators=(',', ':'))}\n```\n")
-
-
-def review_prefix(leg: str) -> str:
-    return f"**aiwork-review · {leg} · "
 
 
 def publication_binding(record: dict) -> str:
@@ -453,7 +450,24 @@ def publication_lock():
         os.close(fd)
 
 
-def check_unpublished(token: str, *, repository: str, number: int, leg: str, head: str) -> None:
+def project_reviewer_bot(token: str, repository: str) -> str:
+    response = github(token, f'repos/{repository}/contents/.aiwork/policy.json?ref=main')
+    invalid = 'project main .aiwork/policy.json reviewer_bot is missing or invalid; refusing publication'
+    content = response.get('content')
+    if response.get('type') != 'file' or response.get('encoding') != 'base64' or not isinstance(content, str):
+        raise ReviewError(invalid)
+    try:
+        policy = json.loads(base64.b64decode(''.join(content.split()), validate=True).decode('utf-8'))
+    except ValueError as exc:
+        raise ReviewError(invalid) from exc
+    bot = policy.get('reviewer_bot') if isinstance(policy, dict) else None
+    if not isinstance(bot, str) or not bot.endswith('[bot]'):
+        raise ReviewError(invalid)
+    return bot
+
+
+def find_published_review(token: str, *, repository: str, number: int,
+                          head: str, body: str, reviewer_bot: str) -> str | None:
     page = 1
     while True:
         raw = github(token, f'repos/{repository}/pulls/{number}/reviews?per_page=100&page={page}', raw=True)
@@ -461,15 +475,21 @@ def check_unpublished(token: str, *, repository: str, number: int, leg: str, hea
         if not isinstance(reviews, list) or any(not isinstance(item, dict) for item in reviews):
             raise ReviewError('cannot check existing reviews; refusing publication')
         for item in reviews:
+            user = item.get('user')
             if (item.get('commit_id') == head and item.get('state') != 'PENDING'
-                    and isinstance(item.get('body'), str) and item['body'].startswith(review_prefix(leg))):
-                raise ReviewError(f'{leg} already published for head {head}; refusing publication')
+                    and isinstance(user, dict) and user.get('type') == 'Bot'
+                    and user.get('login') == reviewer_bot and item.get('body') == body):
+                link = item.get('html_url')
+                if not isinstance(link, str) or not link.startswith('https://github.com/'):
+                    raise ReviewError('saved review already published but has no valid link; refusing duplicate publication')
+                return link
         if len(reviews) < 100:
-            return
+            return None
         page += 1
 
 
-def publish_saved(directory: Path, *, repository: str, number: int, leg: str) -> str:
+def publish_saved(directory: Path, *, repository: str, number: int, leg: str,
+                  recover_published: bool = False) -> str:
     with publication_lock():
         record, body = load_publication(directory, repository=repository, number=number, leg=leg)
         privacy = subprocess.run([str(BIN / 'privacy-check'), '--files', str(directory / 'review-body.md')],
@@ -478,8 +498,14 @@ def publish_saved(directory: Path, *, repository: str, number: int, leg: str) ->
             raise PrivacyError('privacy-check refused review publication:\n' + privacy.stdout + privacy.stderr)
         token = review_token(repository)
         head = record['head_sha']
-        check_unpublished(token, repository=repository, number=number, leg=leg, head=head)
         check_current_head(head, pr_state(token, number, repository=repository))
+        bot = project_reviewer_bot(token, repository)
+        existing = find_published_review(token, repository=repository, number=number,
+                                         head=head, body=body, reviewer_bot=bot)
+        if existing is not None:
+            if recover_published:
+                return existing
+            raise ReviewError(f'{leg} saved review already published for head {head}: {existing}; refusing duplicate publication')
         response = github(token, f'repos/{repository}/pulls/{number}/reviews',
                           {'commit_id': head, 'event': 'COMMENT', 'body': body})
         link = response.get('html_url')
@@ -518,7 +544,8 @@ def main() -> int:
         repository = args.repo or repository_from_origin()
         if args.retry_publish:
             directory = data_path('review-failures') / args.retry_publish
-            print(publish_saved(directory, repository=repository, number=args.pr, leg=args.leg))
+            print(publish_saved(directory, repository=repository, number=args.pr,
+                                leg=args.leg, recover_published=True))
             return 0
         if not args.dry_run:
             prune_data()
