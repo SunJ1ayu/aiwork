@@ -5,10 +5,14 @@ Review one repository's PR head and publish a scoped App COMMENT review."""
 from __future__ import annotations
 
 import argparse
+import base64
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,7 +21,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
 import _review_ci
-from _review_result import leg_identity
+from _review_result import leg_identity, sha256_bytes
 from _aiwork_config import ConfigError, check_programs, data_dir, data_path, prune_data
 from _leg_session import (
     Change,
@@ -53,6 +57,12 @@ class PrivacyError(ReviewError):
 def repository_name(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", value):
         raise argparse.ArgumentTypeError("repository must be owner/name")
+    return value
+
+
+def saved_run_id(value: str) -> str:
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', value):
+        raise argparse.ArgumentTypeError('must name one saved run, not an empty value or a path')
     return value
 
 
@@ -111,6 +121,13 @@ def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = T
             shutil.copytree(directory, destination, symlinks=True,
                             ignore=shutil.ignore_patterns("repo", "askpass"))
             print(f"review-pr: failure artifacts kept in {destination}", file=sys.stderr)
+            record_file = destination / "publication.json"
+            if record_file.is_file():
+                try:
+                    record = json.loads(record_file.read_text(encoding="utf-8"))
+                    print_retry_command(run_id, record)
+                except (OSError, ValueError, KeyError, TypeError):
+                    print('review-pr: 保存的发布记录不可读，不能重发', file=sys.stderr)
         except OSError as exc:
             print(f"review-pr: could not preserve failure artifacts: {redact(str(exc))}", file=sys.stderr)
             destination = None
@@ -380,6 +397,123 @@ def build_body(leg: str, model: str, report: str, block: dict,
             f"```json\n{json.dumps(block, ensure_ascii=False, separators=(',', ':'))}\n```\n")
 
 
+def publication_binding(record: dict) -> str:
+    return sha256_bytes(json.dumps(record, sort_keys=True, ensure_ascii=False,
+                                  separators=(',', ':')).encode('utf-8'))
+
+
+def save_publication(directory: Path, *, body: str, repository: str,
+                     number: int, leg: str, head: str) -> None:
+    body_bytes = body.encode('utf-8')
+    record = {"version": 1, "repository": repository, "pr": number, "leg": leg,
+              "head_sha": head, "body_sha256": sha256_bytes(body_bytes)}
+    record["binding_sha256"] = publication_binding(record)
+    (directory / "review-body.md").write_bytes(body_bytes)
+    (directory / "publication.json").write_text(json.dumps(record) + '\n', encoding='utf-8')
+
+
+def load_publication(directory: Path, *, repository: str, number: int, leg: str) -> tuple[dict, str]:
+    record = json.loads((directory / "publication.json").read_text(encoding='utf-8'))
+    keys = {'version', 'repository', 'pr', 'leg', 'head_sha', 'body_sha256', 'binding_sha256'}
+    if not isinstance(record, dict) or set(record) != keys or record['version'] != 1:
+        raise ReviewError('saved publication.json is invalid or unsupported; refusing publication')
+    if record['repository'] != repository or type(record['pr']) is not int or record['pr'] != number:
+        raise ReviewError('saved publication target differs from --repo/PR; refusing publication')
+    if record['leg'] != leg:
+        raise ReviewError('saved publication leg differs from --leg; refusing publication')
+    binding = record.pop('binding_sha256')
+    if (not isinstance(record['head_sha'], str) or not SHA.fullmatch(record['head_sha'])
+            or publication_binding(record) != binding):
+        raise ReviewError('saved publication binding mismatch; refusing publication')
+    body = (directory / "review-body.md").read_bytes()
+    if sha256_bytes(body) != record['body_sha256']:
+        raise ReviewError('saved review body digest mismatch; refusing publication')
+    return record, body.decode('utf-8')
+
+
+def print_retry_command(run_id: str, record: dict) -> None:
+    command = ['review-pr', str(record['pr']), '--repo', record['repository'],
+               '--leg', record['leg'], '--retry-publish', run_id]
+    print('review-pr: 发布恢复入口（不重新调用模型）: ' + shlex.join(command), file=sys.stderr)
+
+
+@contextmanager
+def publication_lock():
+    # Serialize local publishers: two retries must not both pass the remote duplicate check.
+    root = data_path('review-failures')
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(root, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def project_reviewer_bot(token: str, repository: str) -> str:
+    response = github(token, f'repos/{repository}/contents/.aiwork/policy.json?ref=main')
+    invalid = 'project main .aiwork/policy.json reviewer_bot is missing or invalid; refusing publication'
+    content = response.get('content')
+    if response.get('type') != 'file' or response.get('encoding') != 'base64' or not isinstance(content, str):
+        raise ReviewError(invalid)
+    try:
+        policy = json.loads(base64.b64decode(''.join(content.split()), validate=True).decode('utf-8'))
+    except ValueError as exc:
+        raise ReviewError(invalid) from exc
+    bot = policy.get('reviewer_bot') if isinstance(policy, dict) else None
+    if not isinstance(bot, str) or not bot.endswith('[bot]'):
+        raise ReviewError(invalid)
+    return bot
+
+
+def find_published_review(token: str, *, repository: str, number: int,
+                          head: str, body: str, reviewer_bot: str) -> str | None:
+    page = 1
+    while True:
+        raw = github(token, f'repos/{repository}/pulls/{number}/reviews?per_page=100&page={page}', raw=True)
+        reviews = json.loads(raw)
+        if not isinstance(reviews, list) or any(not isinstance(item, dict) for item in reviews):
+            raise ReviewError('cannot check existing reviews; refusing publication')
+        for item in reviews:
+            user = item.get('user')
+            if (item.get('commit_id') == head and item.get('state') != 'PENDING'
+                    and isinstance(user, dict) and user.get('type') == 'Bot'
+                    and user.get('login') == reviewer_bot and item.get('body') == body):
+                link = item.get('html_url')
+                if not isinstance(link, str) or not link.startswith('https://github.com/'):
+                    raise ReviewError('saved review already published but has no valid link; refusing duplicate publication')
+                return link
+        if len(reviews) < 100:
+            return None
+        page += 1
+
+
+def publish_saved(directory: Path, *, repository: str, number: int, leg: str,
+                  recover_published: bool = False) -> str:
+    with publication_lock():
+        record, body = load_publication(directory, repository=repository, number=number, leg=leg)
+        privacy = subprocess.run([str(BIN / 'privacy-check'), '--files', str(directory / 'review-body.md')],
+                                 text=True, capture_output=True, check=False)
+        if privacy.returncode:
+            raise PrivacyError('privacy-check refused review publication:\n' + privacy.stdout + privacy.stderr)
+        token = review_token(repository)
+        head = record['head_sha']
+        check_current_head(head, pr_state(token, number, repository=repository))
+        # New model runs can repeat earlier text; receipt lookup belongs to saved-body retries.
+        if recover_published:
+            bot = project_reviewer_bot(token, repository)
+            existing = find_published_review(token, repository=repository, number=number,
+                                             head=head, body=body, reviewer_bot=bot)
+            if existing is not None:
+                return existing
+        response = github(token, f'repos/{repository}/pulls/{number}/reviews',
+                          {'commit_id': head, 'event': 'COMMENT', 'body': body})
+        link = response.get('html_url')
+        if not isinstance(link, str) or not link.startswith('https://github.com/'):
+            raise ReviewError('review POST succeeded but returned no review link')
+        return link
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[1])
     parser.add_argument("pr", type=int, help="PR number in the selected repository")
@@ -388,20 +522,31 @@ def main() -> int:
     parser.add_argument("--leg", default="subcodex")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the task only; allow previewing merged PRs; never run a leg or publish")
+    parser.add_argument('--retry-publish', metavar='RUN_ID', type=saved_run_id,
+                        help='publish saved review-failures/RUN_ID artifacts without running a model')
     args = parser.parse_args()
     try:
         drop_inherited_git_env()
-        _leg_session.check_leg_platform(args.leg, BIN)
+        if args.retry_publish and args.dry_run:
+            raise ReviewError('--retry-publish cannot be combined with --dry-run')
+        if not args.retry_publish:
+            _leg_session.check_leg_platform(args.leg, BIN)
         data_dir()
-        check_programs(args.leg)
+        if not args.retry_publish:
+            check_programs(args.leg)
         main_sha = aiwork_main_commit()
         if not args.dry_run:
             require_latest_aiwork_main(main_sha)
         if args.pr < 1:
             raise ReviewError("PR number must be positive")
-        if not args.dry_run:
+        if not args.dry_run and not args.retry_publish:
             family, frozen_model = _leg_session.choose_leg(args.leg, BIN)
         repository = args.repo or repository_from_origin()
+        if args.retry_publish:
+            directory = data_path('review-failures') / args.retry_publish
+            print(publish_saved(directory, repository=repository, number=args.pr,
+                                leg=args.leg, recover_published=True))
+            return 0
         if not args.dry_run:
             prune_data()
         token = review_token(repository)
@@ -486,20 +631,9 @@ def main() -> int:
                 block = {"verdict": result["verdict"], "head_sha": pr["head"]["sha"],
                          "model": model, "family": family, "completeness": completeness(result)}
                 body = build_body(selected_leg, model, report, block, notices=notices)
-                body_file = directory / "review-body.md"
-                body_file.write_text(body, encoding="utf-8")
-                privacy = subprocess.run([str(BIN / "privacy-check"), "--files", str(body_file)],
-                                         text=True, capture_output=True, check=False)
-                if privacy.returncode:
-                    raise PrivacyError("privacy-check refused review publication:\n"
-                                       + privacy.stdout + privacy.stderr)
-                token = review_token(repository)
-                check_current_head(pr["head"]["sha"], pr_state(token, args.pr, repository=repository))
-                response = github(token, f"repos/{repository}/pulls/{args.pr}/reviews",
-                                  {"commit_id": pr["head"]["sha"], "event": "COMMENT", "body": body})
-                link = response.get("html_url")
-                if not isinstance(link, str) or not link.startswith("https://github.com/"):
-                    raise ReviewError("review POST succeeded but returned no review link")
+                save_publication(directory, body=body, repository=repository, number=args.pr,
+                                 leg=selected_leg, head=pr['head']['sha'])
+                link = publish_saved(directory, repository=repository, number=args.pr, leg=selected_leg)
                 # The gate wakes on the review itself (the repo's aiwork-review-ping); no second doorbell.
                 print(link)
                 return 0
