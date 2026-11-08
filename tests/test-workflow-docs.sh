@@ -163,7 +163,6 @@ import tempfile
 
 root = Path(sys.argv[1])
 workflow = (root / 'workflow/CLAUDE.md').read_text()
-assert '\n## 机器人推送与开 PR\n' in workflow, '缺少机器人推送的唯一说明'
 assert 'workflow/CLAUDE.md#机器人推送与开-pr' in (root / 'AGENTS.md').read_text(), 'AGENTS 缺少指向'
 
 # 防的是把认证数据放进命令参数，或直接打印到日志的示例。
@@ -185,14 +184,12 @@ def shell_blocks(text):
 
 
 def check_workflow(text):
-    section = text.split('\n## 机器人推送与开 PR\n', 1)[1].split('\n## ', 1)[0]
+    assert text.count('\n## 机器人推送与开 PR\n') == 1, '机器人推送说明须只有一个入口'
     commands = []
-    for block in shell_blocks(section):
+    for block in shell_blocks(text):
         for line in block.splitlines():
-            if line.startswith('git config --local '):
-                words = shlex.split(line)
-                assert len(words) in (5, 6) and words[-2].startswith('credential.'), '无法识别凭证配置命令'
-                commands.append(words)
+            if line.lstrip().startswith('git config '):
+                commands.append(shlex.split(line))
     helpers = [words[-1] for words in commands if words[-1].startswith('!')]
     assert len(helpers) == 1, '文档须包含一个可执行凭证助手配置'
     helper = helpers[0]
@@ -207,13 +204,16 @@ def check_workflow(text):
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         tool = directory / 'gh-app-token'
-        tool.write_text('#!/bin/sh\nprintf "%s\\n" fixture-credential\n')
+        home = directory / 'home'
+        (home / '.config').mkdir(parents=True)
+        calls = directory / 'token-calls'
+        tool.write_text('#!/bin/sh\nprintf called >> "$TOKEN_CALLS"\nprintf "%s\\n" fixture-credential\n')
         tool.chmod(0o700)
-        spy = directory / 'inherited-helper-called'
         env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-        env.update(PATH=str(directory) + os.pathsep + os.defpath,
-                   GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(directory / 'global'),
-                   GIT_TERMINAL_PROMPT='0', CREDENTIAL_SPY=str(spy))
+        env.update(PATH=str(directory) + os.pathsep + os.environ.get('PATH', os.defpath),
+                   HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'),
+                   GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(home / '.gitconfig'),
+                   GIT_TERMINAL_PROMPT='0', TOKEN_CALLS=str(calls))
 
         def run(args, **kwargs):
             result = subprocess.run(args, cwd=directory, env=env, text=True,
@@ -222,23 +222,35 @@ def check_workflow(text):
             return result
 
         run(['git', 'init', '-q'], check=True)
-        run(['git', 'config', '--global', 'credential.helper',
-             '!printf called > "$CREDENTIAL_SPY"; cat >/dev/null'], check=True)
-        snapshots = []
+        credential_key = 'credential.https://github.com.helper'
+        run(['git', 'config', '--local', credential_key, 'store'], check=True)
+        expected_config = [(credential_key, ''), (credential_key, helper)]
         for _ in range(2):
             for command in commands:
                 run(command, check=True)
-            snapshots.append(run(['git', 'config', '--local', '--get-regexp', r'^credential\.'], check=True).stdout)
-        assert snapshots[0] == snapshots[1], '文档配置重复执行改变了结果'
-        credential = 'protocol=https\nhost=github.com\n\n'
+            output = run(['git', 'config', '--null', '--get-regexp', r'^credential\.'], check=True).stdout
+            actual_config = [tuple(entry.split('\n', 1)) for entry in output.rstrip('\0').split('\0')]
+            assert actual_config == expected_config, '最终凭证设置须恰为清空项和文档助手，不许多项或缺项'
+        credential = 'protocol=https\nhost=github.com\nusername=x-access-token\n\n'
         result = run(['git', 'credential', 'fill'], input=credential, check=True)
         assert 'password=fixture-credential\n' in result.stdout
-        run(['git', 'credential', 'approve'], input=credential.rstrip('\n') + '\npassword=fixture-credential\n\n', check=True)
-        assert not spy.exists(), '继承助手未被清除，可能持久化凭证'
+        filled_credential = result.stdout
+
+        def files():
+            return {str(path.relative_to(directory)): path.read_bytes()
+                    for path in directory.rglob('*') if path.is_file()}
+
+        before = files()
+        run(['git', 'credential', 'approve'], input=filled_credential, check=True)
+        assert files() == before, 'approve 调用了取令牌程序或写出了凭证文件'
         for operation in ('get', 'store', 'erase'):
-            result = run(['sh', '-c', helper[1:] + ' ' + operation], check=True)
+            before = files()
+            result = run(['sh', '-c', helper[1:] + ' ' + operation],
+                         input=credential if operation == 'get' else filled_credential, check=True)
             expected = 'username=x-access-token\npassword=fixture-credential\n' if operation == 'get' else ''
             assert result.stdout == expected
+            if operation != 'get':
+                assert files() == before, '非 get 操作取了令牌或写入了文件'
         for url in ('https://github.com.evil.com', 'https://evil.com', 'http://github.com'):
             result = run(['git', 'credential', 'fill'], input='url=' + url + '\n\n')
             assert result.returncode != 0 and 'fixture-credential' not in result.stdout
@@ -252,19 +264,15 @@ def check_workflow(text):
 
 
 helper = check_workflow(workflow)
-# 同一个检查函数必须拒绝单边改坏的文档，不能靠测试另拼一份正确配置。
-mutations = {
+# 这些只检查助手自身的令牌输出行为；配置增删统一由完整结果核对覆盖。
+behavior_mutations = {
     'stderr': workflow.replace(helper, helper.replace('; printf ', '; echo "$token" >&2; printf ')),
     'argv': workflow.replace(helper, helper.replace('; printf ', '; sh -c : "$token"; printf ')),
     'external_printf': workflow.replace(helper, helper.replace(safe_output, 'env ' + safe_output)),
     'redirect': workflow.replace(helper, helper.replace(safe_output, safe_output + ' >&2')),
     'pipe': workflow.replace(helper, helper.replace(safe_output, safe_output + ' | tee /dev/stderr')),
-    'no_reset': '\n'.join(line for line in workflow.split('\n')
-                         if not (line.startswith('git config --local ') and line.endswith(".helper ''"))),
-    'no_config': '\n'.join(line for line in workflow.split('\n')
-                          if not (line.startswith('git config --local ') or line.startswith("  '!"))),
 }
-for name, changed in mutations.items():
+for name, changed in behavior_mutations.items():
     assert changed != workflow, f'{name}: 变异未命中'
     try:
         check_workflow(changed)
