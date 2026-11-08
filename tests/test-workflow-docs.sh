@@ -154,12 +154,12 @@ check "W4: 开工先在本机数据目录建工作树，不在共享检出里改
 
 python3 - "$ROOT" <<'PY'
 from pathlib import Path
+import os
 import re
-import sys
 import shlex
 import subprocess
+import sys
 import tempfile
-import os
 
 root = Path(sys.argv[1])
 workflow = (root / 'workflow/CLAUDE.md').read_text()
@@ -176,41 +176,108 @@ unsafe = re.compile(
     r'|\b(?:echo|printf|printenv)\b[^\n]*\$\{?(?:GH_TOKEN|GITHUB_TOKEN|token)\b',
     re.I,
 )
+safe_output = r'printf "username=x-access-token\npassword=%s\n" "$token"'
+safe_statement = re.compile(r'(?<=;)\s*' + re.escape(safe_output) + ';')
+
+def shell_blocks(text):
+    return [block.replace('\\\n', ' ') for block in
+            re.findall(r'^```(?:bash|sh|shell)\n(.*?)^```', text, re.M | re.S)]
+
+
+def check_workflow(text):
+    section = text.split('\n## 机器人推送与开 PR\n', 1)[1].split('\n## ', 1)[0]
+    commands = []
+    for block in shell_blocks(section):
+        for line in block.splitlines():
+            if line.startswith('git config --local '):
+                words = shlex.split(line)
+                assert len(words) in (5, 6) and words[-2].startswith('credential.'), '无法识别凭证配置命令'
+                commands.append(words)
+    helpers = [words[-1] for words in commands if words[-1].startswith('!')]
+    assert len(helpers) == 1, '文档须包含一个可执行凭证助手配置'
+    helper = helpers[0]
+    # 只放过交给 Git 的这一句 stdout，助手其余内容仍受原有扫描约束。
+    remaining = safe_statement.sub('', helper)
+    assert not unsafe.search(remaining), '助手含不安全的认证示例'
+    remaining = remaining.replace('test -n "$token"', '')
+    assert not re.search(r'\$\{?(?:token|GH_TOKEN|GITHUB_TOKEN)\b', remaining), '助手把令牌用于凭证输出以外的位置'
+    for block in shell_blocks(text):
+        assert not unsafe.search(block.replace(helper, safe_statement.sub('', helper))), '命令含不安全的认证示例'
+
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        tool = directory / 'gh-app-token'
+        tool.write_text('#!/bin/sh\nprintf "%s\\n" fixture-credential\n')
+        tool.chmod(0o700)
+        spy = directory / 'inherited-helper-called'
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        env.update(PATH=str(directory) + os.pathsep + os.defpath,
+                   GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(directory / 'global'),
+                   GIT_TERMINAL_PROMPT='0', CREDENTIAL_SPY=str(spy))
+
+        def run(args, **kwargs):
+            result = subprocess.run(args, cwd=directory, env=env, text=True,
+                                    capture_output=True, **kwargs)
+            assert 'fixture-credential' not in result.stderr, '凭证泄漏到标准错误'
+            return result
+
+        run(['git', 'init', '-q'], check=True)
+        run(['git', 'config', '--global', 'credential.helper',
+             '!printf called > "$CREDENTIAL_SPY"; cat >/dev/null'], check=True)
+        snapshots = []
+        for _ in range(2):
+            for command in commands:
+                run(command, check=True)
+            snapshots.append(run(['git', 'config', '--local', '--get-regexp', r'^credential\.'], check=True).stdout)
+        assert snapshots[0] == snapshots[1], '文档配置重复执行改变了结果'
+        credential = 'protocol=https\nhost=github.com\n\n'
+        result = run(['git', 'credential', 'fill'], input=credential, check=True)
+        assert 'password=fixture-credential\n' in result.stdout
+        run(['git', 'credential', 'approve'], input=credential.rstrip('\n') + '\npassword=fixture-credential\n\n', check=True)
+        assert not spy.exists(), '继承助手未被清除，可能持久化凭证'
+        for operation in ('get', 'store', 'erase'):
+            result = run(['sh', '-c', helper[1:] + ' ' + operation], check=True)
+            expected = 'username=x-access-token\npassword=fixture-credential\n' if operation == 'get' else ''
+            assert result.stdout == expected
+        for url in ('https://github.com.evil.com', 'https://evil.com', 'http://github.com'):
+            result = run(['git', 'credential', 'fill'], input='url=' + url + '\n\n')
+            assert result.returncode != 0 and 'fixture-credential' not in result.stdout
+        for script in ('#!/bin/sh\nexit 1\n', '#!/bin/sh\nexit 0\n'):
+            tool.write_text(script)
+            result = run(['git', 'credential', 'fill'], input=credential)
+            assert result.returncode != 0 and not result.stdout
+            result = run(['sh', '-c', helper[1:] + ' get'])
+            assert result.returncode != 0 and not result.stdout
+    return helper
+
+
+helper = check_workflow(workflow)
+# 同一个检查函数必须拒绝单边改坏的文档，不能靠测试另拼一份正确配置。
+mutations = {
+    'stderr': workflow.replace(helper, helper.replace('; printf ', '; echo "$token" >&2; printf ')),
+    'argv': workflow.replace(helper, helper.replace('; printf ', '; sh -c : "$token"; printf ')),
+    'external_printf': workflow.replace(helper, helper.replace(safe_output, 'env ' + safe_output)),
+    'redirect': workflow.replace(helper, helper.replace(safe_output, safe_output + ' >&2')),
+    'pipe': workflow.replace(helper, helper.replace(safe_output, safe_output + ' | tee /dev/stderr')),
+    'no_reset': '\n'.join(line for line in workflow.split('\n')
+                         if not (line.startswith('git config --local ') and line.endswith(".helper ''"))),
+    'no_config': '\n'.join(line for line in workflow.split('\n')
+                          if not (line.startswith('git config --local ') or line.startswith("  '!"))),
+}
+for name, changed in mutations.items():
+    assert changed != workflow, f'{name}: 变异未命中'
+    try:
+        check_workflow(changed)
+    except (AssertionError, subprocess.CalledProcessError):
+        pass
+    else:
+        raise AssertionError(f'{name}: 不安全或不完整的文档仍被接受')
+
 docs = [root / 'AGENTS.md', root / 'README.md', *sorted((root / 'workflow').rglob('*.md'))]
 for path in docs:
-    for command in re.findall(r'^```(?:bash|sh|shell)\n(.*?)^```', path.read_text(), re.M | re.S):
-        command = command.replace(chr(92) + chr(10), ' ')
-        # 凭证助手的 stdout 交给 Git；配置它的单引号参数不会在配置时执行。
-        for quoted in re.findall(r"'(!f\(\).*?; f)'", command):
-            words = shlex.split(next(line for line in command.splitlines() if quoted in line))
-            assert words[:4] == ['git', 'config', '--local', '--add']
-            assert len(words) == 6 and words[4] == 'credential.https://github.com.helper'
-            with tempfile.TemporaryDirectory() as temporary:
-                directory = Path(temporary)
-                tool = directory / 'gh-app-token'
-                tool.write_text('#!/bin/sh\nprintf "%s\\n" fixture-credential\n')
-                tool.chmod(0o700)
-                env = {**os.environ, 'PATH': str(directory) + os.pathsep + os.environ['PATH']}
-                helper = quoted[1:]
-                env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
-                           GIT_TERMINAL_PROMPT='0')
-                subprocess.run(['git', 'init', '-q', str(directory)], env=env, check=True)
-                for value in ('', quoted):
-                    subprocess.run(['git', '-C', str(directory), 'config', '--add',
-                                    'credential.https://github.com.helper', value], env=env, check=True)
-                result = subprocess.run(['git', '-C', str(directory), 'credential', 'fill'],
-                                        input='protocol=https\nhost=github.com\n\n',
-                                        env=env, text=True, capture_output=True, check=True)
-                assert 'password=fixture-credential\n' in result.stdout
-                for operation in ('get', 'store', 'erase'):
-                    result = subprocess.run(['sh', '-c', helper + ' ' + operation],
-                                            env=env, text=True, capture_output=True, check=True)
-                    expected = 'username=x-access-token\npassword=fixture-credential\n' if operation == 'get' else ''
-                    assert result.stdout == expected
-                tool.write_text('#!/bin/sh\nexit 1\n')
-                result = subprocess.run(['sh', '-c', helper + ' get'], env=env, text=True, capture_output=True)
-                assert result.returncode != 0 and not result.stdout
-            command = command.replace("'" + quoted + "'", "''")
+    if path == root / 'workflow/CLAUDE.md':
+        continue
+    for command in shell_blocks(path.read_text()):
         assert not unsafe.search(command), f'{path.relative_to(root)} 有不安全的认证示例'
 PY
 check "W4: 机器人推送说明有唯一入口，命令示例不把令牌放进参数或日志" $?

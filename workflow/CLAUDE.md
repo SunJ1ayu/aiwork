@@ -51,7 +51,7 @@ review-pr PR --repo owner/name --leg LEG --retry-publish RUN_ID
 
 ```bash
 git remote get-url origin
-git config --local credential.https://github.com.helper ''
+git config --local --replace-all credential.https://github.com.helper ''
 git config --local --add credential.https://github.com.helper \
   '!f() { test "$1" = get || exit 0; token=$(gh-app-token build --repo SunJ1ayu/aiwork) || exit; test -n "$token" || exit 1; printf "username=x-access-token\npassword=%s\n" "$token"; }; f'
 git config --show-origin --get-all credential.https://github.com.helper
