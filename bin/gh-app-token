@@ -17,7 +17,7 @@ aiwork_init "${0##*/}" || exit 78
 # review 读 CI：公开仓库目前可直接读；私有仓库需在 App 和本机 PERMISSIONS 中授予 actions:read，
 # 读取关卡自己的 G1 检查还需 checks:read；只在 App 加权限而不改本机配置，换出的令牌仍不带它。
 #
-# 用法:GH_TOKEN="$(gh-app-token review)" gh pr review …   (GH_TOKEN 优先于 gh 里登录的账号)
+# 评审发布入口见 workflow/CLAUDE.md「评审发布失败后重发」。
 # 私钥和 token 都不许打印、不许写进日志或仓库;JWT 与 token 都不出现在命令行参数里(ps 看不到)。
 set -euo pipefail
 

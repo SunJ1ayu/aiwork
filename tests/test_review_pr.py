@@ -554,7 +554,9 @@ class ReviewPrTests(unittest.TestCase):
                                  local_rules="LOCAL WORKSPACE RULES", risks_present=True,
                                  leg_exit=0, leg_stderr="", view_state="complete", emit_failure=False,
                                  report="Finding\nConclusion: PASS", private_terms='unused\n', data_setup=None, ci=None,
-                                 checkout_error=False, expire_during_leg=False):
+                                 checkout_error=False, expire_during_leg=False,
+                                 publication_failure=None, retry_publish=False, retry_change=None,
+                                 existing_reviews=None):
         """Exercise committed source readers and task, with offline Git transport and review leg."""
         calls = {"github_writes": [], "public_reads": [], "source_reads": [], "leg_runs": 0}
         rules = "# aiwork main 规则\r\n必须以此为准。\r\n"
@@ -566,6 +568,9 @@ class ReviewPrTests(unittest.TestCase):
         clock = 0
         grants = {}
         calls['token_grants'] = []
+        calls['post_attempts'] = []
+        reviews = list(existing_reviews or [])
+        failed = False
 
         def require_live_token(token):
             if expire_during_leg and clock >= grants[token]:
@@ -580,17 +585,33 @@ class ReviewPrTests(unittest.TestCase):
             self.fail('anonymous source API must not be used')
 
         def fake_github(token, endpoint, payload=None, **kwargs):
+            nonlocal failed
             require_live_token(token)
+            if payload is None and '/reviews?' in endpoint:
+                calls.setdefault('review_reads', []).append(endpoint)
+                page = int(parse_qs(urlsplit(endpoint).query)['page'][0])
+                return json.dumps(reviews[(page - 1) * 100:page * 100])
             if payload is None and ci is not None:
                 return ci.api(endpoint, **kwargs)
             if payload is not None:
+                calls['post_attempts'].append(dict(payload))
+                if publication_failure in ('post', 'lost_response') and not failed:
+                    failed = True
+                    if publication_failure == 'lost_response':
+                        reviews.append({'commit_id': payload['commit_id'], 'state': 'COMMENTED',
+                                        'body': payload['body']})
+                    raise self.review.ReviewError('POST EOF')
                 calls["github_writes"].append(endpoint)
                 calls["posted_body"] = payload["body"]
                 calls['posted_block'] = json.loads(payload['body'].split('```json\n', 1)[1].split('\n```', 1)[0])
             return {"html_url": "https://github.com/SunJ1ayu/OpenDesign/pull/12#pullrequestreview-1"}
 
         def fake_run(command, **kwargs):
+            nonlocal failed
             if command[0].endswith("gh-app-token"):
+                if publication_failure == 'token' and len(grants) == 1 and not failed:
+                    failed = True
+                    raise self.review.ReviewError('token TLS failure')
                 calls["token_command"] = command
                 token = FAKE_TOKEN + str(len(grants))
                 grants[token] = clock + 3600
@@ -709,6 +730,22 @@ class ReviewPrTests(unittest.TestCase):
                     patch.object(self.review.subprocess, "run", side_effect=fake_leg), \
                     redirect_stdout(stdout), redirect_stderr(stderr):
                 rc = self.review.main()
+                if retry_publish:
+                    calls['first_rc'] = rc
+                    calls['first_stderr'] = stderr.getvalue()
+                    archives = list((workspace / 'data/review-failures').iterdir())
+                    self.assertEqual(len(archives), 1)
+                    archive = archives[0]
+                    calls['retry_archive'] = archive.name
+                    if retry_change is not None:
+                        retry_change(archive, pr, config, calls)
+                    stdout.seek(0)
+                    stdout.truncate()
+                    stderr.seek(0)
+                    stderr.truncate()
+                    with patch('sys.argv', ['review-pr', '12', '--repo', repository,
+                                           '--leg', 'subcursor', '--retry-publish', archive.name]):
+                        rc = self.review.main()
                 calls["pr_state"] = state.call_args_list
                 calls["snapshot"] = snapshot.call_args
             failures = workspace / 'data/review-failures'
@@ -718,6 +755,99 @@ class ReviewPrTests(unittest.TestCase):
             calls['archive_modes'] = [p.stat().st_mode & 0o777 for p in failures.iterdir()] if failures.exists() else []
             calls['temporary_exists'] = Path(calls.get('temporary', '/nonexistent')).exists()
         return rc, calls, stdout.getvalue(), stderr.getvalue()
+
+    def test_publication_retry_succeeds_without_another_model_call(self):
+        for failure in ('token', 'post'):
+            with self.subTest(failure=failure):
+                rc, calls, stdout, stderr = self.run_main_with_leg_result(
+                    'gpt-5.6', publication_failure=failure, retry_publish=True)
+                self.assertEqual(calls['first_rc'], 1)
+                self.assertIn('--retry-publish ' + calls['retry_archive'], calls['first_stderr'])
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(calls['leg_runs'], 1)
+                self.assertEqual(calls['github_writes'], ['repos/SunJ1ayu/aiwork/pulls/12/reviews'])
+                saved = next(iter(calls['archives'].values()))
+                self.assertEqual(calls['posted_body'].encode(), saved['review-body.md'])
+                self.assertIn('publication.json', saved)
+                self.assertIn('pullrequestreview', stdout)
+
+    def test_publication_retry_refuses_changed_head(self):
+        def change(_archive, pr, _config, _calls):
+            pr['head']['sha'] = 'e' * 40
+        rc, calls, _, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', publication_failure='post', retry_publish=True, retry_change=change)
+        self.assertEqual(rc, 1)
+        self.assertIn('head changed', stderr)
+        self.assertEqual(len(calls['post_attempts']), 1)
+
+    def test_publication_retry_refuses_a_post_with_lost_response(self):
+        rc, calls, _, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', publication_failure='lost_response', retry_publish=True)
+        self.assertEqual(rc, 1)
+        self.assertIn('already published', stderr)
+        self.assertEqual(len(calls['post_attempts']), 1)
+
+    def test_publication_retry_checks_privacy_again(self):
+        def change(_archive, _pr, config, _calls):
+            (config / 'private-terms').write_text('Finding\n')
+        rc, calls, stdout, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', publication_failure='post', retry_publish=True, retry_change=change)
+        self.assertEqual(rc, 1)
+        self.assertIn('privacy-check refused', stderr)
+        self.assertNotIn('Finding', stderr + stdout)
+        self.assertEqual(len(calls['post_attempts']), 1)
+
+    def test_publication_retry_refuses_missing_or_mismatched_artifacts(self):
+        def edit_body(archive):
+            (archive / 'review-body.md').write_text('Different findings\nConclusion: PASS\n')
+        def edit_record(archive, field, value):
+            path = archive / 'publication.json'
+            record = json.loads(path.read_text())
+            record[field] = value
+            path.write_text(json.dumps(record))
+        changes = {
+            'body replaced, conclusion preserved': (edit_body, 'body digest'),
+            'body missing': (lambda p: (p / 'review-body.md').unlink(), 'review-body.md'),
+            'record missing': (lambda p: (p / 'publication.json').unlink(), 'publication.json'),
+            'leg changed': (lambda p: edit_record(p, 'leg', 'subkimi'), 'leg'),
+            'head changed': (lambda p: edit_record(p, 'head_sha', 'e' * 40), 'binding'),
+            'repository changed': (lambda p: edit_record(p, 'repository', 'Example/other'), 'target'),
+            'PR changed': (lambda p: edit_record(p, 'pr', 13), 'target'),
+        }
+        for label, (mutate, reason) in changes.items():
+            with self.subTest(label=label):
+                rc, calls, _, stderr = self.run_main_with_leg_result(
+                    'gpt-5.6', publication_failure='post', retry_publish=True,
+                    retry_change=lambda archive, *_: mutate(archive))
+                self.assertEqual(rc, 1)
+                self.assertIn(reason, stderr)
+                self.assertEqual(len(calls['post_attempts']), 1)
+
+    def test_publication_retry_does_not_require_model_preflight(self):
+        def change(_archive, _pr, _config, _calls):
+            self.session.check_leg_platform = lambda *_: self.fail('retry ran leg platform check')
+            self.session.choose_leg = lambda *_: self.fail('retry chose a model')
+        with patch.object(self.session, 'check_leg_platform', wraps=self.session.check_leg_platform), \
+                patch.object(self.session, 'choose_leg', wraps=self.session.choose_leg):
+            rc, calls, _, stderr = self.run_main_with_leg_result(
+                'gpt-5.6', publication_failure='post', retry_publish=True, retry_change=change)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls['leg_runs'], 1)
+
+    def test_publication_retry_checks_all_review_pages_and_other_heads(self):
+        old = {'commit_id': 'b' * 40, 'state': 'COMMENTED',
+               'body': '**aiwork-review · subcursor · gpt-5.6**\n'}
+        other_leg = dict(old, commit_id='a' * 40, body='**aiwork-review · subkimi · kimi-code/k3**\n')
+        rc, calls, _, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', existing_reviews=[old] * 100 + [other_leg])
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(len(calls['review_reads']), 2)
+        duplicate = dict(old, commit_id='a' * 40)
+        rc, calls, _, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', existing_reviews=[other_leg] * 100 + [duplicate])
+        self.assertEqual(rc, 1)
+        self.assertIn('already published', stderr)
+        self.assertEqual(calls['post_attempts'], [])
 
     def test_expired_startup_token_does_not_prevent_review_publication(self):
         rc, calls, _stdout, stderr = self.run_main_with_leg_result(
@@ -1620,6 +1750,8 @@ grep -q -F -- "$3" "$clone/$4"
             self.fail('anonymous source API must not be used')
 
         def fake_github(token, endpoint, payload=None, **kwargs):
+            if payload is None and '/reviews?' in endpoint:
+                return '[]'
             if payload is not None:
                 calls["github_writes"].append(endpoint)
             return {"html_url": "https://github.com/Example/other/pull/12#pullrequestreview-1"}
