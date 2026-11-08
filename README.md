@@ -106,6 +106,8 @@ MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行
 
 ## 本机设置
 
+新建 Linux 虚拟机见 [Agent 安装说明](docs/linux-vm.md)。
+
 仓库只保存工作流；本机设置统一放在 `~/.config/aiwork/`（目录权限 700）：
 
 - `models.env`：Codex、Cursor、DeepSeek、Kimi、MiMo 的模型选择，以及 Kimi 的模型参数。字段与示例见 `templates/models.env.example`。

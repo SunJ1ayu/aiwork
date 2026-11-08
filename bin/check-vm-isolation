@@ -1,0 +1,112 @@
+#!/bin/sh
+"""exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
+Inspect the guest before installing credentials or running agents (stdlib only)."""
+import os
+from pathlib import Path
+import pwd
+import re
+import shutil
+import sys
+
+
+# Host sharing must fail regardless of the mount's name, location or writability.
+# Unknown transports fail too; new guest filesystems need an explicit review.
+LOCAL_FILESYSTEMS = frozenset('''ext2 ext3 ext4 xfs btrfs vfat iso9660 squashfs
+    proc sysfs tmpfs devtmpfs devpts cgroup cgroup2 pstore securityfs debugfs
+    tracefs configfs mqueue hugetlbfs efivarfs ramfs autofs binfmt_misc fusectl bpf nsfs'''.split())
+MAC_ROOTS = ('/Users', '/Volumes', '/System/Volumes/Data')
+
+
+def unescape(value):
+    return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), value)
+
+
+def mac_path(value):
+    return any(value == root or value.startswith(root + '/') for root in MAC_ROOTS)
+
+
+def check_mounts(table):
+    failures = []
+    lines = table.splitlines()
+    if not lines:
+        return ['OBSERVATION: 挂载表为空，不能确认隔离。']
+    for number, line in enumerate(lines, 1):
+        before, separator, after = line.partition(' - ')
+        fields, tail = before.split(), after.split()
+        if (not separator or len(fields) < 6 or len(tail) != 3
+                or not fields[0].isdigit() or not fields[1].isdigit()
+                or not re.fullmatch(r'\d+:\d+', fields[2])):
+            failures.append(f'OBSERVATION: 第 {number} 条挂载记录无法解析。')
+            continue
+        fs = tail[0]
+        if fs not in LOCAL_FILESYSTEMS:
+            failures.append(f'MOUNT: 第 {number} 条挂载不是允许的 guest 本地或内核文件系统；禁止宿主和远程目录共享。')
+        if any(mac_path(unescape(value)) for value in (fields[3], fields[4], tail[1])):
+            failures.append(f'MAC_PATH: 第 {number} 条挂载暴露 Mac 目录。')
+    return failures
+
+
+def check_paths(root, homes):
+    failures = []
+    candidates = [('MAC_PATH', root / path.lstrip('/')) for path in MAC_ROOTS]
+    candidates.append(('OPENCLAW', root / 'Applications/OpenClaw.app'))
+    # sudo may remove SSH_AUTH_SOCK while Lima's forwarded socket remains usable.
+    candidates.append(('SSH_AGENT', root / 'run/host-services/ssh-auth.sock'))
+    for home in homes:
+        candidates.extend(('OPENCLAW', home / path) for path in (
+            '.openclaw', '.config/openclaw', 'Library/Application Support/OpenClaw'))
+        candidates.append(('MAC_SETTINGS', home / 'Library/Application Support/aiwork'))
+        config = home / '.config/aiwork'
+        # A dangling link into a Mac home is a configuration error as well.
+        if mac_path(str(config.resolve())):
+            failures.append('MAC_SETTINGS: aiwork 设置链接指向 Mac 目录。')
+    for rule, path in candidates:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            continue
+        # Do not read credentials or print paths containing local private names.
+        failures.append(f'{rule}: guest 可见禁止的宿主路径、认证 socket 或 OpenClaw 状态。')
+    return failures
+
+
+def check_environment(environment, openclaw):
+    failures = []
+    if environment.get('SSH_AUTH_SOCK'):
+        failures.append('SSH_AGENT: 检测到 SSH agent，禁止转发 Mac 的认证能力。')
+    if openclaw:
+        failures.append('OPENCLAW: guest 的 PATH 中可见 OpenClaw。')
+    return failures
+
+
+def main(argv=None):
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments:
+        print('check-vm-isolation: 不接受参数；必须检查当前 guest 的真实状态。', file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        print('IDENTITY: 请在 Linux guest 内用 root 运行检查。', file=sys.stderr)
+        return 2
+    try:
+        if os.readlink('/proc/self/ns/mnt') != os.readlink('/proc/1/ns/mnt'):
+            print('NAMESPACE: 必须在 guest 的初始挂载命名空间检查，不能在腿或测试沙箱里检查。', file=sys.stderr)
+            return 2
+        failures = check_mounts(Path('/proc/self/mountinfo').read_text())
+        homes = {Path(entry.pw_dir) for entry in pwd.getpwall() if entry.pw_dir.startswith(('/home/', '/root'))}
+        homes.add(Path('/root'))
+        homes.update(path for path in Path('/home').iterdir() if path.is_dir())
+        failures.extend(check_paths(Path('/'), homes))
+        failures.extend(check_environment(os.environ, shutil.which('openclaw')))
+    except (OSError, RuntimeError, UnicodeError):
+        print('OBSERVATION: 无法完整读取挂载或检查路径，不能确认隔离。', file=sys.stderr)
+        return 2
+    if failures:
+        for failure in failures:
+            print(failure, file=sys.stderr)
+        return 1
+    print('PASS: 当前挂载、可见路径和环境检查通过；不证明虚拟机身份或凭证来源。')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
