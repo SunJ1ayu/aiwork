@@ -499,13 +499,13 @@ def publish_saved(directory: Path, *, repository: str, number: int, leg: str,
         token = review_token(repository)
         head = record['head_sha']
         check_current_head(head, pr_state(token, number, repository=repository))
-        bot = project_reviewer_bot(token, repository)
-        existing = find_published_review(token, repository=repository, number=number,
-                                         head=head, body=body, reviewer_bot=bot)
-        if existing is not None:
-            if recover_published:
+        # New model runs can repeat earlier text; receipt lookup belongs to saved-body retries.
+        if recover_published:
+            bot = project_reviewer_bot(token, repository)
+            existing = find_published_review(token, repository=repository, number=number,
+                                             head=head, body=body, reviewer_bot=bot)
+            if existing is not None:
                 return existing
-            raise ReviewError(f'{leg} saved review already published for head {head}: {existing}; refusing duplicate publication')
         response = github(token, f'repos/{repository}/pulls/{number}/reviews',
                           {'commit_id': head, 'event': 'COMMENT', 'body': body})
         link = response.get('html_url')

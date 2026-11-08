@@ -20,7 +20,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from test_review_pr import load_script, CiFixture, CI_POLICY, policy_response
+from test_review_pr import load_script, CiFixture, CI_POLICY
 from test_leg_quick_fixes import LegCase
 
 
@@ -142,10 +142,6 @@ class ReliabilityTests(unittest.TestCase):
 
         def github(token, endpoint, payload=None, **kwargs):
             if payload is None:
-                if '/contents/.aiwork/policy.json?' in endpoint:
-                    return policy_response(CI_POLICY)
-                if '/reviews?' in endpoint:
-                    return '[]'
                 return ci.api(endpoint, **kwargs)
             posted.append(payload)
             return {'html_url': 'https://github.com/example/repo/pull/1#pullrequestreview-1'}

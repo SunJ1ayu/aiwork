@@ -833,6 +833,16 @@ class ReviewPrTests(unittest.TestCase):
                 self.assertEqual(len(calls['post_attempts']), 1)
                 self.assertNotEqual(body, calls['posted_body'])
 
+    def test_publication_dedup_allows_fresh_review_with_identical_text(self):
+        rc, original, _, stderr = self.run_main_with_leg_result('gpt-5.6')
+        self.assertEqual(rc, 0, stderr)
+        old = published_review(original['posted_body'])
+        rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', existing_reviews=[old])
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(calls['leg_runs'], 1)
+        self.assertEqual(len(calls['post_attempts']), 1)
+        self.assertEqual(calls['posted_body'], old['body'])
+
     def test_publication_dedup_ignores_other_authors_with_identical_body(self):
         rc, original, _, stderr = self.run_main_with_leg_result('gpt-5.6')
         self.assertEqual(rc, 0, stderr)
@@ -843,28 +853,35 @@ class ReviewPrTests(unittest.TestCase):
                 rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', existing_reviews=[old])
                 self.assertEqual(rc, 0, stderr)
                 self.assertEqual(len(calls['post_attempts']), 1)
+                rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', existing_reviews=[old],
+                    publication_failure='post', retry_publish=True)
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(calls['leg_runs'], 1)
+                self.assertEqual(len(calls['post_attempts']), 2)
 
     def test_publication_dedup_reads_registered_reviewer_from_project_main(self):
         rc, original, _, stderr = self.run_main_with_leg_result('gpt-5.6')
         self.assertEqual(rc, 0, stderr)
         policy = dict(CI_POLICY, reviewer_bot='project-review[bot]')
-        for login, expected in [(policy['reviewer_bot'], 1), (CI_POLICY['reviewer_bot'], 0)]:
+        for login, expected_posts in [(policy['reviewer_bot'], 1), (CI_POLICY['reviewer_bot'], 2)]:
             with self.subTest(login=login):
                 old = published_review(original['posted_body'], login=login)
                 rc, calls, _, stderr = self.run_main_with_leg_result(
-                    'gpt-5.6', existing_reviews=[old], reviewer_policy=policy)
-                self.assertEqual(rc, expected, stderr)
+                    'gpt-5.6', existing_reviews=[old], reviewer_policy=policy,
+                    publication_failure='post', retry_publish=True)
+                self.assertEqual(rc, 0, stderr)
                 self.assertEqual(calls['policy_reads'],
                     ['repos/SunJ1ayu/aiwork/contents/.aiwork/policy.json?ref=main'])
-                self.assertEqual(len(calls['post_attempts']), 1 - expected)
+                self.assertEqual(len(calls['post_attempts']), expected_posts)
 
     def test_publication_dedup_refuses_missing_or_invalid_registered_reviewer(self):
         for policy in ({}, {'reviewer_bot': 'human-reviewer'}, {'reviewer_bot': False}):
             with self.subTest(policy=policy):
-                rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', reviewer_policy=policy)
+                rc, calls, _, stderr = self.run_main_with_leg_result('gpt-5.6', reviewer_policy=policy,
+                    publication_failure='post', retry_publish=True)
                 self.assertEqual(rc, 1)
                 self.assertIn('reviewer_bot', stderr)
-                self.assertEqual(calls['post_attempts'], [])
+                self.assertEqual(len(calls['post_attempts']), 1)
 
     def test_publication_retry_concurrent_retries_post_only_once(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -978,16 +995,20 @@ class ReviewPrTests(unittest.TestCase):
         other_leg = published_review(self.review.build_body('subkimi', 'kimi-code/k3',
             'Finding\nConclusion: PASS', dict(original['posted_block'], model='kimi-code/k3', family='moonshot')))
         rc, calls, _, stderr = self.run_main_with_leg_result(
-            'gpt-5.6', existing_reviews=[old] * 100 + [other_leg])
+            'gpt-5.6', existing_reviews=[old] * 100 + [other_leg],
+            publication_failure='post', retry_publish=True)
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(len(calls['review_reads']), 2)
+        self.assertEqual(len(calls['post_attempts']), 2)
         duplicate = dict(old, commit_id='a' * 40)
-        rc, calls, _, stderr = self.run_main_with_leg_result(
-            'gpt-5.6', existing_reviews=[other_leg] * 100 + [duplicate])
-        self.assertEqual(rc, 1)
-        self.assertIn('already published', stderr)
-        self.assertIn(duplicate['html_url'], stderr)
-        self.assertEqual(calls['post_attempts'], [])
+        rc, calls, stdout, stderr = self.run_main_with_leg_result(
+            'gpt-5.6', existing_reviews=[other_leg] * 100 + [duplicate],
+            publication_failure='post', retry_publish=True)
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(len(calls['review_reads']), 2)
+        self.assertEqual(stdout.strip(), duplicate['html_url'])
+        self.assertEqual(len(calls['post_attempts']), 1)
+        self.assertEqual(calls['github_writes'], [])
 
     def test_expired_startup_token_does_not_prevent_review_publication(self):
         rc, calls, _stdout, stderr = self.run_main_with_leg_result(
@@ -1890,10 +1911,6 @@ grep -q -F -- "$3" "$clone/$4"
             self.fail('anonymous source API must not be used')
 
         def fake_github(token, endpoint, payload=None, **kwargs):
-            if payload is None and '/contents/.aiwork/policy.json?' in endpoint:
-                return policy_response(CI_POLICY)
-            if payload is None and '/reviews?' in endpoint:
-                return '[]'
             if payload is not None:
                 calls["github_writes"].append(endpoint)
             return {"html_url": "https://github.com/Example/other/pull/12#pullrequestreview-1"}
