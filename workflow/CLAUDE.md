@@ -47,26 +47,41 @@ review-pr PR --repo owner/name --leg LEG --retry-publish RUN_ID
 执行方推送和开 PR 只用构建机器人身份，令牌只从仓库的 `bin/gh-app-token` 换，不用个人账号。
 防的是 PR #44 首次推送把令牌放进命令行参数，进程列表能看到；来历见 [#43](https://github.com/SunJ1ayu/aiwork/issues/43)。
 
-先确认自己的工作树继承了该仓库现有的 Git 凭证助手。服务器上 aiwork 的仓库配置先清空助手列表，再登记一个在 Git 请求凭证时调用 `gh-app-token build --repo SunJ1ayu/aiwork` 的助手；令牌经助手的标准输出交给 Git，不经过参数。工具已在 PATH 中，直接 `git push` 就用它。助手缺失、身份或目标仓库不对时，停下报告，不临时拼认证参数或改用个人登录。
+新机器先按 README「本机设置」安装 App 配置和程序，确认 `gh-app-token` 在 PATH 中。在目标仓库的共享检出执行下面的配置（工作树继承它），示例目标是 aiwork；其他仓库须替换远端及助手内的 `--repo`，并核对角色配置允许该仓库。只配置本仓库，不修改全局凭证设置。
 
-下面在自己的工作树里运行，以 aiwork 为例；先把本次 PR 说明写到 `/tmp/aiwork-pr-body.md`，替换标题。其他仓库使用各自的远端、助手和 `--repo` 作用域。
+```bash
+git remote get-url origin
+git config --local --replace-all credential.https://github.com.helper ''
+git config --local --add credential.https://github.com.helper \
+  '!f() { test "$1" = get || exit 0; token=$(gh-app-token build --repo SunJ1ayu/aiwork) || exit; test -n "$token" || exit 1; printf "username=x-access-token\npassword=%s\n" "$token"; }; f'
+git config --show-origin --get-all credential.https://github.com.helper
+gh-app-token build --repo SunJ1ayu/aiwork --grant
+```
+
+远端须为目标仓库的 `https://github.com/owner/repo.git`。此助手仅在本仓库通过 HTTPS 访问 `github.com` 时生效，不用于 SSH 或其他主机；空项清除继承的助手列表，后面的助手只处理 Git 的 `get` 请求，不存储令牌。换取失败或空值会拒绝返回凭证。令牌经助手标准输出交给 Git，不经过参数。不要直接运行并打印 `git credential fill`；上面的 `--grant` 只显示实际授权范围，不证明推送身份。助手缺失、身份或目标仓库不对时，停下报告，不临时拼认证参数或改用个人登录。
+
+下面在自己的工作树里运行，以 aiwork 为例；替换标题，并在提示时把本次 PR 说明输入到文件（输入结束按 Ctrl-D）。`mktemp` 为每次运行分配独立文件，避免并行覆盖。
 
 ```bash
 (
   set +x
+  umask 077
+  pr_body=$(mktemp "${TMPDIR:-/tmp}/aiwork-pr-body.XXXXXX") || exit
+  trap 'rm -f "$pr_body"' EXIT
+  cat > "$pr_body" || exit
   export GIT_TERMINAL_PROMPT=0
   git push --set-upstream origin HEAD || exit
   GH_TOKEN="$(gh-app-token build --repo SunJ1ayu/aiwork)" || exit
   test -n "$GH_TOKEN" || exit 1
   export GH_TOKEN
   gh pr create --repo SunJ1ayu/aiwork --base main \
-    --title '本次改动的标题' --body-file /tmp/aiwork-pr-body.md
+    --title '本次改动的标题' --body-file "$pr_body"
 )
 ```
 
 开 PR 的令牌只在这个子 shell 的环境中交给 `gh`；换取失败或返回空值就退出，不能回退到 `gh` 已登录的个人账号。令牌不放进 URL、认证头选项或助手配置的字符串，也不打印环境、开启认证调试或把令牌写进日志、提交和 PR 说明；示例先关闭 shell 跟踪，避免展开的值进入日志。
 
-验证推送时，用 `git ls-remote origin refs/heads/分支名` 的结果对照本地 `git rev-parse HEAD`；开 PR 后核对远端 PR 的 head 和作者是本次提交、构建机器人。记录分支、提交号、PR 链接和验证结果，不记录令牌。身份与助手的实际行为需要真推送核实，文档扫描不能证明它们。
+验证推送时，用 `git ls-remote origin refs/heads/分支名` 的结果对照本地 `git rev-parse HEAD`；开 PR 后核对远端 PR 的 head 和作者是本次提交、构建机器人。记录分支、提交号、PR 链接和验证结果，不记录令牌。同时核对该提交的 GitHub 推送事件中 `actor.login` 是项目构建机器人（不是提交作者）；PR 作者也必须是同一个机器人。身份与助手的实际行为需要真推送核实，文档扫描不能证明它们。
 
 ## 做事的方法
 

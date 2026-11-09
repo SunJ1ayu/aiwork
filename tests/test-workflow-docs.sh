@@ -154,12 +154,15 @@ check "W4: 开工先在本机数据目录建工作树，不在共享检出里改
 
 python3 - "$ROOT" <<'PY'
 from pathlib import Path
+import os
 import re
+import shlex
+import subprocess
 import sys
+import tempfile
 
 root = Path(sys.argv[1])
 workflow = (root / 'workflow/CLAUDE.md').read_text()
-assert '\n## 机器人推送与开 PR\n' in workflow, '缺少机器人推送的唯一说明'
 assert 'workflow/CLAUDE.md#机器人推送与开-pr' in (root / 'AGENTS.md').read_text(), 'AGENTS 缺少指向'
 
 # 防的是把认证数据放进命令参数，或直接打印到日志的示例。
@@ -172,10 +175,118 @@ unsafe = re.compile(
     r'|\b(?:echo|printf|printenv)\b[^\n]*\$\{?(?:GH_TOKEN|GITHUB_TOKEN|token)\b',
     re.I,
 )
+safe_output = r'printf "username=x-access-token\npassword=%s\n" "$token"'
+safe_statement = re.compile(r'(?<=;)\s*' + re.escape(safe_output) + ';')
+
+def shell_blocks(text):
+    return [block.replace('\\\n', ' ') for block in
+            re.findall(r'^```(?:bash|sh|shell)\n(.*?)^```', text, re.M | re.S)]
+
+
+def check_workflow(text):
+    assert text.count('\n## 机器人推送与开 PR\n') == 1, '机器人推送说明须只有一个入口'
+    commands = []
+    for block in shell_blocks(text):
+        for line in block.splitlines():
+            if line.lstrip().startswith('git config '):
+                commands.append(shlex.split(line))
+    helpers = [words[-1] for words in commands if words[-1].startswith('!')]
+    assert len(helpers) == 1, '文档须包含一个可执行凭证助手配置'
+    helper = helpers[0]
+    # 只放过交给 Git 的这一句 stdout，助手其余内容仍受原有扫描约束。
+    remaining = safe_statement.sub('', helper)
+    assert not unsafe.search(remaining), '助手含不安全的认证示例'
+    remaining = remaining.replace('test -n "$token"', '')
+    assert not re.search(r'\$\{?(?:token|GH_TOKEN|GITHUB_TOKEN)\b', remaining), '助手把令牌用于凭证输出以外的位置'
+    for block in shell_blocks(text):
+        assert not unsafe.search(block.replace(helper, safe_statement.sub('', helper))), '命令含不安全的认证示例'
+
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        tool = directory / 'gh-app-token'
+        home = directory / 'home'
+        (home / '.config').mkdir(parents=True)
+        calls = directory / 'token-calls'
+        tool.write_text('#!/bin/sh\nprintf called >> "$TOKEN_CALLS"\nprintf "%s\\n" fixture-credential\n')
+        tool.chmod(0o700)
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        env.update(PATH=str(directory) + os.pathsep + os.environ.get('PATH', os.defpath),
+                   HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'),
+                   GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(home / '.gitconfig'),
+                   GIT_TERMINAL_PROMPT='0', TOKEN_CALLS=str(calls))
+
+        def run(args, **kwargs):
+            result = subprocess.run(args, cwd=directory, env=env, text=True,
+                                    capture_output=True, **kwargs)
+            assert 'fixture-credential' not in result.stderr, '凭证泄漏到标准错误'
+            return result
+
+        run(['git', 'init', '-q'], check=True)
+        credential_key = 'credential.https://github.com.helper'
+        run(['git', 'config', '--local', credential_key, 'store'], check=True)
+        expected_config = [(credential_key, ''), (credential_key, helper)]
+        for _ in range(2):
+            for command in commands:
+                run(command, check=True)
+            output = run(['git', 'config', '--null', '--get-regexp', r'^credential\.'], check=True).stdout
+            actual_config = [tuple(entry.split('\n', 1)) for entry in output.rstrip('\0').split('\0')]
+            assert actual_config == expected_config, '最终凭证设置须恰为清空项和文档助手，不许多项或缺项'
+        credential = 'protocol=https\nhost=github.com\nusername=x-access-token\n\n'
+        result = run(['git', 'credential', 'fill'], input=credential, check=True)
+        assert 'password=fixture-credential\n' in result.stdout
+        filled_credential = result.stdout
+
+        def files():
+            return {str(path.relative_to(directory)): path.read_bytes()
+                    for path in directory.rglob('*') if path.is_file()}
+
+        before = files()
+        run(['git', 'credential', 'approve'], input=filled_credential, check=True)
+        assert files() == before, 'approve 调用了取令牌程序或写出了凭证文件'
+        for operation in ('get', 'store', 'erase'):
+            before = files()
+            result = run(['sh', '-c', helper[1:] + ' ' + operation],
+                         input=credential if operation == 'get' else filled_credential, check=True)
+            expected = 'username=x-access-token\npassword=fixture-credential\n' if operation == 'get' else ''
+            assert result.stdout == expected
+            if operation != 'get':
+                assert files() == before, '非 get 操作取了令牌或写入了文件'
+        for url in ('https://github.com.evil.com', 'https://evil.com', 'http://github.com'):
+            result = run(['git', 'credential', 'fill'], input='url=' + url + '\n\n')
+            assert result.returncode != 0 and 'fixture-credential' not in result.stdout
+        for script in ('#!/bin/sh\nexit 1\n', '#!/bin/sh\nexit 0\n'):
+            tool.write_text(script)
+            result = run(['git', 'credential', 'fill'], input=credential)
+            assert result.returncode != 0 and not result.stdout
+            result = run(['sh', '-c', helper[1:] + ' get'])
+            assert result.returncode != 0 and not result.stdout
+    return helper
+
+
+helper = check_workflow(workflow)
+# 这些只检查助手自身的令牌输出行为；配置增删统一由完整结果核对覆盖。
+behavior_mutations = {
+    'stderr': workflow.replace(helper, helper.replace('; printf ', '; echo "$token" >&2; printf ')),
+    'argv': workflow.replace(helper, helper.replace('; printf ', '; sh -c : "$token"; printf ')),
+    'external_printf': workflow.replace(helper, helper.replace(safe_output, 'env ' + safe_output)),
+    'redirect': workflow.replace(helper, helper.replace(safe_output, safe_output + ' >&2')),
+    'pipe': workflow.replace(helper, helper.replace(safe_output, safe_output + ' | tee /dev/stderr')),
+}
+for name, changed in behavior_mutations.items():
+    assert changed != workflow, f'{name}: 变异未命中'
+    try:
+        check_workflow(changed)
+    except (AssertionError, subprocess.CalledProcessError):
+        pass
+    else:
+        raise AssertionError(f'{name}: 不安全或不完整的文档仍被接受')
+
 docs = [root / 'AGENTS.md', root / 'README.md', *sorted((root / 'workflow').rglob('*.md'))]
 for path in docs:
-    for command in re.findall(r'^```(?:bash|sh|shell)\n(.*?)^```', path.read_text(), re.M | re.S):
-        assert not unsafe.search(command.replace('\\\n', ' ')), f'{path.relative_to(root)} 有不安全的认证示例'
+    if path == root / 'workflow/CLAUDE.md':
+        continue
+    for command in shell_blocks(path.read_text()):
+        assert not unsafe.search(command), f'{path.relative_to(root)} 有不安全的认证示例'
 PY
 check "W4: 机器人推送说明有唯一入口，命令示例不把令牌放进参数或日志" $?
 
