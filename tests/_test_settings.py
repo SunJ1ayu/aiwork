@@ -32,7 +32,6 @@ def inherited_environment_keys():
 def clear_inherited_environment():
     for key in inherited_environment_keys():
         os.environ.pop(key)
-    # A nonempty proxy dictionary also prevents urllib's macOS system-proxy fallback.
     os.environ.update(PROXY_BYPASS)
 
 
@@ -84,11 +83,11 @@ def owned_settings():
         for key in ('AIWORK_CONFIG_DIR', 'AIWORK_DATA_DIR')))
 
 
-def write_platform_probe(directory, *, macos=False):
+def write_platform_probe(directory, *, linux=True):
     """Give disposable deployments the real routing rules with a fixed probe."""
     helper = Path(__file__).resolve().parents[1] / 'bin/_review-platform.sh'
-    source, count = re.subn(r'review_platform_is_macos\(\) \{[^}]*\}',
-                            'review_platform_is_macos() { return ' + ('0' if macos else '1') + '; }',
+    source, count = re.subn(r'review_platform_is_linux\(\) \{[^}]*\}',
+                            'review_platform_is_linux() { return ' + ('0' if linux else '1') + '; }',
                             helper.read_text())
     if count != 1:
         raise ValueError('platform probe definition not found')
@@ -113,27 +112,6 @@ def _fixture_launcher(programs, name, source):
     launcher = programs / name
     os.replace(temporary.name, launcher)
     return launcher
-
-
-def claude_fixture_launcher(programs, target):
-    """Model stubs also implement the native CLI's offline MCP startup protocol."""
-    source = '#!' + sys.executable + '\n' + """
-import json, os, sys
-if sys.argv[-2:] == ['mcp', 'serve']:
-    for line in sys.stdin:
-        message = json.loads(line)
-        if message.get('method') == 'initialize':
-            result = {'protocolVersion': '2024-11-05', 'capabilities': {},
-                      'serverInfo': {'name': 'offline-fixture', 'version': '2.1.301'}}
-        elif message.get('method') == 'tools/call':
-            result = {'content': [{'type': 'text', 'text': json.dumps({
-                'stdout': 'AIWORK_NATIVE_SANDBOX_READY', 'stderr': '', 'interrupted': False})}]}
-        else:
-            continue
-        print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
-    raise SystemExit(0)
-""" + 'os.execv(' + repr(str(target)) + ', [' + repr(str(target)) + '] + sys.argv[1:])\n'
-    return _fixture_launcher(programs, '_claude-fixture', source)
 
 
 def kimi_fixture_launcher(programs, target):
@@ -162,9 +140,7 @@ def write_programs(directory, fake=None):
         target = runtime.get(name, reject)
         if fake is not None and (Path(fake) / name).exists():
             target = Path(fake) / name
-            if name == 'claude':
-                target = claude_fixture_launcher(programs, target)
-            elif name == 'kimi':
+            if name == 'kimi':
                 target = kimi_fixture_launcher(programs, target)
         link = programs / name
         link.unlink(missing_ok=True)
@@ -191,9 +167,7 @@ def run_with_programs(command):
                 except ValueError:
                     continue
                 (programs / name).unlink(missing_ok=True)
-                if name == 'claude':
-                    target = claude_fixture_launcher(programs, target)
-                elif name == 'kimi':
+                if name == 'kimi':
                     target = kimi_fixture_launcher(programs, target)
                 (programs / name).symlink_to(target)
         return subprocess.call(command)
@@ -282,7 +256,7 @@ if __name__ == '__main__':
     elif sys.argv[1] == 'set-model':
         set_model(os.environ['AIWORK_CONFIG_DIR'], *sys.argv[2:])
     elif sys.argv[1] == 'mktemp':
-        # BSD mktemp can ignore TMPDIR; both languages allocate in the owned tree.
+        # Keep shell fixtures under the supervisor-owned temporary tree.
         directory = fixture_directory(os.environ['TMPDIR'])
         if sys.argv[2:] == ['-d']:
             print(tempfile.mkdtemp(prefix='tmp.', dir=directory))
@@ -296,8 +270,6 @@ if __name__ == '__main__':
         command = sys.argv[1:]
         isolated = command[:1] == ['--isolated']
         if isolated:
-            command = command[1:]
-        if command[:1] == ['--workspace']:
             command = command[1:]
         ensure_settings(fresh=isolated)
         raise SystemExit(subprocess.call(command))

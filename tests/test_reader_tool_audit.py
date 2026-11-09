@@ -451,8 +451,6 @@ class ReaderToolAuditTests(unittest.TestCase):
         subprocess.check_call(["git", "-C", str(self.repo), "commit", "-qm", "base"])
         self.deployment = self.root / 'deployment'
         shutil.copytree(ROOT / 'bin', self.deployment)
-        from _test_settings import write_platform_probe
-        write_platform_probe(self.deployment, macos=False)
         wrapper = self.deployment / 'ro-repo-exec'
         wrapper.write_text('#!/bin/bash\nshift 2\nexec "$@"\n')
         wrapper.chmod(0o755)
@@ -727,9 +725,7 @@ sys.stdout.write(pathlib.Path(os.environ['CLAUDE_STREAM']).read_text())
         # The real Linux guard is exercised by the existing platform suites.
         self.fixture._write('ro-repo-exec', '#!/bin/bash\nshift 2\nexec "$@"\n')
 
-    def run_leg(self, mode='review', macos=False, leg='submimo'):
-        from _test_settings import write_platform_probe
-        write_platform_probe(self.fixture.bin, macos=macos)
+    def run_leg(self, mode='review', leg='submimo'):
         env=self.fixture._env()
         env.update(CLAUDE_CAPTURE=str(self.capture), CLAUDE_STREAM=str(self.stream),
                    AIWORK_REVIEW_REPORT_PATH=str(self.root/'report.md'),
@@ -801,23 +797,6 @@ sys.stdout.write(pathlib.Path(os.environ['CLAUDE_STREAM']).read_text())
                     review = _load('review-pr')
                     with self.assertRaises(review.ReviewError):
                         review.publishable_model(json.loads(emitted.read_text()))
-
-    def test_mac_both_providers_share_command_policy(self):
-        sys.path.insert(0, str(ROOT / "bin"))
-        from _claude_sandbox import TOOLS
-        stream = self.stream.read_text()
-        events = [json.loads(line) for line in stream.splitlines()]
-        events[0]['tools'] = list(TOOLS)
-        self.stream.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
-        for mode in ('review', 'explore'):
-            for leg in ('submimo', 'subagent'):
-                result = self.run_leg(mode, True, leg)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                call = json.loads(self.capture.read_text())
-                self.assertEqual(call['argv'][call['argv'].index('--tools') + 1], ','.join(TOOLS))
-                self.assertTrue(call['settings']['sandbox']['enabled'])
-                self.assertFalse(call['settings']['sandbox']['allowUnsandboxedCommands'])
-                self.capture.unlink()
 
     def test_mimo_settings_fail_before_provider_and_name_bad_item(self):
         good=self.settings.read_text()

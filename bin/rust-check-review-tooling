@@ -33,7 +33,6 @@ SUITES=(
   "timeout|python3|$ROOT/tests/test_timeout.py"
   "leg-finish|python3|$ROOT/tests/test_leg_finish.py"
   "review-platform|python3|$ROOT/tests/test_review_platform.py"
-  "claude-sandbox|python3|$ROOT/tests/test_claude_sandbox.py"
   "reader-tool-audit|python3|$ROOT/tests/test_reader_tool_audit.py"
   "kimi-preflight|python3|$ROOT/tests/test_kimi_preflight.py"
   "review-homes|python3|$ROOT/tests/test_review_homes.py"

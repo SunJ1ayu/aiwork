@@ -12,17 +12,13 @@ from urllib.parse import quote
 from urllib.error import HTTPError
 
 MAX_BYTES = 4096
-MAC_PATH = '.github/workflows/ci-macos.yml'
 STEPS = {
     'linux': 'Run the offline suite inside a real network namespace',
-    'mac': 'All offline suites (report only for now)',
 }
-NO_EGRESS_STEP = 'No-egress suite (must pass)'
 
 
 def workflow_paths(policy):
-    return {'linux': (policy or {}).get('ci', {}).get('workflow_path', '策略 CI（路径没取到）'),
-            'mac': MAC_PATH}
+    return {'linux': (policy or {}).get('ci', {}).get('workflow_path', '策略 CI（路径没取到）')}
 
 
 def select_run(runs, head, policy, number, timeout):
@@ -38,7 +34,6 @@ class Result:
     state: str = '没取到'
     reason: str = ''
     red: set[str] | None = None
-    network: str = '没取到'
 
 
 def error_reason(exc: Exception) -> str:
@@ -96,7 +91,7 @@ def render(head: str, main: str, results: dict, *, policy=None, gate='关卡结�
         '可信度：状态和结论来自 GitHub 接口；Linux 的 G1 原样引用关卡自己的检查，不从工作流 success 推断。'
         '套件名单从日志解析，日志由 PR 自己的代码打印，只能参考，不能证明测到了点子上。未列出日志原文。',
         '正式测试套件在评审环境触发断网守卫拒跑（78）是正常环境限制，不是 PR 的问题；'
-        '要看测试结果请看本节，不必在腿自己的环境重跑正式套件。Mac CI 只报不拦；'
+        '要看测试结果请看本节，不必在腿自己的环境重跑正式套件。'
         '多出来的红套件是否构成问题，由评审按 REVIEW-RULES 判断。',
         '红名单仅与查询时 main 当前提交比较，不说明因果；不在红名单不等于通过，也可能未运行或被删除。',
     ]
@@ -104,9 +99,6 @@ def render(head: str, main: str, results: dict, *, policy=None, gate='关卡结�
     lines.append(f'- {paths["linux"].rsplit("/", 1)[-1]}（Linux，关卡要求通过）：当前 head {gate}；main 工作流 {baseline.state}。')
     current = results.get(('head', 'linux'), Result())
     lines.append(f'  本 PR 关联的工作流运行状态（不代替 G1）：{current.state}。')
-    current, baseline = (results.get((side, 'mac'), Result()) for side in ('head', 'main'))
-    lines.append(f'- ci-macos.yml（Mac，只报不拦）：当前 head {current.state}；main {baseline.state}。')
-    lines.append(f'Mac 断网判据：{current.network}；main：{baseline.network}。')
     for kind, path in paths.items():
         current = results.get(('head', kind), Result(reason='未查询'))
         baseline = results.get(('main', kind), Result(reason='未查询'))
@@ -208,7 +200,7 @@ def context(api, *, repository: str, head: str, main: str | None, number: int, p
                 selection_policy = {'ci': {**policy['ci'], 'workflow_path': path}}
                 run = select_run(runs, sha, selection_policy, number if side == 'head' else None, remaining())
                 if not run:
-                    result.state = result.network = '没有运行'
+                    result.state = '没有运行'
                     result.reason = '没有关联到本 PR 编号的同一工作流运行' if side == 'head' else '没有 main 当前提交的同一工作流运行'
                     continue
                 result.state = state(run)
@@ -217,9 +209,6 @@ def context(api, *, repository: str, head: str, main: str | None, number: int, p
                 if type(rid) is not int or type(attempt) is not int or min(rid, attempt) < 1:
                     raise ValueError('invalid run identity')
                 jobs = pages(f'repos/{repository}/actions/runs/{rid}/attempts/{attempt}/jobs?per_page=100', 'jobs')
-                network = [state(step) for job in jobs for step in job.get('steps', []) if step['name'] == NO_EGRESS_STEP]
-                result.network = (next((v for v in network if v != '通过'), '通过') if network else
-                                  '还在跑' if run['status'] != 'completed' else '没有运行')
                 if run['status'] != 'completed':
                     continue
                 offline = [(job, step) for job in jobs for step in job.get('steps', []) if step['name'] == STEPS[kind]]

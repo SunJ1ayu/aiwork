@@ -302,29 +302,6 @@ print('descendants share settings, data, programs and workspace')
         self.assertNotEqual(rejected.returncode, 0)
         self.assertEqual(models.read_bytes(), before)
 
-    def test_shell_fixture_allocation_uses_workspace_when_native_mktemp_does_not(self):
-        # Replay the suite's real allocation with BSD's default-directory behavior.
-        source = (ROOT / 'tests/test-subcodex.sh').read_text()
-        allocation = re.search(r'^d="\$\(([^\n)]+)\)"', source, re.M).group(1)
-        native = self.d / 'native-temp'
-        workspace = self.d / 'workspace'
-        fake = self.d / 'native-bin'
-        for directory in (native, workspace, fake):
-            directory.mkdir()
-        mktemp = fake / 'mktemp'
-        mktemp.write_text('#!/bin/sh\nexec /usr/bin/mktemp "$@" '
-                          '"$NATIVE_TEMP/tmp.XXXXXXXX"\n')
-        mktemp.chmod(0o755)
-        script = (f'. {shlex.quote(str(ROOT / "tests/_no-egress.sh"))} || exit 78\n'
-                  f'd="$({allocation})" || exit\nprintf "%s\\n" "$d"\nrm -rf "$d"\n')
-        result = subprocess.run(['bash', '-c', script],
-                                env=dict(self.env, TMPDIR=str(workspace), NATIVE_TEMP=str(native),
-                                         AIWORK_PROGRAMS=str(self.config / 'programs'),
-                                         PATH=str(fake) + os.pathsep + self.env['PATH']),
-                                capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(Path(result.stdout.strip()).is_relative_to(workspace), result.stdout)
-
     def test_missing_file_and_each_missing_leg_name_the_path_and_leg(self):
         path = self.config / 'models.env'
         path.unlink()
@@ -733,7 +710,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                     'aiwork-config', 'subagent', 'subdeepseek-agent', 'submimo',
                     'subcodex', 'subcursor', 'subkimi')):
                 shutil.copy2(source, self.bin / source.name)
-        write_platform_probe(self.bin, macos=False)
+        write_platform_probe(self.bin, linux=True)
         self._program('ro-repo-exec', '#!/bin/sh\nshift 2\nexec "$@"\n')
         shutil.copy2(ROOT / 'bin/aiwork-timeout', self.bin / 'real-aiwork-timeout')
         self._program('aiwork-timeout', '''#!/usr/bin/env python3
