@@ -212,7 +212,7 @@ function modificationRoundLine(reviews, config) {
   return `轮数：第 ${count} 轮 / 上限 ${limit}${stop ? "；停：交业主" : ""}`;
 }
 
-export function decide(facts, policy, { excludeFamilies = [] } = {}) {
+export function decide(facts, policy) {
   const head = facts.pr.head_sha;
   const lines = [];
   const add = (ok, rule, text) => lines.push(`${ok ? "✅" : "❌"} ${rule} ${text}`);
@@ -240,7 +240,7 @@ export function decide(facts, policy, { excludeFamilies = [] } = {}) {
   const onHead = botReviews.filter((r) => r.commit_id === head);
   // 已知作者只排除本次实现家族:登记为 Builder 不代表写过所有 PR。
   // UNKNOWN 沿用保守边界,不能猜测共享账号这次实际调用的模型。
-  const authorFamilies = new Set([...(author.known ? [author.family] : Object.values(policy.builders)), ...excludeFamilies]);
+  const authorFamilies = new Set(author.known ? [author.family] : Object.values(policy.builders));
   const passes = [];
   const reviewed = new Set();
   const blocks = [];

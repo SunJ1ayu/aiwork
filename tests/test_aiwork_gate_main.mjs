@@ -4,6 +4,9 @@
 // 合并用另换的一张令牌(只在要合并时才换),带上判过的 head。
 // 跑法:node --test tests/test_aiwork_gate_main.mjs
 import { test } from "node:test";
+import { collect } from "../gate/collect.mjs";
+import { decide } from "../gate/decide.mjs";
+import { githubClient } from "../gate/github.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { generateKeyPairSync, createVerify } from "node:crypto";
@@ -409,7 +412,7 @@ test('派发桥真跑共享 GitHub 读取、默认分支策略、分页和关卡
   current.review_dispatch.targets.documentation=2;
   const gh=await fakeGitHub({dispatchPolicy:current,defaultBranch:'develop',files:['web/a.ts','web/b.ts'],paginateFiles:true,
     reviews:[dispatchReview('deepseek','PASS',1),dispatchReview('deepseek','PASS',2),
-      dispatchReview('moonshot','BLOCK',3),dispatchReview('openai','PASS',4),
+      dispatchReview('moonshot','BLOCK',3),
       dispatchReview('anthropic','PASS',5),dispatchReview('xiaomi','PASS',6,'partial')]});
   try {
     const result=await runDispatchBridge(gh.url);assert.equal(result.code,0,result.err);
@@ -433,12 +436,30 @@ test('派发桥的作者排除跟随关卡，已知作者与 UNKNOWN 都从关�
     try {
       const result=await runDispatchBridge(gh.url);assert.equal(result.code,0,result.err);
       const state=JSON.parse(result.out);
-      assert.deepEqual(state.pass_families,actorLogin==='SunJ1ayuBoT'?['deepseek']:[]);
+      assert.deepEqual(state.pass_families,actorLogin==='SunJ1ayuBoT'?['deepseek','openai']:['openai']);
       assert.ok(state.excluded.includes('anthropic'));assert.ok(state.excluded.includes('openai'));
       assert.equal(state.excluded.includes('deepseek'),actorLogin!=='SunJ1ayuBoT');
-      assert.equal(state.minimum_met,actorLogin==='SunJ1ayuBoT');
+      assert.equal(state.minimum_met,true);
     } finally {gh.server.close();}
   }
+});
+test('执行方已有 PASS 时派发记录保留真关卡结论，只跳过执行方派腿',async()=>{
+  const current=dispatchPolicy();
+  const gh=await fakeGitHub({dispatchPolicy:current,actorLogin:'SunJ1ayuBoT',
+    reviews:[dispatchReview('openai','PASS',1)]});
+  try {
+    const facts=await collect(githubClient({GITHUB_API_URL:gh.url}).reader('read_token'),'o/r',10,current);
+    const official=decide(facts,current);
+    const result=await runDispatchBridge(gh.url);assert.equal(result.code,0,result.err);
+    const state=JSON.parse(result.out);
+    assert.deepEqual(state.gate,{title:official.title,conclusion:official.conclusion,summary:official.summary});
+    assert.deepEqual(state.pass_families,official.review_state.pass_families);
+    assert.equal(state.minimum_met,official.review_state.minimum_met);
+    assert.ok(state.excluded.includes('openai'));
+    for (const field of ['reviewed_families','target_met','missing_target','next_step']) {
+      assert.deepEqual(state[field],official.review_state[field],field);
+    }
+  } finally {gh.server.close();}
 });
 test('派发桥不吞 GraphQL 错误',async()=>{
   const gh=await fakeGitHub({dispatchPolicy:dispatchPolicy(),graphqlErrors:true});

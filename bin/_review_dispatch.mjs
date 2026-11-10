@@ -20,8 +20,10 @@ const policy = JSON.parse(Buffer.from(source.content, 'base64').toString('utf8')
 validatePolicy(policy);
 const facts = await collect(api, repository, number, policy);
 if (facts.pr.state !== 'open') throw new Error('PR is not open');
-const result = decide(facts, policy, { excludeFamilies: [builder_family] });
+const result = decide(facts, policy);
 process.stdout.write(JSON.stringify({
   head: facts.pr.head_sha, policy_sha: source.sha, ...result.review_state,
+  // 执行方只影响是否派腿，不能改写关卡对作者和评审的判断。
+  excluded: [...new Set([...result.review_state.excluded, builder_family])],
   gate: { title: result.title, conclusion: result.conclusion, summary: result.summary },
 }));

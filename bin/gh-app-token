@@ -15,7 +15,9 @@ aiwork_init "${0##*/}" || exit 78
 #   PERMISSIONS='{"contents":"read","pull_requests":"write","actions":"read","checks":"read"}'  # 令牌只带这些权限;App 以后多给了也不会带上
 #
 # review 读 CI：公开仓库目前可直接读；私有仓库需在 App 和本机 PERMISSIONS 中授予 actions:read，
-# 读取关卡自己的 G1 检查还需 checks:read；只在 App 加权限而不改本机配置，换出的令牌仍不带它。
+# 读取关卡自己的 G1 检查还需 checks:read。--auto 的 collect 还读取 PR 事件：私有仓库需
+# issues:read，同时在 App 和本机 PERMISSIONS 配置；缺少时会在派腿前报读取失败。公开仓库
+# 当前可直接读取。不在这里自动申请或扩大权限，需业主决定；只在 App 加权限而不改本机配置，换出的令牌仍不带它。
 #
 # 评审发布入口见 workflow/CLAUDE.md「评审发布失败后重发」。
 # 私钥和 token 都不许打印、不许写进日志或仓库;JWT 与 token 都不出现在命令行参数里(ps 看不到)。

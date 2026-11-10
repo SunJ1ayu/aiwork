@@ -46,7 +46,7 @@ GitHub `main` 是 aiwork 的源码准本。改动流程见 [workflow/CLAUDE.md](
 - `bin/submimo <review|explore>` — MiMo，经 `bin/subagent` 复用 Claude Code headless，连接小米的 Anthropic 兼容接口。模型读 `models.env` 的 mimo 行（API 原生 `mimo-…` 名称）；接口地址和密钥读 `mimo.env`。Linux 上两个模式只提供读取工具，配置和跑完核对共用 `bin/_reader_tools.py`。看不出实际工具或出现其他工具时记为 `readonly_tools`，不发评审、不因这个原因重试。超时使用 `MIMO_TIMEOUT`，轮次上限使用 `MIMO_MAX_TURNS`。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。原生沙箱设置见 `bin/subcodex` 的 `CODEX_CFG`；外层另经 `ro-repo-exec`。副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
-- `bin/review-pr PR [--repo owner/name] --auto --builder-family FAMILY` — 按项目 main 策略自动派评审；分档与配置定义见 [gate/README.md「评审分档与派发」](gate/README.md#评审分档与派发)。`FAMILY` 填本次实际写代码的模型家族（本会话 Codex 为 `openai`），只用于多排除一家，不改变关卡对共享构建账号的 UNKNOWN 认定。工具直接使用关卡给出的底线、排除家族和已交卷记录；同一 head 上已交完整评审（包括 BLOCK）的家族不重复派。调用单腿入口自动发布，失败按策略换下一家，不按失败原因分类；BLOCK 是已经交卷，但不算 PASS，不会抹掉反对。head 或 main 策略变化就停止。标准输出给出目标、已交卷家族、合格 PASS、逐腿失败/跳过原因和关卡原文；目标不足但已到 PASS 底线时退出 0、交汇总，底线不足退出 2、交业主，均不会申请合并。记录和逐腿日志保存在本机数据目录 `logs/review-dispatch-<PR>-<随机名>/`；交接时把本轮位置交给汇总，不将私人日志提交仓库。单腿入口仍用于按修改单补审或发布恢复。
+- `bin/review-pr PR [--repo owner/name] --auto --builder-family FAMILY` — 按项目 main 策略自动派评审；分档与配置定义见 [gate/README.md「评审分档与派发」](gate/README.md#评审分档与派发)。`FAMILY` 填本次实际写代码的模型家族（本会话 Codex 为 `openai`），只用于跳过该家族的派腿，不改变关卡的作者认定、合格 PASS 和原文结论。工具直接使用关卡给出的底线、排除家族和已交卷记录；同一 head 上已交完整评审（包括 BLOCK）的家族不重复派。调用单腿入口自动发布，失败按策略换下一家，不按失败原因分类；BLOCK 是已经交卷，但不算 PASS，不会抹掉反对。head 或 main 策略变化就停止。标准输出给出目标、已交卷家族、合格 PASS、逐腿失败/跳过原因和关卡原文；目标不足但已到 PASS 底线时退出 0、交汇总，底线不足退出 2、交业主，均不会申请合并。记录和逐腿日志保存在本机数据目录 `logs/review-dispatch-<PR>-<随机名>/`；交接时把本轮位置交给汇总，不将私人日志提交仓库。单腿入口仍用于按修改单补审或发布恢复。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。
   失败时打印脱敏后的 stderr 末 40 行，诊断留在数据目录 `review-failures/<run-id>/`，不含仓库检出和凭证助手。保留规矩见 `bin/_aiwork_config.py` 的 `DATA_ENTRIES`。旧的 `logs/review-pr-failures/` 不再写入，按 `logs` 的保留规矩清理。
   发布失败的处理见 [workflow/CLAUDE.md「评审发布失败后重发」](workflow/CLAUDE.md#评审发布失败后重发)。
@@ -116,7 +116,7 @@ MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行
 - `deepseek.env`：DeepSeek 使用的 `DEEPSEEK_API_KEY`，保留文件权限 600。
 - `mimo.env`：两行 `MIMO_BASE_URL=…`、`MIMO_API_KEY=…`，文件权限 600。地址使用小米控制台给出的 Anthropic 兼容 Base URL：按量付费和 Token Plan 的地址、凭证不同，不能混用；地址须为 HTTPS、以 `/anthropic` 结尾，不带用户名、密码、查询串或片段。MiMo 不从环境变量补地址或密钥。
 - `models.env`、`runtime.env`、`deepseek.env`、`mimo.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
-- `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。
+- `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。评审及自动派发的读取权限见 [gh-app-token](bin/gh-app-token) 文件头；私有仓库读 PR 事件的要求也在那里，是否增权由业主决定。
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。
 
