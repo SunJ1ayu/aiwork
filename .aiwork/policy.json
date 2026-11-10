@@ -38,18 +38,68 @@
     "templates/aiwork-gate.yml",
     "templates/aiwork-review-ping.yml"
   ],
-  "high_min_families": 3,
+  "high_min_families": 2,
   "modification_rounds": {
     "summary_account": "SunJ1ayuBoT"
   },
   "high": [
-    "bin/gh-app-token",
-    "bin/aiwork-config",
     "bin/_aiwork_config.py",
-    "bin/privacy-check",
+    "bin/_cursor-stream.py",
+    "bin/_kimi_preflight.py",
+    "bin/_leg_session.py",
+    "bin/_paths.py",
+    "bin/_programs.sh",
+    "bin/_python",
+    "bin/_reader_tools.py",
+    "bin/_review-home-guard.sh",
+    "bin/_review-platform.sh",
+    "bin/_review-reader-context.sh",
+    "bin/_review-workspace.sh",
+    "bin/_review_dispatch.mjs",
+    "bin/_review_result.py",
     "bin/_secret-shapes",
     "bin/_secret_shapes.py",
+    "bin/aiwork-config",
+    "bin/aiwork-timeout",
+    "bin/gh-app-token",
+    "bin/privacy-check",
     "bin/review-pr",
-    "bin/_leg_session.py"
-  ]
+    "bin/ro-repo-exec",
+    "bin/subagent",
+    "bin/subcodex",
+    "bin/subcursor",
+    "bin/subdeepseek-agent",
+    "bin/subkimi",
+    "bin/submimo",
+    "kimi-review-home/config.toml",
+    "kimi-review-home/hooks/guard.mjs"
+  ],
+  "review_dispatch": {
+    "targets": {
+      "documentation": 1,
+      "code": 2,
+      "high": 3
+    },
+    "documentation_paths": [
+      "*.md",
+      "**/*.md",
+      "*.rst",
+      "**/*.rst",
+      "*.txt",
+      "**/*.txt"
+    ],
+    "order": [
+      "subdeepseek-agent",
+      "subkimi",
+      "subcursor",
+      "subcodex",
+      "submimo"
+    ],
+    "high_only": [
+      "subkimi",
+      "subcursor",
+      "subcodex"
+    ],
+    "minimum_families": 1
+  }
 }

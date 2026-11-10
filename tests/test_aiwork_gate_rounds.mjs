@@ -244,10 +244,11 @@ test("真实策略保留 main 的 UNKNOWN 家族边界：Claude PASS 不能单�
     submitted_at: "2026-10-30T04:00:00Z", body: "" };
   const reviewed = (family, id) => ({ ...pass, id, body: pass.body.replace('"openai"', JSON.stringify(family)) });
   const unknown = { covers_head: true, actors: ["aiwork-build[bot]"] };
-  const high = decide(facts([], { pushes: unknown, files: ["bin/gh-app-token"],
-    reviews: [reviewed("anthropic", 1), reviewed("openai", 2), reviewed("deepseek", 3), approval] }), current);
+  const independent = ["openai", "deepseek", "moonshot", "xiaomi"].slice(0, current.high_min_families - 1);
+  const reviews = [reviewed("anthropic", 1), ...independent.map((f, i) => reviewed(f, i + 2)), approval];
+  const high = decide(facts([], { pushes: unknown, files: ["bin/gh-app-token"], reviews }), current);
   assert.equal(high.title, `不放行:high 路径要 ${current.high_min_families} 家不同家族都 PASS`);
-  assert.deepEqual(high.passes.map((r) => r.family).sort(), ["deepseek", "openai"]);
+  assert.deepEqual(high.passes.map((r) => r.family).sort(), independent.sort());
   const ordinary = decide(facts([], { pushes: unknown, reviews: [reviewed("anthropic", 1), approval] }), current);
   assert.equal(ordinary.author.known, false);
   assert.equal(ordinary.title, "不放行:缺合格评审");

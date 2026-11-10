@@ -9,6 +9,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 
 | 文件 | 做什么 |
 |---|---|
+| `github.mjs` | GitHub 请求、Link 分页与 GraphQL 的共享客户端；各入口传入本角色令牌 |
 | `collect.mjs` | 只读 GitHub API 收集事实;出错、分页没取完、条数对不上一律抛错(G8) |
 | `decide.mjs` | 纯判定,不碰网络(G1–G7) |
 | `run.mjs` | 流程:每次运行把所有开着的 PR 全重算一遍(事件只是门铃)。列出开着的 PR、按 head 分组 → 先在每个 head 上占位 → 每个 head 把以它为 head 的 PR 全判一遍、合成一个结论写一次;读不全就不放行;写上的是放行,就合并有合并请求的 PR(见下「合并」) |
@@ -18,6 +19,14 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 测试:`tests/test_aiwork_gate.mjs`(判定与收集)、`tests/test_aiwork_gate_run.mjs`(流程与失败处理)、
 `tests/test_aiwork_gate_main.mjs`(假 GitHub API 上真跑 `main.mjs`)、`tests/test_aiwork_gate_workflow.mjs`(workflow 形状和本仓库策略)。
 从 OpenDesign 仓库内容推导 policy 清单的测试留在 OpenDesign。
+
+## 评审分档与派发
+
+项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发目标、普通文档路径和固定顺序；`high_min_families` 仍是 high 底线。`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`order` 是腿的尝试顺序；`high_only` 中的腿留给 high。high 优先于其他档位。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测目标或顺序。
+
+工具用法见 README「Review commands」；失败记录由汇总读取。关卡摘要显示目标与底线，只有底线参与 G3 / G6；其他规则不变。隔离保障链的推导和漏项检查见 `tests/test_aiwork_gate_workflow.mjs`。
+
+`decide.mjs` 的 `review_state` 是派发器消费的机器状态：底线是否满足、已排除家族、完整已交卷家族及目标缺口均在那里定义。派发桥只读取默认分支策略、收集事实并转交该状态；Python 只按状态选择下一条腿，不计算评审资格或底线。派发桥仅在选择腿的排除集合中加入实际执行方；关卡返回的作者、评审资格、底线及原文保持原样。读取桥与关卡入口共用 `github.mjs`，配置仍由入口环境提供。
 
 ## 修改轮数显示
 

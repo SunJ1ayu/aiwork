@@ -1,3 +1,6 @@
+import { matchAny } from "./paths.mjs";
+export { matchAny, globToRegExp } from "./paths.mjs";
+import { reviewPlan } from "./review-plan.mjs";
 // aiwork 放行关卡的判定部分:只吃收集好的事实(collect.mjs)和策略(.aiwork/policy.json),不碰网络。
 // 规则编号的来历在 git 历史里。对抗用例见 tests/test_aiwork_gate.mjs。
 //
@@ -53,26 +56,6 @@ export function conclusionLines(body) {
   return found;
 }
 
-export function globToRegExp(pattern) {
-  let re = "";
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c === "*" && pattern[i + 1] === "*") {
-      re += ".*";
-      i++;
-    } else if (c === "*") {
-      re += "[^/]*";
-    } else {
-      re += c.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  return new RegExp(`^${re}$`);
-}
-
-export function matchAny(patterns, path) {
-  return patterns.some((p) => globToRegExp(p).test(path));
-}
-
 // 评审正文里恰好一个 ```json 块;字段不全或类型不对就不算这条评审的结论。
 export function parseReviewBlock(body) {
   const blocks = [...String(body ?? "").matchAll(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
@@ -121,6 +104,15 @@ function blockReason(r, p) {
 }
 
 const isReviewerBot = (r, policy) => r.login === policy.reviewer_bot && r.type === "Bot";
+
+// 交卷与合格 PASS 共用范围检查；BLOCK 的拦截仍先按 blockReason 处理。
+function reviewScopeReason(r, v, head, author, authorFamilies) {
+  if (v.head_sha !== head) return `结论写的是 ${v.head_sha.slice(0, 7)},不是当前 head`;
+  if (r.state === "DISMISSED") return "已被撤销";
+  if (v.completeness !== "complete") return `不完整(${v.completeness})`;
+  if (authorFamilies.has(v.family)) return `${v.family} ${author.known ? "是本次作者家族" : "是可能的 Builder 家族"},不能提供独立评审`;
+  return null;
+}
 
 // 一条评审只有一个生效时刻 = 它现在的立场为我们所知的那一刻。选"最后一次表态"、定 BLOCK 时刻、比"批准是否晚于
 // BLOCK"都只用它。评审机器人的立场写在正文里:撤销了也读得到,正文被改写就是改写那一刻;人的立场是评审状态:
@@ -250,34 +242,27 @@ export function decide(facts, policy) {
   // UNKNOWN 沿用保守边界,不能猜测共享账号这次实际调用的模型。
   const authorFamilies = new Set(author.known ? [author.family] : Object.values(policy.builders));
   const passes = [];
+  const reviewed = new Set();
   const blocks = [];
   const rejected = [];
   for (const r of onHead) {
     const p = parseReviewBlock(r.body);
     const why = blockReason(r, p);
+    const scopeReason = p.ok ? reviewScopeReason(r, p.value, head, author, authorFamilies) : null;
+    if (p.ok && scopeReason === null && (why === null || why === "") && p.value.verdict !== "UNKNOWN") {
+      reviewed.add(p.value.family);
+    }
     if (why !== null) {
       blocks.push({ id: r.id, at: effectiveAt(r, policy), family: p.ok ? p.value.family : "?", model: `${p.ok ? p.value.model : `评审 #${r.id}`}${why ? `,${why}` : ""}` });
       continue;
     }
     const v = p.value;
-    if (v.head_sha !== head) {
-      rejected.push(`评审 #${r.id}:结论写的是 ${v.head_sha.slice(0, 7)},不是当前 head`);
+    if (scopeReason !== null) {
+      rejected.push(`评审 #${r.id}:${scopeReason}`);
       continue;
     }
     if (v.verdict !== "PASS") {
       rejected.push(`评审 #${r.id}:结论是 ${v.verdict}`);
-      continue;
-    }
-    if (r.state === "DISMISSED") {
-      rejected.push(`评审 #${r.id}:已被撤销`);
-      continue;
-    }
-    if (v.completeness !== "complete") {
-      rejected.push(`评审 #${r.id}:不完整(${v.completeness})`);
-      continue;
-    }
-    if (authorFamilies.has(v.family)) {
-      rejected.push(`评审 #${r.id}:${v.family} ${author.known ? "是本次作者家族" : "是可能的 Builder 家族"},不能提供独立评审`);
       continue;
     }
     passes.push({ id: r.id, family: v.family, model: v.model });
@@ -293,12 +278,14 @@ export function decide(facts, policy) {
   }
 
   // G3
-  const reviewOk = passes.length > 0;
+  const plan = reviewPlan(facts.files, policy);
+  const reviewOk = new Set(passes.map(p => p.family)).size >= plan.g3_minimum;
   add(
     reviewOk,
     "G3",
     reviewOk
       ? `合格 PASS:${passes.map((p) => `${p.model}(${p.family})`).join("、")}`
+      : passes.length ? `合格 PASS 家族数不足(要 ${plan.g3_minimum} 家)`
       : `当前 head 上没有合格 PASS${stale ? `(另有 ${stale} 条评审针对旧提交,不算)` : ""}`,
   );
   for (const r of rejected) lines.push(`   · ${r}`);
@@ -312,9 +299,10 @@ export function decide(facts, policy) {
   const high = facts.files.filter((f) => matchAny(policy.high, f));
   if (judging.length) add(false, "G2", `改了判卷面:${judging.slice(0, 5).join("、")}${judging.length > 5 ? " 等" : ""}`);
   const families = [...new Set(passes.map((p) => p.family))];
-  const highOk = !high.length || families.length >= policy.high_min_families;
+  if (policy.review_dispatch) lines.push(`评审目标 ${plan.target} 家；底线 ${plan.minimum} 家；档位 ${plan.tier}（目标不足不豁免底线，也不另挡合并）`);
+  const highOk = !high.length || families.length >= plan.minimum;
   if (high.length) {
-    add(highOk, "G6", `high 路径:${high.slice(0, 5).join("、")}${high.length > 5 ? " 等" : ""};不同家族 PASS ${families.length} 家(要 ${policy.high_min_families} 家)`);
+    add(highOk, "G6", `high 路径:${high.slice(0, 5).join("、")}${high.length > 5 ? " 等" : ""};不同家族 PASS ${families.length} 家(要 ${plan.minimum} 家)`);
   }
 
   // G7
@@ -335,10 +323,12 @@ export function decide(facts, policy) {
     add(ownerOk, "G7", `需要业主在当前 head 上批准(${needOwner.join("、")}):${why}`);
   }
 
+  const minimumMet = reviewOk && highOk;
+  const missingTarget = Math.max(0, plan.target - reviewed.size);
   const verdictLine = (() => {
     if (!ciOk) return pending ? "等 CI" : baseMoved ? "不放行:目标分支改过,CI 要在新目标上重跑" : "不放行:CI 没通过";
     if (!reviewOk) return "不放行:缺合格评审";
-    if (!highOk) return `不放行:high 路径要 ${policy.high_min_families} 家不同家族都 PASS`;
+    if (!highOk) return `不放行:high 路径要 ${plan.minimum} 家不同家族都 PASS`;
     if (ownerObjection) return `不放行:${ownerObjection}`;
     if (!ownerOk) return `等业主批准:${needOwner.join("、")}`;
     return "放行";
@@ -351,6 +341,16 @@ export function decide(facts, policy) {
     title: verdictLine,
     summary: [`head \`${head}\``, "", ...(roundLine ? [roundLine, ""] : []), ...lines].join("\n"),
     ...(roundLine ? { round_line: roundLine } : {}),
+    review_state: {
+      plan,
+      excluded: [...authorFamilies],
+      reviewed_families: [...reviewed],
+      pass_families: families,
+      minimum_met: minimumMet,
+      target_met: missingTarget === 0,
+      missing_target: missingTarget,
+      next_step: minimumMet ? '等汇总' : '交业主',
+    },
     author,
     passes,
     blocks,

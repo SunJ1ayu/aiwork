@@ -21,7 +21,7 @@
 5. PR 开好、CI 绿了以后，用 `review-pr` 派评审腿。
    `review-pr` 必须在沙箱外运行；使用目标仓库当前 PR head 和 main 的规则来源。
    `review-pr` 从共享检出跑，跑之前先把共享检出更新到最新 main。
-   改到项目策略 high 路径的 PR，所有能跑的腿都跑一遍；关卡要几家见项目策略的 `high_min_families`。
+   派评审使用 `review-pr --auto --builder-family 本次执行方家族`；分档、顺序和目标见项目 main 的 `.aiwork/policy.json`，工具用法见 README「Review commands」。
    各腿出结果后，由汇总处理（见 `summary` skill）。
 6. 修改方怎么修，见 REVIEW-RULES 开头的「一轮」。
    合并由项目关卡或业主完成。合并后用 `sync-workflow-docs` 同步部署出去的工作流文档。
@@ -103,4 +103,4 @@ gh-app-token build --repo SunJ1ayu/aiwork --grant
 
 可用通道包括 Codex、Cursor、DeepSeek、Kimi、MiMo。每个通道都能写代码也能评审；同一个 PR 的评审要换一家，由关卡判断。默认模型读取本机设置。
 `review-pr` 的运行前提包括 node（CI 选择器使用），以及所选腿的程序路径和 Python 版本；配置与预检方法见 README「本机设置」。
-正式评审入口是 `review-pr`。要多家评审就并行跑几次 `review-pr`。
+正式评审入口和用法见 README「Review commands」中的 `review-pr`。

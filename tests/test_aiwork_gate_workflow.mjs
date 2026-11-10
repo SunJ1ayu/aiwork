@@ -127,6 +127,7 @@ const HIGH_RE = new RegExp([
   /\bapp[-_]key\b/.source,
   /\/access_tokens\b/.source,
   /\bGH_TOKEN\s*=/.source,
+  /\bprocess\.env\.GH_TOKEN\b/.source,
   /\bGIT_ASKPASS\s*=/.source,
   /\bload_shapes\b/.source,
   /\bgit push\b/.source,
@@ -233,7 +234,7 @@ test("aiwork 自己的策略：真拦截，不登记共用的 build 账号，罩
   assert.equal(policy.builders["aiwork-build[bot]"], undefined);
   assert.equal(policy.modification_rounds.summary_account, "SunJ1ayuBoT");
   assert.equal(policy.builders[policy.modification_rounds.summary_account], "anthropic");
-  assert.equal(policy.high_min_families, 3);
+  assert.equal(policy.high_min_families, 2);
   for (const path of [
     ".github/workflows/ci.yml",
     ".aiwork/policy.json",
@@ -328,4 +329,66 @@ test("high 清单从 bin 里碰私钥、令牌、推送、发布的文件推出�
   const current = policy();
   const missing = highFiles().filter((path) => !matchAny(current.high, path));
   assert.deepEqual(missing, [], `这些文件改了只要一家 PASS:${missing.join("、")}`);
+});
+
+// 业主选择整条隔离保障链：从实际腿入口沿仓内运行依赖和种子目录展开，
+// 包含启动检查、路径判断、事后核对；不从 high 反推入口，漏项才会被发现。
+function isolationChain(readSource = read, files = tracked('.')) {
+  const candidates=files.filter(path=>exists(path) && statSync(new URL(path,ROOT)).isFile() &&
+    (path.startsWith('bin/') || /^[^/]+-review-home\//.test(path)));
+  const pending=candidates.filter(path=>/^bin\/sub[^/]+$/.test(path));
+  assert.ok(pending.length>0,'仓库要有真实评审腿入口');
+  const visited=new Set();
+  for (const file of pending) {
+    if (visited.has(file)) continue;
+    visited.add(file);
+    const source=readSource(file).replace(/^\s*#.*$/gm,'');
+    for (const path of candidates) {
+      const leaf=path.slice(path.lastIndexOf('/')+1);
+      const escaped=leaf.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+      const module=leaf.endsWith('.py')?leaf.slice(0,-3):null;
+      const directory=path.split('/')[0];
+      if (new RegExp('(?:\\$[^\\s"\'`]*|\\$\\([^\\n]*\\))/'+escaped+'(?=[\\s"\'`)};]|$)').test(source) ||
+          new RegExp('/\\s*["\']'+escaped+'["\']').test(source) ||
+          new RegExp('(?:with_name|joinpath)\\(\\s*["\']'+escaped+'["\']').test(source) ||
+          new RegExp('(?:\\.\\.?|bin)/'+escaped+'["\']').test(source) ||
+          (module && new RegExp('\\b(?:from|import)\\s+[^\\n]*?\\b'+module+'\\b').test(source)) ||
+          (directory!=='bin' && source.includes('../'+directory))) {
+        if (!visited.has(path)) pending.push(path);
+      }
+    }
+  }
+  return [...visited].sort();
+}
+function missingIsolation(current) {
+  return isolationChain().filter(path=>!matchAny(current.high,path));
+}
+test('整条隔离保障链由评审入口及仓内运行依赖推出并纳入 high', t => {
+  const required=isolationChain();
+  t.diagnostic('隔离保障链:'+required.join('、'));
+  for (const file of ['bin/ro-repo-exec','bin/_reader_tools.py','bin/_paths.py',
+                      'bin/_kimi_preflight.py','bin/_review-workspace.sh','kimi-review-home/hooks/guard.mjs']) {
+    assert.ok(required.includes(file),'量具必须发现 '+file);
+  }
+  assert.deepEqual(missingIsolation(policy()),[]);
+});
+test('隔离保障链任意一个依赖漏出 high 都使覆盖检查变红', () => {
+  for (const file of isolationChain()) {
+    const current=policy(); current.high=current.high.filter(pattern=>!matchAny([pattern],file));
+    assert.ok(missingIsolation(current).includes(file),file);
+  }
+});
+test('新加入的间接运行依赖自动进入隔离保障链，不修改名单', () => {
+  const unrelated='bin/privacy-check';
+  const readSource=file=>read(file)+(file==='bin/_reader_tools.py'?`\n"$BIN/${unrelated.slice(4)}"\n`:'');
+  assert.ok(isolationChain(readSource).includes(unrelated));
+});
+
+test('隔离依赖推导支持相对模块、Path 辅助和并列导入，不把诊断文案当调用', () => {
+  const plain=source=>isolationChain(file=>file==='bin/subagent'?source:read(file));
+  for (const source of ['import "./_review_dispatch.mjs";', 'Path(__file__).with_name("_review_dispatch.mjs")']) {
+    assert.ok(plain(source).includes('bin/_review_dispatch.mjs'),source);
+  }
+  assert.ok(plain('import os, _leg_session').includes('bin/_leg_session.py'));
+  assert.equal(plain('echo "review/explore needs a worktree"').includes('bin/explore'),false);
 });

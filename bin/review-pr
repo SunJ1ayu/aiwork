@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
 import _review_ci
 from _review_result import leg_identity, sha256_bytes
-from _aiwork_config import ConfigError, check_programs, data_dir, data_path, prune_data
+from _aiwork_config import ConfigError, check_programs, data_dir, data_path, prune_data, program
 from _leg_session import (
     Change,
     ReviewError,
@@ -514,12 +514,70 @@ def publish_saved(directory: Path, *, repository: str, number: int, leg: str,
         return link
 
 
+def read_dispatch_state(repository: str, number: int, builder_family: str) -> dict:
+    token = review_token(repository)
+    try:
+        result = subprocess.run(
+            [str(program('node')), str(BIN / '_review_dispatch.mjs')],
+            input=json.dumps(dict(repository=repository, number=number, builder_family=builder_family)),
+            env=dict(os.environ, GH_TOKEN=token), text=True, capture_output=True,
+            timeout=300, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise ReviewError('dispatch facts query timed out') from exc
+    if result.returncode:
+        raise ReviewError('dispatch facts unavailable: ' + redact(result.stderr[-2000:]))
+    return json.loads(result.stdout)
+
+
+def auto_dispatch(repository: str, number: int, builder_family: str) -> int:
+    from _review_dispatch import dispatch
+    # Logs stay outside the repository and are not included in later legs' tasks.
+    root = data_path('logs')
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory = Path(tempfile.mkdtemp(prefix=f'review-dispatch-{number}-', dir=root))
+    attempts = []
+
+    def run(leg, model, head):
+        env = dict(os.environ)
+        for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'AIWORK_REVIEW_GIT_TOKEN', 'GIT_ASKPASS'):
+            env.pop(key, None)
+        if model is not None:
+            env['CURSOR_MODEL'] = model
+        print(f'review-pr: dispatch {leg} at {head[:12]}', file=sys.stderr, flush=True)
+        result = subprocess.run([str(BIN / 'review-pr'), str(number), '--repo', repository,
+                                 '--leg', leg, '--expected-head', head],
+                                env=env, text=True, capture_output=True, check=False)
+        diagnostic = redact(result.stdout + result.stderr)
+        (directory / f'{len(attempts) + 1}-{leg}.log').write_text(diagnostic, encoding='utf-8')
+        attempts.append(leg)
+        if result.returncode:
+            return dict(ok=False, reason=redact(result.stderr[-2000:]) or f'review-pr exited {result.returncode}')
+        urls = [line for line in result.stdout.splitlines() if line.startswith('https://github.com/')]
+        return dict(ok=bool(urls), **({'url': urls[-1]} if urls else
+                    {'reason': 'review-pr returned no publication URL'}))
+
+    try:
+        report = dispatch(lambda family: read_dispatch_state(repository, number, family),
+                          lambda leg: _leg_session.choose_leg(leg, BIN), run, builder_family)
+    except (ValueError, OSError) as exc:
+        (directory / 'failure.txt').write_text(redact(str(exc)), encoding='utf-8')
+        raise
+    finally:
+        print(f'review-pr: dispatch record {directory}', file=sys.stderr)
+    (directory / 'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report['minimum_met'] else 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[1])
     parser.add_argument("pr", type=int, help="PR number in the selected repository")
     parser.add_argument("--repo", type=repository_name, default=None,
                         help="target owner/name (default: this checkout's origin)")
-    parser.add_argument("--leg", default="subcodex")
+    parser.add_argument("--leg", default=None)
+    parser.add_argument('--auto', action='store_true', help='dispatch from project main policy')
+    parser.add_argument('--builder-family', help='exclude the actual implementing family; does not change gate author attribution')
+    parser.add_argument('--expected-head', help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true",
                         help="print the task only; allow previewing merged PRs; never run a leg or publish")
     parser.add_argument('--retry-publish', metavar='RUN_ID', type=saved_run_id,
@@ -527,6 +585,23 @@ def main() -> int:
     args = parser.parse_args()
     try:
         drop_inherited_git_env()
+        if args.auto:
+            if args.leg or args.dry_run or args.retry_publish or args.expected_head:
+                raise ReviewError('--auto cannot be combined with --leg/--dry-run/--retry-publish/--expected-head')
+            if not re.fullmatch(r'[a-z][a-z0-9-]*', args.builder_family or ''):
+                raise ReviewError('--auto requires --builder-family')
+            if args.pr < 1:
+                raise ReviewError('PR number must be positive')
+            _leg_session.check_leg_platform('review-pr', BIN)
+            data_dir()
+            check_programs('review-pr')
+            require_latest_aiwork_main(aiwork_main_commit())
+            return auto_dispatch(args.repo or repository_from_origin(), args.pr, args.builder_family)
+        if args.builder_family:
+            raise ReviewError('--builder-family requires --auto')
+        args.leg = args.leg or 'subcodex'
+        if args.expected_head and not SHA.fullmatch(args.expected_head):
+            raise ReviewError('--expected-head is not a commit SHA')
         if args.retry_publish and args.dry_run:
             raise ReviewError('--retry-publish cannot be combined with --dry-run')
         if not args.retry_publish:
@@ -552,6 +627,8 @@ def main() -> int:
         token = review_token(repository)
         pr = (pr_state(token, args.pr, repository=repository, preview=True) if args.dry_run
               else pr_state(token, args.pr, repository=repository))
+        if args.expected_head and pr['head']['sha'] != args.expected_head:
+            raise ReviewError('PR head changed before dispatch; no review run')
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
             directory = Path(temporary)
             run_id = f"pr-{repository.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}-{directory.name.removeprefix('aiwork-review-pr-')}"
