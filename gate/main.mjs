@@ -6,9 +6,9 @@
 import { createSign } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { gate } from "./run.mjs";
+import { githubClient } from "./github.mjs";
 
 const env = process.env;
-const API = env.GITHUB_API_URL || "https://api.github.com";
 const repo = env.GITHUB_REPOSITORY;
 // 策略在调用方项目的检出里。路径只认 workflow 传入的 AIWORK_POLICY_PATH，不按本文件的位置去找。
 // 读不出 / 不是合法 JSON 交给 gate() 的策略校验拒绝,不会判定或合并 PR
@@ -21,44 +21,8 @@ try {
   console.log(`读不了策略:${e.message}`);
 }
 
-// 每个请求最多等这么久:卡住的请求不能把整次运行拖到超时(后面的提交就来不及写)
-const TIMEOUT_MS = Number(env.AIWORK_GATE_TIMEOUT_MS) || 30_000;
-
-async function request(method, url, token, body) {
-  const res = await fetch(url.startsWith("http") ? url : `${API}${url}`, {
-    method,
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "aiwork-gate",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`${method} ${url} → HTTP ${res.status}:${text.slice(0, 300)}`);
-  return { data: text ? JSON.parse(text) : null, link: res.headers.get("link") };
-}
-
-const actionsToken = env.GITHUB_TOKEN;
-const api = {
-  async get(path) {
-    return (await request("GET", path, actionsToken)).data;
-  },
-  async getPage(path) {
-    const { data, link } = await request("GET", path, actionsToken);
-    const m = /<([^>]+)>;\s*rel="next"/.exec(link ?? "");
-    return { data, next: m ? m[1] : null };
-  },
-  // REST 不给的(评审改写时间)才走 GraphQL;有 errors 就当读失败
-  async graphql(query, variables) {
-    const { data } = await request("POST", env.GITHUB_GRAPHQL_URL || `${API}/graphql`, actionsToken, { query, variables });
-    if (data?.errors?.length) throw new Error(`GraphQL:${data.errors.map((e) => e.message).join(";").slice(0, 300)}`);
-    return data?.data;
-  },
-};
+const { request, reader } = githubClient(env);
+const api = reader(env.GITHUB_TOKEN);
 
 const b64url = (x) => Buffer.from(x).toString("base64url");
 // 按权限分开换、分开缓存:一张令牌只带这一类请求要的权限

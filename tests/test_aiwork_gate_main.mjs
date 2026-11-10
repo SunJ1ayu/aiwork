@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { generateKeyPairSync, createVerify } from "node:crypto";
 import { spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, readdirSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,10 +28,15 @@ function fakeGitHub(opts = {}) {
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       const auth = req.headers.authorization ?? "";
-      const record = { method: req.method, url: req.url, auth, body: body ? JSON.parse(body) : null };
+      const record = { method: req.method, url: req.url, auth, userAgent: req.headers["user-agent"], body: body ? JSON.parse(body) : null };
       log.push(record);
-      const send = (code, data) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(data)); };
+      const send = (code, data, headers = {}) => { res.writeHead(code, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(data)); };
       const u = req.url;
+      if (u === '/repos/o/r') return send(200, {default_branch: opts.defaultBranch ?? 'main'});
+      if (u.startsWith('/repos/o/r/contents/.aiwork/policy.json?ref=')) {
+        return send(200, {type:'file', encoding:'base64', sha:'b'.repeat(40),
+          content:Buffer.from(JSON.stringify(opts.dispatchPolicy ?? policy)).toString('base64')});
+      }
       if (opts.pauseAt === u && (!opts.pausePermission || record.body?.permissions?.[opts.pausePermission])) {
         opts.onPause(); return;
       }
@@ -63,18 +68,25 @@ function fakeGitHub(opts = {}) {
       if (opts.prFails && u === "/repos/o/r/pulls/10") return send(502, { message: "bad gateway" });
       // mergeReady:有合格 PASS、业主贴了合并标签 → 放行并合并
       const labels = opts.mergeReady ? [{ name: policy.merge_label }] : [];
-      const pr10 = { number: 10, state: "open", changed_files: 1, labels, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main" } };
+      const pr10 = { number: 10, state: "open", changed_files: opts.files?.length ?? 1, labels, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main" } };
       if (u === "/repos/o/r/pulls?state=open&per_page=100") return send(200, [pr10]);
       if (u === "/repos/o/r/pulls/10") return send(200, pr10);
-      if (u.startsWith("/repos/o/r/pulls/10/files")) return send(200, [{ filename: "web/a.ts" }]);
+      if (u.startsWith("/repos/o/r/pulls/10/files")) {
+        const files = (opts.files ?? ['web/a.ts']).map(filename=>({filename}));
+        if (opts.paginateFiles && !u.includes('page=2')) {
+          return send(200, files.slice(0,1), {link:`<http://127.0.0.1:${server.address().port}/repos/o/r/pulls/10/files?per_page=100&page=2>; rel="next"`});
+        }
+        return send(200, opts.paginateFiles ? files.slice(1) : files);
+      }
       const pass = "```json\n" + JSON.stringify({ verdict: "PASS", head_sha: HEAD, model: "gpt-x", family: "openai", completeness: "complete" }) + "\n```";
-      const reviews = opts.mergeReady ? [{ id: 1, user: { login: policy.reviewer_bot, type: "Bot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-09-29T09:00:00Z", body: pass }] : [];
+      const reviews = opts.reviews ?? (opts.mergeReady ? [{ id: 1, user: { login: policy.reviewer_bot, type: "Bot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-09-29T09:00:00Z", body: pass }] : []);
       if (u.startsWith("/repos/o/r/pulls/10/reviews")) return send(200, reviews);
       if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: [{ id: 1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", pull_requests: [{ number: 10 }] }] });
-      if (u.startsWith("/repos/o/r/activity")) return send(200, [{ id: 1, timestamp: "t", activity_type: "push", after: HEAD, actor: { login: "SunJ1ayuBoT" } }]);
+      if (u.startsWith("/repos/o/r/activity")) return send(200, [{ id: 1, timestamp: "t", activity_type: "push", after: HEAD, actor: { login: opts.actorLogin ?? "SunJ1ayuBoT" } }]);
       const events = opts.mergeReady ? [{ id: 1, event: "labeled", label: { name: policy.merge_label }, actor: { login: policy.owner }, created_at: "2026-09-29T10:00:00Z" }] : [];
       if (u.startsWith("/repos/o/r/issues/10/events")) return send(200, events);
       const nodes = reviews.map((r) => ({ databaseId: r.id, submittedAt: r.submitted_at, lastEditedAt: null }));
+      if (u === "/graphql" && opts.graphqlErrors) return send(200, { errors: [{message:"unavailable"}] });
       if (u === "/graphql" && req.method === "POST") return send(200, { data: { repository: { pullRequest: { reviews: { totalCount: nodes.length, pageInfo: { hasNextPage: false }, nodes } } } } });
       send(404, { message: `fake: no route ${u}` });
     });
@@ -280,7 +292,7 @@ test("整机:没传 AIWORK_POLICY_PATH → 不读 main.mjs 相对路径上的 po
   try {
     const gateDir = join(root, ".github", "aiwork-gate");
     mkdirSync(gateDir, { recursive: true });
-    for (const name of ["main.mjs", "run.mjs", "collect.mjs", "decide.mjs", "paths.mjs", "review-plan.mjs"]) {
+    for (const name of readdirSync(new URL("../gate/", import.meta.url)).filter(name => name.endsWith(".mjs"))) {
       cpSync(new URL(`../gate/${name}`, import.meta.url), join(gateDir, name));
     }
     mkdirSync(join(root, ".aiwork"));
@@ -371,4 +383,75 @@ test("整机:App 发不出占位时旧 success 可能保留，但本轮不读事
   } finally {
     gh.server.close();
   }
+});
+
+
+function runDispatchBridge(apiUrl, builderFamily='openai', extraEnv={}) {
+  return new Promise(resolve=>{
+    const child=spawn(process.execPath,[new URL('../bin/_review_dispatch.mjs',import.meta.url).pathname], {
+      timeout:5000,env:{PATH:process.env.PATH,GITHUB_API_URL:apiUrl,GH_TOKEN:'read_token',...extraEnv},
+    });
+    let out='',err='';child.stdout.on('data',chunk=>out+=chunk);child.stderr.on('data',chunk=>err+=chunk);
+    child.on('close',code=>resolve({code,out,err}));
+    child.stdin.end(JSON.stringify({repository:'o/r',number:10,builder_family:builderFamily}));
+  });
+}
+function dispatchReview(family, verdict='PASS', id=1, completeness='complete') {
+  return {id,user:{login:policy.reviewer_bot,type:'Bot'},state:'COMMENTED',commit_id:HEAD,
+    submitted_at:'2026-11-10T01:00:00Z',body:'```json\n'+JSON.stringify({family,verdict,completeness,
+      model:family+'-test',head_sha:HEAD})+'\n```'};
+}
+const dispatchPolicy = () => ({...policy,review_dispatch:
+  JSON.parse(readFileSync(new URL('../.aiwork/policy.json',import.meta.url),'utf8')).review_dispatch});
+
+test('派发桥真跑共享 GitHub 读取、默认分支策略、分页和关卡评审状态', async()=>{
+  const current=dispatchPolicy();current.review_dispatch.minimum_families=2;
+  current.review_dispatch.targets.documentation=2;
+  const gh=await fakeGitHub({dispatchPolicy:current,defaultBranch:'develop',files:['web/a.ts','web/b.ts'],paginateFiles:true,
+    reviews:[dispatchReview('deepseek','PASS',1),dispatchReview('deepseek','PASS',2),
+      dispatchReview('moonshot','BLOCK',3),dispatchReview('openai','PASS',4),
+      dispatchReview('anthropic','PASS',5),dispatchReview('xiaomi','PASS',6,'partial')]});
+  try {
+    const result=await runDispatchBridge(gh.url);assert.equal(result.code,0,result.err);
+    const state=JSON.parse(result.out);
+    assert.equal(state.minimum_met,false,'同家族两条不填两家底线');
+    assert.deepEqual(state.pass_families,['deepseek']);
+    assert.deepEqual(state.reviewed_families,['deepseek','moonshot']);
+    assert.deepEqual(state.excluded.sort(),['anthropic','openai']);
+    assert.equal(state.target_met,true);
+    assert.ok(gh.log.some(r=>r.url.endsWith('ref=develop')));
+    assert.ok(gh.log.some(r=>r.url.includes('page=2')));
+    assert.ok(gh.log.every(r=>r.auth==='Bearer read_token' && r.userAgent==='aiwork-gate'));
+    assert.ok(gh.log.every(r=>r.method==='GET' || r.url==='/graphql'),'桥不写检查或合并');
+  } finally {gh.server.close();}
+});
+test('派发桥的作者排除跟随关卡，已知作者与 UNKNOWN 都从关卡返回', async()=>{
+  for (const actorLogin of ['SunJ1ayuBoT', 'unregistered-build']) {
+    const current=dispatchPolicy();current.builders={...current.builders,'other-builder':'deepseek'};
+    const gh=await fakeGitHub({dispatchPolicy:current,actorLogin,
+      reviews:[dispatchReview('deepseek','PASS',1),dispatchReview('openai','PASS',2),dispatchReview('anthropic','PASS',3)]});
+    try {
+      const result=await runDispatchBridge(gh.url);assert.equal(result.code,0,result.err);
+      const state=JSON.parse(result.out);
+      assert.deepEqual(state.pass_families,actorLogin==='SunJ1ayuBoT'?['deepseek']:[]);
+      assert.ok(state.excluded.includes('anthropic'));assert.ok(state.excluded.includes('openai'));
+      assert.equal(state.excluded.includes('deepseek'),actorLogin!=='SunJ1ayuBoT');
+      assert.equal(state.minimum_met,actorLogin==='SunJ1ayuBoT');
+    } finally {gh.server.close();}
+  }
+});
+test('派发桥不吞 GraphQL 错误',async()=>{
+  const gh=await fakeGitHub({dispatchPolicy:dispatchPolicy(),graphqlErrors:true});
+  try {
+    const result=await runDispatchBridge(gh.url);assert.notEqual(result.code,0);assert.match(result.err,/GraphQL/);
+    assert.equal(result.out,'');
+  } finally {gh.server.close();}
+});
+
+test('派发桥实际使用关卡共用的请求超时',async()=>{
+  const gh=await fakeGitHub({dispatchPolicy:dispatchPolicy(),pauseAt:'/repos/o/r/pulls/10',onPause:()=>{}});
+  try {
+    const result=await runDispatchBridge(gh.url,'openai',{AIWORK_GATE_TIMEOUT_MS:'50'});
+    assert.notEqual(result.code,0);assert.match(result.err,/Timeout|Abort/i);assert.equal(result.out,'');
+  } finally {gh.server.closeAllConnections();gh.server.close();}
 });

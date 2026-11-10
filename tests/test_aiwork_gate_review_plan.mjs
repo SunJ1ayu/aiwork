@@ -62,3 +62,24 @@ test('G3 bottom line also comes from the shared policy', () => {
   assert.equal(decide(facts(['deepseek'],['README.md']),p).conclusion,'failure');
   assert.equal(decide(facts(['deepseek','moonshot'],['README.md']),p).conclusion,'success');
 });
+
+test('关卡只把当前 head 上有效、完整、独立的评审计为已交卷', () => {
+  const block=review('deepseek');block.body=block.body.replace('"verdict":"PASS"','"verdict":"BLOCK"');
+  const cases=[
+    [block,['deepseek']],
+    [{...block,body:block.body.replace('"BLOCK"','"NEEDS_MORE_INFO"')},['deepseek']],
+    [{...block,body:block.body.replace('"complete"','"partial"')},[]],
+    [{...block,commit_id:'b'.repeat(40)},[]],
+    [{...block,body:block.body.replace(head,'b'.repeat(40))},[]],
+    [{...block,edited_at:'2026-11-10T02:00:00Z'},[]],
+    [{...block,state:'DISMISSED'},[]],
+    [{...block,body:'unreadable'},[]],
+    [{...review('deepseek'),body:review('deepseek').body+'\nConclusion: BLOCK'},[]],
+    [{...block,body:block.body.replace('"deepseek"','"anthropic"')},[]],
+  ];
+  for (const [record,expected] of cases) {
+    const result=decide({...facts([]),reviews:[record]},policy);
+    assert.deepEqual(result.review_state.reviewed_families,expected);
+    assert.equal(result.review_state.minimum_met,false);
+  }
+});

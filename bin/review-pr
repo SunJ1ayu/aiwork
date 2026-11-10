@@ -514,13 +514,16 @@ def publish_saved(directory: Path, *, repository: str, number: int, leg: str,
         return link
 
 
-def read_dispatch_state(repository: str, number: int) -> dict:
+def read_dispatch_state(repository: str, number: int, builder_family: str) -> dict:
     token = review_token(repository)
-    result = subprocess.run(
-        [str(program('node')), str(BIN / '_review_dispatch.mjs')],
-        input=json.dumps(dict(repository=repository, number=number)),
-        env=dict(os.environ, GH_TOKEN=token), text=True, capture_output=True,
-        timeout=300, check=False)
+    try:
+        result = subprocess.run(
+            [str(program('node')), str(BIN / '_review_dispatch.mjs')],
+            input=json.dumps(dict(repository=repository, number=number, builder_family=builder_family)),
+            env=dict(os.environ, GH_TOKEN=token), text=True, capture_output=True,
+            timeout=300, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise ReviewError('dispatch facts query timed out') from exc
     if result.returncode:
         raise ReviewError('dispatch facts unavailable: ' + redact(result.stderr[-2000:]))
     return json.loads(result.stdout)
@@ -542,36 +545,27 @@ def auto_dispatch(repository: str, number: int, builder_family: str) -> int:
             env['CURSOR_MODEL'] = model
         print(f'review-pr: dispatch {leg} at {head[:12]}', file=sys.stderr, flush=True)
         result = subprocess.run([str(BIN / 'review-pr'), str(number), '--repo', repository,
-                                 '--leg', leg, '--expected-head', head, '--dispatch-result'],
+                                 '--leg', leg, '--expected-head', head],
                                 env=env, text=True, capture_output=True, check=False)
         diagnostic = redact(result.stdout + result.stderr)
         (directory / f'{len(attempts) + 1}-{leg}.log').write_text(diagnostic, encoding='utf-8')
         attempts.append(leg)
         if result.returncode:
             return dict(ok=False, reason=redact(result.stderr[-2000:]) or f'review-pr exited {result.returncode}')
-        prefix = 'aiwork-dispatch-result:'
-        records = [line[len(prefix):] for line in result.stdout.splitlines() if line.startswith(prefix)]
-        if len(records) != 1:
-            return dict(ok=False, reason='review-pr returned no unique publication result')
-        try:
-            publication = json.loads(records[0])
-        except ValueError:
-            return dict(ok=False, reason='review-pr returned an invalid publication result')
-        if publication.get('head') != head or not str(publication.get('url', '')).startswith('https://github.com/'):
-            return dict(ok=False, reason='review-pr publication result has the wrong head or URL')
-        if publication.get('complete') is not True:
-            return dict(ok=False, reason='published review is partial; does not fill the target', url=publication['url'])
-        return dict(ok=True, url=publication['url'])
+        urls = [line for line in result.stdout.splitlines() if line.startswith('https://github.com/')]
+        return dict(ok=bool(urls), **({'url': urls[-1]} if urls else
+                    {'reason': 'review-pr returned no publication URL'}))
 
     try:
-        report = dispatch(lambda: read_dispatch_state(repository, number),
+        report = dispatch(lambda family: read_dispatch_state(repository, number, family),
                           lambda leg: _leg_session.choose_leg(leg, BIN), run, builder_family)
     except (ValueError, OSError) as exc:
         (directory / 'failure.txt').write_text(redact(str(exc)), encoding='utf-8')
         raise
+    finally:
+        print(f'review-pr: dispatch record {directory}', file=sys.stderr)
     (directory / 'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    print(f'review-pr: dispatch record {directory}', file=sys.stderr)
     return 0 if report['minimum_met'] else 2
 
 
@@ -584,7 +578,6 @@ def main() -> int:
     parser.add_argument('--auto', action='store_true', help='dispatch from project main policy')
     parser.add_argument('--builder-family', help='exclude the actual implementing family; does not change gate author attribution')
     parser.add_argument('--expected-head', help=argparse.SUPPRESS)
-    parser.add_argument('--dispatch-result', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true",
                         help="print the task only; allow previewing merged PRs; never run a leg or publish")
     parser.add_argument('--retry-publish', metavar='RUN_ID', type=saved_run_id,
@@ -593,7 +586,7 @@ def main() -> int:
     try:
         drop_inherited_git_env()
         if args.auto:
-            if args.leg or args.dry_run or args.retry_publish or args.expected_head or args.dispatch_result:
+            if args.leg or args.dry_run or args.retry_publish or args.expected_head:
                 raise ReviewError('--auto cannot be combined with --leg/--dry-run/--retry-publish/--expected-head')
             if not re.fullmatch(r'[a-z][a-z0-9-]*', args.builder_family or ''):
                 raise ReviewError('--auto requires --builder-family')
@@ -604,8 +597,6 @@ def main() -> int:
             check_programs('review-pr')
             require_latest_aiwork_main(aiwork_main_commit())
             return auto_dispatch(args.repo or repository_from_origin(), args.pr, args.builder_family)
-        if args.dispatch_result and (args.dry_run or args.retry_publish):
-            raise ReviewError('--dispatch-result requires a fresh review')
         if args.builder_family:
             raise ReviewError('--builder-family requires --auto')
         args.leg = args.leg or 'subcodex'
@@ -722,9 +713,6 @@ def main() -> int:
                 link = publish_saved(directory, repository=repository, number=args.pr, leg=selected_leg)
                 # The gate wakes on the review itself (the repo's aiwork-review-ping); no second doorbell.
                 print(link)
-                if args.dispatch_result:
-                    print('aiwork-dispatch-result:' + json.dumps(dict(
-                        head=pr['head']['sha'], complete=block['completeness'] == 'complete', url=link)))
                 return 0
             except (ReviewError, OSError, ValueError) as exc:
                 report_failure(directory, run_id, include_diagnostic=not isinstance(exc, PrivacyError))

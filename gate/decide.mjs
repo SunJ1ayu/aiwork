@@ -105,6 +105,15 @@ function blockReason(r, p) {
 
 const isReviewerBot = (r, policy) => r.login === policy.reviewer_bot && r.type === "Bot";
 
+// 交卷与合格 PASS 共用范围检查；BLOCK 的拦截仍先按 blockReason 处理。
+function reviewScopeReason(r, v, head, author, authorFamilies) {
+  if (v.head_sha !== head) return `结论写的是 ${v.head_sha.slice(0, 7)},不是当前 head`;
+  if (r.state === "DISMISSED") return "已被撤销";
+  if (v.completeness !== "complete") return `不完整(${v.completeness})`;
+  if (authorFamilies.has(v.family)) return `${v.family} ${author.known ? "是本次作者家族" : "是可能的 Builder 家族"},不能提供独立评审`;
+  return null;
+}
+
 // 一条评审只有一个生效时刻 = 它现在的立场为我们所知的那一刻。选"最后一次表态"、定 BLOCK 时刻、比"批准是否晚于
 // BLOCK"都只用它。评审机器人的立场写在正文里:撤销了也读得到,正文被改写就是改写那一刻;人的立场是评审状态:
 // 被撤销后原立场就丢了 ⇒ 撤销那一刻(缺撤销时间就当它在最后,之前的批准豁免不了);其余 ⇒ 提交那一刻。
@@ -203,7 +212,7 @@ function modificationRoundLine(reviews, config) {
   return `轮数：第 ${count} 轮 / 上限 ${limit}${stop ? "；停：交业主" : ""}`;
 }
 
-export function decide(facts, policy) {
+export function decide(facts, policy, { excludeFamilies = [] } = {}) {
   const head = facts.pr.head_sha;
   const lines = [];
   const add = (ok, rule, text) => lines.push(`${ok ? "✅" : "❌"} ${rule} ${text}`);
@@ -231,36 +240,29 @@ export function decide(facts, policy) {
   const onHead = botReviews.filter((r) => r.commit_id === head);
   // 已知作者只排除本次实现家族:登记为 Builder 不代表写过所有 PR。
   // UNKNOWN 沿用保守边界,不能猜测共享账号这次实际调用的模型。
-  const authorFamilies = new Set(author.known ? [author.family] : Object.values(policy.builders));
+  const authorFamilies = new Set([...(author.known ? [author.family] : Object.values(policy.builders)), ...excludeFamilies]);
   const passes = [];
+  const reviewed = new Set();
   const blocks = [];
   const rejected = [];
   for (const r of onHead) {
     const p = parseReviewBlock(r.body);
     const why = blockReason(r, p);
+    const scopeReason = p.ok ? reviewScopeReason(r, p.value, head, author, authorFamilies) : null;
+    if (p.ok && scopeReason === null && (why === null || why === "") && p.value.verdict !== "UNKNOWN") {
+      reviewed.add(p.value.family);
+    }
     if (why !== null) {
       blocks.push({ id: r.id, at: effectiveAt(r, policy), family: p.ok ? p.value.family : "?", model: `${p.ok ? p.value.model : `评审 #${r.id}`}${why ? `,${why}` : ""}` });
       continue;
     }
     const v = p.value;
-    if (v.head_sha !== head) {
-      rejected.push(`评审 #${r.id}:结论写的是 ${v.head_sha.slice(0, 7)},不是当前 head`);
+    if (scopeReason !== null) {
+      rejected.push(`评审 #${r.id}:${scopeReason}`);
       continue;
     }
     if (v.verdict !== "PASS") {
       rejected.push(`评审 #${r.id}:结论是 ${v.verdict}`);
-      continue;
-    }
-    if (r.state === "DISMISSED") {
-      rejected.push(`评审 #${r.id}:已被撤销`);
-      continue;
-    }
-    if (v.completeness !== "complete") {
-      rejected.push(`评审 #${r.id}:不完整(${v.completeness})`);
-      continue;
-    }
-    if (authorFamilies.has(v.family)) {
-      rejected.push(`评审 #${r.id}:${v.family} ${author.known ? "是本次作者家族" : "是可能的 Builder 家族"},不能提供独立评审`);
       continue;
     }
     passes.push({ id: r.id, family: v.family, model: v.model });
@@ -321,6 +323,8 @@ export function decide(facts, policy) {
     add(ownerOk, "G7", `需要业主在当前 head 上批准(${needOwner.join("、")}):${why}`);
   }
 
+  const minimumMet = reviewOk && highOk;
+  const missingTarget = Math.max(0, plan.target - reviewed.size);
   const verdictLine = (() => {
     if (!ciOk) return pending ? "等 CI" : baseMoved ? "不放行:目标分支改过,CI 要在新目标上重跑" : "不放行:CI 没通过";
     if (!reviewOk) return "不放行:缺合格评审";
@@ -337,6 +341,16 @@ export function decide(facts, policy) {
     title: verdictLine,
     summary: [`head \`${head}\``, "", ...(roundLine ? [roundLine, ""] : []), ...lines].join("\n"),
     ...(roundLine ? { round_line: roundLine } : {}),
+    review_state: {
+      plan,
+      excluded: [...authorFamilies],
+      reviewed_families: [...reviewed],
+      pass_families: families,
+      minimum_met: minimumMet,
+      target_met: missingTarget === 0,
+      missing_target: missingTarget,
+      next_step: minimumMet ? '等汇总' : '交业主',
+    },
     author,
     passes,
     blocks,
