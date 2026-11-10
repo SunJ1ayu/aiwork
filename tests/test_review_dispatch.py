@@ -76,6 +76,14 @@ class DispatchTests(unittest.TestCase):
 
 class PublisherIntegrationTests(unittest.TestCase):
     def test_auto_pins_head_and_cursor_model_and_keeps_logs_outside_repo(self):
+        self.publisher_case(True)
+
+    def test_partial_or_unconfirmed_publication_does_not_fill_target(self):
+        for complete in (False, None):
+            with self.subTest(complete=complete):
+                self.publisher_case(complete)
+
+    def publisher_case(self, complete):
         import importlib.util, importlib.machinery, tempfile, json, io, subprocess
         from unittest.mock import patch
         from contextlib import redirect_stdout,redirect_stderr
@@ -89,8 +97,9 @@ class PublisherIntegrationTests(unittest.TestCase):
         seen=[]
         def run(command,**kwargs):
             seen.append((command,kwargs))
-            state['passes']=['moonshot']
-            return subprocess.CompletedProcess(command,0,'https://github.com/example/review\n','')
+            state['passes']=['moonshot'] if complete else []
+            marker='aiwork-dispatch-result:' + json.dumps(dict(head='a'*40,complete=complete,url='https://github.com/example/review'))+'\n' if complete is not None else ''
+            return subprocess.CompletedProcess(command,0,'https://github.com/example/review\n'+marker,'')
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(publisher,'data_path',return_value=Path(directory)), \
              patch.object(publisher,'read_dispatch_state',side_effect=lambda *a:state.copy()), \
@@ -98,11 +107,13 @@ class PublisherIntegrationTests(unittest.TestCase):
              patch.object(publisher.subprocess,'run',side_effect=run), \
              patch.dict(os.environ,{'GH_TOKEN':'not-for-model'}), \
              redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
-            self.assertEqual(publisher.auto_dispatch('example/repo',1,'openai'),0)
+            self.assertEqual(publisher.auto_dispatch('example/repo',1,'openai'),0 if complete else 2)
             reports=list(Path(directory).glob('*/summary.json'));self.assertEqual(len(reports),1)
-            self.assertEqual(json.loads(reports[0].read_text())['pass_families'],['moonshot'])
+            report=json.loads(reports[0].read_text())
+            self.assertEqual(report['pass_families'],['moonshot'] if complete else [])
+            self.assertEqual(report['target_met'],bool(complete))
         command,kwargs=seen[0]
-        self.assertEqual(command[-2:],['--expected-head','a'*40])
+        self.assertEqual(command[-3:],['--expected-head','a'*40,'--dispatch-result'])
         self.assertEqual(kwargs['env']['CURSOR_MODEL'],'kimi-test')
         self.assertNotIn('GH_TOKEN',kwargs['env'])
 
