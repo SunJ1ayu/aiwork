@@ -280,7 +280,7 @@ test("整机:没传 AIWORK_POLICY_PATH → 不读 main.mjs 相对路径上的 po
   try {
     const gateDir = join(root, ".github", "aiwork-gate");
     mkdirSync(gateDir, { recursive: true });
-    for (const name of ["main.mjs", "run.mjs", "collect.mjs", "decide.mjs"]) {
+    for (const name of ["main.mjs", "run.mjs", "collect.mjs", "decide.mjs", "paths.mjs", "review-plan.mjs"]) {
       cpSync(new URL(`../gate/${name}`, import.meta.url), join(gateDir, name));
     }
     mkdirSync(join(root, ".aiwork"));

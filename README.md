@@ -46,6 +46,7 @@ GitHub `main` 是 aiwork 的源码准本。改动流程见 [workflow/CLAUDE.md](
 - `bin/submimo <review|explore>` — MiMo，经 `bin/subagent` 复用 Claude Code headless，连接小米的 Anthropic 兼容接口。模型读 `models.env` 的 mimo 行（API 原生 `mimo-…` 名称）；接口地址和密钥读 `mimo.env`。Linux 上两个模式只提供读取工具，配置和跑完核对共用 `bin/_reader_tools.py`。看不出实际工具或出现其他工具时记为 `readonly_tools`，不发评审、不因这个原因重试。超时使用 `MIMO_TIMEOUT`，轮次上限使用 `MIMO_MAX_TURNS`。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
 - `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。原生沙箱设置见 `bin/subcodex` 的 `CODEX_CFG`；外层另经 `ro-repo-exec`。副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
+- `bin/review-pr PR [--repo owner/name] --auto --builder-family FAMILY` — 按项目 main 策略自动派评审；分档与配置定义见 [gate/README.md「评审分档与派发」](gate/README.md#评审分档与派发)。`FAMILY` 填本次实际写代码的模型家族（本会话 Codex 为 `openai`），只用于多排除一家，不改变关卡对共享构建账号的 UNKNOWN 认定。工具使用关卡自己的收集和 PASS 判定，排除关卡认定的作者家族及本次执行方；同一家族不重复派。调用单腿入口自动发布，失败按策略换下一家，不按失败原因分类；BLOCK 是已经交卷，但不算 PASS，不会抹掉反对。head 或 main 策略变化就停止。标准输出给出目标、已交卷家族、合格 PASS、逐腿失败/跳过原因和关卡原文；目标不足但已到 PASS 底线时退出 0、交汇总，底线不足退出 2、交业主，均不会申请合并。记录和逐腿日志保存在本机数据目录 `logs/review-dispatch-<PR>-<随机名>/`；交接时把本轮位置交给汇总，不将私人日志提交仓库。单腿入口仍用于按修改单补审或发布恢复。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。
   失败时打印脱敏后的 stderr 末 40 行，诊断留在数据目录 `review-failures/<run-id>/`，不含仓库检出和凭证助手。保留规矩见 `bin/_aiwork_config.py` 的 `DATA_ENTRIES`。旧的 `logs/review-pr-failures/` 不再写入，按 `logs` 的保留规矩清理。
   发布失败的处理见 [workflow/CLAUDE.md「评审发布失败后重发」](workflow/CLAUDE.md#评审发布失败后重发)。
@@ -171,7 +172,7 @@ bin/aiwork-config runtime subcodex effort
 `XDG_*`，因此 aiwork 数据入口不随供应商的 XDG 设置变化。查询路径本身不创建目录。
 数据目录要先存在，aiwork 不会自动创建它。数据目录要放在外接盘里面的一个子目录，不要直接用盘的挂载点(盘没挂上时，挂载点往往还是一个空目录，检查会误判通过)。
 数据目录的登记项和保留规矩见 `bin/_aiwork_config.py` 的 `DATA_ENTRIES`；产物单位和计龄说明见该文件中 `DATA_ENTRIES` 上方的注释及 `prune_data`。
-`review-pr`（除 `--dry-run`）和 `explore` 在通过会让整次运行退出的检查之后、开始干活之前自动清理；清理某项失败时在 stderr 报出路径和原因，跳过后继续。也可手动运行 `bin/aiwork-config prune-data`，加 `--dry-run` 只列出候选路径、逻辑字节数和最后改动时间，不删除。输出的 `last_modified` 是文件系统提供的 Unix 秒数，使用数字而非日期字符串。
+`review-pr` 的正式单腿评审和 `explore` 在通过会让整次运行退出的检查之后、开始干活之前自动清理；`--auto` 通过调用单腿评审执行这项清理。清理某项失败时在 stderr 报出路径和原因，跳过后继续。也可手动运行 `bin/aiwork-config prune-data`，加 `--dry-run` 只列出候选路径、逻辑字节数和最后改动时间，不删除。输出的 `last_modified` 是文件系统提供的 Unix 秒数，使用数字而非日期字符串。
 
 这些子目录都通过该数据入口定位，有哪些见登记表；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。

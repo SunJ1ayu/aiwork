@@ -19,6 +19,12 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 `tests/test_aiwork_gate_main.mjs`(假 GitHub API 上真跑 `main.mjs`)、`tests/test_aiwork_gate_workflow.mjs`(workflow 形状和本仓库策略)。
 从 OpenDesign 仓库内容推导 policy 清单的测试留在 OpenDesign。
 
+## 评审分档与派发
+
+项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发目标、普通文档路径和固定顺序；`high_min_families` 仍是 high 底线。`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`order` 是腿的尝试顺序；`high_only` 中的腿留给 high。high 优先于其他档位。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测目标或顺序。
+
+工具用法见 README「Review commands」；失败记录由汇总读取。关卡摘要显示目标与底线，只有底线参与 G3 / G6；其他规则不变。隔离保障链的推导和漏项检查见 `tests/test_aiwork_gate_workflow.mjs`。
+
 ## 修改轮数显示
 
 项目可在策略中配置 `modification_rounds`，其中可选的 `limit` 是正整数覆盖值（省略时的上限来源见下段），`summary_account` 是汇总账号，不能兼任评审机器人或合并申请人（含业主）。汇总账号与 Builder 的互斥检查按 [业主决定](https://github.com/SunJ1ayu/aiwork/issues/107#issuecomment-6536969415) 推迟；SunJ1ayuBoT 暂时保留原 Builder 登记。未配置时，关卡输出和行为保持原样。aiwork 启用此项；其他项目要用时修改自己的策略。

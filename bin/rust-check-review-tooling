@@ -24,6 +24,7 @@ SUITES=(
   "program-paths|python3|$ROOT/tests/test_program_paths.py"
   "local-settings|python3|$ROOT/tests/test_local_settings.py"
   "review-pr|python3|$ROOT/tests/test_review_pr.py"
+  "review-dispatch|python3|$ROOT/tests/test_review_dispatch.py"
   "explore|python3|$ROOT/tests/test_explore.py"
   "review-leg-reliability|python3|$ROOT/tests/test_review_leg_reliability.py"
   "app-token-scope|python3|$ROOT/tests/test_app_token_scope.py"

@@ -23,6 +23,7 @@
 // 运行被取消或超时:已创建且未完成的 App 检查停在 in_progress;下一次运行全部重算。
 // 这种"事件来了再重算"的做法本身补不死的窗口,见 README「已知限制」。
 
+import { validateReviewPolicy } from "./review-plan.mjs";
 import { collect, paginate } from "./collect.mjs";
 import { decide, mergeRequester } from "./decide.mjs";
 
@@ -53,6 +54,7 @@ export function validatePolicy(p) {
       bad.push("modification_rounds");
     }
   }
+  validateReviewPolicy(p);
   if (bad.length) throw new Error(`.aiwork/policy.json 不完整或不合法:${bad.join("、")}`);
 }
 
