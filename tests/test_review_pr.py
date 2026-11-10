@@ -64,12 +64,10 @@ def published_review(body, *, head='a' * 40, state='COMMENTED',
 
 class CiFixture:
     """GitHub API-shaped responses; job log lines use real Actions timestamp format."""
-    def __init__(self, *, head_mac=None, main_mac=None, api_error=False, head="a" * 40, number=12):
+    def __init__(self, *, head_linux=None, main_linux=None, api_error=False, head="a" * 40, number=12):
         self.specs = {
-            11: {'state': 'success', 'red': []},
-            12: head_mac or {'state': 'failure', 'red': ['existing-suite']},
-            21: {'state': 'success', 'red': []},
-            22: main_mac or {'state': 'failure', 'red': ['existing-suite']},
+            11: head_linux or {'state': 'failure', 'red': ['existing-suite']},
+            21: main_linux or {'state': 'failure', 'red': ['existing-suite']},
         }
         self.head, self.number = head, number
         self.policy = json.loads(json.dumps(CI_POLICY))
@@ -97,14 +95,14 @@ class CiFixture:
             sha = query['head_sha'][0]
             is_head = sha == self.head
             runs = []
-            for rid in ((11, 12) if is_head else (21, 22)):
+            for rid in ((11,) if is_head else (21,)):
                 spec = self.specs[rid]
                 if spec['state'] == 'missing':
                     continue
                 runs.append({'id': rid, 'run_attempt': 1, 'head_sha': sha,
                              'head_branch': 'f' if is_head else 'main',
                              'event': query['event'][0],
-                             'path': self.policy['ci']['workflow_path'] if rid % 10 == 1 else '.github/workflows/ci-macos.yml',
+                             'path': self.policy['ci']['workflow_path'],
                              'run_started_at': '2026-10-17T04:28:39Z',
                              'status': 'in_progress' if spec['state'] == 'running' else 'completed',
                              'conclusion': None if spec['state'] == 'running' else spec['state'],
@@ -114,12 +112,8 @@ class CiFixture:
         match = re.search(r'/actions/runs/(\d+)/(?:attempts/\d+/)?jobs', endpoint)
         if match:
             rid = int(match[1]); spec = self.specs[rid]
-            is_mac = rid % 10 == 2
             steps = []
-            if is_mac:
-                steps.append({'name': 'No-egress suite (must pass)', 'status': 'completed', 'conclusion': 'success'})
-            steps.append({'name': 'All offline suites (report only for now)' if is_mac else
-                          'Run the offline suite inside a real network namespace',
+            steps.append({'name': 'Run the offline suite inside a real network namespace',
                           'status': 'in_progress' if spec['state'] == 'running' else 'completed',
                           'conclusion': None if spec['state'] == 'running' else spec['state']})
             return {'total_count': 1, 'jobs': [{'id': rid + 100, 'steps': steps}]}
@@ -304,9 +298,9 @@ class ReviewPrTests(unittest.TestCase):
         return task.split('## CI 结果', 1)[1].split('## 改动文件', 1)[0]
 
     def test_ci_other_pr_success_cannot_replace_this_pr_failure(self):
-        fixture = CiFixture(head_mac={'state': 'failure', 'red': ['our-suite']})
+        fixture = CiFixture(head_linux={'state': 'failure', 'red': ['our-suite']})
         fixture.specs[11] = {'state': 'failure', 'red': ['our-linux-suite']}
-        fixture.specs[31] = fixture.specs[32] = {'state': 'success', 'red': []}
+        fixture.specs[31] = {'state': 'success', 'red': []}
         fixture.g1 = '❌ G1 CI 没通过:结论 failure(运行 11)'
         real_api = fixture.api
         def api(endpoint, **kwargs):
@@ -320,9 +314,8 @@ class ReviewPrTests(unittest.TestCase):
         fixture.api = api
         section = self.ci_task(fixture)
         self.assertIn(fixture.g1, section)
-        self.assertRegex(section, r'ci-macos.yml[^\n]*当前 head 失败')
+        self.assertRegex(section, r'工作流运行状态[^\n]*失败')
         self.assertIn('our-linux-suite', section)
-        self.assertIn('our-suite', section)
         self.assertFalse(any('/runs/31/' in endpoint or '/runs/32/' in endpoint for endpoint, _ in fixture.reads))
 
     def test_ci_retarget_after_ci_uses_gate_g1_instead_of_workflow_success(self):
@@ -352,7 +345,7 @@ class ReviewPrTests(unittest.TestCase):
         self.assertTrue(all('event=pull_request_target' in endpoint for endpoint in head_reads))
 
     def test_ci_missing_gate_does_not_become_workflow_success(self):
-        fixture = CiFixture()
+        fixture = CiFixture(head_linux={'state': 'success', 'red': []})
         real_api = fixture.api
         def api(endpoint, **kwargs):
             if '/check-runs?' in endpoint:
@@ -401,19 +394,17 @@ class ReviewPrTests(unittest.TestCase):
         section = self.ci_task(fixture)
         self.assertIn('a' * 40, section)
         self.assertIn('ci.yml', section)
-        self.assertIn('ci-macos.yml', section)
+        self.assertNotIn('只报不拦', section)
         self.assertIn('GitHub 接口', section)
         self.assertIn('只能参考', section)
         self.assertIn('PR 自己的代码', section)
         self.assertIn('78', section)
         self.assertIn('不是 PR 的问题', section)
-        self.assertIn('只报不拦', section)
         self.assertNotIn('UNTRUSTED_LOG_BODY_DO_NOT_COPY', section)
 
-    def test_ci_mac_running_is_reported_without_inventing_a_comparison(self):
-        section = self.ci_task(CiFixture(head_mac={'state': 'running', 'red': []}))
-        self.assertRegex(section, r'ci-macos.yml[^\n]*还在跑')
-        self.assertIn('断网判据：通过', section)
+    def test_ci_linux_running_is_reported_without_inventing_a_comparison(self):
+        section = self.ci_task(CiFixture(head_linux={'state': 'running', 'red': []}))
+        self.assertRegex(section, r'工作流运行状态[^\n]*还在跑')
         self.assertIn('对比没取到', section)
         self.assertNotRegex(section, r'不再出现在红名单里的套件：[^\n]*existing-suite')
 
@@ -424,7 +415,7 @@ class ReviewPrTests(unittest.TestCase):
         self.assertIn('权限', section)
 
     def test_ci_marks_newly_red_suites(self):
-        section = self.ci_task(CiFixture(head_mac={'state': 'failure', 'red': ['new-suite', 'existing-suite']}))
+        section = self.ci_task(CiFixture(head_linux={'state': 'failure', 'red': ['new-suite', 'existing-suite']}))
         self.assertRegex(section, r'相对 main 当前提交，多出来的红套件：[^\n]*new-suite')
         self.assertNotRegex(section, r'相对 main 当前提交，多出来的红套件：[^\n]*existing-suite')
 
@@ -434,19 +425,19 @@ class ReviewPrTests(unittest.TestCase):
         self.assertNotRegex(section, r'相对 main 当前提交，多出来的红套件：[^\n]*existing-suite')
 
     def test_ci_reports_removed_red_names_without_claiming_deleted_suites_passed(self):
-        section = self.ci_task(CiFixture(head_mac={'state': 'success', 'red': []}))
+        section = self.ci_task(CiFixture(head_linux={'state': 'success', 'red': []}))
         self.assertRegex(section, r'不再出现在红名单里的套件：[^\n]*existing-suite')
         self.assertNotIn('变绿', section)
         self.assertIn('也可能未运行或被删除', section)
 
     def test_ci_missing_run_is_distinct_from_failure(self):
-        section = self.ci_task(CiFixture(head_mac={'state': 'missing', 'red': []}))
-        self.assertRegex(section, r'ci-macos.yml[^\n]*没有运行')
+        section = self.ci_task(CiFixture(head_linux={'state': 'missing', 'red': []}))
+        self.assertRegex(section, r'工作流运行状态[^\n]*没有运行')
         self.assertIn('对比没取到', section)
 
     def test_ci_log_unavailable_keeps_github_state_but_does_not_invent_green(self):
-        section = self.ci_task(CiFixture(head_mac={'state': 'failure', 'red': [], 'log_error': True}))
-        self.assertRegex(section, r'ci-macos.yml[^\n]*失败')
+        section = self.ci_task(CiFixture(head_linux={'state': 'failure', 'red': [], 'log_error': True}))
+        self.assertRegex(section, r'工作流运行状态[^\n]*失败')
         self.assertIn('没取到', section)
         self.assertNotRegex(section, r'不再出现在红名单里的套件：[^\n]*existing-suite')
 
@@ -461,16 +452,16 @@ class ReviewPrTests(unittest.TestCase):
 
     def test_ci_section_is_byte_bounded_and_marks_truncation(self):
         names = ['suite-' + str(i).zfill(4) + '-' + 'x' * 40 for i in range(200)]
-        section = '## CI 结果' + self.ci_task(CiFixture(head_mac={'state': 'failure', 'red': names}))
+        section = '## CI 结果' + self.ci_task(CiFixture(head_linux={'state': 'failure', 'red': names}))
         self.assertLessEqual(len(section.rstrip().encode('utf-8')), self.review._review_ci.MAX_BYTES)
-        for required in ('已截断', '只能参考', '78', 'ci.yml', 'ci-macos.yml', '断网判据'):
+        for required in ('已截断', '只能参考', '78', 'ci.yml'):
             self.assertIn(required, section)
 
     def test_ci_incomplete_or_unrelated_log_never_implies_green(self):
         for log in ('unrelated output', '--- existing-suite (rc=1) ---',
                     '✅ 工具链防锈通过 | unrelated: OK', '❌ 工具链防锈失败:'):
             with self.subTest(log=log):
-                section = self.ci_task(CiFixture(head_mac={'state': 'failure', 'red': [], 'log': log}))
+                section = self.ci_task(CiFixture(head_linux={'state': 'failure', 'red': [], 'log': log}))
                 self.assertIn('套件名单没取到', section)
                 self.assertNotRegex(section, r'不再出现在红名单里的套件：[^\n]*existing-suite')
 
@@ -480,7 +471,7 @@ class ReviewPrTests(unittest.TestCase):
         def api(endpoint, **kwargs):
             value = real_api(endpoint, **kwargs)
             if '/actions/runs?' in endpoint:
-                current = value['workflow_runs'][1]
+                current = value['workflow_runs'][0]
                 # A newer run id can be older than a rerun of this PR.
                 old = dict(current, id=999, run_started_at='2026-10-16T00:00:00Z')
                 decoys = [dict(current, **change) for change in (
@@ -497,7 +488,7 @@ class ReviewPrTests(unittest.TestCase):
         section = self.ci_task(fixture)
         self.assertIn('两边都有的红套件：["existing-suite"]', section)
         endpoints = [endpoint for endpoint, _ in fixture.reads]
-        self.assertTrue(any('/runs/12/attempts/2/jobs?' in endpoint for endpoint in endpoints))
+        self.assertTrue(any('/runs/11/attempts/2/jobs?' in endpoint for endpoint in endpoints))
         self.assertFalse(any('/runs/999/' in endpoint or '/runs/1000/' in endpoint for endpoint in endpoints))
 
     def test_ci_timeout_does_not_block_dispatch_and_has_a_query_budget(self):

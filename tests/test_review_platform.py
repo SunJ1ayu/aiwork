@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise both platform routes offline, including on Linux CI."""
+"""Linux admission, source protection and Codex output isolation."""
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -7,7 +7,6 @@ import _no_egress  # noqa: E402,F401
 
 from pathlib import Path
 import json
-import re
 import shutil
 import subprocess
 import unittest
@@ -42,15 +41,9 @@ raise SystemExit(86)
             self.fixture._write(cli, '#!/usr/bin/env python3\nimport json,sys\nstream=' + repr(stream) + '\n' +
                 "for line in stream.splitlines():\n e=json.loads(line)\n if e.get('type')=='system' and '--tools' in sys.argv:e['tools']=sys.argv[sys.argv.index('--tools')+1].split(',')\n print(json.dumps(e))\n")
 
-    def run_leg(self, leg, mode, macos, **extra):
-        # Replace the probe only in a disposable deployment, never in production.
-        helper = ROOT / 'bin/_review-platform.sh'
-        source = helper.read_text() if helper.exists() else 'review_platform_is_macos() { return 1; }'
-        source, count = re.subn(r'review_platform_is_macos\(\) \{[^}]*\}',
-                                'review_platform_is_macos() { return ' + ('0' if macos else '1') + '; }',
-                                source)
-        self.assertEqual(count, 1)
-        (self.bin / helper.name).write_text(source)
+    def run_leg(self, leg, mode, linux=True, **extra):
+        from _test_settings import write_platform_probe
+        write_platform_probe(self.bin, linux=linux)
         env = self.fixture._env()
         env.update(RO_MARKER=str(self.marker), FINISH_CASE='pass',
                    AIWORK_REVIEW_REPORT_PATH=str(self.root / 'report.md'),
@@ -62,65 +55,32 @@ raise SystemExit(86)
              str(self.root / 'logs/leg.log'), str(self.fixture.repo)],
             capture_output=True, text=True, env=env, timeout=30)
 
-    def test_mac_readers_start_without_ro_wrapper_in_both_modes(self):
-        for leg in ('subkimi', 'submimo', 'subdeepseek-agent'):
-            for mode in ('review', 'explore'):
-                with self.subTest(leg=leg, mode=mode):
-                    result = self.run_leg(leg, mode, True)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertFalse(self.marker.exists())
-                    self.assertIn('Conclusion: PASS', (self.root / 'report.md').read_text())
-
-    def test_mac_codex_starts_without_ro_wrapper_in_both_modes(self):
-        (self.bin / 'ro-repo-exec').unlink()
+    def test_codex_sandbox_only_work_copy_in_both_modes(self):
         for mode in ('review', 'explore'):
             with self.subTest(mode=mode):
-                result = self.run_leg('subcodex', mode, True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertFalse(self.marker.exists())
-                self.assertIn('Conclusion: PASS', (self.root / 'report.md').read_text())
+                result = self.run_leg('subcodex', mode)
+                self.assertTrue(self.marker.exists(), result.stderr)
+                args = self.marker.read_text().splitlines()
+                cwd = args[args.index('-C') + 1]
+                self.assertEqual(args[args.index('-s') + 1], 'workspace-write')
+                config = dict(arg.split('=', 1) for i, arg in enumerate(args)
+                              if i and args[i - 1] == '-c')
+                expected = {
+                    'sandbox_workspace_write.writable_roots': '[]',
+                    'sandbox_workspace_write.exclude_slash_tmp': 'true',
+                    'sandbox_workspace_write.exclude_tmpdir_env_var': 'true',
+                    'sandbox_workspace_write.network_access': 'false',
+                    'approval_policy': 'never',
+                }
+                for key, value in expected.items():
+                    self.assertEqual(config.get(key), value, key)
+                self.assertEqual(json.loads(config['shell_environment_policy.set.TMPDIR']), cwd)
+                self.assertNotIn('--add-dir', args)
+                self.assertNotEqual(Path(cwd), self.fixture.repo.resolve())
+                last_message = Path(args[args.index('-o') + 1])
+                self.assertEqual(inside(cwd, str(last_message), literal=False)[0], 1)
 
-    def test_codex_sandbox_only_work_copy_on_both_platforms_and_modes(self):
-        capture = self.root / 'codex-args.json'
-        cli = self.bin / 'codex'
-        source = cli.read_text().replace(
-            'case = os.environ["FINISH_CASE"]',
-            "json.dump({'args': args, 'cwd': os.getcwd(), 'tmp': os.environ.get('TMPDIR')}, "
-            "open(os.environ['CODEX_CAPTURE'], 'w'))\ncase = os.environ[\"FINISH_CASE\"]")
-        cli.write_text(source)
-        for macos in (False, True):
-            for mode in ('review', 'explore'):
-                with self.subTest(macos=macos, mode=mode):
-                    result = self.run_leg('subcodex', mode, macos, CODEX_CAPTURE=str(capture))
-                    if macos:
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        recorded = json.loads(capture.read_text())
-                        args, cwd = recorded['args'], recorded['cwd']
-                        # CLI scratch must be outside the model-writable copy.
-                        self.assertEqual(inside(cwd, recorded['tmp'], literal=False)[0], 1)
-                    else:
-                        self.assertTrue(self.marker.exists(), result.stderr)
-                        args = self.marker.read_text().splitlines()
-                        cwd = args[args.index('-C') + 1]
-                    self.assertEqual(args[args.index('-s') + 1], 'workspace-write')
-                    config = dict(arg.split('=', 1) for i, arg in enumerate(args)
-                                  if i and args[i - 1] == '-c')
-                    expected = {
-                        'sandbox_workspace_write.writable_roots': '[]',
-                        'sandbox_workspace_write.exclude_slash_tmp': 'true',
-                        'sandbox_workspace_write.exclude_tmpdir_env_var': 'true',
-                        'sandbox_workspace_write.network_access': 'false',
-                        'approval_policy': 'never',
-                    }
-                    for key, value in expected.items():
-                        self.assertEqual(config.get(key), value, key)
-                    self.assertEqual(json.loads(config['shell_environment_policy.set.TMPDIR']), cwd)
-                    self.assertNotIn('--add-dir', args)
-                    self.assertNotEqual(Path(cwd), self.fixture.repo.resolve())
-                    last_message = Path(args[args.index('-o') + 1])
-                    self.assertEqual(inside(cwd, str(last_message), literal=False)[0], 1)
-
-    def test_mac_pending_legs_refuse_before_any_preparation(self):
+    def test_nonlinux_legs_refuse_before_any_preparation(self):
         unexpected = self.root / 'prepared'
         poison = '''#!/usr/bin/env python3
 import os, pathlib
@@ -130,53 +90,17 @@ raise SystemExit(95)
         for name in ('git', 'mkdir', 'mktemp', 'cp', 'realpath', 'aiwork-config',
                      'codex', 'claude', 'cursor-agent'):
             self.fixture._write(name, poison)
-        for leg, reason in (('subcursor', 'Cursor 收残留进程'),):
+        for leg in LEGS:
             for mode in ('review', 'explore'):
                 with self.subTest(leg=leg, mode=mode):
-                    result = self.run_leg(leg, mode, True, PREP_MARKER=str(unexpected),
+                    result = self.run_leg(leg, mode, False, PREP_MARKER=str(unexpected),
                                           AIWORK_DATA_DIR=str(self.root / 'absent-data'))
                     self.assertEqual(result.returncode, 78, result.stderr)
-                    self.assertIn(reason, result.stderr)
-                    self.assertIn('PR', result.stderr)
+                    self.assertIn('仅支持 Linux', result.stderr)
                     self.assertFalse(unexpected.exists())
                     self.assertFalse(self.marker.exists())
                     self.assertFalse((self.root / 'logs').exists())
                     self.assertFalse((self.root / 'absent-data').exists())
-
-    def test_native_behavior_passes_with_a_different_cli_version(self):
-        original = self.fixture._env
-        def different_version_environment():
-            env = original()
-            launcher = self.root / 'settings/programs/_claude-fixture'
-            launcher.write_text(launcher.read_text().replace('2.1.301', 'future-cli-version'))
-            return env
-        self.fixture._env = different_version_environment
-        for leg in ('submimo', 'subdeepseek-agent'):
-            for mode in ('review', 'explore'):
-                with self.subTest(leg=leg, mode=mode):
-                    result = self.run_leg(leg, mode, True)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertIn('Conclusion: PASS', (self.root / 'report.md').read_text())
-
-    def test_native_sandbox_failure_never_dispatches_either_provider(self):
-        invoked = self.root / 'model-dispatched'
-        self.fixture._write('claude', '#!/usr/bin/env python3\nfrom pathlib import Path\nPath(' + repr(str(invoked)) + ').touch()\n')
-        original = self.fixture._env
-
-        def failed_preflight_environment():
-            env = original()
-            launcher = self.root / 'settings/programs/_claude-fixture'
-            launcher.write_text(launcher.read_text().replace('AIWORK_NATIVE_SANDBOX_READY', 'NATIVE_SANDBOX_FAILED'))
-            return env
-
-        self.fixture._env = failed_preflight_environment
-        for leg in ('submimo', 'subdeepseek-agent'):
-            for mode in ('review', 'explore'):
-                with self.subTest(leg=leg, mode=mode):
-                    result = self.run_leg(leg, mode, True)
-                    self.assertEqual(result.returncode, 78, result.stderr)
-                    self.assertIn('native sandbox preflight failed', result.stderr)
-                    self.assertFalse(invoked.exists(), 'provider must not start after native sandbox failure')
 
     def _codex_output_attack(self, attack):
         # The CLI is outside its command sandbox. Model actions below only
@@ -219,28 +143,27 @@ out.write_text('Conclusion: PASS\n')
 ''')
         target = self.root / 'outside-synthetic.txt'
         secret = 'SYNTHETIC_OUTSIDE_CONTENT_63\n'
-        for macos in (False, True):
-            for mode in ('review', 'explore'):
-                with self.subTest(attack=attack, macos=macos, mode=mode):
-                    target.write_text(secret)
-                    result = self.run_leg('subcodex', mode, macos,
-                                          OUTPUT_ATTACK=attack, ATTACK_TARGET=str(target),
-                                          SUBCODEX_TIMEOUT='5')
-                    report = self.root / 'report.md'
-                    artifacts = [result.stdout, result.stderr]
-                    artifacts += [p.read_text() for p in (self.root / 'logs').iterdir()]
-                    if report.exists():
-                        artifacts.append(report.read_text())
-                    if attack != 'clean':
-                        self.assertIn('"model_link_created": true',
-                                      (self.root / 'logs/leg.stream.jsonl').read_text())
-                    self.assertEqual(target.read_text(), secret, 'CLI overwrote outside file')
-                    self.assertTrue(all(secret.strip() not in text for text in artifacts),
-                                    'outside content leaked into logs/report')
-                    self.assertEqual(result.returncode, 1 if attack == 'read' else 0,
-                                     result.stderr)
-                    if attack != 'read':
-                        self.assertEqual(report.read_text(), 'Conclusion: PASS\n')
+        for mode in ('review', 'explore'):
+            with self.subTest(attack=attack, mode=mode):
+                target.write_text(secret)
+                result = self.run_leg('subcodex', mode,
+                                      OUTPUT_ATTACK=attack, ATTACK_TARGET=str(target),
+                                      SUBCODEX_TIMEOUT='5')
+                report = self.root / 'report.md'
+                artifacts = [result.stdout, result.stderr]
+                artifacts += [p.read_text() for p in (self.root / 'logs').iterdir()]
+                if report.exists():
+                    artifacts.append(report.read_text())
+                if attack != 'clean':
+                    self.assertIn('"model_link_created": true',
+                                  (self.root / 'logs/leg.stream.jsonl').read_text())
+                self.assertEqual(target.read_text(), secret, 'CLI overwrote outside file')
+                self.assertTrue(all(secret.strip() not in text for text in artifacts),
+                                'outside content leaked into logs/report')
+                self.assertEqual(result.returncode, 1 if attack == 'read' else 0,
+                                 result.stderr)
+                if attack != 'read':
+                    self.assertEqual(report.read_text(), 'Conclusion: PASS\n')
 
     def test_codex_output_cannot_overwrite_model_symlink_target(self):
         self._codex_output_attack('write')
@@ -256,7 +179,7 @@ out.write_text('Conclusion: PASS\n')
             for mode in ('review', 'explore'):
                 with self.subTest(leg=leg, mode=mode):
                     self.marker.unlink(missing_ok=True)
-                    result = self.run_leg(leg, mode, False)
+                    result = self.run_leg(leg, mode)
                     self.assertTrue(self.marker.is_file(), result.stderr)
                     args = self.marker.read_text().splitlines()
                     self.assertEqual(args[:2], [str(self.fixture.repo.resolve()), '--'])

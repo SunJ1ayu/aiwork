@@ -2,7 +2,6 @@
 """Reader policies and tool trace checks.
 
 Reader profiles, Kimi's execution-time hook and post-run checks share policy.
-The Mac command inventory comes from _claude_sandbox.py.
 """
 
 import json
@@ -292,7 +291,7 @@ def claude_records(value):
                 yield from claude_records(child)
 
 
-def audit_claude(text, repo, allowed=CLAUDE_READER_TOOLS):
+def audit_claude(text, repo):
     """Audit API calls, inventory and completion; other CLI records are opaque."""
     check_recorded_paths(text, repo, claude=True)
     events = _events(text)
@@ -332,7 +331,7 @@ def audit_claude(text, repo, allowed=CLAUDE_READER_TOOLS):
             inventory = event.get("tools")
             if initialized or finished or not isinstance(inventory, list) or any(not isinstance(t, str) for t in inventory):
                 return None
-            if set(inventory) != set(allowed):
+            if set(inventory) != set(CLAUDE_READER_TOOLS):
                 return None
             initialized = True
         elif kind == "result":
@@ -433,13 +432,9 @@ def main(argv):
         elif cmd == "audit-kimi":
             text = Path(argv[2]).read_text(encoding="utf-8", errors="replace") if Path(argv[2]).is_file() else ""
             return _report(audit_kimi(text, Path(argv[3])), frozenset(KIMI_TOOLS))
-        elif cmd in ("audit-claude", "audit-claude-sandbox"):
+        elif cmd == "audit-claude":
             text = Path(argv[2]).read_text(encoding="utf-8", errors="replace") if Path(argv[2]).is_file() else ""
-            allowed = CLAUDE_READER_TOOLS
-            if cmd == "audit-claude-sandbox":
-                from _claude_sandbox import TOOLS
-                allowed = TOOLS
-            return _report(audit_claude(text, Path(argv[3]), allowed), frozenset(allowed))
+            return _report(audit_claude(text, Path(argv[3])), frozenset(CLAUDE_READER_TOOLS))
         else:
             print(f"unknown command {cmd}", file=sys.stderr)
             return 2

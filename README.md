@@ -36,18 +36,20 @@ GitHub `main` 是 aiwork 的源码准本。改动流程见 [workflow/CLAUDE.md](
 
 ## Review commands
 
+评审腿和执行方仅在 Linux 上运行；Mac 只作为虚拟机、OpenClaw 和 autoloop 中台的宿主。
+
 每个通道都能写代码也能评审。写代码在自己的工作树里打开那家的命令行。
 仓库里的这些命令服务 `review-pr`。同一个 PR 要换一家评审，由关卡判断。
 
 - `bin/subdeepseek-agent` — DeepSeek，经 Claude Code headless 读仓库。模型来自 `~/.config/aiwork/models.env` 的 deepseek 行。
 - `bin/subkimi` — Kimi，kimi-code CLI。review、explore 的 agent profile、读取前 hook 和跑完核对共用 `bin/_reader_tools.py`。`kimi-review-home/hooks/guard.mjs` 将事件交给共享策略；副本外路径、未知工具或未知参数在读取前拒绝。Kimi 不继承 ripgrep 配置，避免搜索时跟随副本外链接。 供应商调用前，`bin/_kimi_preflight.py` 用独立临时 HOME、本机假接口和无害文件检查当前 CLI 的完整工具参数结构、正常读取、guard 越界拒绝且不返回副本外内容，以及搜索遍历；不使用真实凭证或额度，不按 CLI 版本号放行。整个预检（含收尾）经过 `aiwork-timeout` 总时限，入口见 `bin/_kimi_preflight.py`。检查失败或证据不完整就拒派。清单以外的工具（含被 CLI 拒掉的尝试），或者输出里看不出用了哪些工具，只在这次本来会成功时记成 `readonly_tools`：不发评审，这个失败原因不重试。没有结论的那次仍是 `no_verdict`，会重试一次。任务复制进快照，由 Read 读取，正文不进命令行参数。模型来自 kimi 行。读取分页和截断结果的处理指令见 `bin/_reader_tools.py::kimi_profile`，历史失败记录的脱敏来源见 `tests/fixtures/kimi-outside-results.md`。
-- `bin/submimo <review|explore>` — MiMo，经 `bin/subagent` 复用 Claude Code headless，连接小米的 Anthropic 兼容接口。模型读 `models.env` 的 mimo 行（API 原生 `mimo-…` 名称）；接口地址和密钥读 `mimo.env`。Linux 上两个模式只提供读取工具，配置和跑完核对共用 `bin/_reader_tools.py`；Mac 的命令策略见下方 Claude Code 外壳一节。看不出实际工具或出现其他工具时记为 `readonly_tools`，不发评审、不因这个原因重试。超时使用 `MIMO_TIMEOUT`，轮次上限使用 `MIMO_MAX_TURNS`。
+- `bin/submimo <review|explore>` — MiMo，经 `bin/subagent` 复用 Claude Code headless，连接小米的 Anthropic 兼容接口。模型读 `models.env` 的 mimo 行（API 原生 `mimo-…` 名称）；接口地址和密钥读 `mimo.env`。Linux 上两个模式只提供读取工具，配置和跑完核对共用 `bin/_reader_tools.py`。看不出实际工具或出现其他工具时记为 `readonly_tools`，不发评审、不因这个原因重试。超时使用 `MIMO_TIMEOUT`，轮次上限使用 `MIMO_MAX_TURNS`。
 - `bin/subcursor <review|explore>` — Cursor CLI。模型来自 cursor 行，或用 `CURSOR_MODEL` 覆盖一次。家族跟着模型走，不跟着 Cursor 这个传输。用 `cursor-agent login` 登录。
-- `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。两个平台的原生沙箱设置见 `bin/subcodex` 的 `CODEX_CFG`；Linux 外层另经 `ro-repo-exec`。副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
+- `bin/subcodex <review|explore>` — Codex CLI。模型来自 codex 行（`SUBCODEX_MODEL` 覆盖一次）。原生沙箱设置见 `bin/subcodex` 的 `CODEX_CFG`；外层另经 `ro-repo-exec`。副本可丢弃，`--ignore-user-config --ephemeral`，提示词走 stdin。派发前用 `codex debug prompt-input` 离线确认子 agent 工具已去掉；联网搜索关闭。
 - `bin/review-pr PR [--repo owner/name] --leg LEG` — 评审一个 PR 的 head 并发布一条 aiwork-review COMMENT。`--repo` 默认是这个检出的 origin；origin 不是 GitHub `owner/name` 时显式传入。需要联网、需要读取本机模型凭证；被 agent 派去跑时必须在沙箱外运行。跑之前的前提见 `workflow/CLAUDE.md`。
   失败时打印脱敏后的 stderr 末 40 行，诊断留在数据目录 `review-failures/<run-id>/`，不含仓库检出和凭证助手。保留规矩见 `bin/_aiwork_config.py` 的 `DATA_ENTRIES`。旧的 `logs/review-pr-failures/` 不再写入，按 `logs` 的保留规矩清理。
   发布失败的处理见 [workflow/CLAUDE.md「评审发布失败后重发」](workflow/CLAUDE.md#评审发布失败后重发)。
-  任务统一附带当前 head 与 main 的「CI 结果」：Linux / Mac 工作流状态、Mac 断网判据、离线红套件及相对 main 当前提交的红名单差异。Linux G1 直接引用关卡自己的检查；挑运行共用关卡选择器，工作流路径和事件读取项目 main 的策略。状态来自 GitHub 接口；套件名单来自 PR 可影响的日志，只能参考。查询失败或未完成会如实标明，继续派腿；本节最多 4 KiB，超长注明截断，关卡规则不变。
+  任务统一附带当前 head 与 main 的「CI 结果」：Linux 工作流状态、离线红套件及相对 main 当前提交的红名单差异。Linux G1 直接引用关卡自己的检查；挑运行共用关卡选择器，工作流路径和事件读取项目 main 的策略。状态来自 GitHub 接口；套件名单来自 PR 可影响的日志，只能参考。查询失败或未完成会如实标明，继续派腿；本节最多 4 KiB，超长注明截断，关卡规则不变。
   review 机器人读 CI：公开仓库目前能读到；私有仓库须在 GitHub App 和本机 `apps/review.env` 的 `PERMISSIONS` 同时加入 `actions:read`（运行和日志）、`checks:read`（关卡 G1 检查）。配置示例见 `bin/gh-app-token`；取不到时如实注明并继续派腿。
   `--dry-run` 只把任务打印到标准输出，不调用模型、不发布评审、不清理过期数据；允许从开发工作树预览已合并的 PR。正式派腿仍须从干净且为最新 main 的共享检出运行。
   任务在 diff 之后再次要求结论。完整 diff（含删除）放得下就内联。超过 `READER_INLINE_DIFF_BYTES`（200KB）时，任务只列每个文件的状态和行数，完整 diff 在快照文件 `aiwork-review.diff`。
@@ -89,18 +91,15 @@ bash bin/rust-check-review-tooling --coverage-only   # 只查没登记进总跑�
 The runner is list-driven (`SUITES`) and hard-reds when a `tests/test-*` file is
 NOT in that list — a judging suite nobody runs rots silently. Individual suites
 still run standalone (`bash tests/test-subcodex.sh`); each one first reruns
-itself with no egress — inside a network namespace on Linux, under the system
-`sandbox-exec` on macOS — and refuses to run (78) if isolation cannot be verified.
-The macOS guarantees and limitations are defined in one place:
-[`tests/_no_egress.py`, “Mac 上出网的路”](tests/_no_egress.py).
-Linux details: `tests/_no-egress.sh`. This guard prevents accidental paid calls
-from tests (the 2026-08-10 incident), within the documented platform limits.
+itself with no egress inside a network namespace, and refuses to run (78)
+if isolation cannot be verified. Details: `tests/_no-egress.sh` and
+`tests/_no_egress.py`. This guard prevents accidental paid calls from tests
+(the 2026-08-10 incident).
 
 ## MiMo / DeepSeek 的 Claude Code 外壳
 
 两条腿共用 `bin/subagent` 的供应商表。
 Claude Code 的版本不写死，在本机 `programs/claude`、`programs/node` 登记安装路径。
-Mac 上 DeepSeek、MiMo 的 review / explore 共用 `bin/_claude_sandbox.py` 的原生沙箱策略和工具清单：允许在一次性副本内运行命令，命令断网、隐藏凭证，读取仅开放本次副本、运行临时目录和必要的系统程序与库，禁止退回无沙箱执行。程序自己的临时文件仅可写本次运行的临时目录；项目设置、MCP 和技能不参与配置。派模型前通过 Claude Code 自带 MCP 的 Bash 做离线启动检查，同时实测副本内外读写、凭证环境变量隐藏和断网（直连、DNS、本机连接与原生代理）；任何一项无法确认生效即拒绝派发。真实工具记录仍由 `bin/_reader_tools.py` 核对。Mac 沙箱不能叠加，腿内运行 aiwork 测试会被断网守卫拒绝；使用任务书里的 CI 结果。Linux 上两条腿的原有能力和保护保持不变。
 
 MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行目录。
 小米接口的配置方法见[官方 Claude Code 文档](https://mimo.mi.com/docs/zh-CN/tokenplan/integration/claudecode)。
@@ -128,7 +127,7 @@ MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行
 
 入口在启动时校验 Python 和本次所需程序；依赖表见 `bin/_programs.sh`，
 可用下述 `check-programs` 命令预检，不在文档中另抄一份依赖表。
-不使用某条腿时可以不登记它（例如尚未开放的 Mac Cursor）；
+不使用某条腿时可以不登记它；
 直接入口、`review-pr` 和 `explore` 都先检查所选腿的平台支持，再读取该腿的设置；
 `explore` 的一条腿被平台拒跑时，其他腿照常运行。设置缺项、断链、非文件、不能执行或 Python 版本不够时，
 打印 `programs/项名` 与设置路径并退出，不查 PATH 补缺。`CODEX_BIN` 不再覆盖本机登记。

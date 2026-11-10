@@ -102,7 +102,7 @@ v9_claude_shell_base() {
   # 这一组问的是**claude 壳这条底座本身**(env 注入、工具白名单、裁决 gate),
   # 它对 deepseek 仍然完全有效,断言一条不删、一条不弱。GLM 那条底座由 V28 问。
   # 瘦 shim,躯干在 subagent(V21);bin/ 成套部署,两个都要 cp。
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/_reader_tools.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_reader_tools.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
   # stub claude: record argv + the env subdeepseek-agent must (and must not) inject,
   # then emit STUB_REVIEW_OUT as the review text.
@@ -173,13 +173,9 @@ PYEOF
   else
     bad "agent: no write-capable tool in allowlist"
   fi
-  if review_platform_is_macos; then
-    argvhas "$d/a1.json" "--tools"; check "agent: exact native tool selection present" $?
-  else
   argvhas "$d/a1.json" "--disallowedTools"; check "agent: --disallowedTools present" $?
   argvhas "$d/a1.json" "Write";             check "agent: Write explicitly disallowed" $?
   argvhas "$d/a1.json" "Agent";             check "agent: subagent tool (Agent) disallowed" $?
-  fi
   # 2026-08-18 晚收紧(track deepseek-leg-bash-hole):**allowlist 里不许再有任何 Bash**。
   # 实测:`Bash(git diff:*)` 放行了 `git diff --output=<仓内文件> HEAD`,文件真写出来了
   # ⇒ 评审腿能往被评审的仓里写 ⇒ **能写 tests/,也就是能动判据**。
@@ -265,11 +261,7 @@ sys.exit(0 if not missing else 1)" "$d/a1.json" 2>/dev/null; then
     bad "agent: 写口仍全禁(Write/Edit/NotebookEdit/Task/Agent)—— 零成本,不跟着 Bash 一起放"
   fi
   argvhas "$d/a1.json" "--model sonnet";    check "agent: --model sonnet (mapped slot)" $?
-  if review_platform_is_macos; then
-    python3 -c "import json,sys;a=json.load(open(sys.argv[1]))['argv'];sys.exit(a[a.index('--setting-sources')+1]!='')" "$d/a1.json"
-  else
     argvhas "$d/a1.json" "--setting-sources project"
-  fi
   check "agent: user settings not loaded" $?
   argvhas "$d/a1.json" "--max-turns";       check "agent: turn cap present" $?
 
@@ -514,7 +506,7 @@ v21_agent_leg_body_is_single_source() {
 
   local d; d="$(test_mktemp -d)"; local ab="$d/bin"; mkdir -p "$ab" "$d/repo"
   fixture_git_repo "$d/repo"
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/_reader_tools.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_reader_tools.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/subagent" "$ab/"
   cp "$BIN/ro-repo-exec" "$ab/"
   cat > "$ab/claude" <<'CAPEOF'
 #!/usr/bin/env python3
@@ -590,10 +582,6 @@ v35_legs_run_in_readonly_repo() {
   # "写仓失败"这类断言会**全部假绿** —— 命令根本没跑,当然写不进去。
   # 11 条里有 6 条这样绿了(2026-08-19 红检当场照出来,我自己看 PASS 数发现的)。
   # ⇒ 前置不满足就把**每一条**都判红,一条都不许留在"看起来绿"的状态。
-  if review_platform_is_macos; then
-    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
-    rm -rf "$d"; return
-  fi
   if [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local why="$BIN/ro-repo-exec 不存在或不可执行"
     local t
@@ -717,10 +705,6 @@ v36_wrappers_actually_use_readonly_repo() {
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
   printf '# t\n' > "$d/t.md"
 
-  if review_platform_is_macos; then
-    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
-    rm -rf "$d"; return
-  fi
   if [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local t
     for t in "subdeepseek-agent 副本可写/原仓只读" \
@@ -732,7 +716,7 @@ v36_wrappers_actually_use_readonly_repo() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"   # 成套部署:wrapper 靠它把腿放进只读仓(V35/V36)
 
   # 假模型从 cwd/--dir 找到真正派给它的 repo:往那里写必须成功；再往显式传入的
@@ -895,10 +879,6 @@ v37_wrappers_open_no_write_hole() {
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
   printf '# t\n' > "$d/t.md"
 
-  if review_platform_is_macos; then
-    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
-    rm -rf "$d"; return
-  fi
   if [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local t
     for t in "腿日志不靠写口也写得出" "wrapper 一个 --rw 都不传" \
@@ -909,7 +889,7 @@ v37_wrappers_open_no_write_hole() {
     rm -rf "$d"; return
   fi
 
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$BIN/subagent" "$BIN/submimo" "$BIN/subkimi" "$b/"
   cp "$BIN/ro-repo-exec" "$b/"
   _mk_pwn_stub2() {
     cat > "$1" <<'PWN2'
@@ -1084,10 +1064,6 @@ v39_readonly_blind_spots() {
   ( cd "$repo" && git init -q . && printf 'x\n' > a.txt && git add -A \
     && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
 
-  if review_platform_is_macos; then
-    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
-    rm -rf "$d"; return
-  fi
   if [[ ! -x "$BIN/ro-repo-exec" ]]; then
     local t
     for t in "worktree:工作树写不了" "worktree:git commit 写不进主仓" \
@@ -1380,10 +1356,6 @@ v42_git_common_dir_no_silent_gap() {
   # 这是全工具唯一一处**失败被吞而不是 fail-closed** 的地方,而 fail-closed 正是本单的规格。
   local d b; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b"
 
-  if review_platform_is_macos; then
-    echo "  SKIP: Linux 只读挂载判据（Mac 启动路径见 test_review_platform.py）"
-    rm -rf "$d"; return
-  fi
   if [[ ! -x "$BIN/ro-repo-exec" ]]; then
     bad "V42①: 老 git 下 worktree 共同目录仍然只读(缺 ro-repo-exec ⇒ 不许静默跳过)"
     bad "V42②: 共同目录拿不到时拒跑(缺件同上)"
@@ -1465,7 +1437,7 @@ v46_final_report_is_the_last_message() {
   local d b rc; d="$(test_mktemp -d)"; b="$d/bin"; mkdir -p "$b" "$d/repo"
   fixture_git_repo "$d/repo"
   printf '# t\n' > "$d/t.md"
-  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/_claude_sandbox.py" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
+  cp "$BIN/_python" "$BIN/_programs.sh" "$BIN/_review-platform.sh" "$BIN/subdeepseek-agent" "$BIN/subagent" "$BIN/subkimi" "$BIN/submimo" \
     "$BIN/_review-home-guard.sh" "$BIN/_review-workspace.sh" "$BIN/_review-reader-context.sh" "$BIN/aiwork-timeout" "$BIN/_paths.py" "$BIN/aiwork-config" \
     "$BIN/_aiwork_config.py" "$BIN/_review_result.py" "$BIN/_reader_tools.py" "$BIN/_kimi_preflight.py" "$BIN/ro-repo-exec" "$b/"
   printf '%s' $'Findings at gate/decide.mjs:22.\n\nThe pending ternary is not a verdict line.\n\nConclusion: PASS' > "$d/last.txt"
