@@ -19,6 +19,7 @@ def dispatch(read_state, identify, run, builder_family):
             raise ValueError('PR head changed during dispatch; stop and rerun for the new head')
         if value['policy_sha'] != policy_sha:
             raise ValueError('main policy changed during dispatch; stop and rerun')
+        completed.update(set(value['passes']) - excluded)
         return value
 
     for leg in plan['order']:

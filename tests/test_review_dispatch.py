@@ -52,6 +52,19 @@ class DispatchTests(unittest.TestCase):
             return {'ok':True,'url':'https://github.com/example/review'}
         r=dispatch(lambda:state.copy(),lambda l:({'a':'deepseek','b':'moonshot','c':'xiaomi'}[l],None),run,'openai')
         self.assertEqual(calls,['a','b']);self.assertTrue(r['target_met']);self.assertTrue(r['minimum_met'])
+    def test_lost_publication_response_uses_actual_gate_passes_for_target(self):
+        state={'head':'a'*40,'policy_sha':'b'*40,
+               'plan':{'tier':'code','target':2,'minimum':1,'order':['a','b']},
+               'passes':[],'excluded':[],'gate':{}}
+        families={'a':'deepseek','b':'moonshot'}
+        def run(leg,model,head):
+            state['passes'].append(families[leg])
+            return {'ok':False,'reason':'publication response lost'} if leg=='a' else {'ok':True,'url':'https://github.com/example/review'}
+        result=dispatch(lambda:state.copy(),lambda leg:(families[leg],None),run,'openai')
+        self.assertTrue(result['target_met'])
+        self.assertEqual(result['missing_target'],0)
+        self.assertFalse(result['attempts'][0]['ok'])
+
     def test_policy_change_stops(self):
         i=0
         def state():
