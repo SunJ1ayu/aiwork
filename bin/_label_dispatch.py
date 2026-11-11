@@ -28,6 +28,10 @@ def actor(event):
     return (event.get('actor') or {}).get('login','').lower()
 
 
+def trusted_accounts(project):
+    return {project[k].lower() for k in ('owner','bot')}
+
+
 def relevant(row):
     return sorted((e for e in row['events'] if e.get('event') in ('labeled','unlabeled')
                    and (e.get('label') or {}).get('name') in LABELS),key=lambda e:int(e['id']))
@@ -35,13 +39,15 @@ def relevant(row):
 
 def plan(rows, original, busy, stops):
     state=copy.deepcopy(original)
+    # Old issue-wide boundaries must not suppress another label's latest event.
+    state.pop('cutoffs',None)
     decisions=[]
     active=state.get('active')
     by_subject={subject(row):row for row in rows}
     if active:
         name=active['subject']
         row=by_subject[name]  # Missing observation must never mean closed or idle.
-        trusted={row['project'][k].lower() for k in ('owner','bot')}
+        trusted=trusted_accounts(row['project'])
         events=relevant(row)
         origin=[e for e in events if int(e['id'])==int(active['event_id'])]
         if len(origin)!=1:raise ValueError('active event missing')
@@ -58,12 +64,11 @@ def plan(rows, original, busy, stops):
             else:
                 state['active']=None
                 if reason=='owner_stop' and name not in state['stopped']:state['stopped'].append(name)
-                if removed:state['cutoffs'][name]=max(int(state['cutoffs'].get(name,0)),max(int(e['id']) for e in removed))
                 decisions.append({'subject':name,'reason':reason})
     candidates=[]
     for row in rows:
         name=subject(row)
-        trusted={row['project'][k].lower() for k in ('owner','bot')}
+        trusted=trusted_accounts(row['project'])
         present={x['name'] for x in row['issue']['labels']}
         events=relevant(row)
         for label in LABELS:
@@ -74,7 +79,6 @@ def plan(rows, original, busy, stops):
                     'label_absent' if label not in present or e['event']!='labeled' else
                     'untrusted_actor' if actor(e) not in trusted else
                     'owner_stopped' if name in stops or name in state['stopped'] else
-                    'previous_cycle' if eid<=int(state['cutoffs'].get(name,0)) else
                     'already_dispatched' if key in state['sent'] else None)
             if reason:decisions.append({'subject':name,'event_id':eid,'reason':reason})
             else:candidates.append({'subject':name,'key':key,'event':e,'project':row['project'],'issue':row['issue']})
@@ -231,7 +235,7 @@ def poll(config,folder,preview=False,backend=None):
     try:
         backend=backend or Backend(config)
         state_path=folder/'state.json'
-        state=json.loads(state_path.read_text()) if state_path.exists() else {'sent':[],'active':None,'cutoffs':{},'stopped':[]}
+        state=json.loads(state_path.read_text()) if state_path.exists() else {'sent':[],'active':None,'stopped':[]}
         stop_path=folder/'owner-stops.json'
         stops=set(json.loads(stop_path.read_text())) if stop_path.exists() else set()
         if state.get('pending'):
@@ -243,7 +247,7 @@ def poll(config,folder,preview=False,backend=None):
             rows=backend.observe(state)
             record['observed']=[{'subject':subject(r),'event_id':int(e['id']),
                 'action':e['event'],'label':e['label']['name'],
-                'trusted':actor(e) in {r['project'][k].lower() for k in ('owner','bot')}} for r in rows for e in relevant(r)]
+                'trusted':actor(e) in trusted_accounts(r['project'])} for r in rows for e in relevant(r)]
             record['stage']='admission'
             result=plan(rows,state,backend.busy(),stops)
             record['decisions']=result['decisions']
@@ -267,7 +271,6 @@ def import_legacy(legacy, repo):
         raise ValueError('legacy active event must be identified before migration')
     return {'sent':[repo+':'+str(e) for e in legacy.get('sent',[])],
             'active':{'subject':repo+'#'+str(active),'event_id':int(legacy['active_event_id'])} if active else None,
-            'cutoffs':{repo+'#'+str(n):int(e) for n,e in legacy.get('released_through',{}).items()},
             'stopped':[repo+'#'+str(n) for n in legacy.get('stopped_issues',[])]}
 
 
