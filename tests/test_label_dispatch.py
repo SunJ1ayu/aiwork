@@ -261,6 +261,98 @@ class Orchestration(unittest.TestCase):
             self.assertEqual(backend.posted,['example/project:1'])
             self.assertEqual(len((folder/'poll-history.jsonl').read_text().splitlines()),3)
 
+    def test_state_filename_maintenance_reaches_write_and_read(self):
+        source=(ROOT/'bin/_label_dispatch.py').read_text()
+        module=types.ModuleType('state_file_maintenance')
+        exec(compile(source.replace("'state.json'","'renamed-state.json'",1),str(ROOT/'bin/_label_dispatch.py'),'exec'),module.__dict__)
+        observed=[]
+        class Fake:
+            def observe(self,s):observed.append(copy.deepcopy(s));return [item(1,[event(1)])]
+            def busy(self):return set()
+            def accepted(self,c):return True
+            def post(self,c):raise AssertionError('already routed')
+        with tempfile.TemporaryDirectory() as td:
+            folder=Path(td)
+            self.assertTrue(module.poll({},folder,backend=Fake())['ok'])
+            self.assertTrue(module.poll({},folder,backend=Fake())['ok'])
+            self.assertIn('example/project:1',observed[-1]['sent'])
+
+    def test_identity_format_maintenance_reaches_import_and_observe(self):
+        source=(ROOT/'bin/_label_dispatch.py').read_text()
+        for old,new in [("'#'","'@'"),("+':'+","+'~'+")]:
+            with self.subTest(format=old):
+                self.assertIn(old,source)
+                module=types.ModuleType('format_maintenance')
+                exec(compile(source.replace(old,new,1),str(ROOT/'bin/_label_dispatch.py'),'exec'),module.__dict__)
+                row=item(97,[event(10)])
+                candidate=module.plan([row],state(),set(),set())['candidate']
+                imported=module.import_legacy({'sent':[10],'active_issue':97,'active_event_id':10,
+                                               'stopped_issues':[97]},PROJECT['repo'])
+                self.assertEqual(imported['active']['subject'],candidate['subject'])
+                self.assertEqual(imported['stopped'],[candidate['subject']])
+                self.assertEqual(imported['sent'],[candidate['key']])
+                backend=module.Backend({'projects':[PROJECT]})
+                backend.pages=lambda *args:[]
+                backend.api=lambda project,path:row['issue']
+                self.assertEqual(module.subject(backend.observe(imported)[0]),candidate['subject'])
+
+    def test_issue_route_maintenance_reaches_read_and_delivery(self):
+        source=(ROOT/'bin/_label_dispatch.py').read_text()
+        module=types.ModuleType('route_maintenance')
+        exec(compile(source.replace("'issues/'","'tickets/'",1),str(ROOT/'bin/_label_dispatch.py'),'exec'),module.__dict__)
+        backend=module.Backend({'projects':[PROJECT]})
+        row=item(97,[event(10)])
+        routes=[]
+        def api(project,path):
+            routes.append(path)
+            return row['issue']
+        def pages(project,path):
+            routes.append(path)
+            return []
+        backend.api=api;backend.pages=pages
+        backend.observe(Admission().active())
+        base=next(path for path in routes if '?' not in path and not path.endswith('/events'))
+        self.assertIn(base+'/events',routes)
+        with tempfile.TemporaryDirectory() as td:
+            config=Path(td)/'hub.json'
+            config.write_text(json.dumps({'url':'http://127.0.0.1:3350','source':{'key':'fixture'}}))
+            backend.config['hub_config']=str(config)
+            candidate=module.plan([row],state(),set(),set())['candidate']
+            candidate['project'].update(reference_root='/reference',reference_command=['writer'])
+            class Response:
+                def __enter__(self):return self
+                def __exit__(self,*args):pass
+                def read(self):return b'{}'
+            class Opener:
+                def open(self,req,timeout):
+                    self_payload=json.loads(req.data)
+                    routes.append(self_payload['link'].split(PROJECT['repo']+'/')[1])
+                    return Response()
+            backend.open=Opener()
+            with patch.object(module,'command',return_value=''):
+                backend.post(candidate)
+            self.assertIn(base+'/comments',routes)
+            self.assertEqual(routes[-1],base)
+
+    def test_observe_backfills_active_outside_open_labels(self):
+        for status,labels in [('closed',()),('open',())]:
+            with self.subTest(status=status):
+                backend=d.Backend({'projects':[PROJECT]})
+                calls=[]
+                def api(project,path):
+                    calls.append(path)
+                    if path.startswith('issues?'):return []
+                    if path=='issues/97':return item(97,[],labels,status)['issue']
+                    if path.startswith('issues/97/events?'):
+                        return [event(10),event(11,'unlabeled')]
+                    self.fail('unexpected query '+path)
+                backend.api=api
+                rows=backend.observe(Admission().active())
+                self.assertEqual(len(rows),1)
+                self.assertIn('issues/97',calls)
+                result=d.plan(rows,Admission().active(),set(),set())
+                self.assertIsNone(result['state']['active'])
+
     def test_pagination_and_pr_fix_observation(self):
         backend=d.Backend({'projects':[PROJECT]})
         pr={'number':1,'state':'open','labels':[{'name':'aiwork:fix'}],'pull_request':{}}

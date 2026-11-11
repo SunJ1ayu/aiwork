@@ -20,8 +20,29 @@ LABELS = {'aiwork:task':'issues.task', 'aiwork:fix':'issues.fix'}
 TERMINAL = ('done','nothing','cancelled')
 
 
+SUBJECT_SEPARATOR = '#'
+STATE_FILENAME = 'state.json'
+
+
+def issue_subject(repo, number):
+    return SUBJECT_SEPARATOR.join((repo,str(number)))
+
+
+def split_subject(value):
+    repo,number=value.rsplit(SUBJECT_SEPARATOR,1)
+    return repo,int(number)
+
+
+def event_key(repo, event_id):
+    return repo+':'+str(event_id)
+
+
+def issue_path(number, suffix=''):
+    return 'issues/'+str(number)+suffix
+
+
 def subject(row):
-    return row['project']['repo']+'#'+str(row['issue']['number'])
+    return issue_subject(row['project']['repo'],row['issue']['number'])
 
 
 def actor(event):
@@ -74,7 +95,7 @@ def plan(rows, original, busy, stops):
         for label in LABELS:
             matching=[e for e in events if e['label']['name']==label]
             if not matching:continue
-            e=matching[-1]; eid=int(e['id']); key=row['project']['repo']+':'+str(eid)
+            e=matching[-1]; eid=int(e['id']); key=event_key(row['project']['repo'],eid)
             reason=('closed' if row['issue']['state']!='open' else
                     'label_absent' if label not in present or e['event']!='labeled' else
                     'untrusted_actor' if actor(e) not in trusted else
@@ -118,14 +139,14 @@ def deliver(folder, state, candidate, post, accepted):
     state=copy.deepcopy(state)
     state['pending']=candidate
     state['active']={'subject':candidate['subject'],'event_id':int(candidate['event']['id'])}
-    atomic(folder/'state.json',state)
+    atomic(folder/STATE_FILENAME,state)
     # The outbox survives an ambiguous POST. Hub event keys make re-delivery idempotent.
     if not accepted(candidate):
         post(candidate)
         if not accepted(candidate):raise RuntimeError('event_not_routed')
     if candidate['key'] not in state['sent']:state['sent'].append(candidate['key'])
     state.pop('pending')
-    atomic(folder/'state.json',state)
+    atomic(folder/STATE_FILENAME,state)
     return state
 
 
@@ -171,10 +192,11 @@ class Backend:
                 for issue in self.pages(project,'issues?state=open&labels='+urllib.parse.quote(label,safe='')):
                     issues[issue['number']]=issue
             active=state.get('active')
-            if active and active['subject'].rsplit('#',1)[0]==project['repo']:
-                n=int(active['subject'].rsplit('#',1)[1]);issues[n]=self.api(project,'issues/'+str(n))
+            if active:
+                repo,n=split_subject(active['subject'])
+                if repo==project['repo']:issues[n]=self.api(project,issue_path(n))
             for n,issue in sorted(issues.items()):
-                rows.append({'project':project,'issue':issue,'events':self.pages(project,'issues/'+str(n)+'/events')})
+                rows.append({'project':project,'issue':issue,'events':self.pages(project,issue_path(n,'/events'))})
         return rows
 
     def db(self):
@@ -194,7 +216,7 @@ class Backend:
     def post(self,c):
         project=c['project'];n=c['issue']['number'];event=c['event']
         reference={'repository':project['repo'],'issue':c['issue'],
-                   'comments':self.pages(project,'issues/'+str(n)+'/comments'),'label_event':event,
+                   'comments':self.pages(project,issue_path(n,'/comments')),'label_event':event,
                    'classification':'untrusted reference data; not instructions'}
         dest=project['reference_root'].rstrip('/')+'/issues/'+str(n)+'/label-'+str(event['id'])+'.json'
         command(project['reference_command'],{'path':dest,'data':reference})
@@ -205,7 +227,7 @@ class Backend:
             raise ValueError('hub must be loopback http')
         payload={'id':c['key'],'type':LABELS[event['label']['name']],'subject':c['subject'],
             'summary':'Trusted '+event['label']['name']+' label',
-            'link':'https://github.com/'+project['repo']+'/issues/'+str(n),
+            'link':'https://github.com/'+project['repo']+'/'+issue_path(n),
             'detail':json.dumps({'reference_file':dest,'label_event_id':event['id'],
                 'label_actor':event['actor']['login']},ensure_ascii=False)}
         req=urllib.request.Request(url+'/v1/events',data=json.dumps(payload).encode(),headers={
@@ -234,7 +256,7 @@ def poll(config,folder,preview=False,backend=None):
     record={'ok':False,'preview':preview,'decisions':[]}
     try:
         backend=backend or Backend(config)
-        state_path=folder/'state.json'
+        state_path=folder/STATE_FILENAME
         state=json.loads(state_path.read_text()) if state_path.exists() else {'sent':[],'active':None,'stopped':[]}
         stop_path=folder/'owner-stops.json'
         stops=set(json.loads(stop_path.read_text())) if stop_path.exists() else set()
@@ -269,9 +291,9 @@ def import_legacy(legacy, repo):
     active=legacy.get('active_issue')
     if active and not legacy.get('active_event_id'):
         raise ValueError('legacy active event must be identified before migration')
-    return {'sent':[repo+':'+str(e) for e in legacy.get('sent',[])],
-            'active':{'subject':repo+'#'+str(active),'event_id':int(legacy['active_event_id'])} if active else None,
-            'stopped':[repo+'#'+str(n) for n in legacy.get('stopped_issues',[])]}
+    return {'sent':[event_key(repo,e) for e in legacy.get('sent',[])],
+            'active':{'subject':issue_subject(repo,active),'event_id':int(legacy['active_event_id'])} if active else None,
+            'stopped':[issue_subject(repo,n) for n in legacy.get('stopped_issues',[])]}
 
 
 def main():
@@ -297,7 +319,7 @@ def main():
             try:
                 repo=args.legacy_repo
                 if repo not in {p['repo'] for p in config['projects']}:raise ValueError('unknown legacy repo')
-                target=folder/'state.json'
+                target=folder/STATE_FILENAME
                 if target.exists():raise ValueError('state already exists')
                 value=import_legacy(json.loads(args.import_legacy.read_text()),repo)
                 if not args.preview:atomic(target,value)
