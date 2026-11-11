@@ -392,3 +392,16 @@ test('隔离依赖推导支持相对模块、Path 辅助和并列导入，不把
   assert.ok(plain('import os, _leg_session').includes('bin/_leg_session.py'));
   assert.equal(plain('echo "review/explore needs a worktree"').includes('bin/explore'),false);
 });
+
+// Dispatch policy authorizes work from repository events, just as release tooling authorizes writes.
+test("决定谁能指挥执行方的派活入口和实现纳入保护", () => {
+  const current = policy();
+  const paths = sameDirectoryCalls("bin/label-dispatch", read("bin/label-dispatch"));
+  paths.push("bin/label-dispatch");
+  for (const path of paths) {
+    assert.ok(matchAny(current.high, path) || matchAny(current.judging_surface, path), path);
+  }
+  for (const path of tracked("bin").filter((path) => /issues\.task/.test(read(path)))) {
+    assert.ok(matchAny(current.high, path) || matchAny(current.judging_surface, path), path);
+  }
+});

@@ -15,6 +15,7 @@
 所有项目都不得放任何密钥和私人信息。密钥只保存在项目外的本机设置目录（aiwork 使用 `~/.config/aiwork/`），项目通过统一入口读取。推送前由 `privacy-check` 兜底，不许用 `--no-verify` 绕过；误报就改本机私人词表或测试夹具。
 
 1. 从最新 main 拉分支。开工先在本机数据目录建自己的工作树，在里面拉分支干活，不在共享检出（如 /root/aiwork）里直接改。路径用 `aiwork-config data-path worktrees` 取。PR 合并后删掉这个工作树。
+   标签派活的任务，开工后先用构建机器人推一次分支（可以为空提交或说明草稿）；宿主接线和占位规则见 [Mac 运行手册](https://github.com/SunJ1ayu/aiwork/blob/main/docs/mac-host.md)。
 2. 改代码时，先写先红的测试，再实现（怎么算见 REVIEW-RULES 第一节第 3 条第 1 步）。
 3. 全跑项目 `tests/`，核对结果及已明确允许的例外。
 4. 提交后按下文「机器人推送与开 PR」操作，然后停下。
