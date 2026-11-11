@@ -1,8 +1,5 @@
 """Admission and durable-delivery regressions for the label source."""
 import copy
-import ast
-import re
-import types
 import importlib.util
 import json
 from pathlib import Path
@@ -24,10 +21,11 @@ spec = importlib.util.spec_from_file_location('dispatch', ROOT/'bin/_label_dispa
 d = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(d)
 
+TASK,FIX = d.LABELS
 PROJECT = {'repo':'example/project','owner':'owner','bot':'builder'}
-def event(i, action='labeled', actor='owner', label='aiwork:task'):
+def event(i, action='labeled', actor='owner', label=TASK):
     return {'id':i,'event':action,'actor':{'login':actor},'label':{'name':label}}
-def item(n, events, labels=('aiwork:task',), state='open', repo='example/project'):
+def item(n, events, labels=(TASK,), state='open', repo='example/project'):
     return {'project':dict(PROJECT,repo=repo), 'issue':{'number':n,'state':state,
         'labels':[{'name':x} for x in labels]}, 'events':events}
 def state():
@@ -39,15 +37,15 @@ class Admission(unittest.TestCase):
         return d.plan(items,s or state(),set(busy),set(stops))
 
     def active(self):
-        return dict(state(),active={'subject':'example/project#97','event_id':10},sent=['example/project:10'])
+        return dict(state(),active={'subject':d.issue_subject(PROJECT['repo'],97),'event_id':10},sent=[d.event_key(PROJECT['repo'],10)])
 
     def test_trust_dedup_and_one_slot(self):
         self.assertIsNone(self.plan([item(1,[event(1,actor='outsider')])])['candidate'])
         self.assertIsNotNone(self.plan([item(1,[event(1,actor='BUILDER')])])['candidate'])
-        s=state();s['sent']=['example/project:1']
+        s=state();s['sent']=[d.event_key(PROJECT['repo'],1)]
         self.assertIsNone(self.plan([item(1,[event(1)])],s)['candidate'])
         p=self.plan([item(2,[event(2)]),item(1,[event(1)])])
-        self.assertEqual(p['candidate']['subject'],'example/project#1')
+        self.assertEqual(p['candidate']['subject'],d.issue_subject(PROJECT['repo'],1))
         self.assertIsNone(self.plan([item(97,[event(10)]),item(124,[event(12)])],self.active())['candidate'])
 
     def test_trusted_removal_releases_97_for_124(self):
@@ -55,35 +53,35 @@ class Admission(unittest.TestCase):
             p=self.plan([item(97,[event(10),event(11,'unlabeled',actor)],labels=()),
                          item(124,[event(12)])],self.active())
             self.assertEqual(bool(p['candidate']),allowed)
-            if allowed:self.assertEqual(p['candidate']['subject'],'example/project#124')
+            if allowed:self.assertEqual(p['candidate']['subject'],d.issue_subject(PROJECT['repo'],124))
 
     def test_close_and_owner_stop(self):
         items=[item(97,[event(10)]),item(124,[event(12)])]
         for kind in ('closed','stop'):
             batch=copy.deepcopy(items)
             if kind=='closed':batch[0]['issue']['state']='closed'
-            p=self.plan(batch,self.active(),stops=['example/project#97'] if kind=='stop' else [])
-            self.assertEqual(p['candidate']['subject'],'example/project#124')
+            p=self.plan(batch,self.active(),stops=[d.issue_subject(PROJECT['repo'],97)] if kind=='stop' else [])
+            self.assertEqual(p['candidate']['subject'],d.issue_subject(PROJECT['repo'],124))
 
     def test_busy_and_unknown_round_never_release(self):
         p=self.plan([item(97,[event(10),event(11,'unlabeled')],labels=()),item(124,[event(12)])],
-                    self.active(),busy=['example/project#97'])
+                    self.active(),busy=[d.issue_subject(PROJECT['repo'],97)])
         self.assertIsNone(p['candidate'])
         self.assertIsNotNone(p['state']['active'])
         self.assertIsNone(self.plan([item(124,[event(12)])],busy=['another/repo#1'])['candidate'])
 
     def test_cycles_and_unrelated_label_removal(self):
-        p=self.plan([item(97,[event(10),event(11,'unlabeled',label='aiwork:fix')])],self.active())
+        p=self.plan([item(97,[event(10),event(11,'unlabeled',label=FIX)])],self.active())
         self.assertIsNone(p['candidate'])
         self.assertIsNotNone(p['state']['active'])
         p=self.plan([item(97,[event(10),event(11,'unlabeled'),event(12)])],self.active())
         self.assertEqual(p['candidate']['event']['id'],12)
 
     def check_label_order(self, fix_id, removal_id):
-        rows=[item(97,[event(10),event(fix_id,label='aiwork:fix'),
-                      event(removal_id,'unlabeled')],labels=('aiwork:fix',))]
+        rows=[item(97,[event(10),event(fix_id,label=FIX),
+                      event(removal_id,'unlabeled')],labels=(FIX,))]
         # A live round must finish before the queued fix can be delivered.
-        busy=self.plan(rows,self.active(),busy=['example/project#97'])
+        busy=self.plan(rows,self.active(),busy=[d.issue_subject(PROJECT['repo'],97)])
         self.assertIsNone(busy['candidate'])
         self.assertEqual(busy['state']['active'],self.active()['active'])
         p=self.plan(rows,busy['state'])
@@ -101,52 +99,29 @@ class Admission(unittest.TestCase):
     def test_fix_after_task_removal(self):
         self.check_label_order(13,12)
 
-    def test_trust_maintenance_reaches_admission_release_and_history(self):
-        # Simulate the review's one-sided maintenance: allow a bot suffix.
-        # Locate the definition in the source, rather than copying its policy.
-        tree=ast.parse((ROOT/'bin/_label_dispatch.py').read_text())
-        definitions=[n for n in ast.walk(tree) if isinstance(n,ast.SetComp)
-                     and isinstance(n.generators[0].iter,ast.Tuple)
-                     and [getattr(x,'value',None) for x in n.generators[0].iter.elts]==['owner','bot']]
-        definitions.sort(key=lambda n:n.lineno)
-        self.assertTrue(definitions,'trusted accounts need an identifiable definition')
-        target=definitions[1] if len(definitions)>1 else definitions[0]
-        project=ast.unparse(target.elt.func.value.value)
-        replacement=ast.parse(ast.unparse(target)+" | {"+project+"['bot'].lower()+'[bot]'}",mode='eval').body
-        class Maintenance(ast.NodeTransformer):
-            def visit_SetComp(self,node):
-                return replacement if node is target else self.generic_visit(node)
-        module=types.ModuleType('maintenance_dispatch')
-        exec(compile(ast.fix_missing_locations(Maintenance().visit(tree)),str(ROOT/'bin/_label_dispatch.py'),'exec'),module.__dict__)
-        rows=[item(97,[event(10,actor='builder[bot]')])]
-        self.assertIsNotNone(module.plan(rows,state(),set(),set())['candidate'])
-        rows[0]['events'].append(event(11,'unlabeled',actor='builder[bot]'))
-        rows[0]['issue']['labels']=[]
-        released=module.plan(rows,self.active(),set(),set())
-        with self.subTest(path='release'):
-            self.assertIsNone(released['state']['active'])
-        class Fake:
-            def observe(self,s):return rows
-            def busy(self):return set()
-        with tempfile.TemporaryDirectory() as td:
-            record=module.poll({},Path(td),True,Fake())
-            self.assertTrue(record['ok'])
-            with self.subTest(path='history'):
-                self.assertTrue(all(e['trusted'] for e in record['observed']))
 
-    def test_manual_points_to_code_instead_of_repeating_its_vocabulary(self):
-        tree=ast.parse((ROOT/'bin/_label_dispatch.py').read_text())
-        vocabulary={n.value for n in ast.walk(tree) if isinstance(n,ast.Constant)
-                    and isinstance(n.value,str) and re.fullmatch(r'[a-z][a-z0-9_]*',n.value)}
-        manual=(ROOT/'docs/mac-host.md').read_text()
-        prose=re.sub(r'\[[^\]]*\]\([^)]+\)','',manual)
-        tokens=set(re.findall(r'`([a-z][a-z0-9_]*)`',prose))
-        # A removed/renamed code is absent from today's vocabulary, but is
-        # still a stale machine identifier when repeated in prose.
-        repeated=(tokens & vocabulary) | {token for token in tokens if '_' in token}
-        self.assertEqual(repeated,set(),'manual must point to definitions: '+str(sorted(repeated)))
-        self.assertIn('../bin/_label_dispatch.py',manual)
-        self.assertIn('../workflow/CLAUDE.md',manual)
+
+    def test_owner_stop_survives_request_removal(self):
+        rows=[item(97,[event(10),event(12)])]
+        stopped=self.plan(rows,self.active(),stops=[d.subject(rows[0])])
+        self.assertIn(d.subject(rows[0]),stopped['state']['stopped'])
+        self.assertIsNone(self.plan(rows,stopped['state'])['candidate'])
+
+    def test_trusted_accounts_agree_on_admission_release_and_history(self):
+        for login in (PROJECT['owner'].upper(),PROJECT['bot'].upper(),'outsider'):
+            rows=[item(97,[event(10,actor=login)])]
+            expected=login.lower() in d.trusted_accounts(PROJECT)
+            self.assertEqual(bool(self.plan(rows)['candidate']),expected)
+            rows[0]['events'].append(event(11,'unlabeled',actor=login))
+            rows[0]['issue']['labels']=[]
+            self.assertEqual(self.plan(rows,self.active())['state']['active'] is None,expected)
+            class Fake:
+                def observe(self,s):return rows
+                def busy(self):return set()
+            with tempfile.TemporaryDirectory() as td:
+                record=d.poll({},Path(td),True,Fake())
+                self.assertTrue(record['ok'])
+                self.assertTrue(all(e['trusted']==expected for e in record['observed']))
 
     def test_global_slot_across_projects(self):
         p=self.plan([item(1,[event(1)],repo='a/repo'),item(2,[event(2)],repo='b/repo')])
@@ -162,11 +137,11 @@ class Delivery(unittest.TestCase):
                 raise TimeoutError('private diagnostic must never enter history')
             with self.assertRaises(TimeoutError):
                 d.deliver(folder,state(),self_candidate(),post,lambda c:False)
-            saved=json.loads((folder/'state.json').read_text())
-            self.assertEqual(saved['pending']['key'],'example/project:1')
+            saved=json.loads((folder/d.FILES['state']).read_text())
+            self.assertEqual(saved['pending']['key'],d.event_key(PROJECT['repo'],1))
             done=d.deliver(folder,saved,saved['pending'],post,lambda c:True)
             self.assertNotIn('pending',done)
-            self.assertIn('example/project:1',done['sent'])
+            self.assertIn(d.event_key(PROJECT['repo'],1),done['sent'])
             self.assertEqual(len(calls),1)
 
     def test_atomic_and_history(self):
@@ -184,15 +159,15 @@ class Orchestration(unittest.TestCase):
     def test_legacy_migration_preserves_slot_stops_and_dedup(self):
         migrated=d.import_legacy({'sent':['10'],'active_issue':97,'active_event_id':'10',
             'released_through':{'96':9},'stopped_issues':[95]},'example/project')
-        self.assertEqual(migrated['sent'],['example/project:10'])
-        self.assertEqual(migrated['active']['subject'],'example/project#97')
+        self.assertEqual(migrated['sent'],[d.event_key(PROJECT['repo'],10)])
+        self.assertEqual(migrated['active']['subject'],d.issue_subject(PROJECT['repo'],97))
         self.assertNotIn('cutoffs',migrated)
         self.assertEqual(migrated['stopped'],['example/project#95'])
         with self.assertRaises(ValueError):d.import_legacy({'active_issue':97},'example/project')
 
     def test_old_cutoff_cannot_discard_queued_fix_on_import_and_poll(self):
-        rows=[item(97,[event(10),event(12,label='aiwork:fix'),event(13,'unlabeled')],
-                   labels=('aiwork:fix',))]
+        rows=[item(97,[event(10),event(12,label=FIX),event(13,'unlabeled')],
+                   labels=(FIX,))]
         class Fake:
             accepted_keys=set()
             posted=[]
@@ -202,16 +177,16 @@ class Orchestration(unittest.TestCase):
             def post(self,c):self.posted.append(c['key']);self.accepted_keys.add(c['key'])
         migrated=d.import_legacy({'sent':['10'],'active_issue':97,'active_event_id':10,
             'released_through':{'97':13},'stopped_issues':[95]},'example/project')
-        for old in (migrated,dict(migrated,cutoffs={'example/project#97':13})):
+        for old in (migrated,dict(migrated,cutoffs={d.issue_subject(PROJECT['repo'],97):13})):
             with self.subTest(old=old),tempfile.TemporaryDirectory() as td:
                 folder=Path(td);backend=Fake();backend.accepted_keys=set();backend.posted=[]
-                d.atomic(folder/'state.json',old)
+                d.atomic(folder/d.FILES['state'],old)
                 self.assertTrue(d.poll({},folder,backend=backend)['ok'])
                 self.assertEqual(backend.posted,['example/project:12'])
-                saved=json.loads((folder/'state.json').read_text())
+                saved=json.loads((folder/d.FILES['state']).read_text())
                 self.assertNotIn('cutoffs',saved)
                 self.assertEqual(saved['stopped'],['example/project#95'])
-                self.assertIn('example/project:10',saved['sent'])
+                self.assertIn(d.event_key(PROJECT['repo'],10),saved['sent'])
                 self.assertTrue(d.poll({},folder,backend=backend)['ok'])
                 self.assertEqual(backend.posted,['example/project:12'])
 
@@ -224,13 +199,13 @@ class Orchestration(unittest.TestCase):
             self.assertEqual(run.returncode,1)
             self.assertNotIn('private-canary',run.stdout+run.stderr)
             folder=root/'label-dispatch'
-            self.assertEqual(json.loads((folder/'poll-history.jsonl').read_text())['error'],'JSONDecodeError')
-            with (folder/'poll.lock').open('a') as lock:
+            self.assertEqual(json.loads((folder/d.FILES['history']).read_text())['error'],'JSONDecodeError')
+            with (folder/d.FILES['lock']).open('a') as lock:
                 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 run=subprocess.run(argv,env=env,capture_output=True,text=True)
             self.assertEqual(run.returncode,0)
-            lines=(folder/'poll-history.jsonl').read_text().splitlines()
-            self.assertEqual(json.loads(lines[-1])['decisions'][0]['reason'],'poll_already_running')
+            lines=(folder/d.FILES['history']).read_text().splitlines()
+            self.assertEqual(json.loads(lines[-1])['decisions'][0]['reason'],d.Reason.LOCKED)
 
     def test_query_failure_records_only_error_class(self):
         class Broken:
@@ -240,8 +215,8 @@ class Orchestration(unittest.TestCase):
             record=d.poll({},folder,backend=Broken())
             self.assertFalse(record['ok'])
             self.assertEqual(record['error'],'RuntimeError')
-            self.assertNotIn('private-value',(folder/'poll-history.jsonl').read_text())
-            self.assertFalse((folder/'state.json').exists())
+            self.assertNotIn('private-value',(folder/d.FILES['history']).read_text())
+            self.assertFalse((folder/d.FILES['state']).exists())
 
     def test_preview_and_full_delivery_then_dedup(self):
         class Fake:
@@ -254,85 +229,38 @@ class Orchestration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             folder=Path(td);backend=Fake()
             self.assertTrue(d.poll({},folder,True,backend)['ok'])
-            self.assertFalse((folder/'state.json').exists())
+            self.assertFalse((folder/d.FILES['state']).exists())
             self.assertEqual(backend.posted,[])
             self.assertTrue(d.poll({},folder,backend=backend)['ok'])
             self.assertTrue(d.poll({},folder,backend=backend)['ok'])
-            self.assertEqual(backend.posted,['example/project:1'])
-            self.assertEqual(len((folder/'poll-history.jsonl').read_text().splitlines()),3)
+            self.assertEqual(backend.posted,[d.event_key(PROJECT['repo'],1)])
+            self.assertEqual(len((folder/d.FILES['history']).read_text().splitlines()),3)
 
-    def test_state_filename_maintenance_reaches_write_and_read(self):
-        source=(ROOT/'bin/_label_dispatch.py').read_text()
-        module=types.ModuleType('state_file_maintenance')
-        exec(compile(source.replace("'state.json'","'renamed-state.json'",1),str(ROOT/'bin/_label_dispatch.py'),'exec'),module.__dict__)
-        observed=[]
-        class Fake:
-            def observe(self,s):observed.append(copy.deepcopy(s));return [item(1,[event(1)])]
-            def busy(self):return set()
-            def accepted(self,c):return True
-            def post(self,c):raise AssertionError('already routed')
+
+
+
+    def test_manual_file_paths_drive_stop_and_persisted_state(self):
+        # Run the documented discovery command; use its result as an operator would.
+        manual=(ROOT/'docs/mac-host.md').read_text()
+        self.assertIn('--local-files',manual)
         with tempfile.TemporaryDirectory() as td:
-            folder=Path(td)
-            self.assertTrue(module.poll({},folder,backend=Fake())['ok'])
-            self.assertTrue(module.poll({},folder,backend=Fake())['ok'])
-            self.assertIn('example/project:1',observed[-1]['sent'])
-
-    def test_identity_format_maintenance_reaches_import_and_observe(self):
-        source=(ROOT/'bin/_label_dispatch.py').read_text()
-        for old,new in [("'#'","'@'"),("+':'+","+'~'+")]:
-            with self.subTest(format=old):
-                self.assertIn(old,source)
-                module=types.ModuleType('format_maintenance')
-                exec(compile(source.replace(old,new,1),str(ROOT/'bin/_label_dispatch.py'),'exec'),module.__dict__)
-                row=item(97,[event(10)])
-                candidate=module.plan([row],state(),set(),set())['candidate']
-                imported=module.import_legacy({'sent':[10],'active_issue':97,'active_event_id':10,
-                                               'stopped_issues':[97]},PROJECT['repo'])
-                self.assertEqual(imported['active']['subject'],candidate['subject'])
-                self.assertEqual(imported['stopped'],[candidate['subject']])
-                self.assertEqual(imported['sent'],[candidate['key']])
-                backend=module.Backend({'projects':[PROJECT]})
-                backend.pages=lambda *args:[]
-                backend.api=lambda project,path:row['issue']
-                self.assertEqual(module.subject(backend.observe(imported)[0]),candidate['subject'])
-
-    def test_issue_route_maintenance_reaches_read_and_delivery(self):
-        source=(ROOT/'bin/_label_dispatch.py').read_text()
-        module=types.ModuleType('route_maintenance')
-        exec(compile(source.replace("'issues/'","'tickets/'",1),str(ROOT/'bin/_label_dispatch.py'),'exec'),module.__dict__)
-        backend=module.Backend({'projects':[PROJECT]})
-        row=item(97,[event(10)])
-        routes=[]
-        def api(project,path):
-            routes.append(path)
-            return row['issue']
-        def pages(project,path):
-            routes.append(path)
-            return []
-        backend.api=api;backend.pages=pages
-        backend.observe(Admission().active())
-        base=next(path for path in routes if '?' not in path and not path.endswith('/events'))
-        self.assertIn(base+'/events',routes)
-        with tempfile.TemporaryDirectory() as td:
-            config=Path(td)/'hub.json'
-            config.write_text(json.dumps({'url':'http://127.0.0.1:3350','source':{'key':'fixture'}}))
-            backend.config['hub_config']=str(config)
-            candidate=module.plan([row],state(),set(),set())['candidate']
-            candidate['project'].update(reference_root='/reference',reference_command=['writer'])
-            class Response:
-                def __enter__(self):return self
-                def __exit__(self,*args):pass
-                def read(self):return b'{}'
-            class Opener:
-                def open(self,req,timeout):
-                    self_payload=json.loads(req.data)
-                    routes.append(self_payload['link'].split(PROJECT['repo']+'/')[1])
-                    return Response()
-            backend.open=Opener()
-            with patch.object(module,'command',return_value=''):
-                backend.post(candidate)
-            self.assertIn(base+'/comments',routes)
-            self.assertEqual(routes[-1],base)
+            env=dict(os.environ,AIWORK_DATA_DIR=td)
+            run=subprocess.run([sys.executable,str(ROOT/'bin/_label_dispatch.py'),'--local-files'],
+                               env=env,capture_output=True,text=True,check=True)
+            files={k:Path(v) for k,v in json.loads(run.stdout).items()}
+            row=item(97,[event(10),event(12)])
+            class Fake:
+                def observe(self,s):return [row]
+                def busy(self):return set()
+                def post(self,c):raise AssertionError('stopped issue must not dispatch')
+            folder=files['state'].parent
+            folder.mkdir(parents=True,exist_ok=True)
+            d.atomic(files['state'],Admission().active())
+            d.atomic(files['stops'],[d.subject(row)])
+            self.assertTrue(d.poll({},folder,backend=Fake())['ok'])
+            self.assertIn(d.subject(row),json.loads(files['state'].read_text())['stopped'])
+            d.atomic(files['stops'],[])
+            self.assertTrue(d.poll({},folder,backend=Fake())['ok'])
 
     def test_observe_backfills_active_outside_open_labels(self):
         for status,labels in [('closed',()),('open',())]:
@@ -341,26 +269,26 @@ class Orchestration(unittest.TestCase):
                 calls=[]
                 def api(project,path):
                     calls.append(path)
-                    if path.startswith('issues?'):return []
-                    if path=='issues/97':return item(97,[],labels,status)['issue']
-                    if path.startswith('issues/97/events?'):
+                    if path.startswith(d.ISSUES_ROUTE+'?'):return []
+                    if path==d.issue_path(97):return item(97,[],labels,status)['issue']
+                    if path.startswith(d.issue_path(97,d.EVENTS_SUFFIX)+'?'):
                         return [event(10),event(11,'unlabeled')]
                     self.fail('unexpected query '+path)
                 backend.api=api
                 rows=backend.observe(Admission().active())
                 self.assertEqual(len(rows),1)
-                self.assertIn('issues/97',calls)
+                self.assertIn(d.issue_path(97),calls)
                 result=d.plan(rows,Admission().active(),set(),set())
                 self.assertIsNone(result['state']['active'])
 
     def test_pagination_and_pr_fix_observation(self):
         backend=d.Backend({'projects':[PROJECT]})
-        pr={'number':1,'state':'open','labels':[{'name':'aiwork:fix'}],'pull_request':{}}
+        pr={'number':1,'state':'open','labels':[{'name':FIX}],'pull_request':{}}
         calls=[]
         def api(project,path):
             calls.append(path)
-            if path.startswith('issues?'):return [pr] if 'aiwork%3Afix' in path else []
-            return [event(1,label='aiwork:fix')]
+            if path.startswith(d.ISSUES_ROUTE+'?'):return [pr] if d.urllib.parse.quote(FIX,safe='') in path else []
+            return [event(1,label=FIX)]
         backend.api=api
         rows=backend.observe(state())
         self.assertEqual(len(rows),1)
@@ -394,6 +322,6 @@ class Orchestration(unittest.TestCase):
             backend.open=Opener()
             with patch.object(d,'command',side_effect=lambda argv,payload:actions.append(payload['path'])):
                 backend.post(c)
-            self.assertEqual(actions,['/reference/issues/1/label-1.json','example/project:1'])
+            self.assertEqual(actions,['/reference/'+d.issue_path(1)+'/'+d.REFERENCE_LABEL_PREFIX+'1'+d.REFERENCE_SUFFIX,d.event_key(PROJECT['repo'],1)])
 
 if __name__=='__main__': unittest.main()

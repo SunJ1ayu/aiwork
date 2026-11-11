@@ -32,11 +32,13 @@ Mac 单独检出已合并的 aiwork，记下提交；按 [README 本机设置](.
 
 中台的启停、状态和事件诊断使用安装版本的 `agent-autoloop --help`、`status`、`why`；launchd 是否加载用 `launchctl print gui/$(id -u)/<本机服务标签>` 检查。命令不存在时查固定版本手册，不升级到浮动版本。中台健康、worker 在线、来源最近一次查询成功是三个不同检查。
 
-数据目录用 `aiwork-config data-path label-dispatch` 定位：
+运行以下只读命令取得本机文件的实际路径（名称由程序的 `FILES` 唯一定义，不在手册另抄）：
 
-- `state.json` 的结构见 [标签来源的 `poll` 与 `deliver`](../bin/_label_dispatch.py)。不要按时间清掉它，否则可能重复接单。
-- `poll-history.jsonl` 的记录结构与查询原因见 [标签来源的 `history`、`poll` 与 `plan`](../bin/_label_dispatch.py)。排查某单时对照查询记录、占位与中台轮次；记录没有自动删减，定期查看磁盘使用，归档由操作员管理。
-- `owner-stops.json` 的读取与停止判断见 [标签来源的 `poll` 与 `plan`](../bin/_label_dispatch.py)。解除停止须先确认本人明确恢复，再停来源、备份，按该定义同步解除停止请求与持久停止状态；保留已交付记录。
+```bash
+"$AIWORK_CHECKOUT/bin/label-dispatch" --local-files
+```
+
+输出按用途标明状态、停止请求、查询历史和锁的路径。结构与停止判断见 [标签来源的 `FILES`、`poll`、`plan` 与 `deliver`](../bin/_label_dispatch.py)。停止请求写入上述命令给出的停止请求路径；内容为议题编号字符串的 JSON 数组，编号由 [标签来源的 `issue_subject`](../bin/_label_dispatch.py) 定义。不要按时间清掉状态，否则可能重复接单。解除停止须先确认本人明确恢复，再停来源、备份，按定义同步解除停止请求与持久停止状态；保留已交付记录。排查时对照查询历史、占位与中台轮次；历史不自动删减，归档由操作员管理。
 
 ## 手动放行与开工证据
 

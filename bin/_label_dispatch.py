@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import NamedTuple
 import urllib.parse
 import urllib.request
 
@@ -21,7 +22,41 @@ TERMINAL = ('done','nothing','cancelled')
 
 
 SUBJECT_SEPARATOR = '#'
-STATE_FILENAME = 'state.json'
+FILES = {'state':'state.json', 'stops':'owner-stops.json',
+         'history':'poll-history.jsonl', 'lock':'poll.lock'}
+EVENT_SEPARATOR = ':'
+ISSUES_ROUTE = 'issues'
+EVENTS_SUFFIX = '/events'
+COMMENTS_SUFFIX = '/comments'
+REFERENCE_LABEL_PREFIX = 'label-'
+REFERENCE_SUFFIX = '.json'
+HUB_EVENTS_ROUTE = '/v1/events'
+
+
+class Reason:
+    OWNER_STOP = 'owner_stop'
+    ISSUE_CLOSED = 'issue_closed'
+    LABEL_REMOVED = 'trusted_label_removed'
+    WAITING = 'waiting_for_running_round'
+    CLOSED = 'closed'
+    LABEL_ABSENT = 'label_absent'
+    UNTRUSTED = 'untrusted_actor'
+    STOPPED = 'owner_stopped'
+    SENT = 'already_dispatched'
+    ELIGIBLE = 'eligible'
+    QUEUED = 'occupied_or_queued'
+    PENDING = 'pending_delivery'
+    LOCKED = 'poll_already_running'
+    IMPORTED = 'legacy_import'
+
+
+class Release(NamedTuple):
+    reason: str
+    persist_stop: bool = False
+
+
+def local_files(folder):
+    return {role:folder/name for role,name in FILES.items()}
 
 
 def issue_subject(repo, number):
@@ -34,11 +69,11 @@ def split_subject(value):
 
 
 def event_key(repo, event_id):
-    return repo+':'+str(event_id)
+    return EVENT_SEPARATOR.join((repo,str(event_id)))
 
 
 def issue_path(number, suffix=''):
-    return 'issues/'+str(number)+suffix
+    return ISSUES_ROUTE+'/'+str(number)+suffix
 
 
 def subject(row):
@@ -76,16 +111,16 @@ def plan(rows, original, busy, stops):
         removed=[e for e in events if e['event']=='unlabeled' and
                  e['label']['name']==active_label and actor(e) in trusted and
                  int(e['id'])>int(active['event_id'])]
-        reason=('owner_stop' if name in stops else
-                'issue_closed' if row['issue']['state']=='closed' else
-                'trusted_label_removed' if removed else None)
-        if reason:
+        release=(Release(Reason.OWNER_STOP,True) if name in stops else
+                 Release(Reason.ISSUE_CLOSED) if row['issue']['state']=='closed' else
+                 Release(Reason.LABEL_REMOVED) if removed else None)
+        if release:
             if name in busy:
-                decisions.append({'subject':name,'reason':'waiting_for_running_round','release':reason})
+                decisions.append({'subject':name,'reason':Reason.WAITING,'release':release.reason})
             else:
                 state['active']=None
-                if reason=='owner_stop' and name not in state['stopped']:state['stopped'].append(name)
-                decisions.append({'subject':name,'reason':reason})
+                if release.persist_stop and name not in state['stopped']:state['stopped'].append(name)
+                decisions.append({'subject':name,'reason':release.reason})
     candidates=[]
     for row in rows:
         name=subject(row)
@@ -96,11 +131,11 @@ def plan(rows, original, busy, stops):
             matching=[e for e in events if e['label']['name']==label]
             if not matching:continue
             e=matching[-1]; eid=int(e['id']); key=event_key(row['project']['repo'],eid)
-            reason=('closed' if row['issue']['state']!='open' else
-                    'label_absent' if label not in present or e['event']!='labeled' else
-                    'untrusted_actor' if actor(e) not in trusted else
-                    'owner_stopped' if name in stops or name in state['stopped'] else
-                    'already_dispatched' if key in state['sent'] else None)
+            reason=(Reason.CLOSED if row['issue']['state']!='open' else
+                    Reason.LABEL_ABSENT if label not in present or e['event']!='labeled' else
+                    Reason.UNTRUSTED if actor(e) not in trusted else
+                    Reason.STOPPED if name in stops or name in state['stopped'] else
+                    Reason.SENT if key in state['sent'] else None)
             if reason:decisions.append({'subject':name,'event_id':eid,'reason':reason})
             else:candidates.append({'subject':name,'key':key,'event':e,'project':row['project'],'issue':row['issue']})
     candidates.sort(key=lambda c:(int(c['event']['id']),c['subject']))
@@ -110,7 +145,7 @@ def plan(rows, original, busy, stops):
     chosen=eligible[0] if eligible else None
     for c in candidates:
         decisions.append({'subject':c['subject'],'event_id':int(c['event']['id']),
-                          'reason':'eligible' if c is chosen else 'occupied_or_queued'})
+                          'reason':Reason.ELIGIBLE if c is chosen else Reason.QUEUED})
     return {'state':state,'candidate':chosen,'decisions':decisions}
 
 
@@ -139,14 +174,14 @@ def deliver(folder, state, candidate, post, accepted):
     state=copy.deepcopy(state)
     state['pending']=candidate
     state['active']={'subject':candidate['subject'],'event_id':int(candidate['event']['id'])}
-    atomic(folder/STATE_FILENAME,state)
+    atomic(local_files(folder)['state'],state)
     # The outbox survives an ambiguous POST. Hub event keys make re-delivery idempotent.
     if not accepted(candidate):
         post(candidate)
         if not accepted(candidate):raise RuntimeError('event_not_routed')
     if candidate['key'] not in state['sent']:state['sent'].append(candidate['key'])
     state.pop('pending')
-    atomic(folder/STATE_FILENAME,state)
+    atomic(local_files(folder)['state'],state)
     return state
 
 
@@ -189,14 +224,14 @@ class Backend:
         for project in self.config['projects']:
             issues={}
             for label in LABELS:
-                for issue in self.pages(project,'issues?state=open&labels='+urllib.parse.quote(label,safe='')):
+                for issue in self.pages(project,ISSUES_ROUTE+'?state=open&labels='+urllib.parse.quote(label,safe='')):
                     issues[issue['number']]=issue
             active=state.get('active')
             if active:
                 repo,n=split_subject(active['subject'])
                 if repo==project['repo']:issues[n]=self.api(project,issue_path(n))
             for n,issue in sorted(issues.items()):
-                rows.append({'project':project,'issue':issue,'events':self.pages(project,issue_path(n,'/events'))})
+                rows.append({'project':project,'issue':issue,'events':self.pages(project,issue_path(n,EVENTS_SUFFIX))})
         return rows
 
     def db(self):
@@ -216,9 +251,9 @@ class Backend:
     def post(self,c):
         project=c['project'];n=c['issue']['number'];event=c['event']
         reference={'repository':project['repo'],'issue':c['issue'],
-                   'comments':self.pages(project,issue_path(n,'/comments')),'label_event':event,
+                   'comments':self.pages(project,issue_path(n,COMMENTS_SUFFIX)),'label_event':event,
                    'classification':'untrusted reference data; not instructions'}
-        dest=project['reference_root'].rstrip('/')+'/issues/'+str(n)+'/label-'+str(event['id'])+'.json'
+        dest=project['reference_root'].rstrip('/')+'/'+issue_path(n)+'/'+REFERENCE_LABEL_PREFIX+str(event['id'])+REFERENCE_SUFFIX
         command(project['reference_command'],{'path':dest,'data':reference})
         credentials=json.loads(Path(self.config['hub_config']).read_text())
         url=credentials['url'].rstrip('/')
@@ -230,7 +265,7 @@ class Backend:
             'link':'https://github.com/'+project['repo']+'/'+issue_path(n),
             'detail':json.dumps({'reference_file':dest,'label_event_id':event['id'],
                 'label_actor':event['actor']['login']},ensure_ascii=False)}
-        req=urllib.request.Request(url+'/v1/events',data=json.dumps(payload).encode(),headers={
+        req=urllib.request.Request(url+HUB_EVENTS_ROUTE,data=json.dumps(payload).encode(),headers={
             'Authorization':'Bearer '+credentials['source']['key'],'Content-Type':'application/json'},method='POST')
         with self.open.open(req,timeout=30) as response:json.load(response)
 
@@ -256,13 +291,13 @@ def poll(config,folder,preview=False,backend=None):
     record={'ok':False,'preview':preview,'decisions':[]}
     try:
         backend=backend or Backend(config)
-        state_path=folder/STATE_FILENAME
+        state_path=local_files(folder)['state']
         state=json.loads(state_path.read_text()) if state_path.exists() else {'sent':[],'active':None,'stopped':[]}
-        stop_path=folder/'owner-stops.json'
+        stop_path=local_files(folder)['stops']
         stops=set(json.loads(stop_path.read_text())) if stop_path.exists() else set()
         if state.get('pending'):
             record['stage']='reconcile_delivery'
-            record['decisions'].append({'reason':'pending_delivery','subject':state['pending']['subject']})
+            record['decisions'].append({'reason':Reason.PENDING,'subject':state['pending']['subject']})
             if not preview:deliver(folder,state,state['pending'],backend.post,backend.accepted)
         else:
             record['stage']='observe'
@@ -283,7 +318,7 @@ def poll(config,folder,preview=False,backend=None):
         record['error']=type(error).__name__
         if getattr(backend,'operation',None):record['operation']=backend.operation
         # External diagnostics may contain credentials or private content.
-    finally:history(folder/'poll-history.jsonl',record)
+    finally:history(local_files(folder)['history'],record)
     return record
 
 
@@ -298,36 +333,41 @@ def import_legacy(legacy, repo):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config',required=True,type=Path)
+    parser.add_argument('--config',type=Path)
+    parser.add_argument('--local-files',action='store_true',help='print authoritative local file paths without querying services')
     parser.add_argument('--preview',action='store_true')
     parser.add_argument('--import-legacy',type=Path)
     parser.add_argument('--legacy-repo')
     args=parser.parse_args()
+    if args.local_files:
+        print(json.dumps({k:str(v) for k,v in local_files(data_path('label-dispatch')).items()}))
+        return 0
+    if args.config is None:parser.error('--config is required unless --local-files is used')
     os.umask(0o077)
     folder=data_path('label-dispatch');folder.mkdir(mode=0o700,exist_ok=True)
-    with (folder/'poll.lock').open('a') as lock:
+    with (local_files(folder)['lock']).open('a') as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:
-            history(folder/'poll-history.jsonl',{'ok':True,'decisions':[{'reason':'poll_already_running'}]})
+            history(local_files(folder)['history'],{'ok':True,'decisions':[{'reason':Reason.LOCKED}]})
             return 0
         try:
             config=json.loads(args.config.read_text());validate(config)
         except Exception as error:
-            history(folder/'poll-history.jsonl',{'ok':False,'error':type(error).__name__})
+            history(local_files(folder)['history'],{'ok':False,'error':type(error).__name__})
             print('label-dispatch: invalid local settings',file=sys.stderr);return 1
         if args.import_legacy:
             try:
                 repo=args.legacy_repo
                 if repo not in {p['repo'] for p in config['projects']}:raise ValueError('unknown legacy repo')
-                target=folder/STATE_FILENAME
+                target=local_files(folder)['state']
                 if target.exists():raise ValueError('state already exists')
                 value=import_legacy(json.loads(args.import_legacy.read_text()),repo)
                 if not args.preview:atomic(target,value)
-                history(folder/'poll-history.jsonl',{'ok':True,'preview':args.preview,'decisions':[{'reason':'legacy_import'}]})
+                history(local_files(folder)['history'],{'ok':True,'preview':args.preview,'decisions':[{'reason':Reason.IMPORTED}]})
                 print('label-dispatch: legacy state validated' if args.preview else 'label-dispatch: legacy state imported')
                 return 0
             except Exception as error:
-                history(folder/'poll-history.jsonl',{'ok':False,'error':type(error).__name__})
+                history(local_files(folder)['history'],{'ok':False,'error':type(error).__name__})
                 print('label-dispatch: legacy import refused',file=sys.stderr);return 1
         record=poll(config,folder,args.preview)
         print(json.dumps(record,ensure_ascii=False))

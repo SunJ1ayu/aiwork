@@ -93,7 +93,14 @@ function sameDirectoryCalls(file, code) {
     if (directory.startsWith("$(") &&
         (!/\bdirname\b/.test(directory) || !/\$0|\$\{?BASH_SOURCE/.test(directory) ||
          [...directory.matchAll(/\bdirname\b/g)].length !== 1)) continue;
-    found.push(file.slice(0, file.lastIndexOf("/") + 1) + match[3]);
+    const prefix = file.slice(0, file.lastIndexOf("/") + 1);
+    found.push(prefix + match[3]);
+    // The shared Python launcher executes its next same-directory argument.
+    if (match[3] === "_python") {
+      const rest = code.slice(match.index + match[0].length).split("\n", 1)[0];
+      const operand = /^\s+(["'])(\$(?:\{(?:BIN|BIN_DIR)\}|(?:BIN|BIN_DIR)))\/([A-Za-z0-9_.-]+)\1(?=\s|$)/.exec(rest);
+      if (operand) found.push(prefix + operand[3]);
+    }
   }
   return found;
 }
@@ -396,12 +403,17 @@ test('隔离依赖推导支持相对模块、Path 辅助和并列导入，不把
 // Dispatch policy authorizes work from repository events, just as release tooling authorizes writes.
 test("决定谁能指挥执行方的派活入口和实现纳入保护", () => {
   const current = policy();
-  const paths = sameDirectoryCalls("bin/label-dispatch", read("bin/label-dispatch"));
+  const paths = binCalledByFramework(["bin/label-dispatch"]);
   paths.push("bin/label-dispatch");
+  assert.ok(paths.some(path => path.endsWith(".py")), "launcher script dependency must be discovered");
   for (const path of paths) {
     assert.ok(matchAny(current.high, path) || matchAny(current.judging_surface, path), path);
   }
-  for (const path of tracked("bin").filter((path) => /issues\.task/.test(read(path)))) {
-    assert.ok(matchAny(current.high, path) || matchAny(current.judging_surface, path), path);
-  }
+});
+
+
+test("共享解释器的脚本操作数是依赖，业务文案不是", () => {
+  assert.deepEqual(sameDirectoryCalls("bin/entry", 'exec "$BIN_DIR/_python" "$BIN_DIR/renamed.py" "$@"'),
+                   ["bin/_python", "bin/renamed.py"]);
+  assert.deepEqual(sameDirectoryCalls("bin/entry", 'echo "diagnostic text"'), []);
 });
