@@ -78,6 +78,12 @@ def data_path(name: str = '') -> Path:
 # 每次运行的产物各占登记项下第一层的一个单位，只由创建它的那次运行写入；不共用多次运行的容器。
 DATA_ENTRIES = (
     {
+        'name': 'label-dispatch',
+        'purpose': '派活来源的占位、去重、待交付事件与查询记录。',
+        'kind': '运行目录',
+        'keep_days': None,
+    },
+    {
         'name': 'logs',
         'purpose': '任务和评审留下的日志。',
         'kind': '工作产物',

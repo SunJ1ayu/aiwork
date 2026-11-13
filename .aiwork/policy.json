@@ -72,7 +72,9 @@
     "bin/subkimi",
     "bin/submimo",
     "kimi-review-home/config.toml",
-    "kimi-review-home/hooks/guard.mjs"
+    "kimi-review-home/hooks/guard.mjs",
+    "bin/label-dispatch",
+    "bin/_label_dispatch.py"
   ],
   "review_dispatch": {
     "targets": {

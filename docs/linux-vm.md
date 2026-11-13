@@ -2,6 +2,8 @@
 
 这是新机器的安装步骤，不是切换指令。依据是 [路线决定](https://github.com/SunJ1ayu/aiwork/issues/43#issuecomment-6686152849)、[缩小范围的决定](https://github.com/SunJ1ayu/aiwork/issues/43#issuecomment-6708987865)。本单合并后，还须由 Mac 上的执行方在**新建**虚拟机里完整验证，再交汇总安排正式切换；此前正式发布仍在服务器。现有试验虚拟机不动。
 
+Mac 的中台、标签来源、运行诊断和替换步骤见 [Mac 宿主运行手册](mac-host.md)。
+
 ## 安装布局与版本
 
 Mac 运行 Lima、OpenClaw、autoloop 中台；AI CLI、aiwork、项目和测试都在 guest。单台虚拟机，不按工作角色分账号，进入后统一用 root 工作。Lima 的普通登录账号只用于 SSH 进入和 `sudo -i`。root 可以读取 guest 内全部凭证，本检查不提供 #127 的钥匙隔离。

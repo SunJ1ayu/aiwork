@@ -13,6 +13,7 @@ set -uo pipefail
 ROOT="$(dirname "$(/usr/bin/dirname "$(/bin/realpath "$0")")")"
 
 SUITES=(
+  "label-dispatch|python3|$ROOT/tests/test_label_dispatch.py"
   "privacy-check|python3|$ROOT/tests/test_privacy_check.py"
   "machine-bits|python3|$ROOT/tests/test_machine_bits.py"
   "vm-isolation|python3|$ROOT/tests/test_vm_isolation.py"
