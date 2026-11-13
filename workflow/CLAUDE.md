@@ -48,20 +48,23 @@ review-pr PR --repo owner/name --leg LEG --retry-publish RUN_ID
 执行方推送和开 PR 只用构建机器人身份，令牌只从仓库的 `bin/gh-app-token` 换，不用个人账号。
 防的是 PR #44 首次推送把令牌放进命令行参数，进程列表能看到；来历见 [#43](https://github.com/SunJ1ayu/aiwork/issues/43)。
 
-新机器先按 README「本机设置」安装 App 配置和程序，确认 `gh-app-token` 在 PATH 中。在目标仓库的共享检出执行下面的配置（工作树继承它），示例目标是 aiwork；其他仓库须替换远端及助手内的 `--repo`，并核对角色配置允许该仓库。只配置本仓库，不修改全局凭证设置。
+新机器先按 README「本机设置」安装 App 配置和程序，确认 `gh-app-token` 在 PATH 中。在目标仓库的共享检出执行下面的配置（工作树继承它），示例目标是 aiwork；其他仓库须替换本节所有命令中的仓库名（包括助手、授权核对、取令牌和开 PR）及远端，并核对角色配置允许该仓库。只配置本仓库，不修改全局凭证设置。
 
 ```bash
 git remote get-url origin
+git remote get-url --push --all origin
+git config --local --unset-all credential.https://github.com.helper
+git config --local --replace-all credential.helper ''
 git config --local --replace-all credential.https://github.com.helper ''
 git config --local --add credential.https://github.com.helper \
   '!f() { test "$1" = get || exit 0; token=$(gh-app-token build --repo SunJ1ayu/aiwork) || exit; test -n "$token" || exit 1; printf "username=x-access-token\npassword=%s\n" "$token"; }; f'
-git config --show-origin --get-all credential.https://github.com.helper
+git config --show-origin --get-regexp '^credential\..*helper$'
 gh-app-token build --repo SunJ1ayu/aiwork --grant
 ```
 
-远端须为目标仓库的 `https://github.com/owner/repo.git`。此助手仅在本仓库通过 HTTPS 访问 `github.com` 时生效，不用于 SSH 或其他主机；空项清除继承的助手列表，后面的助手只处理 Git 的 `get` 请求，不存储令牌。换取失败或空值会拒绝返回凭证。令牌经助手标准输出交给 Git，不经过参数。不要直接运行并打印 `git credential fill`；上面的 `--grant` 只显示实际授权范围，不证明推送身份。助手缺失、身份或目标仓库不对时，停下报告，不临时拼认证参数或改用个人登录。
+拉取地址及所有推送地址都须为目标仓库的 `https://github.com/owner/repo.git`。此助手仅在本仓库通过 HTTPS 访问 `github.com` 时生效，不用于 SSH 或其他主机；空项清除继承的助手列表，后面的助手只处理 Git 的 `get` 请求，不存储令牌。换取失败或空值会拒绝返回凭证。令牌经助手标准输出交给 Git，不经过参数。不要直接运行并打印 `git credential fill`；上面的 `--grant` 只显示实际授权范围，不证明推送身份。助手缺失、身份或目标仓库不对时，停下报告，不临时拼认证参数或改用个人登录。
 
-下面在自己的工作树里运行，以 aiwork 为例；替换标题，并在提示时把本次 PR 说明输入到文件（输入结束按 Ctrl-D）。`mktemp` 为每次运行分配独立文件，避免并行覆盖。
+下面在自己的工作树里运行，以 aiwork 为例；替换标题和下方正文占位内容；使用带引号的 here-document 写入完整 PR 说明。`mktemp` 为每次运行分配独立文件，避免并行覆盖。
 
 ```bash
 (
@@ -69,7 +72,10 @@ gh-app-token build --repo SunJ1ayu/aiwork --grant
   umask 077
   pr_body=$(mktemp "${TMPDIR:-/tmp}/aiwork-pr-body.XXXXXX") || exit
   trap 'rm -f "$pr_body"' EXIT
-  cat > "$pr_body" || exit
+  cat > "$pr_body" <<'PR_BODY' || exit
+在这里填写符合 REVIEW-RULES 的完整 PR 说明，执行前替换本行。
+PR_BODY
+  test -s "$pr_body" || exit 1
   export GIT_TERMINAL_PROMPT=0
   git push --set-upstream origin HEAD || exit
   GH_TOKEN="$(gh-app-token build --repo SunJ1ayu/aiwork)" || exit

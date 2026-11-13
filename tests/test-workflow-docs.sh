@@ -175,8 +175,8 @@ unsafe = re.compile(
     r'|\b(?:echo|printf|printenv)\b[^\n]*\$\{?(?:GH_TOKEN|GITHUB_TOKEN|token)\b',
     re.I,
 )
-safe_output = r'printf "username=x-access-token\npassword=%s\n" "$token"'
-safe_statement = re.compile(r'(?<=;)\s*' + re.escape(safe_output) + ';')
+safe_statement = re.compile(r'(?<=;)\s*printf\s+[^;]+;')
+safe_output = safe_statement.search(workflow).group(0).strip().removesuffix(';')
 
 def shell_blocks(text):
     return [block.replace('\\\n', ' ') for block in
@@ -190,6 +190,11 @@ def check_workflow(text):
         for line in block.splitlines():
             if line.lstrip().startswith('git config '):
                 commands.append(shlex.split(line))
+    for block in shell_blocks(text):
+        for line in block.splitlines():
+            words = shlex.split(line) if line.strip().startswith('git ') else []
+            if 'push' in words:
+                assert words[1] == 'push', '推送不得携带覆盖凭证设置的命令选项'
     helpers = [words[-1] for words in commands if words[-1].startswith('!')]
     assert len(helpers) == 1, '文档须包含一个可执行凭证助手配置'
     helper = helpers[0]
@@ -224,10 +229,11 @@ def check_workflow(text):
         run(['git', 'init', '-q'], check=True)
         credential_key = 'credential.https://github.com.helper'
         run(['git', 'config', '--local', credential_key, 'store'], check=True)
-        expected_config = [(credential_key, ''), (credential_key, helper)]
+        expected_config = [('credential.helper', ''), (credential_key, ''), (credential_key, helper)]
         for _ in range(2):
             for command in commands:
-                run(command, check=True)
+                result = run(command)
+                assert result.returncode == 0 or ('--unset-all' in command and result.returncode == 5)
             output = run(['git', 'config', '--null', '--get-regexp', r'^credential\.'], check=True).stdout
             actual_config = [tuple(entry.split('\n', 1)) for entry in output.rstrip('\0').split('\0')]
             assert actual_config == expected_config, '最终凭证设置须恰为清空项和文档助手，不许多项或缺项'
@@ -264,6 +270,14 @@ def check_workflow(text):
 
 
 helper = check_workflow(workflow)
+equivalent = workflow.replace(safe_output, r'printf "username=%s\npassword=%s\n" x-access-token "$token"')
+check_workflow(equivalent)
+try:
+    check_workflow(workflow.replace('git push --set-upstream', 'git -c credential.helper=store push --set-upstream'))
+except AssertionError:
+    pass
+else:
+    raise AssertionError('命令行覆盖凭证设置未被拦截')
 # 这些只检查助手自身的令牌输出行为；配置增删统一由完整结果核对覆盖。
 behavior_mutations = {
     'stderr': workflow.replace(helper, helper.replace('; printf ', '; echo "$token" >&2; printf ')),
