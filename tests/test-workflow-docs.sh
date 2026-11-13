@@ -175,7 +175,8 @@ unsafe = re.compile(
     r'|\b(?:echo|printf|printenv)\b[^\n]*\$\{?(?:GH_TOKEN|GITHUB_TOKEN|token)\b',
     re.I,
 )
-safe_statement = re.compile(r'(?<=;)\s*printf\s+[^;]+;')
+# 只豁免一个无重定向、管道或命令替换的 shell 内建 printf；协议内容由真实执行验证。
+safe_statement = re.compile(r'(?<=;)\s*printf\s+(?:"[^"$`<>|;&]*"|\'[^\'$`<>|;&]*\')(?:\s+[a-zA-Z0-9_=-]+)*\s+"\$token";')
 safe_output = safe_statement.search(workflow).group(0).strip().removesuffix(';')
 
 def shell_blocks(text):
@@ -199,7 +200,8 @@ def check_workflow(text):
     assert len(helpers) == 1, '文档须包含一个可执行凭证助手配置'
     helper = helpers[0]
     # 只放过交给 Git 的这一句 stdout，助手其余内容仍受原有扫描约束。
-    remaining = safe_statement.sub('', helper)
+    assert len(safe_statement.findall(helper)) == 1, '助手须只有一句凭证输出'
+    remaining = safe_statement.sub('', helper, count=1)
     assert not unsafe.search(remaining), '助手含不安全的认证示例'
     remaining = remaining.replace('test -n "$token"', '')
     assert not re.search(r'\$\{?(?:token|GH_TOKEN|GITHUB_TOKEN)\b', remaining), '助手把令牌用于凭证输出以外的位置'
@@ -280,6 +282,7 @@ else:
     raise AssertionError('命令行覆盖凭证设置未被拦截')
 # 这些只检查助手自身的令牌输出行为；配置增删统一由完整结果核对覆盖。
 behavior_mutations = {
+    'extra_printf': workflow.replace(helper, helper.replace('; }; f', '; printf \"%s\\n\" \"$token\" > /tmp/credential-leak; }; f')),
     'stderr': workflow.replace(helper, helper.replace('; printf ', '; echo "$token" >&2; printf ')),
     'argv': workflow.replace(helper, helper.replace('; printf ', '; sh -c : "$token"; printf ')),
     'external_printf': workflow.replace(helper, helper.replace(safe_output, 'env ' + safe_output)),
@@ -311,6 +314,10 @@ import sys
 
 root = Path(sys.argv[1])
 rules = (root / 'REVIEW-RULES.md').read_text()
+patrol = (root / 'workflow/skills/patrol/SKILL.md').read_text()
+assert not re.search(r'aiwork:(?:task|fix|merge|recheck)|SunJ1ayu(?:BoT)?|PushNotification', patrol)
+assert '修改顺序或状态' not in rules
+
 definitions = re.findall(r'^### ([^\n]+五级证据)\n(.*?)(?=^## |^### |\Z)', rules, re.M | re.S)
 assert len(definitions) == 1, '五级证据应只有一处定义'
 heading, definition = definitions[0]

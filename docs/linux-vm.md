@@ -70,7 +70,6 @@ CODEX_PACKAGE=@openai/codex@0.166.0
 CURSOR_VERSION=2026.10.16-e3cb207
 read -r -p '从独立可信渠道核实的 Cursor 包 SHA-256：' CURSOR_SHA256
 test "${#CURSOR_SHA256}" -eq 64
-AUTOLOOP_TAG=v1.6.1
 
 for entry in "aiwork:$AIWORK_NODE_VERSION" "autoloop:$AUTOLOOP_NODE_VERSION"; do
   purpose=${entry%%:*}

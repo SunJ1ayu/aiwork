@@ -141,7 +141,9 @@ class VmIsolationTests(unittest.TestCase):
         lima_refs = re.findall(r'(?:lima-|lima/releases/tag/v)(\d+\.\d+\.\d+)', guide)
         self.assertTrue(lima_refs)
         self.assertEqual(set(lima_refs), {template['minimumLimaVersion']})
-        autoloop_tag = re.search(r'^AUTOLOOP_TAG=(v\d+\.\d+\.\d+)$', guide, re.M)[1]
+        autoloop_tags = re.findall(r'^AUTOLOOP_TAG=(v\d+\.\d+\.\d+)$', guide, re.M)
+        self.assertEqual(len(autoloop_tags), 1)
+        autoloop_tag = autoloop_tags[0]
         autoloop_refs = re.findall(r'agent-autoloop/(?:releases/tag|blob)/(v\d+\.\d+\.\d+)', guide)
         self.assertTrue(autoloop_refs)
         self.assertEqual(set(autoloop_refs), {autoloop_tag})
