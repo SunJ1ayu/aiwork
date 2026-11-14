@@ -50,6 +50,49 @@ class SettingsTest(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
+    def test_review_location_defaults_and_rejects_invalid_settings(self):
+        import _aiwork_config as config
+        self.assertEqual(config.review_location(), 'unisolated')
+        settings = self.config / 'review.env'
+        for value in ('local', 'external', 'unisolated'):
+            settings.write_text('location=' + value + '\n')
+            self.assertEqual(config.review_location(), value)
+        for text in ('location=unknown\n', 'other=local\n', '',
+                     'location=local\nlocation=external\n'):
+            settings.write_text(text)
+            with self.assertRaises(config.ConfigError):
+                config.review_location()
+
+    def test_isolated_machine_rejects_wrong_role_and_mixed_credentials(self):
+        import _aiwork_config as config
+        apps = self.config / 'apps'
+        apps.mkdir()
+        for location, allowed, denied in (('external', 'build', 'review'),
+                                          ('local', 'review', 'build')):
+            (self.config / 'review.env').write_text('location=' + location + '\n')
+            config.check_app_role(allowed)
+            with self.assertRaises(config.ConfigError):
+                config.check_app_role(denied)
+            wrong = apps / (denied + '.env')
+            wrong.write_text('not a real credential')
+            with self.assertRaises(config.ConfigError):
+                config.check_app_role(allowed)
+            wrong.unlink()
+        (self.config / 'review.env').write_text('location=unisolated\n')
+        config.check_app_role('build')
+        config.check_app_role('review')
+
+    def test_external_review_rejected_before_any_github_access(self):
+        (self.config / 'review.env').write_text('location=external\n')
+        for options in (['--auto', '--builder-family', 'openai'], ['--leg', 'subcodex'],
+                        ['--retry-publish', 'fixture-run'], ['--dry-run']):
+            with self.subTest(options=options):
+                result = subprocess.run([sys.executable, str(ROOT / 'bin/review-pr'), '12',
+                                         '--repo', 'fixture/project', *options], env=self.env,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('派活方', result.stderr)
+
     def write_models(self):
         (self.config / 'models.env').write_text(''.join(f'{k}={v}\n' for k, v in self.models.items()))
 

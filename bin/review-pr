@@ -22,7 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
 import _review_ci
 from _review_result import leg_identity, sha256_bytes
-from _aiwork_config import ConfigError, check_programs, data_dir, data_path, prune_data, program
+from _aiwork_config import (
+    check_app_role, ConfigError, check_programs, data_dir, data_path, prune_data, program,
+)
 from _leg_session import (
     Change,
     ReviewError,
@@ -529,7 +531,21 @@ def read_dispatch_state(repository: str, number: int, builder_family: str) -> di
     return json.loads(result.stdout)
 
 
-def auto_dispatch(repository: str, number: int, builder_family: str) -> int:
+def review_request(repository: str, number: int, builder_family: str) -> dict:
+    """Public handoff facts only; the dispatcher chooses the destination itself."""
+    token = _leg_session.run([str(BIN / 'gh-app-token'), 'build', '--repo', repository]).strip()
+    if not token:
+        raise ReviewError('build App returned an empty token')
+    pr = pr_state(token, number, repository=repository)
+    head = pr['head']['sha']
+    return dict(v=1, repository=repository, pr=number, head=head,
+                builder_family=builder_family,
+                argv=['review-pr', str(number), '--repo', repository, '--auto',
+                      '--builder-family', builder_family, '--expected-head', head])
+
+
+def auto_dispatch(repository: str, number: int, builder_family: str, *,
+                  expected_head: str | None = None) -> int:
     from _review_dispatch import dispatch
     # Logs stay outside the repository and are not included in later legs' tasks.
     root = data_path('logs')
@@ -556,8 +572,14 @@ def auto_dispatch(repository: str, number: int, builder_family: str) -> int:
         return dict(ok=bool(urls), **({'url': urls[-1]} if urls else
                     {'reason': 'review-pr returned no publication URL'}))
 
+    def read_state(family):
+        state = read_dispatch_state(repository, number, family)
+        if expected_head and state["head"] != expected_head:
+            raise ReviewError("PR head changed since handoff; no review dispatched")
+        return state
+
     try:
-        report = dispatch(lambda family: read_dispatch_state(repository, number, family),
+        report = dispatch(read_state,
                           lambda leg: _leg_session.choose_leg(leg, BIN), run, builder_family)
     except (ValueError, OSError) as exc:
         (directory / 'failure.txt').write_text(redact(str(exc)), encoding='utf-8')
@@ -575,6 +597,8 @@ def main() -> int:
     parser.add_argument("--repo", type=repository_name, default=None,
                         help="target owner/name (default: this checkout's origin)")
     parser.add_argument("--leg", default=None)
+    parser.add_argument("--request", action="store_true",
+                        help="emit public handoff JSON for the dispatcher; never invoke a review")
     parser.add_argument('--auto', action='store_true', help='dispatch from project main policy')
     parser.add_argument('--builder-family', help='exclude the actual implementing family; does not change gate author attribution')
     parser.add_argument('--expected-head', help=argparse.SUPPRESS)
@@ -585,9 +609,19 @@ def main() -> int:
     args = parser.parse_args()
     try:
         drop_inherited_git_env()
+        if args.request:
+            if (args.auto or args.leg or args.dry_run or args.retry_publish or args.expected_head
+                    or args.pr < 1 or not re.fullmatch(r'[a-z][a-z0-9-]*', args.builder_family or '')):
+                raise ReviewError('--request requires PR and --builder-family, without review options')
+            print(json.dumps(review_request(args.repo or repository_from_origin(), args.pr,
+                                            args.builder_family), ensure_ascii=False, indent=2))
+            return 0
+        check_app_role('review')
+        if args.expected_head and not SHA.fullmatch(args.expected_head):
+            raise ReviewError('--expected-head is not a commit SHA')
         if args.auto:
-            if args.leg or args.dry_run or args.retry_publish or args.expected_head:
-                raise ReviewError('--auto cannot be combined with --leg/--dry-run/--retry-publish/--expected-head')
+            if args.leg or args.dry_run or args.retry_publish:
+                raise ReviewError('--auto cannot be combined with --leg/--dry-run/--retry-publish')
             if not re.fullmatch(r'[a-z][a-z0-9-]*', args.builder_family or ''):
                 raise ReviewError('--auto requires --builder-family')
             if args.pr < 1:
@@ -596,12 +630,11 @@ def main() -> int:
             data_dir()
             check_programs('review-pr')
             require_latest_aiwork_main(aiwork_main_commit())
-            return auto_dispatch(args.repo or repository_from_origin(), args.pr, args.builder_family)
+            return auto_dispatch(args.repo or repository_from_origin(), args.pr, args.builder_family,
+                                 expected_head=args.expected_head)
         if args.builder_family:
             raise ReviewError('--builder-family requires --auto')
         args.leg = args.leg or 'subcodex'
-        if args.expected_head and not SHA.fullmatch(args.expected_head):
-            raise ReviewError('--expected-head is not a commit SHA')
         if args.retry_publish and args.dry_run:
             raise ReviewError('--retry-publish cannot be combined with --dry-run')
         if not args.retry_publish:

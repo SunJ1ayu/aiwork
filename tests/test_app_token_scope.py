@@ -51,6 +51,22 @@ print('201')
         return subprocess.run([str(helper or ROOT / "bin/gh-app-token"), "review", *args], env=env,
                               capture_output=True, text=True, timeout=10)
 
+    def test_external_location_refuses_review_key_before_config_or_network(self):
+        from _test_settings import write_programs
+        config = self.root / 'settings'
+        config.mkdir()
+        write_programs(config)
+        (config / 'review.env').write_text('location=external\n')
+        self.env['AIWORK_CONFIG_DIR'] = str(config)
+        # The role file would leave evidence if it were sourced before the guard.
+        marker = self.root / 'role-was-read'
+        (self.root / 'apps/review.env').write_text('touch ' + str(marker) + '\n')
+        result = self.invoke(['--grant', '--repo', 'SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('派活方', result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.request.exists())
+
     def test_symlink_invocation_mints_the_same_scoped_token(self):
         installed = self.root / "installed"
         installed.mkdir()

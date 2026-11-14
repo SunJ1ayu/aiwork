@@ -19,7 +19,7 @@
 2. 改代码时，先写先红的测试，再实现（怎么算见 REVIEW-RULES 第一节第 3 条第 1 步）。
 3. 全跑项目 `tests/`，核对结果及已明确允许的例外。
 4. 提交后按下文「机器人推送与开 PR」操作，然后停下。
-5. PR 开好、CI 绿了以后，用 `review-pr` 派评审腿。
+5. PR 开好、CI 绿了以后，按本机评审位置交接（设置与边界见 README「评审位置」）。隔离部署中执行方只用 `review-pr --request --builder-family 本次执行方家族` 交回公开资料，然后停下；派活方直接交给评审机器，执行方不登录或调用评审机器。不隔离的安装沿用本机派评审。评审方用 `review-pr` 派评审腿。
    `review-pr` 必须在沙箱外运行；使用目标仓库当前 PR head 和 main 的规则来源。
    `review-pr` 从共享检出跑，跑之前先把共享检出更新到最新 main。
    派评审使用 `review-pr --auto --builder-family 本次执行方家族`；分档、顺序和目标见项目 main 的 `.aiwork/policy.json`，工具用法见 README「Review commands」。
