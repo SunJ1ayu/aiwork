@@ -68,7 +68,8 @@ KIMI_PACKAGE=@moonshot-ai/kimi-code@0.36.1
 CLAUDE_PACKAGE=@anthropic-ai/claude-code@2.1.301
 CODEX_PACKAGE=@openai/codex@0.166.0
 CURSOR_VERSION=2026.10.16-e3cb207
-AUTOLOOP_TAG=v1.6.1
+read -r -p '从独立可信渠道核实的 Cursor 包 SHA-256：' CURSOR_SHA256
+test "${#CURSOR_SHA256}" -eq 64
 
 for entry in "aiwork:$AIWORK_NODE_VERSION" "autoloop:$AUTOLOOP_NODE_VERSION"; do
   purpose=${entry%%:*}
@@ -88,10 +89,13 @@ export PATH="/opt/node-aiwork/bin:$PATH"
 npm install --global "$KIMI_PACKAGE" "$CLAUDE_PACKAGE" "$CODEX_PACKAGE"
 cursor_stage=$(mktemp -d)
 curl -fSL "https://downloads.cursor.com/lab/$CURSOR_VERSION/linux/arm64/agent-cli-package.tar.gz" -o "$cursor_stage/package.tar.gz"
+printf '%s  %s\n' "$CURSOR_SHA256" "$cursor_stage/package.tar.gz" | sha256sum --check -
 mkdir -p /opt/cursor-agent
 tar --no-same-owner -xzf "$cursor_stage/package.tar.gz" --strip-components=1 -C /opt/cursor-agent
 rm -r "$cursor_stage"
 ```
+
+Cursor 包的预期 SHA-256 和 autoloop 发布提交须在安装前经独立可信渠道核实，不能从同一次下载结果自算后当作校验值。无法取得可信值时停下，不安装。
 
 Cursor 的固定版本包地址取自[官方安装器](https://cursor.com/install)的发行目录结构，不运行会跟随最新版的安装脚本。启动时禁用自动更新的评审行为见 `bin/subcursor`；安装时也不运行 `cursor-agent update`。
 
@@ -129,8 +133,13 @@ export PATH="$HOME/.config/aiwork/programs:/opt/aiwork/bin:/usr/local/bin:/usr/b
 guest root shell：
 
 ```bash
+set -eu
+AUTOLOOP_TAG=v1.6.1
+read -r -p '从独立可信渠道核实的发布提交完整哈希：' AUTOLOOP_COMMIT
+test "${#AUTOLOOP_COMMIT}" -eq 40
 install -d -m 700 "$HOME/.agent-autoloop" "$HOME/.local/bin"
 git clone --depth 1 --branch "$AUTOLOOP_TAG" https://github.com/KKKKhazix/agent-autoloop.git "$HOME/.agent-autoloop/app"
+test "$(git -C "$HOME/.agent-autoloop/app" rev-parse HEAD)" = "$AUTOLOOP_COMMIT"
 cat > "$HOME/.local/bin/agent-autoloop" <<'SH'
 #!/bin/sh
 exec /opt/node-autoloop/bin/node --disable-warning=ExperimentalWarning "$HOME/.agent-autoloop/app/bin/agent-autoloop.ts" "$@"

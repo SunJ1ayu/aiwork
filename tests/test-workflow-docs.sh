@@ -175,8 +175,9 @@ unsafe = re.compile(
     r'|\b(?:echo|printf|printenv)\b[^\n]*\$\{?(?:GH_TOKEN|GITHUB_TOKEN|token)\b',
     re.I,
 )
-safe_output = r'printf "username=x-access-token\npassword=%s\n" "$token"'
-safe_statement = re.compile(r'(?<=;)\s*' + re.escape(safe_output) + ';')
+# 只豁免一个无重定向、管道或命令替换的 shell 内建 printf；协议内容由真实执行验证。
+safe_statement = re.compile(r'(?<=;)\s*printf\s+(?:"[^"$`<>|;&]*"|\'[^\'$`<>|;&]*\')(?:\s+[a-zA-Z0-9_=-]+)*\s+"\$token";')
+safe_output = safe_statement.search(workflow).group(0).strip().removesuffix(';')
 
 def shell_blocks(text):
     return [block.replace('\\\n', ' ') for block in
@@ -190,11 +191,17 @@ def check_workflow(text):
         for line in block.splitlines():
             if line.lstrip().startswith('git config '):
                 commands.append(shlex.split(line))
+    for block in shell_blocks(text):
+        for line in block.splitlines():
+            words = shlex.split(line) if line.strip().startswith('git ') else []
+            if 'push' in words:
+                assert words[1] == 'push', '推送不得携带覆盖凭证设置的命令选项'
     helpers = [words[-1] for words in commands if words[-1].startswith('!')]
     assert len(helpers) == 1, '文档须包含一个可执行凭证助手配置'
     helper = helpers[0]
     # 只放过交给 Git 的这一句 stdout，助手其余内容仍受原有扫描约束。
-    remaining = safe_statement.sub('', helper)
+    assert len(safe_statement.findall(helper)) == 1, '助手须只有一句凭证输出'
+    remaining = safe_statement.sub('', helper, count=1)
     assert not unsafe.search(remaining), '助手含不安全的认证示例'
     remaining = remaining.replace('test -n "$token"', '')
     assert not re.search(r'\$\{?(?:token|GH_TOKEN|GITHUB_TOKEN)\b', remaining), '助手把令牌用于凭证输出以外的位置'
@@ -224,10 +231,11 @@ def check_workflow(text):
         run(['git', 'init', '-q'], check=True)
         credential_key = 'credential.https://github.com.helper'
         run(['git', 'config', '--local', credential_key, 'store'], check=True)
-        expected_config = [(credential_key, ''), (credential_key, helper)]
+        expected_config = [('credential.helper', ''), (credential_key, ''), (credential_key, helper)]
         for _ in range(2):
             for command in commands:
-                run(command, check=True)
+                result = run(command)
+                assert result.returncode == 0 or ('--unset-all' in command and result.returncode == 5)
             output = run(['git', 'config', '--null', '--get-regexp', r'^credential\.'], check=True).stdout
             actual_config = [tuple(entry.split('\n', 1)) for entry in output.rstrip('\0').split('\0')]
             assert actual_config == expected_config, '最终凭证设置须恰为清空项和文档助手，不许多项或缺项'
@@ -264,8 +272,17 @@ def check_workflow(text):
 
 
 helper = check_workflow(workflow)
+equivalent = workflow.replace(safe_output, r'printf "username=%s\npassword=%s\n" x-access-token "$token"')
+check_workflow(equivalent)
+try:
+    check_workflow(workflow.replace('git push --set-upstream', 'git -c credential.helper=store push --set-upstream'))
+except AssertionError:
+    pass
+else:
+    raise AssertionError('命令行覆盖凭证设置未被拦截')
 # 这些只检查助手自身的令牌输出行为；配置增删统一由完整结果核对覆盖。
 behavior_mutations = {
+    'extra_printf': workflow.replace(helper, helper.replace('; }; f', '; printf \"%s\\n\" \"$token\" > /tmp/credential-leak; }; f')),
     'stderr': workflow.replace(helper, helper.replace('; printf ', '; echo "$token" >&2; printf ')),
     'argv': workflow.replace(helper, helper.replace('; printf ', '; sh -c : "$token"; printf ')),
     'external_printf': workflow.replace(helper, helper.replace(safe_output, 'env ' + safe_output)),
@@ -297,6 +314,10 @@ import sys
 
 root = Path(sys.argv[1])
 rules = (root / 'REVIEW-RULES.md').read_text()
+patrol = (root / 'workflow/skills/patrol/SKILL.md').read_text()
+assert not re.search(r'aiwork:(?:task|fix|merge|recheck)|SunJ1ayu(?:BoT)?|PushNotification', patrol)
+assert '修改顺序或状态' not in rules
+
 definitions = re.findall(r'^### ([^\n]+五级证据)\n(.*?)(?=^## |^### |\Z)', rules, re.M | re.S)
 assert len(definitions) == 1, '五级证据应只有一处定义'
 heading, definition = definitions[0]
