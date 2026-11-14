@@ -62,6 +62,33 @@ def published_review(body, *, head='a' * 40, state='COMMENTED',
             'html_url': 'https://github.com/SunJ1ayu/aiwork/pull/12#pullrequestreview-101'}
 
 
+class ReviewHandoffTests(unittest.TestCase):
+    def test_request_binds_repository_head_and_builder_without_review_key(self):
+        module = load_script()
+        pr = {'state': 'open', 'head': {'sha': 'a' * 40, 'ref': 'feature'},
+              'base': {'sha': 'b' * 40, 'ref': 'main',
+                       'repo': {'full_name': 'fixture/project'}}}
+        with patch.object(module._leg_session, 'run', return_value='fixture-token') as run, \
+                patch.object(module, 'github', return_value=pr), \
+                patch.object(module, 'review_token', side_effect=AssertionError('review key used')):
+            request = module.review_request('fixture/project', 12, 'openai')
+        self.assertEqual(run.call_args.args[0][1], 'build')
+        self.assertEqual(request['head'], 'a' * 40)
+        self.assertEqual(request['repository'], 'fixture/project')
+        self.assertEqual(request['builder_family'], 'openai')
+        self.assertIn('--expected-head', request['argv'])
+        self.assertNotIn('fixture-token', json.dumps(request))
+
+    def test_auto_handoff_rejects_changed_head_before_dispatch(self):
+        module = load_script()
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(module, 'data_path', return_value=Path(folder)), \
+                patch.object(module, 'read_dispatch_state', return_value={'head': 'b' * 40}), \
+                patch('sys.argv', ['review-pr', '12']):
+            with self.assertRaises(module.ReviewError):
+                module.auto_dispatch('fixture/project', 12, 'openai', expected_head='a' * 40)
+
+
 class CiFixture:
     """GitHub API-shaped responses; job log lines use real Actions timestamp format."""
     def __init__(self, *, head_linux=None, main_linux=None, api_error=False, head="a" * 40, number=12):

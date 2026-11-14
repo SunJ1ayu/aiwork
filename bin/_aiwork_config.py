@@ -518,3 +518,28 @@ def model_family(adapter: str, selected: str) -> str:
     if identity is None or not selected.startswith(identity[1]):
         raise ConfigError(f'model does not belong to adapter {adapter}')
     return identity[0]
+
+
+def review_location() -> str:
+    """One machine's review role. Missing file preserves owner-approved legacy use."""
+    path, rows = _assignments('review.env', optional=True)
+    if not rows and not path.exists() and not path.is_symlink():
+        return 'unisolated'
+    if len(rows) != 1 or rows[0][1] != 'location' or rows[0][2] not in (
+            'local', 'external', 'unisolated'):
+        raise ConfigError('review.env: expected location=local, external or unisolated')
+    return rows[0][2]
+
+
+def check_app_role(role: str) -> None:
+    location = review_location()
+    if location == 'unisolated':
+        return
+    allowed = 'review' if location == 'local' else 'build'
+    if role != allowed:
+        raise ConfigError('本机角色不允许使用这把机器人钥匙；评审由派活方交给评审机器')
+    try:
+        if any(path.name != allowed + '.env' for path in apps_dir().iterdir() if path.name.endswith('.env')):
+            raise ConfigError('隔离机器存在其他角色配置；先核实凭证部署，不读取钥匙')
+    except OSError as exc:
+        raise ConfigError('无法检查本机机器人角色配置') from exc

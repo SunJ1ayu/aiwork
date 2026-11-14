@@ -6,7 +6,7 @@ Mac 的中台、标签来源、运行诊断和替换步骤见 [Mac 宿主运行�
 
 ## 安装布局与版本
 
-Mac 运行 Lima、OpenClaw、autoloop 中台；AI CLI、aiwork、项目和测试都在 guest。单台虚拟机，不按工作角色分账号，进入后统一用 root 工作。Lima 的普通登录账号只用于 SSH 进入和 `sudo -i`。root 可以读取 guest 内全部凭证，本检查不提供 #127 的钥匙隔离。
+Mac 运行 Lima、OpenClaw、autoloop 中台。按[钥匙隔离决定](https://github.com/SunJ1ayu/aiwork/issues/127#issuecomment-6768388449)，写代码和评审各用一台 guest，各自从下面同一份模板独立安装；guest 内统一用 root，普通登录账号只用于进入和 `sudo -i`。两台不共享目录、不互相登录，汇总的钥匙留在云端。`check-vm-isolation` 检查可见的宿主共享，不能证明两台之间的网络和凭证部署。
 
 虚拟机参数的唯一定义是 [templates/linux-vm.yaml](../templates/linux-vm.yaml)。文件用 JSON 语法书写（合法 YAML），因此测试能用 Python 标准库检查，无须另装解析器。它不继承 Lima 默认模板，因为默认模板会共享宿主家目录；只读共享也禁止。
 
@@ -122,9 +122,28 @@ export PATH="$HOME/.config/aiwork/programs:/opt/aiwork/bin:/usr/local/bin:/usr/b
 
 配置、登录缓存、模型选择、API Key、GitHub App 设置均只放 guest 自己的本机目录，权限按 README；数据用 `aiwork-config data-path`，工作树用 `aiwork-config data-path worktrees`。在 guest 单独登录 Kimi、Cursor、Codex；DeepSeek、MiMo 由业主新建能单独撤销的 Key，并在供应商后台设花费上限。不要把任何登录或钥匙写进仓库或验收输出。
 
-本单验收阶段不放 GitHub App 私钥或令牌、不运行发布。后续切换时才能按工作流另配机器人角色；汇总在云端，汇总的钥匙不进 guest。guest 内 root 能读其他 guest 文件的限制留给 #127，本说明不承诺已解决。
+机器人角色部署、评审交接与验收见下节；没有完成对应验收前不切换正式发布。
 
 逐项执行 `python3 --version`、`node --version`、`kimi --version`、`claude --version`、`cursor-agent --version`、`codex --version`，再对本次要用的各腿执行 `aiwork-config check-programs 入口名`。任一 ARM 程序失败就停下，不放松防护让它跑。
+
+## 角色部署与评审交接
+
+在每台 guest 的本机设置目录建立权限 600 的 `review.env`，格式与行为见 [README「评审位置」](../README.md#评审位置)。执行方选 `external`，评审方选 `local`；默认模板内存不变，小机器可在新实例的本机配置调到 2GiB，不能低于它，不修改公共模板中的默认值。
+
+执行方只部署 `build` 角色配置及对应私钥；评审方只部署 `review` 角色配置及对应私钥、各家评审登录。不要克隆已经放过凭证的执行方磁盘来建立评审机；使用干净模板、分别 clone 公开代码。私钥经本人已有的非公开入口逐项部署，不整包复制配置，不在命令行或日志中展示。旧副本是否删除、旧钥匙是否轮换由本人决定，本 PR 不移动或销毁任何凭证。
+
+两台各领不同的 worker 身份；Mac 的派活方固定将写代码任务交给执行方、评审任务交给评审方。实例名和 worker 路由只放 Mac 本机设置，执行方不能指定评审目的地。两台不保存对方登录钥匙，不开放互相登录的通道；从两边实测对方登录失败，检查磁盘、挂载、SSH 授权和中台路由，不把程序的角色检查当成虚拟机隔离证明。
+
+执行方开 PR、CI 绿后运行 `review-pr PR --repo owner/name --request --builder-family FAMILY`，把输出交回派活方后停下。这个入口只用构建机器人读取 PR，输出公开的仓库、PR、head 和参数，不连接评审机、不调用模型、不发布评审。派活方核实 PR、CI、实际执行家族和当前 head，再将 `argv` 的各参数交给已配置的评审 worker；不可把 JSON 当 shell 脚本执行。评审机从自己的最新 main 运行其中的 `review-pr --auto`，head 改变会拒派。发布失败仍在评审机按工作流恢复。选远程评审服务时也使用同样的公开交接事实，由派活方自己的适配器发送。
+
+**评审机内部的边界仍未解决**：`ro-repo-exec` 仅把仓挂只读，同账号进程仍能读仓外文件；清除 GitHub 令牌环境变量不隐藏 App 配置和私钥。这不影响两台之间的执行方钥匙隔离，但不能声称评审腿已经与发布钥匙隔离；在后续减少业主批准前须由汇总处理此未验收项。本 PR 不把它写成已接受风险、不改变关卡。
+
+Mac 本机部署验收另交本人完成，PR 中的 Linux 测试不能代替：
+
+1. 记录两台独立实例与代码版本；各自运行 `check-vm-isolation`，核对没有共享、互相登录通道或多余角色配置。执行方 `aiwork-config check-app-role build`、评审方 `aiwork-config check-app-role review` 均应通过；交换角色检查均应拒绝。
+2. 执行方不放评审私钥，直接运行正式评审及重发入口应在联网前拒绝；只生成交接资料。评审方不放构建和汇总钥匙，构建取令牌入口应在换令牌前拒绝。检查真实文件部署，不能只信角色设置。
+3. 从派活方发送一单本人授权的评审，核实实际 worker、PR head、作者与发布结果；旧 head 交接应拒绝，失败保存和重发仅留在评审机。两台重启后重新检查隔离与路由。
+4. 单列评审腿可读同机钥匙的未解决项；上述验收不代表可以取消业主批准。任何一步缺证据，都不能写已通过。
 
 ## 4. autoloop：只安装和连接，不配置派活
 

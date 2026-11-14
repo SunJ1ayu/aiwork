@@ -177,6 +177,14 @@ bin/aiwork-config runtime subcodex effort
 这些子目录都通过该数据入口定位，有哪些见登记表；已有的专用路径覆盖参数仍优先。源码、模板和共享组件相对实际工具位置查找，
 `bin/` 应作为完整工具集部署；缺失共享组件时拒绝派发，不回落到其他机器的 checkout。
 
+### 评审位置
+
+本机 `review.env` 是可选的精确赋值文件，只接受一行 `location=local`、`location=external` 或 `location=unisolated`；不执行 shell。读取和角色规则的唯一定义见 [配置入口](bin/_aiwork_config.py) 的 `review_location`、`check_app_role`。用 `aiwork-config path review.env` 定位、`aiwork-config review-location` 查询。
+
+`external` 用于只写代码的机器：只允许构建机器人；`local` 用于只做评审的机器：只允许评审机器人。隔离模式发现其他角色配置就拒绝。未配置时沿用 `unisolated`，供尚未迁移或选择每单由主人批准的安装使用；它不提供钥匙隔离，也不修改项目关卡批准要求。程序不能阻止同机 root 修改设置，安全边界来自独立虚拟机和真实凭证分离。
+
+`review-pr PR --request --builder-family FAMILY` 使用构建身份输出公开交接 JSON。派活方核实后将参数交给自己的评审目的地；执行方无远程登录评审机的功能。安装、真机验收及评审机内部尚未解决的钥匙可读问题见 [虚拟机手册](docs/linux-vm.md#角色部署与评审交接)。
+
 ## 评审运行目录
 
 `kimi-review-home/config.toml` 和 `hooks/guard.mjs` 是版本控制中的种子；`subkimi` 在运行期 home 渲染模型和 guard 命令占位符。

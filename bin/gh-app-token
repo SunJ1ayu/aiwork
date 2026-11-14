@@ -40,6 +40,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 BIN_DIR="$("$AIWORK_PROGRAMS/python3" -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")" || exit 1
+"$BIN_DIR/aiwork-config" check-app-role "$role" || exit 2
 conf="$("$BIN_DIR/aiwork-config" path apps)/$role.env"
 [ -r "$conf" ] || { echo "gh-app-token: 读不到角色配置 $conf" >&2; exit 2; }
 APP_ID= INSTALLATION_ID= KEY= REPOS= PERMISSIONS=
