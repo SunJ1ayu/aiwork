@@ -70,13 +70,13 @@ function combine(verdicts) {
     verdicts.find((v) => v.r.status === "completed" && v.r.conclusion !== "success") ??
     verdicts.find((v) => v.r.status !== "completed") ??
     verdicts[0];
-  const list = verdicts.map((v) => `- PR #${v.number}:${v.r.title}${v.r.round_line ? `；${v.r.round_line}` : ""}`).join("\n");
+  const list = verdicts.map((v) => `- PR #${v.number}:${v.r.title}${v.r.round_line ? `；${v.r.round_line}` : ""}${v.r.merge_note ? `；${v.r.merge_note}` : ""}`).join("\n");
   const overview = `这个提交是 ${verdicts.length} 个开着的 PR 的 head(检查挂在提交上,全都放行才放行):\n${list}`;
   return {
     ...pick.r,
     title: `PR #${pick.number}:${pick.r.title}`,
     // GitHub 会截断长摘要；逐 PR 的轮数/停信号先写，不能被某个 PR 的长详情挤掉。
-    summary: verdicts.some((v) => v.r.round_line)
+    summary: verdicts.some((v) => v.r.round_line || v.r.merge_note)
       ? `${overview}\n\n---\n${pick.r.summary}`
       : `${pick.r.summary}\n\n---\n${overview}`,
   };
@@ -94,7 +94,7 @@ async function openPrs(api, repo) {
   throw new Error("开着的 PR 连读四遍都对不上(一直有 PR 在开关或推送)");
 }
 
-export async function gate({ repo, policy, api, poster, merger = null, log = () => {} }) {
+export async function gate({ repo, policy, api, poster, bindingApi = api, merger = null, log = () => {} }) {
   const errors = [];
   // 1. 所有开着的 PR,按 head 提交分组
   const heads = new Map();
@@ -123,13 +123,17 @@ export async function gate({ repo, policy, api, poster, merger = null, log = () 
     const verdicts = [];
     try {
       for (const n of numbers) {
-        const facts = await collect(api, repo, n, policy);
+        const facts = await collect(api, repo, n, policy, bindingApi);
         if (facts.pr.state !== "open" || facts.pr.head_sha !== sha) continue; // 列出之后又推进 / 关了
         let r;
         try {
           r = decide(facts, policy);
         } catch (e) {
           r = g8(`判定出错:${e.message}`);
+        }
+        if (facts.merge_request && !facts.merge_request.bound) {
+          const merge_note = "合并标签不对应当前提交，要摘掉重贴。";
+          r = { ...r, merge_note, summary: `${merge_note}\n\n${r.summary}` };
         }
         verdicts.push({ number: n, r, request: facts.merge_request, mergeBy: mergeRequester(facts, policy) });
       }
@@ -150,7 +154,9 @@ export async function gate({ repo, policy, api, poster, merger = null, log = () 
     for (const v of verdicts) {
       if (v.request && !v.mergeBy) {
         const who = v.request.by ? `是 ${v.request.by} 提的` : "在 PR 事件里找不到是谁提的";
-        log(`PR #${v.number}:贴着合并标签,但合并请求${who},不算数(只认业主和 merge_requesters)`);
+        log(v.request.bound
+          ? `PR #${v.number}:贴着合并标签,但合并请求${who},不算数(只认业主和 merge_requesters)`
+          : `PR #${v.number}:合并请求${who}；合并标签不对应当前提交，要摘掉重贴。`);
       }
       if (!v.mergeBy || result.status !== "completed" || result.conclusion !== "success") continue;
       try {

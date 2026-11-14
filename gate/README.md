@@ -10,6 +10,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 | 文件 | 做什么 |
 |---|---|
 | `github.mjs` | GitHub 请求、Link 分页与 GraphQL 的共享客户端；各入口传入本角色令牌 |
+| `merge-request.mjs` | 合并标签事件的冻结提交与绑定记录格式 |
 | `collect.mjs` | 只读 GitHub API 收集事实;出错、分页没取完、条数对不上一律抛错(G8) |
 | `decide.mjs` | 纯判定,不碰网络(G1–G7) |
 | `run.mjs` | 流程:每次运行把所有开着的 PR 全重算一遍(事件只是门铃)。列出开着的 PR、按 head 分组 → 先在每个 head 上占位 → 每个 head 把以它为 head 的 PR 全判一遍、合成一个结论写一次;读不全就不放行;写上的是放行,就合并有合并请求的 PR(见下「合并」) |
@@ -91,7 +92,9 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 - 代价:稳定列表、各接口只需一页、不合并时，设开着的 PR 数为 P、不同 head 数为 H：
   每次 `GITHUB_TOKEN` 要两次读 PR 列表、每 PR 六次 REST 读取和一次 GraphQL 查询，
   即约 `2 + 6P` 次 REST 请求和 P 次 GraphQL 查询；分页或列表不稳定会更多。
-  App 另有每 head 两次检查写入，以及每次运行一次安装查询和一次换检查令牌请求；没有 head 时不换 App 令牌。
+  App 另有每 head 两次检查写入，以及每次运行一次安装查询和一次换检查令牌请求；没有 head 且没有待保存的标签事件时不换 App 令牌。
+  有可唯一定位的合并标签时，每个带标签 PR 还要用检查令牌读取绑定记录（分页会增加请求）；
+  可信的贴标签载荷另创建一条绑定检查，包括重跑。上述绑定读写不计入 GITHUB_TOKEN 的 REST 公式或下表每 head 的常规检查写入数。
   合并时还会另查安装、换合并令牌并逐 PR 发合并请求，这些不算进上述 `GITHUB_TOKEN` REST 数。
   设 T 为模板 cron 每小时的分钟刻度数，D=24T；定时的 REST 用量为 `T × (2 + 6P)`/小时，
   每个 head 每天的 App 检查写入为 2D 次、新检查为 D 条；事件触发另加，Actions 和 runner 占用也增加。
@@ -130,7 +133,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 | 评审(读当前正文;机器人评审发出后被改写过一律按 BLOCK、时刻按改写那一刻;人的评审被撤销按撤销那一刻) | `aiwork-review-ping`:`submitted` / `edited` / `dismissed` → `workflow_run` |
 | 策略 `.aiwork/policy.json`(只认 main 上的) | 改 main 之后 CI 跑完的 `workflow_run` |
 | 关卡代码（aiwork main 的 `gate/`） | `schedule`：计划间隔 15 分钟，具体 cron 见模板；[2026-10-30 实测](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6526765438)约每 4–7 小时一次。GitHub 可能延迟、丢弃或停用定时任务，不能保证准时；用途与限制见下方「定时重算」 |
-| 合并请求(PR 上有没有 `aiwork:merge`、最后是谁贴的) | `pull_request_target`:`labeled`(撤掉标签不用叫醒:只会少合并,下一次运行自然读到) |
+| 合并请求(PR 上有没有 `aiwork:merge`、最后是谁贴的及其提交绑定) | `pull_request_target`:`labeled`(撤掉标签不用叫醒:只会少合并,下一次运行自然读到) |
 | 手动重算 | 给 PR 加任何标签(如 `aiwork:recheck`) |
 
 ### 定时重算：门铃漏响时的补救
@@ -157,17 +160,27 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 - **谁贴的算数**:业主(`policy.json` 的 `owner`)和 `merge_requesters` 里的账号(以后放 OpenClaw 的身份)。
   Builder 贴的不算,也写不进名单(策略校验会拒)—— 不然 Builder 能把自己的 PR 合进去。
   认的是 PR 事件里最后一次贴这个标签的人:撤掉再贴,按最后一次算。
+- **只授权贴标签时的提交**：`main.mjs` 只从可信 `pull_request_target/labeled` 原始载荷取 `pull_request.head.sha`，
+  以关卡 App 创建 `merge-request.mjs` 定义的绑定检查。记录存在 GitHub，每次重算重新读；
+  只认策略指定的关卡 App，不认构建机器人或其他 App 造的同名检查。不增加任何角色权限。
+  标签载荷没有历史事件 ID，按 PR、标签、载荷的 `updated_at` 和申请人对应历史事件；同一秒出现多次该标签的摘贴时一律拒绝，避免旧载荷授权新申请。
+  只从当前 head 的检查中找对应这一次标签的记录；推进提交、摘掉重贴都不能借旧记录。
+  没有记录（含上线前的标签）、记录被平台淘汰、保存失败或同秒歧义时，不自动合并，并在检查摘要提示「合并标签不对应当前提交，要摘掉重贴」。
+  检查记录的字段契约见 [GitHub Checks API](https://docs.github.com/en/rest/checks/runs)，事件载荷见 [GitHub Webhook 文档](https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request)。
+- **排队被顶掉时**：仍用原来的固定并发组，仍对全部开放 PR 重算。若贴标签的运行尚未开始就被顶掉，
+  不会保存绑定；后续推送、评审、定时重算只能报告缺记录，不能用当时的新 head 补绑。需摘掉重贴。
+  重跑旧的贴标签运行也只能保存旧载荷里的提交，不能授权新的提交或新的一次标签。
 - **不另起一套判定**:关卡每次运行照常把所有开着的 PR 判一遍;某个 head 的 App 结论写上了、
   而且是放行,就当场合并这个 head 上有合并请求的 PR。合并用的就是这次刚读到的数据,调合并接口时带上判过的
   head(`sha`):判完之后又推了新提交,接口会拒,不会把没判过的提交合进去。
-- **没放行的请求留着**:之后哪次运行判为放行,就在那次合。不想合了就撤掉标签(关卡正在合的那几秒里撤可能来不及,
+- **没放行的请求留着**:只有提交和这一次标签均未改变，之后哪次运行判为放行，才在那次合。不想合了就撤掉标签(关卡正在合的那几秒里撤可能来不及,
   见项目的 `.aiwork/accepted-risks.md`)。
 - **"在最新的 main 上测过"不归关卡判**:关卡读的输入(head、改动、评审、head 上的 CI、推送、标签)没有一样随 main
   前进而变,main 动了重判一遍结论也一样。这一点靠 main 规则集的「合并前分支必须和 main 同步」,它对 App 的合并同样生效:
-  同一次运行里合了一个 PR,指向 main 的其他 PR 就落后了,GitHub 拒绝合并,请求留着;更新分支 → CI、评审重来 → 放行时再合。
+  同一次运行里合了一个 PR,指向 main 的其他 PR 就落后了,GitHub 拒绝合并,请求留着;更新分支 → CI、评审重来 → 摘掉重贴合并标签 → 放行时再合。
   关了这条规则,关卡会把没和最新 main 一起测过的 PR 合进去。
 - **合并没成**(分支落后于 main、有冲突、评审讨论没解决完、刚推了新提交):原因写在那次运行的摘要里,请求留着。
-  处理完之后,推送、评审都会叫醒下一次运行再合;没有门铃的(比如把讨论标为已解决),加个 `aiwork:recheck`。
+  处理时若推了新提交，要摘掉重贴合并标签；未改提交的，评审等门铃会叫醒下一次运行再合;没有门铃的(比如把讨论标为已解决),加个 `aiwork:recheck`。
 - 合并用 App 另换的一张令牌(Contents / Pull requests / Workflows 写权限),只在真要合并时才换;发检查的那张始终只有 Checks。
 - main 的规则与迁移顺序见上方「已接入仓库迁移」；本轮写不了新结论时的显示结果与已接受风险见 `.aiwork/accepted-risks.md` 第 7 条。
   取消不撤销已经完成的合并；未合并的 PR 由下次运行重新判定后合并。
@@ -208,7 +221,8 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 |---|---|---|---|
 | S10 | 业主给一个会放行的测试 PR 贴 `aiwork:merge` | 那次运行放行后当场合并:合并者是 `aiwork-gate` App,合进去的是判过的 head | 合并用的是刚判过的数据和 head |
 | S11 | 机器账号(Builder)给另一个会放行的测试 PR 贴 `aiwork:merge` | 不合并;运行摘要里写"是 SunJ1ayuBoT 提的,不算数" | Builder 合不了自己的 PR |
-| S12 | 业主给一个还缺评审的测试 PR 贴 `aiwork:merge`,之后补上 PASS | 贴的时候不合;PASS 之后那次运行合并 | 请求留着,放行时才合 |
+| S12 | 业主给一个还缺评审的测试 PR 贴 `aiwork:merge`,不推新提交，之后补上 PASS | 贴的时候不合;PASS 之后那次运行合并 | 同一提交的请求留着,放行时才合 |
+| S12a | 在旧提交贴合并标签后、关卡运行前推新提交，再补齐新提交的放行条件 | 不合新提交；检查摘要提示摘掉重贴。重贴并保存后可合 | 绑定的是原始标签事件的提交；旧标签和无记录不授权新提交 |
 | S13 | 两个都会放行、都指向 main 的测试 PR,业主都贴上 `aiwork:merge` | 合进去一个;另一个被 GitHub 拒(分支落后于 main),摘要里写明,请求留着 | 连着合并时,后一个必须先和新的 main 一起测过 |
 | S15 | 用已满足其他合并条件、未贴 `aiwork:merge` 的测试 PR，以仓库管理员身份在网页上尝试合并 | 被 `main-gate-merge-only` 拒绝更新 main，PR 未合并 | 管理员不能借提交上的放行绕过关卡合并 |
 

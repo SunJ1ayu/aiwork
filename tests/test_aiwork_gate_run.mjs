@@ -80,6 +80,17 @@ function prsApi(calls, prs, { fail = () => false, lists = null } = {}) {
       }
       const act = /\/activity\?ref=refs%2Fheads%2Fclaude%2Fpr(\d+)/.exec(p);
       if (act) return { data: [{ id: 1, timestamp: "t", activity_type: "push", after: prs[act[1]].head, actor: { login: "SunJ1ayuBoT" } }], next: null };
+      if (p.includes('/check-runs?')) {
+        const checks = numbers.flatMap(n => {
+          const x = prs[n];
+          const e = x.bindingEvent ?? x.events?.filter(e => e.event === 'labeled' && e.label?.name === policy.merge_label).at(-1);
+          if (!e || x.bindingSha === null) return [];
+          return [{ name: 'aiwork-merge-request', head_sha: x.bindingSha ?? x.head,
+            app: { id: x.bindingApp ?? policy.gate_app_id }, status: 'completed', conclusion: 'neutral',
+            external_id: JSON.stringify([n, policy.merge_label, e.created_at, e.actor?.login]) }];
+        });
+        return { data: { total_count: checks.length, check_runs: checks }, next: null };
+      }
       const ev = /\/issues\/(\d+)\/events/.exec(p);
       if (ev) return { data: prs[ev[1]].events ?? [], next: null };
       throw new Error(`没料到的请求 ${p}`);
@@ -400,4 +411,33 @@ test("同 head 的未选中 PR 停信号排在长详情之前，GitHub 摘要截
   const posted = result[0].summary.slice(0, 60000);
   assert.match(posted, /PR #10[^\n]*轮数：未知/);
   assert.match(posted, /PR #11[^\n]*第 1 轮[^\n]*停：交业主/);
+});
+
+test("M11 合并标签只授权记录中的提交；缺记录、伪造 App、重贴后旧记录均不合", async () => {
+  const event = labeled(policy.owner);
+  const cases = [
+    { bindingSha: OTHER }, { bindingSha: null },
+    { bindingApp: policy.gate_app_id + 1 },
+    { bindingEvent: labeled(policy.owner, "2026-09-29T09:00:00Z") },
+  ];
+  for (const variant of cases) {
+    const r = recorder(), logs = [];
+    const result = await run(r, prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events: [event], ...variant } }),
+      { merger: mergeRecorder(r), log: l => logs.push(l) });
+    assert.deepEqual(merges(r.calls), [], JSON.stringify(variant));
+    assert.match(result[0].summary, /合并标签不对应当前提交.*摘掉重贴/);
+  }
+});
+
+test("M12 绑定记录读不全按 G8 拒绝；同 head 多个 PR 的失效标签提示不丢", async () => {
+  const prs = { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events: [labeled(policy.owner)], bindingSha: null },
+    11: { head: HEAD, files: ["web/b.ts"] } };
+  const r = recorder();
+  const results = await run(r, prsApi(r.calls, prs), { merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), []);
+  assert.match(results[0].summary.split('---')[0], /PR #10:.*合并标签不对应当前提交.*摘掉重贴/);
+  const r2 = recorder();
+  await run(r2, prsApi(r2.calls, prs, { fail: p => p.includes('/check-runs?') }), { merger: mergeRecorder(r2) });
+  assert.deepEqual(merges(r2.calls), []);
+  assert.match(finishes(r2.calls)[0][3], /G8/);
 });

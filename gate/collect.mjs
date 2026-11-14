@@ -1,3 +1,5 @@
+import { MERGE_BINDING_CHECK, mergeBindingKey } from "./merge-request.mjs";
+
 // aiwork 放行关卡的收集部分:从 GitHub API 读判定要的事实。只读,不执行、不检出 PR 的代码。
 // G8 失败即拒:任何一次请求出错、分页没取完、条数对不上,都抛错,由 run.mjs 判 failure。
 
@@ -82,7 +84,11 @@ export async function collectPrEvents(api, repo, prNumber, mergeLabel) {
     .sort((a, b) => (a.created_at === b.created_at ? a.id - b.id : a.created_at < b.created_at ? -1 : 1))
     .at(-1);
   const mergeLabelBy = lastMergeLabel?.event === "labeled" ? lastMergeLabel.actor?.login ?? null : null;
-  return { base_changed_at: times.at(-1) ?? null, dismissedAt, mergeLabelBy };
+  const mergeLabelUnique = lastMergeLabel && events.filter(e =>
+    (e.event === "labeled" || e.event === "unlabeled") && e.label?.name === mergeLabel &&
+    e.created_at === lastMergeLabel.created_at).length === 1;
+  return { base_changed_at: times.at(-1) ?? null, dismissedAt, mergeLabelBy,
+    mergeLabelAt: mergeLabelUnique ? lastMergeLabel.created_at : null };
 }
 
 // 每条评审发出之后有没有被改写过、何时改写(REST 不给,只有 GraphQL 的 lastEditedAt 有)。
@@ -136,7 +142,7 @@ export async function collectPushes(api, repo, headRef, headSha) {
   };
 }
 
-export async function collect(api, repo, prNumber, policy) {
+export async function collect(api, repo, prNumber, policy, bindingApi = api) {
   const pr = await api.get(`/repos/${repo}/pulls/${prNumber}`);
   const headSha = pr.head.sha;
 
@@ -157,7 +163,7 @@ export async function collect(api, repo, prNumber, policy) {
   }));
 
   const ci = await collectCi(api, repo, headSha, policy, pr.number);
-  const { base_changed_at, dismissedAt, mergeLabelBy } = await collectPrEvents(api, repo, pr.number, policy.merge_label);
+  const { base_changed_at, dismissedAt, mergeLabelBy, mergeLabelAt } = await collectPrEvents(api, repo, pr.number, policy.merge_label);
   const edits = await collectReviewEdits(api, repo, pr.number);
   for (const r of reviews) {
     r.dismissed_at = r.state === "DISMISSED" ? dismissedAt.get(r.id) ?? null : null;
@@ -171,6 +177,19 @@ export async function collect(api, repo, prNumber, policy) {
     ? await collectPushes(api, repo, pr.head.ref, headSha)
     : { covers_head: false, actors: [] };
 
+  let mergeRequest = null;
+  if ((pr.labels ?? []).some(l => l.name === policy.merge_label)) {
+    let bound = false;
+    if (mergeLabelBy && mergeLabelAt) {
+      const records = await paginate(bindingApi,
+        `/repos/${repo}/commits/${headSha}/check-runs?check_name=${MERGE_BINDING_CHECK}&filter=all&per_page=100`, "check_runs");
+      const key = mergeBindingKey(pr.number, policy.merge_label, mergeLabelAt, mergeLabelBy);
+      bound = records.some(r => r.name === MERGE_BINDING_CHECK && r.app?.id === policy.gate_app_id &&
+        r.head_sha === headSha && r.external_id === key && r.status === "completed" && r.conclusion === "neutral");
+    }
+    mergeRequest = { by: mergeLabelBy, bound };
+  }
+
   return {
     pr: { number: pr.number, state: pr.state, head_sha: headSha },
     files,
@@ -178,7 +197,7 @@ export async function collect(api, repo, prNumber, policy) {
     ci,
     base_changed_at,
     pushes,
-    // 标签现在贴着 = 有合并请求;是谁提的看事件里最后一次贴它的人(找不到就是 null,不算数)
-    merge_request: (pr.labels ?? []).some((l) => l.name === policy.merge_label) ? { by: mergeLabelBy } : null,
+    // 申请人及版本绑定共用这一份事实；无记录、歧义均不授权合并。
+    merge_request: mergeRequest,
   };
 }

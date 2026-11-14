@@ -48,10 +48,11 @@ function fakeGitHub(opts = {}) {
       if (u === "/app/installations/777/access_tokens") return send(201, { token: JSON.parse(body).permissions.checks ? "app-check-token" : "app-merge-token" });
       if (u === "/repos/o/r/pulls/10/merge" && req.method === "PUT") return send(200, { merged: true });
       if (u === "/repos/o/r/check-runs" && req.method === "POST") {
+        if (opts.bindingFails && record.body.name === "aiwork-merge-request") return send(502, { message: "binding failed" });
         if (opts.appStartFails) return send(502, { message: "App start failed" });
         if (opts.hang && auth === "Bearer app-check-token") return; // 一直不回
         const id = nextCheck++;
-        const check = { ...record.body, id, auth };
+        const check = { ...record.body, id, auth, app: { id: policy.gate_app_id } };
         checks.set(id, check);
         record.checkId = id;
         return send(201, { id });
@@ -86,7 +87,14 @@ function fakeGitHub(opts = {}) {
       if (u.startsWith("/repos/o/r/pulls/10/reviews")) return send(200, reviews);
       if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: [{ id: 1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", pull_requests: [{ number: 10 }] }] });
       if (u.startsWith("/repos/o/r/activity")) return send(200, [{ id: 1, timestamp: "t", activity_type: "push", after: HEAD, actor: { login: opts.actorLogin ?? "SunJ1ayuBoT" } }]);
-      const events = opts.mergeReady ? [{ id: 1, event: "labeled", label: { name: policy.merge_label }, actor: { login: policy.owner }, created_at: "2026-09-29T10:00:00Z" }] : [];
+      if (u.includes('/check-runs?')) {
+        const saved = [...checks.values()].filter(c => c.head_sha === HEAD && c.name === 'aiwork-merge-request');
+        const records = opts.bindingRecords ?? (opts.mergeReady ? [{ name: 'aiwork-merge-request',
+          head_sha: HEAD, app: { id: policy.gate_app_id }, status: 'completed', conclusion: 'neutral',
+          external_id: JSON.stringify([10, policy.merge_label, '2026-09-29T10:00:00Z', policy.owner]) }] : []);
+        return send(200, { total_count: records.length + saved.length, check_runs: [...records, ...saved] });
+      }
+      const events = opts.events ?? (opts.mergeReady ? [{ id: 1, event: "labeled", label: { name: policy.merge_label }, actor: { login: policy.owner }, created_at: "2026-09-29T10:00:00Z" }] : []);
       if (u.startsWith("/repos/o/r/issues/10/events")) return send(200, events);
       const nodes = reviews.map((r) => ({ databaseId: r.id, submittedAt: r.submitted_at, lastEditedAt: null }));
       if (u === "/graphql" && opts.graphqlErrors) return send(200, { errors: [{message:"unavailable"}] });
@@ -124,8 +132,8 @@ function runMain(apiUrl, extraEnv = {}, main = MAIN, event = { pull_request: { n
 }
 
 // 不在替身里模拟 GitHub 的历史淘汰。平台保留规则见 README 的官方出处；
-// 本测试钉住程序不读历史、不追加 status，每次新建并只 PATCH 本次 id 的请求契约。
-test("整机:重算不访问历史或已满的 status，每次用新检查，放行后仍能合并", async () => {
+// 本测试钉住程序不借旧放行、不追加 status；绑定检查仅用于授权合并。
+test("整机:不追加 status，合并时只读申请检查，每轮新建放行检查", async () => {
   const opts = {};
   const gh = await fakeGitHub(opts);
   const previousIds = new Set();
@@ -160,8 +168,8 @@ test("整机:重算不访问历史或已满的 status，每次用新检查，放
       assert.equal(round.filter((r) => r.url === "/repos/o/r/pulls/10/merge").length, ready ? 1 : 0);
     }
     assert.equal(gh.log.filter((r) => r.url.includes("/statuses/")).length, 0, "旧 status 即使已满也不访问");
-    assert.equal(gh.log.filter((r) => r.method === "GET" && r.url.includes("check-runs")).length, 0,
-      "结果不依赖检查历史的长度、分页或淘汰规则");
+    assert.equal(gh.log.filter((r) => r.method === "GET" && r.url.includes("check-runs")).length, 1,
+      "只有带标签的 PR 读取绑定记录；默认检查历史不参与放行");
   } finally {
     gh.server.close();
   }
@@ -475,4 +483,103 @@ test('派发桥实际使用关卡共用的请求超时',async()=>{
     const result=await runDispatchBridge(gh.url,'openai',{AIWORK_GATE_TIMEOUT_MS:'50'});
     assert.notEqual(result.code,0);assert.match(result.err,/Timeout|Abort/i);assert.equal(result.out,'');
   } finally {gh.server.closeAllConnections();gh.server.close();}
+});
+
+// Webhook 字段契约来自 GitHub pull_request/labeled 载荷；REST 标签历史样本见 #149。
+const labelPayload = (sha = HEAD) => ({ action: 'labeled', repository: { full_name: 'o/r' },
+  sender: { login: policy.owner }, label: { name: policy.merge_label },
+  pull_request: { number: 10, updated_at: '2026-09-29T10:00:00Z',
+    base: { repo: { full_name: 'o/r' } }, head: { sha } } });
+
+test('整机:只保存贴标签载荷里的提交；到运行时已推新提交不能借旧标签合并', async () => {
+  for (const sha of ['c'.repeat(40), HEAD]) {
+    const gh = await fakeGitHub({ mergeReady: true, bindingRecords: [] });
+    try {
+      const { code, out } = await runMain(gh.url, {}, MAIN, labelPayload(sha));
+      assert.equal(code, 0, out);
+      assert.equal(gh.log.filter(r => r.url.endsWith('/merge')).length, sha === HEAD ? 1 : 0);
+      const saved = gh.log.find(r => r.method === 'POST' && r.body?.name === 'aiwork-merge-request');
+      assert.ok(saved, '必须自动保存原始事件');
+      assert.equal(saved.auth, 'Bearer app-check-token');
+      assert.equal(saved.body.head_sha, sha);
+      if (sha !== HEAD) assert.match(out, /合并标签不对应当前提交.*摘掉重贴/);
+    } finally { gh.server.close(); }
+  }
+});
+
+test('整机:记录未保存或贴标签运行被顶掉，不能在后续门铃中补绑当前提交', async () => {
+  for (const extra of [{}, { GITHUB_EVENT_NAME: 'schedule' }]) {
+    const gh = await fakeGitHub({ mergeReady: true, bindingRecords: [] });
+    try {
+      const { code, out } = await runMain(gh.url, extra);
+      assert.equal(code, 0, out);
+      assert.equal(gh.log.filter(r => r.body?.name === 'aiwork-merge-request').length, 0);
+      assert.equal(gh.log.filter(r => r.url.endsWith('/merge')).length, 0);
+      assert.match(out, /合并标签不对应当前提交.*摘掉重贴/);
+    } finally { gh.server.close(); }
+  }
+});
+
+test('整机:绑定保存失败安全拒绝，仍完成 PR 重算', async () => {
+  const gh = await fakeGitHub({ mergeReady: true, bindingRecords: [], bindingFails: true });
+  try {
+    const { code, out } = await runMain(gh.url, {}, MAIN, labelPayload());
+    assert.equal(code, 0, out);
+    assert.match(out, /记录保存失败/);
+    assert.match(out, /合并标签不对应当前提交.*摘掉重贴/);
+    assert.equal(gh.log.filter(r => r.url.endsWith('/merge')).length, 0);
+  } finally { gh.server.close(); }
+});
+
+test('整机:从 GitHub 读持久绑定；摘掉重贴必须新记录，同秒歧义拒绝', async () => {
+  const opts = { mergeReady: true, bindingRecords: [] };
+  const gh = await fakeGitHub(opts);
+  const event = (id, type, at) => ({ id, event: type, created_at: at,
+    label: { name: policy.merge_label }, actor: { login: policy.owner } });
+  try {
+    assert.equal((await runMain(gh.url, {}, MAIN, labelPayload())).code, 0);
+    let start = gh.log.length;
+    let result = await runMain(gh.url, { GITHUB_EVENT_NAME: 'schedule' });
+    assert.equal(result.code, 0, result.out);
+    assert.equal(gh.log.slice(start).filter(r => r.url.endsWith('/merge')).length, 1, '下一运行读服务器记录');
+    opts.events = [event(1, 'labeled', '2026-09-29T10:00:00Z'),
+      event(2, 'unlabeled', '2026-09-29T10:01:00Z'), event(3, 'labeled', '2026-09-29T10:02:00Z')];
+    start = gh.log.length;
+    result = await runMain(gh.url, { GITHUB_EVENT_NAME: 'schedule' });
+    assert.equal(result.code, 0, result.out);
+    assert.equal(gh.log.slice(start).filter(r => r.url.endsWith('/merge')).length, 0, '旧记录不授权重贴');
+    const payload = labelPayload(); payload.pull_request.updated_at = '2026-09-29T10:02:00Z';
+    start = gh.log.length;
+    result = await runMain(gh.url, {}, MAIN, payload);
+    assert.equal(result.code, 0, result.out);
+    assert.equal(gh.log.slice(start).filter(r => r.url.endsWith('/merge')).length, 1, '重贴并保存后恢复');
+    opts.events.push(event(4, 'unlabeled', '2026-09-29T10:02:00Z'), event(5, 'labeled', '2026-09-29T10:02:00Z'));
+    start = gh.log.length;
+    result = await runMain(gh.url, {}, MAIN, payload);
+    assert.equal(result.code, 0, result.out);
+    assert.equal(gh.log.slice(start).filter(r => r.url.endsWith('/merge')).length, 0, '同秒无法区分，旧新记录均不借用');
+    assert.match(result.out, /合并标签不对应当前提交.*摘掉重贴/);
+  } finally { gh.server.close(); }
+});
+
+test('整机:其他事件、仓库、申请人、标签或坏载荷不能保存绑定', async () => {
+  const variants = [
+    p => { p.sender.login = Object.keys(policy.builders)[0]; },
+    p => { p.repository.full_name = 'other/repo'; },
+    p => { p.pull_request.base.repo.full_name = 'other/repo'; },
+    p => { p.label.name = 'other'; },
+    p => { p.pull_request.updated_at = null; },
+    p => { p.pull_request.head.sha = 'bad'; },
+    p => { p.action = 'synchronize'; },
+  ];
+  for (const change of variants) {
+    const gh = await fakeGitHub({ mergeReady: true, bindingRecords: [] });
+    try {
+      const payload = labelPayload(); change(payload);
+      const { code, out } = await runMain(gh.url, {}, MAIN, payload);
+      assert.equal(code, 0, out);
+      assert.equal(gh.log.filter(r => r.body?.name === 'aiwork-merge-request').length, 0);
+      assert.equal(gh.log.filter(r => r.url.endsWith('/merge')).length, 0);
+    } finally { gh.server.close(); }
+  }
 });
