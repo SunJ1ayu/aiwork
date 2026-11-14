@@ -15,7 +15,8 @@
 #     评审提交 / 改写 / 撤销(aiwork-review-ping);
 #     aiwork main 的关卡代码变化由 schedule 定时补算，间隔与限制见门铃表。
 #     给 PR 加标签(如 `aiwork:recheck`)也能手动重算;加合并标签 `aiwork:merge` 就是请关卡在放行时合并
-#     (见 gate/README.md「合并」)。
+#     (见 gate/README.md「合并」)。labeled 原始载荷只用于保存合并提交绑定；
+#     运行被排队顶掉时缺记录就不合并，不用后来的 head 补绑。
 #   · 发检查结果、合并用 aiwork-gate App 的私钥,放在只许 main 用的 environment `aiwork-gate` 里:
 #     同仓库分支的 PR 能拿到仓库级 secrets,拿不到只许 main 的 environment secrets。
 #

@@ -5,7 +5,8 @@
 // 合并(run.mjs 第 4 步)另换一张 App 令牌,只在真要合并时才换:发检查的那张始终只有 checks: write。
 import { createSign } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
-import { gate } from "./run.mjs";
+import { bindingFromEvent } from "./merge-request.mjs";
+import { validatePolicy, gate } from "./run.mjs";
 import { githubClient } from "./github.mjs";
 
 const env = process.env;
@@ -74,11 +75,27 @@ const merger = {
   },
 };
 
+// 只保存原始 labeled 载荷的冻结版本；从不拿随后查询到的 head 补记录。
+validatePolicy(policy);
+if (env.GITHUB_EVENT_NAME === "pull_request_target" && env.GITHUB_EVENT_PATH) {
+  const binding = bindingFromEvent(env.GITHUB_EVENT_NAME,
+    JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")), repo, policy);
+  if (binding) {
+    try {
+      await request("POST", `/repos/${repo}/check-runs`, await appToken(CHECKS), binding);
+    } catch (e) {
+      console.log(`合并申请记录保存失败，未记录的申请不会合并：${e.message}`);
+    }
+  }
+}
+
 await gate({
   repo,
   policy,
   api,
   poster,
+  // 使用已有的检查令牌读取绑定，不增加 workflow 凭证权限。
+  bindingApi: { async getPage(path) { return reader(await appToken(CHECKS)).getPage(path); } },
   merger,
   log: (line) => {
     console.log(line);

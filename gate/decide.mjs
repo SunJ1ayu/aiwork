@@ -1,3 +1,5 @@
+import { isMergeRequester } from "./merge-request.mjs";
+
 import { matchAny } from "./paths.mjs";
 export { matchAny, globToRegExp } from "./paths.mjs";
 import { reviewPlan } from "./review-plan.mjs";
@@ -136,10 +138,10 @@ function stancesOnHead(reviews, policy, head) {
   return last;
 }
 
-// 只回答"谁要求合并、他算不算数":Builder 贴的标签不算,不然 Builder 能自己把自己的 PR 合进去。
+// 合并授权同时要求版本绑定和可信申请人；Builder 的同名记录或标签不算。
 export function mergeRequester(facts, policy) {
   const by = facts.merge_request?.by ?? null;
-  return by !== null && (by === policy.owner || policy.merge_requesters.includes(by)) ? by : null;
+  return facts.merge_request?.bound === true && isMergeRequester(by, policy) ? by : null;
 }
 
 // 围栏和引用的格式源在 summary skill；测试直接读取其中的引用示例对照。
