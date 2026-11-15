@@ -588,6 +588,80 @@ class ReaderFailureClassificationTests(LegCase):
 
 
 class PublisherIsolationTests(unittest.TestCase):
+    def test_caller_beneath_another_users_private_parent(self):
+        import _leg_session as session
+        # Unlike /tmp, this tree is visible through the initial read-only root;
+        # it reproduces sudo CI starting below the runner's private home.
+        with tempfile.TemporaryDirectory(dir='/var/tmp') as name:
+            root = Path(name)
+            foreign = root / 'foreign'
+            foreign.mkdir(mode=0o700)
+            caller = foreign / 'checkout'
+            caller.mkdir()
+            (caller / 'marker').write_text('caller input')
+            os.mkfifo(caller / 'control.fifo')
+            settings = foreign / 'settings'
+            shutil.copytree(os.environ['AIWORK_CONFIG_DIR'], settings, symlinks=True)
+            data = foreign / 'data'
+            data.mkdir()
+            (data / 'marker').write_text('selected data')
+            tools = foreign / 'tools'
+            tools.mkdir()
+            helper = foreign / 'runtime-helper'
+            helper.write_text('#!/bin/sh\nprintf selected-tool\n')
+            helper.chmod(0o755)
+            (tools / 'caller-helper').symlink_to(helper)
+            key = caller / 'publisher-key'
+            key.write_text('disposable publisher key')
+            apps = root / 'apps'
+            apps.mkdir()
+            (apps / 'review.env').write_text('KEY=' + str(key) + '\n')
+            (foreign / 'unrelated').write_text('private sibling')
+            os.chown(foreign, 65534, 65534)
+            output = root / 'output'
+            output.mkdir()
+            repo = output / 'repo'
+            repo.mkdir()
+            task = output / 'check.py'
+            task.write_text('''import os, pathlib, subprocess, sys
+caller = pathlib.Path(sys.argv[1])
+assert pathlib.Path.cwd() == caller
+assert (caller / 'marker').read_text() == 'caller input'
+import stat
+assert not stat.S_ISFIFO((caller / 'control.fifo').stat().st_mode)
+assert (pathlib.Path(os.environ['AIWORK_DATA_DIR']) / 'marker').read_text() == 'selected data'
+assert subprocess.check_output(['caller-helper'], text=True) == 'selected-tool'
+subprocess.run(['/bin/bash', '-c', '. "$1/_programs.sh"; aiwork_init subcodex',
+                'bootstrap', str(pathlib.Path(os.environ['AIWORK_REVIEW_RESULT_BIN']).parent)], check=True)
+try:
+    assert not (caller / 'publisher-key').read_bytes()
+except OSError:
+    pass
+assert not (caller.parent / 'unrelated').exists()
+try:
+    (caller / 'marker').write_text('changed')
+except OSError:
+    pass
+else:
+    raise AssertionError('caller snapshot writable')
+''')
+            previous = Path.cwd()
+            try:
+                os.chdir(caller)
+                result = session.run_isolated_leg(
+                    [sys.executable, str(task), str(caller)],
+                    env=dict(os.environ, AIWORK_APPS_DIR=str(apps),
+                             AIWORK_CONFIG_DIR='../settings', AIWORK_DATA_DIR='../data',
+                             AIWORK_REVIEW_RESULT_BIN=str(BIN / '_review_result.py'),
+                             PATH='../tools' + os.pathsep + os.environ['PATH']),
+                    directory=output, repo=repo, task=task, bin_dir=BIN)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((caller / 'marker').read_text(), 'caller input')
+            self.assertEqual(foreign.stat().st_uid, 65534)
+            self.assertEqual(foreign.stat().st_mode & 0o777, 0o700)
+
     def test_caller_environment_survives_the_boundary_without_host_writes_or_ipc(self):
         import socket
         import _leg_session as session

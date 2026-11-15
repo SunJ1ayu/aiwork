@@ -306,6 +306,49 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
 
     child_env = without_publication_credentials(env)
     with tempfile.TemporaryDirectory(prefix='aiwork-leg-home-') as scratch:
+        # A privileged caller may start inside another user's private parent
+        # (including sudo CI checkouts). Namespace root cannot traverse it.
+        # Keep the same cwd name using a filtered snapshot and private parent
+        # skeleton; never chmod the host or expose that user's sibling files.
+        private_parents = []
+        for parent in reversed((caller, *caller.parents)):
+            info = parent.stat()
+            execute = (stat.S_IXUSR if info.st_uid == os.getuid() else
+                       stat.S_IXGRP if info.st_gid == os.getgid() else stat.S_IXOTH)
+            if not info.st_mode & execute:
+                private_parents.append(parent)
+                break
+        input_snapshots = {}
+
+        def readable_source(path):
+            if not any(path.is_relative_to(parent) for parent in private_parents):
+                return path
+            if protected(path):
+                raise ReviewError('运行输入与发布凭证位置重叠；未启动评审腿')
+            for original, snapshot in input_snapshots.items():
+                if path.is_relative_to(original):
+                    return snapshot / path.relative_to(original)
+            snapshot = Path(scratch) / ('input-' + str(len(input_snapshots)))
+            def input_ignores(directory, names):
+                ignored = tool_ignores(directory, names)
+                # The later masks need mountpoints within a read-only snapshot.
+                # Preserve only empty placeholders, never credential/IPC data.
+                for name in ignored:
+                    entry = Path(directory) / name
+                    if protected(entry) or (entry.exists() and not (entry.is_file() or entry.is_dir())):
+                        placeholder = snapshot / entry.relative_to(path)
+                        if entry.is_dir():
+                            placeholder.mkdir(parents=True, exist_ok=True)
+                        else:
+                            placeholder.parent.mkdir(parents=True, exist_ok=True)
+                            placeholder.touch()
+                return ignored
+            if path.is_dir():
+                shutil.copytree(path, snapshot, ignore=input_ignores, dirs_exist_ok=True)
+            else:
+                shutil.copy2(path, snapshot)
+            input_snapshots[path] = snapshot
+            return snapshot
         # A root publisher can read a checkout owned by another user, but its
         # user namespace cannot traverse that user's private ancestors. Stage
         # trusted public tools before dropping privileges, never chmod the host.
@@ -338,8 +381,10 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
                 snapshot = network / name
                 shutil.copyfile(source, snapshot)
                 network_files.append((snapshot, source.resolve(strict=True)))
-        private_roots = (Path('/tmp'), Path('/run'))
+        private_roots = (Path('/tmp'), Path('/run'), *private_parents)
         readonly_directories = [(config, config)]
+        if private_parents:
+            readonly_directories.insert(0, (caller, caller))
         # Inputs hidden by private runtime mounts are restored at their caller
         # paths. Only directory data is exposed; IPC/special files and protected
         # credentials are masked below, including aliases introduced by binds.
@@ -426,6 +471,8 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
         for path in (*staged_paths, Path(command[0]).resolve()):
             argv += ['--ro-bind', str(path), str(path)]
         for source, target in dict.fromkeys(readonly_directories):
+            if protected(source):
+                continue
             argv += ['--ro-bind', str(source), str(target)]
         for path in readonly_files:
             if path.is_file() and not protected(path):
@@ -448,7 +495,15 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
                 argv += ['--ro-bind', '/dev/null', str(path)]
         # Wrappers initialize caller settings here, then explicitly run their
         # provider in a disposable repository. Do not change their starting cwd.
-        argv += ['--dir', str(caller), '--chdir', str(caller), '--', *command]
+        argv += ['--dir', str(caller)]
+        for parent in private_parents:
+            argv += ['--remount-ro', str(parent)]
+        # Inputs beneath private parents use filtered snapshots, including
+        # settings and declared PATH/link targets outside the caller directory.
+        for index, option in enumerate(argv):
+            if option == '--ro-bind':
+                argv[index + 1] = str(readable_source(Path(argv[index + 1])))
+        argv += ['--chdir', str(caller), '--', *command]
         try:
             completed = subprocess.run(argv, text=True, capture_output=True, env=child_env, check=False)
             # The model may leave symlinks/devices/FIFOs. The parent must never
