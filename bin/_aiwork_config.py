@@ -15,12 +15,13 @@ class ConfigError(ValueError):
     pass
 
 
-def config_dir() -> Path:
+def config_dir(*, environ=None) -> Path:
     import subprocess
     helper = Path(__file__).resolve().with_name('_programs.sh')
     try:
         result = subprocess.run(['/bin/sh', '-c', '. "$1"; aiwork_config_dir',
-                                 'aiwork-config-dir', str(helper)], capture_output=True, text=True)
+                                 'aiwork-config-dir', str(helper)], capture_output=True, text=True,
+                                env=environ)
     except OSError as exc:
         raise ConfigError(f'设置目录读取入口不可用: {exc}') from exc
     if result.returncode:
@@ -48,12 +49,14 @@ def check_programs(entry: str) -> None:
     _program_query('--check', entry)
 
 
-def data_dir() -> Path:
+def data_dir(*, environ=None) -> Path:
     # Provider wrappers override XDG_* for their own isolation. Keep aiwork's
     # machine data stable across those child environments.
     # The directory itself must already exist. Creating it here would turn a
     # missing external disk into a same-named directory on the internal disk.
-    configured = Path(os.environ.get('AIWORK_DATA_DIR') or Path.home() / '.local/share/aiwork').expanduser()
+    env = os.environ if environ is None else environ
+    configured = _user_path(env.get('AIWORK_DATA_DIR') or
+                            Path(env.get('HOME', str(Path.home()))) / '.local/share/aiwork', env)
     try:
         path = configured.resolve()
     except (OSError, RuntimeError) as exc:
@@ -502,9 +505,17 @@ def runtime_value(adapter: str, option: str, *, context: str = 'direct') -> str:
     return runtime_settings(adapter, context=context)[RUNTIME_OPTIONS[adapter][option][0]]
 
 
+def _user_path(value, env) -> Path:
+    value = str(value)
+    if value == '~' or value.startswith('~/'):
+        return Path(env.get('HOME', str(Path.home()))) / value[2:]
+    return Path(value).expanduser()
+
+
 def apps_dir(*, environ=None) -> Path:
     env = os.environ if environ is None else environ
-    return Path(env['AIWORK_APPS_DIR']).expanduser() if env.get('AIWORK_APPS_DIR') else setting_path('apps')
+    return (_user_path(env['AIWORK_APPS_DIR'], env) if env.get('AIWORK_APPS_DIR')
+            else config_dir(environ=env) / 'apps')
 
 
 def app_key(configured: str, *, environ=None) -> Path:

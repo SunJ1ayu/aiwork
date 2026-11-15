@@ -259,15 +259,29 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
     import shutil
     import tempfile
     import stat
-    from _aiwork_config import apps_dir, config_dir, app_key
+    from _aiwork_config import apps_dir, config_dir, app_key, data_dir
 
     bwrap = Path('/usr/bin/bwrap')
     if not bwrap.is_file():
         raise ReviewError('评审隔离需要 bubblewrap；未启动评审腿')
+    caller = Path.cwd()
+    env = without_publication_credentials(env)
+    env['HOME'] = str(Path(env.get('HOME', str(Path.home()))).resolve())
+    config = config_dir(environ=env).resolve()
+    env['AIWORK_CONFIG_DIR'] = str(config)
+    apps = apps_dir(environ=env).resolve()
+    env['AIWORK_APPS_DIR'] = str(apps)
+    data = data_dir(environ=env)
+    env['AIWORK_DATA_DIR'] = str(data)
+    for variable in ('CURSOR_AUTH_FILE', 'XDG_CONFIG_HOME',
+                     'AIWORK_REVIEW_RESULT_BIN'):
+        if env.get(variable):
+            env[variable] = str(Path(env[variable]).resolve())
+    if env.get('KIMI_REVIEW_HOME'):
+        env['KIMI_REVIEW_HOME'] = str(Path(env['KIMI_REVIEW_HOME']).absolute())
     directory, repo, task = directory.resolve(), repo.resolve(), task.resolve()
     # Role configuration is trusted input, as in gh-app-token. Read only KEY's
     # path; never open or copy private-key contents. Resolve symlink targets too.
-    apps, config = apps_dir(environ=env).resolve(), config_dir().resolve()
     hidden = {apps} if apps.exists() else set()
     if apps.exists():
         for role in apps.glob('*.env'):
@@ -287,7 +301,8 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
 
     def tool_ignores(directory, names):
         return [name for name in names if name == '__pycache__' or name.endswith('.pyc')
-                or protected(Path(directory) / name)]
+                or protected(Path(directory) / name)
+                or not ((Path(directory) / name).is_file() or (Path(directory) / name).is_dir())]
 
     child_env = without_publication_credentials(env)
     with tempfile.TemporaryDirectory(prefix='aiwork-leg-home-') as scratch:
@@ -323,8 +338,71 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
                 snapshot = network / name
                 shutil.copyfile(source, snapshot)
                 network_files.append((snapshot, source.resolve(strict=True)))
+        private_roots = (Path('/tmp'), Path('/run'))
+        readonly_directories = [(config, config)]
+        # Inputs hidden by private runtime mounts are restored at their caller
+        # paths. Only directory data is exposed; IPC/special files and protected
+        # credentials are masked below, including aliases introduced by binds.
+        directory_inputs = [data]
+        directory_inputs += [Path(part or str(caller)).absolute()
+                             for part in env.get('PATH', '').split(os.pathsep)]
+        for path in directory_inputs:
+            if path.is_dir() and any(path.is_relative_to(root) for root in private_roots):
+                readonly_directories.append((path.resolve(), path))
+        input_masks = {}
+        readonly_files = []
+        pending = readonly_directories[:]
+        readonly_directories = []
+        visited = set()
+        while pending:
+            source, target = pending.pop()
+            if (source, target) in visited:
+                continue
+            visited.add((source, target))
+            readonly_directories.append((source, target))
+            for parent, directories, files in os.walk(source, followlinks=False):
+                for name in directories[:] + files:
+                    entry = Path(parent) / name
+                    mode = entry.stat().st_mode if entry.exists() else 0
+                    if mode and (protected(entry) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
+                        if entry.is_symlink():
+                            # The original alias must resolve even when its target
+                            # was hidden by a private runtime mount. Mask the
+                            # restored target, never mount through a dangling alias.
+                            resolved = entry.resolve()
+                            if stat.S_ISDIR(mode):
+                                readonly_directories.append((resolved, resolved))
+                            else:
+                                readonly_files.append(resolved)
+                            input_masks[resolved] = stat.S_ISDIR(mode)
+                            if name in directories:
+                                directories.remove(name)
+                            continue
+                        input_masks[target / entry.relative_to(source)] = stat.S_ISDIR(mode)
+                        if name in directories:
+                            directories.remove(name)
+                    elif mode and entry.is_symlink():
+                        resolved = entry.resolve()
+                        if any(resolved.is_relative_to(root) for root in private_roots):
+                            if stat.S_ISDIR(mode):
+                                pending.append((resolved, resolved))
+                            else:
+                                readonly_files.append(resolved)
+        cursor_auth = Path(env.get('CURSOR_AUTH_FILE') or
+                           str(Path(env.get('XDG_CONFIG_HOME') or env['HOME'] + '/.config')
+                               / 'cursor/auth.json'))
+        readonly_files += [cursor_auth, Path(env['HOME']) / '.kimi-code/credentials/kimi-code.json']
+        if child_env.get('AIWORK_REVIEW_RESULT_BIN'):
+            readonly_files.append(Path(child_env['AIWORK_REVIEW_RESULT_BIN']))
+        kimi_home = env.get('KIMI_REVIEW_HOME')
+        kimi_state = None
+        if kimi_home and Path(kimi_home).is_dir():
+            if protected(Path(kimi_home)):
+                raise ReviewError('模型运行目录与发布凭证位置重叠；未启动评审腿')
+            kimi_state = Path(scratch) / 'kimi'
+            shutil.copytree(kimi_home, kimi_state, ignore=tool_ignores)
         # Codex otherwise updates the publisher account's persistent config/sessions.
-        codex_source = Path(env.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
+        codex_source = Path(env.get('CODEX_HOME', env['HOME'] + '/.codex')).resolve()
         codex_home = Path(scratch) / 'codex'
         codex_home.mkdir(mode=0o700)
         output = Path(scratch) / 'output'
@@ -339,29 +417,38 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
         child_env['AIWORK_LEG_ISOLATED'] = '1'
         argv = [str(bwrap), '--die-with-parent', '--new-session', '--unshare-user',
                 '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--cap-drop', 'ALL',
-                '--ro-bind', '/', '/', '--tmpfs', '/tmp', '--tmpfs', '/run',
-                '--proc', '/proc', '--dev', '/dev']
+                '--ro-bind', '/', '/']
+        for root in private_roots:
+            argv += ['--tmpfs', str(root)]
+        argv += ['--proc', '/proc', '--dev', '/dev']
         # Tests and supported installations may keep tools/settings under /tmp.
         # Restore only these read-only paths, never the publisher's whole temp tree.
-        for path in (*staged_paths, config, Path(command[0]).resolve()):
+        for path in (*staged_paths, Path(command[0]).resolve()):
             argv += ['--ro-bind', str(path), str(path)]
-        if config.is_dir():
-            for program in (config / 'programs').glob('*'):
-                target = program.resolve()
-                if target.is_file():
-                    argv += ['--ro-bind', str(target), str(target)]
+        for source, target in dict.fromkeys(readonly_directories):
+            argv += ['--ro-bind', str(source), str(target)]
+        for path in readonly_files:
+            if path.is_file() and not protected(path):
+                argv += ['--ro-bind', str(path.resolve()), str(path)]
         argv += ['--bind', str(codex_home), str(codex_home)]
+        if kimi_state is not None:
+            argv += ['--bind', str(kimi_state), kimi_home]
         argv += ['--bind', str(output), str(directory),
                  '--ro-bind', str(repo), str(repo), '--ro-bind', str(task), str(task)]
         for snapshot, target in network_files:
             argv += ['--ro-bind', str(snapshot), str(target)]
+        for path, directory_mask in sorted(input_masks.items()):
+            argv += (['--tmpfs', str(path), '--remount-ro', str(path)] if directory_mask
+                     else ['--ro-bind', '/dev/null', str(path)])
         # Apply masks last, including keys configured outside apps/ or via symlinks.
         for path in sorted(hidden):
             if path.is_dir():
                 argv += ['--tmpfs', str(path), '--remount-ro', str(path)]
             else:
                 argv += ['--ro-bind', '/dev/null', str(path)]
-        argv += ['--chdir', str(repo), '--', *command]
+        # Wrappers initialize caller settings here, then explicitly run their
+        # provider in a disposable repository. Do not change their starting cwd.
+        argv += ['--dir', str(caller), '--chdir', str(caller), '--', *command]
         try:
             completed = subprocess.run(argv, text=True, capture_output=True, env=child_env, check=False)
             # The model may leave symlinks/devices/FIFOs. The parent must never
@@ -387,6 +474,7 @@ def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, director
                     env: dict[str, str], run_id: str, frozen_model: str | None, *,
                     bin_dir: Path, mode: str = "review",
                     review_contract_version: int | None = None):
+    directory, repo, task, bin_dir = (path.resolve() for path in (directory, repo, task, bin_dir))
     log, facts = directory / "review.log", directory / "facts.json"
     report = directory / "report.md"
     result_file, diagnostic = directory / "result.json", directory / "leg.stderr"

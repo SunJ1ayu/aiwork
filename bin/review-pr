@@ -661,7 +661,7 @@ def main() -> int:
         if args.expected_head and pr['head']['sha'] != args.expected_head:
             raise ReviewError('PR head changed before dispatch; no review run')
         with tempfile.TemporaryDirectory(prefix="aiwork-review-pr-") as temporary:
-            directory = Path(temporary)
+            directory = Path(temporary).resolve()
             run_id = f"pr-{repository.replace('/', '-')}-{args.pr}-{pr['head']['sha'][:12]}-{directory.name.removeprefix('aiwork-review-pr-')}"
             try:
                 repo, merge_base, files, diff, changes = _leg_session.snapshot(

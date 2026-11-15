@@ -588,6 +588,163 @@ class ReaderFailureClassificationTests(LegCase):
 
 
 class PublisherIsolationTests(unittest.TestCase):
+    def test_caller_environment_survives_the_boundary_without_host_writes_or_ipc(self):
+        import socket
+        import _leg_session as session
+        from _aiwork_config import RUNTIME_OPTIONS
+
+        with tempfile.TemporaryDirectory() as name, socket.socket(socket.AF_UNIX) as control:
+            root = Path(name)
+            settings, data, home, kimi = (root / part for part in ('settings', 'data', 'home', 'kimi'))
+            shutil.copytree(os.environ['AIWORK_CONFIG_DIR'], settings, symlinks=True)
+            (settings / 'models.env').write_text('codex=gpt-6-sol-caller\n')
+            (settings / 'runtime.env').write_text('SUBCODEX_EFFORT=xhigh\n')
+            data.mkdir()
+            (data / 'caller.marker').write_text('selected data')
+            (data / 'stale').symlink_to('/absent-aiwork-test-target')
+            control.bind(str(data / 'control.sock'))
+            control.listen()
+            (home / '.config/cursor').mkdir(parents=True)
+            (home / '.config/cursor/auth.json').write_text('home login')
+            (home / '.config/aiwork').symlink_to(settings, target_is_directory=True)
+            (home / '.local/share').mkdir(parents=True)
+            (home / '.local/share/aiwork').symlink_to(data, target_is_directory=True)
+            (home / '.kimi-code/credentials').mkdir(parents=True)
+            (home / '.kimi-code/credentials/kimi-code.json').write_text('kimi login')
+            # The exact '~' form is supported by the bootstrap; its program and
+            # settings links also exercise restoration of configuration aliases.
+            for item in ('programs', 'models.env', 'runtime.env', 'apps'):
+                (home / item).symlink_to(settings / item, target_is_directory=item in ('programs', 'apps'))
+            (root / 'settings-alias').symlink_to(settings, target_is_directory=True)
+            (root / 'login').mkdir()
+            (root / 'login/cursor.json').write_text('explicit login')
+            (root / 'xdg/cursor').mkdir(parents=True)
+            (root / 'xdg/cursor/auth.json').write_text('xdg login')
+            (root / 'caller-bin').mkdir()
+            command = root / 'caller-bin/aiwork-caller-tool'
+            command.write_text('#!/bin/sh\nprintf selected-tool\n')
+            command.chmod(0o755)
+            (kimi / 'hooks').mkdir(parents=True)
+            (kimi / 'hooks/guard').write_text('selected guard')
+            alias = root / 'kimi-alias'
+            alias.symlink_to(kimi, target_is_directory=True)
+            (kimi / 'config.json').write_text(json.dumps({'guard': str(alias / 'hooks/guard')}))
+            (kimi / 'state').write_text('original')
+            key = kimi / 'publisher-key'
+            key.write_text('disposable publisher key')
+            (settings / 'apps').mkdir(exist_ok=True)
+            (settings / 'apps/review.env').write_text('KEY=' + str(key) + '\n')
+            output = root / 'output'
+            output.mkdir()
+            repo = output / 'repo'
+            repo.mkdir()
+            task = output / 'observe.py'
+            task.write_text('''import json, os, pathlib, socket, subprocess, sys
+tools = pathlib.Path(os.environ['AIWORK_REVIEW_RESULT_BIN']).parent
+sys.path.insert(0, str(tools))
+from _aiwork_config import RUNTIME_OPTIONS, data_dir, model, runtime_value
+assert pathlib.Path.cwd() == pathlib.Path(sys.argv[1])
+for leg in RUNTIME_OPTIONS:
+    subprocess.run(['/bin/bash', '-c', '. "$1/_programs.sh"; aiwork_init "$2"',
+                    'bootstrap', str(tools), leg], check=True)
+assert model('codex') == 'gpt-6-sol-caller'
+assert runtime_value('subcodex', 'effort') == 'xhigh'
+assert (data_dir() / 'caller.marker').read_text() == 'selected data'
+auth = pathlib.Path(os.environ.get('CURSOR_AUTH_FILE') or
+                    str(pathlib.Path(os.environ.get('XDG_CONFIG_HOME') or os.environ['HOME'] + '/.config') / 'cursor/auth.json'))
+assert auth.read_text() == sys.argv[2]
+assert (pathlib.Path(os.environ['HOME']) / '.kimi-code/credentials/kimi-code.json').read_text() == 'kimi login'
+assert subprocess.check_output(['aiwork-caller-tool'], text=True) == 'selected-tool'
+runtime = pathlib.Path(os.environ['KIMI_REVIEW_HOME'])
+assert pathlib.Path(json.loads((runtime / 'config.json').read_text())['guard']).read_text() == 'selected guard'
+assert (runtime / 'state').read_text() == 'original'
+if os.environ.get('AIWORK_LEG_ISOLATED'):
+    with socket.socket(socket.AF_UNIX) as connection:
+        try:
+            connection.connect(str(data_dir() / 'control.sock'))
+        except OSError:
+            pass
+        else:
+            raise AssertionError('outer control socket exposed')
+    assert not (runtime / 'publisher-key').is_file()
+    (runtime / 'state').write_text('private update')
+    try:
+        (data_dir() / 'caller.marker').write_text('injected')
+    except OSError:
+        pass
+    else:
+        raise AssertionError('caller data is writable')
+    (pathlib.Path(sys.argv[3]) / 'report.md').write_text('Conclusion: PASS\\n')
+''')
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                for configured in (None, '', 'settings', './settings', 'settings-alias',
+                                   '~/../settings', '~', str(settings)):
+                    for auth_mode in ('explicit', 'xdg', 'home'):
+                        with self.subTest(settings=configured, authentication=auth_mode):
+                            env = dict(os.environ, HOME='home', AIWORK_DATA_DIR='data',
+                                       AIWORK_APPS_DIR='settings/apps', KIMI_REVIEW_HOME='kimi-alias',
+                                       AIWORK_REVIEW_RESULT_BIN=str(BIN / '_review_result.py'),
+                                       PATH='caller-bin' + os.pathsep + os.environ['PATH'])
+                            for options in RUNTIME_OPTIONS.values():
+                                for variable, *_ in options.values():
+                                    env.pop(variable, None)
+                            for variable in ('AIWORK_CONFIG_DIR', 'CURSOR_AUTH_FILE', 'XDG_CONFIG_HOME'):
+                                env.pop(variable, None)
+                            if configured is not None:
+                                env['AIWORK_CONFIG_DIR'] = configured
+                            if auth_mode == 'explicit':
+                                env['CURSOR_AUTH_FILE'] = 'login/cursor.json'
+                            elif auth_mode == 'xdg':
+                                env['XDG_CONFIG_HOME'] = 'xdg'
+                            expected = {'explicit': 'explicit login', 'xdg': 'xdg login', 'home': 'home login'}[auth_mode]
+                            arguments = [sys.executable, str(task), str(root), expected, str(output)]
+                            direct = subprocess.run(arguments, env=env, text=True, capture_output=True)
+                            self.assertEqual(direct.returncode, 0, direct.stderr)
+                            isolated = session.run_isolated_leg(arguments, env=env, directory=output,
+                                                                repo=repo, task=task, bin_dir=BIN)
+                            self.assertEqual(isolated.returncode, 0, isolated.stderr)
+                            self.assertEqual((kimi / 'state').read_text(), 'original')
+                            self.assertEqual((data / 'caller.marker').read_text(), 'selected data')
+            finally:
+                os.chdir(previous)
+
+    def test_relative_settings_match_direct_and_absolute_bootstrap(self):
+        import _leg_session as session
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            settings = root / 'settings'
+            shutil.copytree(os.environ['AIWORK_CONFIG_DIR'], settings, symlinks=True)
+            output = root / 'output'
+            output.mkdir()
+            repo = output / 'repo'
+            repo.mkdir()
+            task = output / 'bootstrap.py'
+            task.write_text('''import os, pathlib, subprocess
+tools = pathlib.Path(os.environ['AIWORK_REVIEW_RESULT_BIN']).parent
+result = subprocess.run(['/bin/bash', '-c', '. "$1/_programs.sh"; aiwork_init subcodex',
+                         'bootstrap', str(tools)], capture_output=True, text=True)
+assert result.returncode == 0, result.stderr
+''')
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                for configured in (str(settings), 'settings'):
+                    with self.subTest(configured=configured):
+                        env = dict(os.environ, AIWORK_CONFIG_DIR=configured,
+                                   AIWORK_REVIEW_RESULT_BIN=str(BIN / '_review_result.py'))
+                        with patch.dict(os.environ, env, clear=True):
+                            direct = subprocess.run([sys.executable, str(task)], env=env,
+                                                    text=True, capture_output=True)
+                            self.assertEqual(direct.returncode, 0, direct.stderr)
+                            isolated = session.run_isolated_leg(
+                                [sys.executable, str(task)], env=env, directory=output,
+                                repo=repo, task=task, bin_dir=BIN)
+                        self.assertEqual(isolated.returncode, 0, isolated.stderr)
+            finally:
+                os.chdir(previous)
+
     def test_dns_with_resolver_configuration_under_private_run(self):
         import socket
         import socketserver

@@ -18,7 +18,7 @@ SCAN_ROOTS = ('bin', 'workflow', 'templates')
 
 
 def default_from_source():
-    """The relative default joined to Path.home() inside data_dir(), and its line."""
+    """The relative default joined to the home expression in data_dir()."""
     path = ROOT / 'bin' / '_aiwork_config.py'
     tree = ast.parse(path.read_text(encoding='utf-8'))
     found = []
@@ -31,8 +31,10 @@ def default_from_source():
             left, right = child.left, child.right
             if not isinstance(right, ast.Constant) or not isinstance(right.value, str):
                 continue
-            func = left.func if isinstance(left, ast.Call) else None
-            if isinstance(func, ast.Attribute) and func.attr == 'home':
+            # Home may come from a supplied child environment, with Path.home()
+            # as fallback. Still derive the one relative suffix from production.
+            if any(isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute)
+                   and part.func.attr == 'home' for part in ast.walk(left)):
                 found.append((right.value, right.lineno))
     if len(found) != 1:
         raise AssertionError(f'data_dir() should join Path.home() to one relative default, got {found!r}')
