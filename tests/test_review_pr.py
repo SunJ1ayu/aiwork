@@ -668,6 +668,8 @@ class ReviewPrTests(unittest.TestCase):
             return ""
 
         def fake_leg(command, **kwargs):
+            if command[0] == '/usr/bin/bwrap':
+                command = command[command.index('--') + 1:]
             nonlocal clock
             if command[0] != str(bin_dir / "subcursor"):
                 return real_subprocess_run(command, **kwargs)
@@ -2032,6 +2034,8 @@ grep -q -F -- "$3" "$clone/$4"
             bin_dir = tool / "bin"
 
             def fake_leg(command, **kwargs):
+                if command[0] == '/usr/bin/bwrap':
+                    command = command[command.index('--') + 1:]
                 if Path(command[0]).name != "subcursor":
                     return real_subprocess_run(command, **kwargs)
                 calls["leg_runs"] += 1

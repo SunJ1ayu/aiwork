@@ -36,7 +36,7 @@ GitHub `main` 是 aiwork 的源码准本。改动流程见 [workflow/CLAUDE.md](
 
 ## Review commands
 
-评审腿和执行方仅在 Linux 上运行；Mac 只作为虚拟机、OpenClaw 和 autoloop 中台的宿主。
+评审腿和执行方仅在 Linux 上运行；Mac 只作为虚拟机、OpenClaw 和 autoloop 中台的宿主。正式评审的隔离依赖与部署验收见[角色部署与评审交接](docs/linux-vm.md#角色部署与评审交接)。
 
 每个通道都能写代码也能评审。写代码在自己的工作树里打开那家的命令行。
 仓库里的这些命令服务 `review-pr`。同一个 PR 要换一家评审，由关卡判断。

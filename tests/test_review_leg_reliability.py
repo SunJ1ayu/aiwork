@@ -105,6 +105,9 @@ class ReliabilityTests(unittest.TestCase):
             (bin_dir / 'privacy-check').symlink_to(BIN / 'privacy-check')
 
         def invoke(command, **kwargs):
+            original_command = command
+            if command[0] == '/usr/bin/bwrap':
+                command = command[command.index('--') + 1:]
             is_leg = Path(command[0]).parent == bin_dir and Path(command[0]).name.startswith('sub')
             if is_leg and on_leg is not None:
                 on_leg(len(self.leg_calls), Path(command[2]), Path(command[4]))
@@ -112,7 +115,7 @@ class ReliabilityTests(unittest.TestCase):
                 self.leg_calls.append((Path(command[0]).name, kwargs['env'].copy()))
                 self.seen_tasks.append(Path(command[2]).read_text(encoding='utf-8'))
             if fake_attempts is None or not is_leg:
-                return real_subprocess_run(command, **kwargs)
+                return real_subprocess_run(original_command, **kwargs)
             name = Path(command[0]).name
             attempt = fake_attempts[min(len(self.leg_calls) - 1, len(fake_attempts) - 1)]
             model = {'subdeepseek-agent': 'deepseek-flash',
@@ -581,6 +584,103 @@ class ReaderFailureClassificationTests(LegCase):
                 self.assertIn('no verdict', proc.stderr, proc.stderr)
                 self.assertIn('Checked the authentication code.', log.read_text())
                 self.assertEqual(json.loads(facts.read_text())['failure_kind'], 'no_verdict')
+
+
+class PublisherIsolationTests(unittest.TestCase):
+    def test_leg_cannot_read_key_or_change_publisher_but_can_return_report(self):
+        import _leg_session as session
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            apps = root / 'apps'
+            apps.mkdir()
+            key = root / 'external-key'
+            key.write_text('disposable credential fixture')
+            (apps / 'key-link').symlink_to(key)
+            (apps / 'review.env').write_text('KEY=key-link\n')
+            publisher = root / 'publisher'
+            publisher.write_text('trusted')
+            output = root / 'output'
+            output.mkdir()
+            task = output / 'probe.py'
+            repo = output / 'repo'
+            repo.mkdir()
+            program = task
+            program.write_text("""import os, pathlib, subprocess, sys
+key, publisher, task, repo, output = map(pathlib.Path, sys.argv[1:])
+try:
+    key.read_bytes()
+except (OSError, PermissionError):
+    pass
+else:
+    raise SystemExit('leg can read publisher credential')
+for path in (task, repo / 'injected'):
+    try:
+        path.write_text('injected')
+    except OSError:
+        pass
+    else:
+        raise SystemExit('leg can alter trusted input: ' + str(path))
+assert not pathlib.Path('/proc/' + os.environ['PUBLISHER_PID']).exists()
+assert 'GH_TOKEN' not in os.environ
+assert subprocess.run(['mount', '-o', 'remount,rw', '/'], capture_output=True).returncode
+assert subprocess.run(['unshare', '-Ur', '-m', 'umount', str(key)], capture_output=True).returncode
+(output / 'report.md').write_text('Conclusion: PASS\\n')
+""")
+            env = dict(os.environ, AIWORK_APPS_DIR=str(apps), GH_TOKEN='fixture',
+                       PUBLISHER_PID=str(os.getpid()))
+            launch = getattr(session, "run_isolated_leg",
+                             lambda command, env, **_: subprocess.run(
+                                 command, env=env, capture_output=True, text=True))
+            result = launch(
+                [sys.executable, str(program), str(key), str(publisher), str(task),
+                 str(repo), str(output)], env=env, directory=output, repo=repo,
+                task=task, bin_dir=BIN)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((output / 'report.md').read_text(), 'Conclusion: PASS\n')
+            # The trusted parent can still use its credential and publish the report.
+            self.assertEqual(key.read_text(), 'disposable credential fixture')
+            self.assertEqual(publisher.read_text(), 'trusted')
+
+    def test_link_outputs_are_rejected_without_reading_or_overwriting_target(self):
+        import _leg_session as session
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            output = root / 'output'
+            output.mkdir()
+            repo = output / 'repo'
+            repo.mkdir()
+            target = root / 'publisher-secret'
+            target.write_text('unchanged fixture')
+            task = output / 'task.py'
+            task.write_text('import pathlib, sys; pathlib.Path(sys.argv[1]).symlink_to(sys.argv[2])')
+            with patch.dict(os.environ, AIWORK_APPS_DIR=str(root / 'absent-apps')):
+                with self.assertRaises(session.ReviewError):
+                    session.run_isolated_leg(
+                        [sys.executable, str(task), str(output / 'report.md'), str(target)],
+                        env=dict(os.environ), directory=output, repo=repo, task=task, bin_dir=BIN)
+            self.assertEqual(target.read_text(), 'unchanged fixture')
+            self.assertFalse((output / 'report.md').exists())
+
+    def test_missing_sandbox_refuses_before_starting_leg(self):
+        import _leg_session as session
+        with patch.object(Path, 'is_file', return_value=False):
+            with self.assertRaisesRegex(session.ReviewError, 'bubblewrap'):
+                session.run_isolated_leg([], env={}, directory=Path('/unused'),
+                                         repo=Path('/unused'), task=Path('/unused'), bin_dir=BIN)
+
+    def test_hardlinked_key_refuses_before_starting_leg(self):
+        import _leg_session as session
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            apps = root / 'apps'
+            apps.mkdir()
+            key = apps / 'fixture-key'
+            key.write_text('disposable fixture')
+            (root / 'alias').hardlink_to(key)
+            (apps / 'review.env').write_text('KEY=fixture-key\n')
+            with self.assertRaisesRegex(session.ReviewError, '硬链接'):
+                session.run_isolated_leg([], env=dict(os.environ, AIWORK_APPS_DIR=str(apps)),
+                                         directory=root, repo=root, task=key, bin_dir=BIN)
 
 
 if __name__ == '__main__':

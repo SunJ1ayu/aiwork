@@ -103,8 +103,8 @@ COMMAND_TMP_DIR="$("$AIWORK_PROGRAMS/python3" -c 'import json, sys; print(json.d
 # 覆盖不到的一种(如实写):codex **同时**改了目录字段名和渲染标记名 ⇒ ①② 都看不见 ⇒ 放行。
 # 2026-09-14 之前这里写的是「换了字段名会拒跑」,只说对了一半(评审发现 E)。
 # 所以升 codex 后仍要重跑一次真探针;联网那件离线看不到工具表,更只能靠真探针(workflow/skills/explore/SKILL.md 里「五条腿」记着每条腿怎么跑)。
-# 敞着的两件(如实写,不宣称严格):业主 ~/.codex/skills 里的 skill 仍列在它的提示里、它会去读;
-# 每次 `codex exec` 会往业主 ~/.codex/config.toml 追加一条这个临时副本的 trust 记录。
+# Codex 会从 CODEX_HOME 读取 skill、配置并写入运行状态。正式 review-pr
+# 提供一次性 CODEX_HOME；直接运行本适配器时仍沿用调用者的目录。
 CODEX_CFG=(
   -c project_doc_max_bytes=0 -c "model_reasoning_effort=$EFFORT" -c "model=\"$MODEL\""
   # workspace-write otherwise grants the shared system temp tree, which also

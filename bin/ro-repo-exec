@@ -117,7 +117,10 @@ fi
 MARK="$(mktemp)" || die "建不了标记文件"
 trap 'rm -f "$MARK"' EXIT
 
-RO_REPO="$REPO" RO_RW="$_rw_list" RO_GITDIRS="$GITDIRS" RO_MARK="$MARK" unshare -m /usr/bin/env bash -c '
+NS_ARGS=(-m)
+# The publisher sandbox drops capabilities; nest a user namespace for mounts.
+[[ "${AIWORK_LEG_ISOLATED:-}" == 1 ]] && NS_ARGS=(-Ur -m)
+RO_REPO="$REPO" RO_RW="$_rw_list" RO_GITDIRS="$GITDIRS" RO_MARK="$MARK" unshare "${NS_ARGS[@]}" /usr/bin/env bash -c '
   set -uo pipefail
   fail() { printf "ro-repo-exec: %s\n" "$*" >&2; exit 78; }
   # 不传播回父 namespace —— 少了这一步,主机的仓会被一起挂成只读。

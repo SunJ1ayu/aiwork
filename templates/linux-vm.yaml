@@ -34,7 +34,7 @@
   "provision": [
     {
       "mode": "system",
-      "script": "#!/bin/sh\nset -eu\napt-get update\nDEBIAN_FRONTEND=noninteractive apt-get install -y bash coreutils ca-certificates curl git gh jq openssl openssh-client procps python3 ripgrep iproute2 util-linux build-essential xz-utils\n"
+      "script": "#!/bin/sh\nset -eu\napt-get update\nDEBIAN_FRONTEND=noninteractive apt-get install -y bash coreutils ca-certificates curl git gh jq openssl openssh-client procps python3 ripgrep iproute2 util-linux bubblewrap build-essential xz-utils\n"
     }
   ]
 }

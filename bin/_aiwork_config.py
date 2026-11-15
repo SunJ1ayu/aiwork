@@ -502,14 +502,15 @@ def runtime_value(adapter: str, option: str, *, context: str = 'direct') -> str:
     return runtime_settings(adapter, context=context)[RUNTIME_OPTIONS[adapter][option][0]]
 
 
-def apps_dir() -> Path:
-    return Path(os.environ['AIWORK_APPS_DIR']).expanduser() if os.environ.get('AIWORK_APPS_DIR') else setting_path('apps')
+def apps_dir(*, environ=None) -> Path:
+    env = os.environ if environ is None else environ
+    return Path(env['AIWORK_APPS_DIR']).expanduser() if env.get('AIWORK_APPS_DIR') else setting_path('apps')
 
 
-def app_key(configured: str) -> Path:
+def app_key(configured: str, *, environ=None) -> Path:
     """Relative keys live under the selected apps directory; absolute keys stay absolute."""
     path = Path(configured)
-    return path if path.is_absolute() else apps_dir() / path
+    return path if path.is_absolute() else apps_dir(environ=environ) / path
 
 
 def model_family(adapter: str, selected: str) -> str:

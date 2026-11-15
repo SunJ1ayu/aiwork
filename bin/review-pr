@@ -554,9 +554,7 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
     attempts = []
 
     def run(leg, model, head):
-        env = dict(os.environ)
-        for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'AIWORK_REVIEW_GIT_TOKEN', 'GIT_ASKPASS'):
-            env.pop(key, None)
+        env = _leg_session.without_publication_credentials(os.environ)
         if model is not None:
             env['CURSOR_MODEL'] = model
         print(f'review-pr: dispatch {leg} at {head[:12]}', file=sys.stderr, flush=True)
@@ -701,9 +699,7 @@ def main() -> int:
                     return 0
                 selected_leg = args.leg
                 notices = []
-                env = dict(os.environ)
-                for key in ("GH_TOKEN", "GITHUB_TOKEN", "AIWORK_REVIEW_GIT_TOKEN", "GIT_ASKPASS"):
-                    env.pop(key, None)
+                env = _leg_session.without_publication_credentials(os.environ)
                 env.update(AIWORK_REVIEW_RESULT_BIN=str(BIN / "_review_result.py"),
                            PANEL_DIFF_BASE=merge_base, AIWORK_REVIEW_PR="1")
                 env = _leg_session.reader_environment(selected_leg, env)

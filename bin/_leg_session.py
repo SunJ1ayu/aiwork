@@ -20,6 +20,11 @@ class ReviewError(ValueError):
     pass
 
 
+def without_publication_credentials(env: dict[str, str]) -> dict[str, str]:
+    return {key: value for key, value in env.items() if key not in (
+        'GH_TOKEN', 'GITHUB_TOKEN', 'AIWORK_REVIEW_GIT_TOKEN', 'GIT_ASKPASS')}
+
+
 def reader_environment(leg: str, env: dict[str, str]) -> dict[str, str]:
     """Freeze resolved reader parameters before the direct wrapper sees them."""
     from _aiwork_config import ConfigError, runtime_settings
@@ -248,6 +253,94 @@ def snapshot_main(source: Path, directory: Path, main_sha: str) -> Path:
     return repo
 
 
+def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path,
+                     repo: Path, task: Path, bin_dir: Path):
+    """Only the trusted publisher runs outside this filesystem/process boundary."""
+    import shutil
+    import tempfile
+    import stat
+    from _aiwork_config import apps_dir, config_dir, app_key
+
+    bwrap = Path('/usr/bin/bwrap')
+    if not bwrap.is_file():
+        raise ReviewError('评审隔离需要 bubblewrap；未启动评审腿')
+    directory, repo, task = directory.resolve(), repo.resolve(), task.resolve()
+    # Role configuration is trusted input, as in gh-app-token. Read only KEY's
+    # path; never open or copy private-key contents. Resolve symlink targets too.
+    apps, config = apps_dir(environ=env).resolve(), config_dir().resolve()
+    hidden = {apps}
+    if apps.exists():
+        for role in apps.glob('*.env'):
+            selected = subprocess.run(
+                ['/bin/bash', '-c', 'set -eu; KEY=; . "$1"; printf "%s" "${KEY:?}"',
+                 'app-key-path', str(role)], env=env, text=True, capture_output=True)
+            if selected.returncode or not selected.stdout:
+                raise ReviewError('无法确定发布钥匙位置；未启动评审腿')
+            key = app_key(selected.stdout, environ=env).resolve(strict=True)
+            if not stat.S_ISREG(key.stat().st_mode) or key.stat().st_nlink != 1:
+                raise ReviewError('发布钥匙有硬链接副本；未启动评审腿')
+            hidden.add(key)
+
+    child_env = without_publication_credentials(env)
+    with tempfile.TemporaryDirectory(prefix='aiwork-leg-home-') as scratch:
+        # Codex otherwise updates the publisher account's persistent config/sessions.
+        codex_source = Path(env.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
+        codex_home = Path(scratch) / 'codex'
+        codex_home.mkdir(mode=0o700)
+        output = Path(scratch) / 'output'
+        output.mkdir(mode=0o700)
+        for name in ('auth.json', 'config.toml', 'models_cache.json'):
+            source = codex_source / name
+            if Path(command[0]).name == 'subcodex' and source.is_file():
+                shutil.copyfile(source, codex_home / name)
+        child_env['CODEX_HOME'] = str(codex_home)
+        child_env['TMPDIR'] = '/tmp'
+        child_env.pop('REVIEW_WORKSPACE_BASE', None)
+        child_env['AIWORK_LEG_ISOLATED'] = '1'
+        argv = [str(bwrap), '--die-with-parent', '--new-session', '--unshare-user',
+                '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--cap-drop', 'ALL',
+                '--ro-bind', '/', '/', '--tmpfs', '/tmp', '--tmpfs', '/run',
+                '--proc', '/proc', '--dev', '/dev']
+        # Tests and supported installations may keep tools/settings under /tmp.
+        # Restore only these read-only paths, never the publisher's whole temp tree.
+        for path in (bin_dir.resolve(), config, Path(command[0]).resolve()):
+            argv += ['--ro-bind', str(path), str(path)]
+        if config.is_dir():
+            for program in (config / 'programs').glob('*'):
+                target = program.resolve()
+                if target.is_file():
+                    argv += ['--ro-bind', str(target), str(target)]
+        argv += ['--bind', str(codex_home), str(codex_home)]
+        argv += ['--bind', str(output), str(directory),
+                 '--ro-bind', str(repo), str(repo), '--ro-bind', str(task), str(task)]
+        # Apply masks last, including keys configured outside apps/ or via symlinks.
+        for path in sorted(hidden):
+            if path.is_dir():
+                argv += ['--tmpfs', str(path), '--remount-ro', str(path)]
+            else:
+                argv += ['--ro-bind', '/dev/null', str(path)]
+        argv += ['--chdir', str(repo), '--', *command]
+        try:
+            completed = subprocess.run(argv, text=True, capture_output=True, env=child_env, check=False)
+            # The model may leave symlinks/devices/FIFOs. The parent must never
+            # follow them with its own credentials or write through their targets.
+            for name in ('review.log', 'facts.json', 'report.md',
+                         'review.stream.jsonl', 'review.stream-summary.json',
+                         'review.log.stream.jsonl', 'review.stderr'):
+                try:
+                    fd = os.open(output / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except FileNotFoundError:
+                    continue
+                with os.fdopen(fd, 'rb') as stream:
+                    info = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                        raise ReviewError('评审输出不是独立普通文件；拒绝接收')
+                    (directory / name).write_bytes(stream.read())
+            return completed
+        except OSError as exc:
+            raise ReviewError('无法启动评审隔离或安全收取结果') from exc
+
+
 def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, directory: Path,
                     env: dict[str, str], run_id: str, frozen_model: str | None, *,
                     bin_dir: Path, mode: str = "review",
@@ -256,8 +349,12 @@ def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, director
     report = directory / "report.md"
     result_file, diagnostic = directory / "result.json", directory / "leg.stderr"
     env = dict(env, AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_REPORT_PATH=str(report))
-    leg = subprocess.run([str(bin_dir / leg_name), mode, str(task), str(log), str(repo)],
-                         text=True, capture_output=True, env=env, check=False)
+    command = [str(bin_dir / leg_name), mode, str(task), str(log), str(repo)]
+    if mode == "review":
+        leg = run_isolated_leg(command, env=env, directory=directory,
+                               repo=repo, task=task, bin_dir=bin_dir)
+    else:
+        leg = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
     diagnostic.write_text(leg.stderr, encoding="utf-8")
     command = [sys.executable, str(bin_dir / "_review_result.py"), "emit", "--result", str(result_file),
                "--run-id", run_id, "--name", leg_name, "--family", family, "--adapter", leg_name,
