@@ -112,15 +112,27 @@ if command -v git >/dev/null 2>&1; then
   done
 fi
 
+# A publisher sandbox already mounts the source and external Git directories
+# read-only. Check the kernel's actual mount state, not an environment marker;
+# remounting again would require privileges deliberately removed from the leg.
+if [[ -z "$_rw_list" ]] && "$AIWORK_PROGRAMS/python3" - "$REPO" "$GITDIRS" <<'PY_RO'
+import os, sys
+paths = [sys.argv[1], *sys.argv[2].splitlines()]
+try:
+    raise SystemExit(0 if all(os.statvfs(p).f_flag & os.ST_RDONLY for p in paths) else 1)
+except OSError:
+    raise SystemExit(1)
+PY_RO
+then
+  exec "$@"
+fi
+
 # 「挂上了没有」必须有实证,不能靠退出码猜:命令自己也可能返回 78。
 # 标记文件落在仓外(仓在 namespace 里是只读的,仓外照常可写)。
 MARK="$(mktemp)" || die "建不了标记文件"
 trap 'rm -f "$MARK"' EXIT
 
-NS_ARGS=(-m)
-# The publisher sandbox drops capabilities; nest a user namespace for mounts.
-[[ "${AIWORK_LEG_ISOLATED:-}" == 1 ]] && NS_ARGS=(-Ur -m)
-RO_REPO="$REPO" RO_RW="$_rw_list" RO_GITDIRS="$GITDIRS" RO_MARK="$MARK" unshare "${NS_ARGS[@]}" /usr/bin/env bash -c '
+RO_REPO="$REPO" RO_RW="$_rw_list" RO_GITDIRS="$GITDIRS" RO_MARK="$MARK" unshare -m /usr/bin/env bash -c '
   set -uo pipefail
   fail() { printf "ro-repo-exec: %s\n" "$*" >&2; exit 78; }
   # 不传播回父 namespace —— 少了这一步,主机的仓会被一起挂成只读。

@@ -268,7 +268,7 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
     # Role configuration is trusted input, as in gh-app-token. Read only KEY's
     # path; never open or copy private-key contents. Resolve symlink targets too.
     apps, config = apps_dir(environ=env).resolve(), config_dir().resolve()
-    hidden = {apps}
+    hidden = {apps} if apps.exists() else set()
     if apps.exists():
         for role in apps.glob('*.env'):
             selected = subprocess.run(
@@ -279,10 +279,36 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
             key = app_key(selected.stdout, environ=env).resolve(strict=True)
             if not stat.S_ISREG(key.stat().st_mode) or key.stat().st_nlink != 1:
                 raise ReviewError('发布钥匙有硬链接副本；未启动评审腿')
-            hidden.add(key)
+            if not key.is_relative_to(apps):
+                hidden.add(key)
+
+    def protected(path: Path) -> bool:
+        return any(path.resolve().is_relative_to(hidden_path) for hidden_path in hidden)
+
+    def tool_ignores(directory, names):
+        return [name for name in names if name == '__pycache__' or name.endswith('.pyc')
+                or protected(Path(directory) / name)]
 
     child_env = without_publication_credentials(env)
     with tempfile.TemporaryDirectory(prefix='aiwork-leg-home-') as scratch:
+        # A root publisher can read a checkout owned by another user, but its
+        # user namespace cannot traverse that user's private ancestors. Stage
+        # trusted public tools before dropping privileges, never chmod the host.
+        original_bin = bin_dir.resolve()
+        tools = Path(scratch) / 'tools'
+        shutil.copytree(original_bin, tools, ignore=tool_ignores)
+        staged_paths = [tools]
+        seed = original_bin.parent / 'kimi-review-home'
+        if seed.is_dir() and not protected(seed):
+            staged_seed = Path(scratch) / seed.name
+            shutil.copytree(seed, staged_seed, ignore=tool_ignores)
+            staged_paths.append(staged_seed)
+        command = list(command)
+        if Path(command[0]).resolve().parent == original_bin:
+            command[0] = str(tools / Path(command[0]).name)
+        result_bin = child_env.get('AIWORK_REVIEW_RESULT_BIN')
+        if result_bin and Path(result_bin).resolve().parent == original_bin:
+            child_env['AIWORK_REVIEW_RESULT_BIN'] = str(tools / Path(result_bin).name)
         # Codex otherwise updates the publisher account's persistent config/sessions.
         codex_source = Path(env.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
         codex_home = Path(scratch) / 'codex'
@@ -291,7 +317,7 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
         output.mkdir(mode=0o700)
         for name in ('auth.json', 'config.toml', 'models_cache.json'):
             source = codex_source / name
-            if Path(command[0]).name == 'subcodex' and source.is_file():
+            if Path(command[0]).name == 'subcodex' and not protected(source) and source.is_file():
                 shutil.copyfile(source, codex_home / name)
         child_env['CODEX_HOME'] = str(codex_home)
         child_env['TMPDIR'] = '/tmp'
@@ -303,7 +329,7 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
                 '--proc', '/proc', '--dev', '/dev']
         # Tests and supported installations may keep tools/settings under /tmp.
         # Restore only these read-only paths, never the publisher's whole temp tree.
-        for path in (bin_dir.resolve(), config, Path(command[0]).resolve()):
+        for path in (*staged_paths, config, Path(command[0]).resolve()):
             argv += ['--ro-bind', str(path), str(path)]
         if config.is_dir():
             for program in (config / 'programs').glob('*'):

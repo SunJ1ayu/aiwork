@@ -136,9 +136,11 @@ for _name in $(compgen -e); do
   [[ "$_name" == CURSOR_* ]] && CURSOR_ENV_UNSET+=(-u "$_name")
 done
 # Cursor starts a worker that may outlive the CLI and detach further children.
-# PID namespace teardown kills the whole tree before temporary-home cleanup.
+# Direct calls tear down the CLI namespace before home cleanup; formal review-pr
+# tears down the whole leg before collecting outputs and releasing private /tmp.
 CURSOR_NS=(unshare --pid --fork --kill-child --mount-proc)
-[[ "${AIWORK_LEG_ISOLATED:-}" == 1 ]] && CURSOR_NS=(unshare -Ur --pid --fork --kill-child --mount-proc)
+# Formal review-pr owns the outer PID namespace and kills the whole leg tree.
+[[ "${AIWORK_LEG_ISOLATED:-}" == 1 ]] && CURSOR_NS=()
 run_cursor() (
   cd "$EMPTY_WORKSPACE" || exit 78
   env ${CURSOR_ENV_UNSET[@]+"${CURSOR_ENV_UNSET[@]}"} \
@@ -149,7 +151,7 @@ run_cursor() (
     ${AUTH_ENV[@]+"${AUTH_ENV[@]}"} \
     "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- \
     "$BIN_DIR/aiwork-timeout" -k 10 "$TIMEOUT_SECONDS" \
-      "${CURSOR_NS[@]}" "$CURSOR_BIN" "$@"
+      ${CURSOR_NS[@]+"${CURSOR_NS[@]}"} "$CURSOR_BIN" "$@"
 )
 set +e
 run_cursor --workspace "$EMPTY_WORKSPACE" --add-dir "$REPO_DIR" \

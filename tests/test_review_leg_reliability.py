@@ -108,6 +108,7 @@ class ReliabilityTests(unittest.TestCase):
             original_command = command
             if command[0] == '/usr/bin/bwrap':
                 command = command[command.index('--') + 1:]
+                command = [str(bin_dir / Path(command[0]).name), *command[1:]]
             is_leg = Path(command[0]).parent == bin_dir and Path(command[0]).name.startswith('sub')
             if is_leg and on_leg is not None:
                 on_leg(len(self.leg_calls), Path(command[2]), Path(command[4]))
@@ -640,6 +641,99 @@ assert subprocess.run(['unshare', '-Ur', '-m', 'umount', str(key)], capture_outp
             # The trusted parent can still use its credential and publish the report.
             self.assertEqual(key.read_text(), 'disposable credential fixture')
             self.assertEqual(publisher.read_text(), 'trusted')
+
+    def test_normal_readonly_launcher_with_and_without_registered_key(self):
+        import _leg_session as session
+        from _aiwork_config import config_dir
+        for registered in (False, True):
+            with self.subTest(registered=registered), tempfile.TemporaryDirectory() as name, \
+                    tempfile.TemporaryDirectory(dir=config_dir()) as config_case:
+                directory = Path(name)
+                repo = directory / 'repo'
+                repo.mkdir()
+                subprocess.run(['git', '-C', str(repo), 'init', '-q'], check=True)
+                task = directory / 'task.md'
+                task.write_text('Disposable launcher compatibility probe')
+                apps = Path(config_case) / 'apps'
+                if registered:
+                    apps.mkdir()
+                    (apps / 'fixture-key').write_text('disposable credential fixture')
+                    (apps / 'review.env').write_text('KEY=fixture-key\n')
+                env = dict(os.environ, AIWORK_APPS_DIR=str(apps))
+                result = session.run_isolated_leg(
+                    [str(BIN / 'ro-repo-exec'), str(repo), '--',
+                     'git', '-C', str(repo), 'status', '--porcelain'],
+                    env=env, directory=directory, repo=repo, task=task, bin_dir=BIN)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_state_and_tool_copies_never_copy_a_registered_publisher_key(self):
+        import _leg_session as session
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            output, apps, codex = (root / part for part in ('output', 'apps', 'codex'))
+            for path in (output, apps, codex):
+                path.mkdir()
+            key = codex / 'auth.json'
+            key.write_text('disposable publisher credential fixture')
+            (apps / 'review.env').write_text('KEY=' + str(key) + '\n')
+            repo = output / 'repo'
+            repo.mkdir()
+            task = output / 'task.md'
+            task.write_text('Probe copied state')
+            leg = codex / 'subcodex'
+            leg.write_text('#!/usr/bin/python3\nimport os, pathlib\n'
+                           'if any((p / "auth.json").exists() for p in (pathlib.Path(os.environ["CODEX_HOME"]), pathlib.Path(__file__).parent)):\n'
+                           '    raise SystemExit("copied publisher credential")\n')
+            leg.chmod(0o755)
+            result = session.run_isolated_leg(
+                [str(leg)], env=dict(os.environ, AIWORK_APPS_DIR=str(apps), CODEX_HOME=str(codex)),
+                directory=output, repo=repo, task=task, bin_dir=codex)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_tools_in_another_users_private_checkout_remain_readable(self):
+        import _leg_session as session
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            foreign = root / 'foreign'
+            foreign.mkdir(mode=0o700)
+            tools = foreign / 'bin'
+            tools.mkdir()
+            leg = tools / 'reader'
+            leg.write_text('#!/bin/sh\nexit 0\n')
+            leg.chmod(0o755)
+            os.chown(foreign, 65534, 65534)
+            output = root / 'output'
+            output.mkdir()
+            repo = output / 'repo'
+            repo.mkdir()
+            task = output / 'task.md'
+            task.write_text('Private checkout compatibility probe')
+            result = session.run_isolated_leg(
+                [str(leg)], env=dict(os.environ, AIWORK_APPS_DIR=str(root / 'absent-apps')),
+                directory=output, repo=repo, task=task, bin_dir=tools)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_staged_tools_keep_kimi_seed_at_the_wrappers_relative_path(self):
+        import _leg_session as session
+        import re
+        import hashlib
+        relative = re.search(r'KIMI_SEED_HOME="\$BIN_DIR/([^"\n]+)"',
+                             (BIN / 'subkimi').read_text()).group(1)
+        digest = hashlib.sha256((BIN / relative / 'hooks/guard.mjs').read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            repo = directory / 'repo'
+            repo.mkdir()
+            task = directory / 'task.py'
+            task.write_text('import hashlib, os, pathlib, sys\n'
+                            'seed = pathlib.Path(os.environ["AIWORK_REVIEW_RESULT_BIN"]).parent / sys.argv[1]\n'
+                            'assert hashlib.sha256((seed / "hooks/guard.mjs").read_bytes()).hexdigest() == sys.argv[2]\n')
+            env = dict(os.environ, AIWORK_APPS_DIR=str(directory / 'absent-apps'),
+                       AIWORK_REVIEW_RESULT_BIN=str(BIN / '_review_result.py'))
+            result = session.run_isolated_leg([sys.executable, str(task), relative, digest],
+                                              env=env, directory=directory, repo=repo,
+                                              task=task, bin_dir=BIN)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_link_outputs_are_rejected_without_reading_or_overwriting_target(self):
         import _leg_session as session
