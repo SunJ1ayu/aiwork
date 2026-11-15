@@ -309,6 +309,20 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
         result_bin = child_env.get('AIWORK_REVIEW_RESULT_BIN')
         if result_bin and Path(result_bin).resolve().parent == original_bin:
             child_env['AIWORK_REVIEW_RESULT_BIN'] = str(tools / Path(result_bin).name)
+        # Resolver/hosts/NSS configuration can be symlinks into the private
+        # runtime trees. Preserve only their data, never a runtime directory or
+        # its sockets. Bind at the real targets so the original aliases work.
+        network = Path(scratch) / 'network'
+        network.mkdir(mode=0o700)
+        network_files = []
+        for name in ('resolv.conf', 'hosts', 'nsswitch.conf'):
+            source = Path('/etc') / name
+            if protected(source):
+                raise ReviewError('网络配置与发布凭证位置重叠；未启动评审腿')
+            if source.is_file():
+                snapshot = network / name
+                shutil.copyfile(source, snapshot)
+                network_files.append((snapshot, source.resolve(strict=True)))
         # Codex otherwise updates the publisher account's persistent config/sessions.
         codex_source = Path(env.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
         codex_home = Path(scratch) / 'codex'
@@ -339,6 +353,8 @@ def run_isolated_leg(command: list[str], *, env: dict[str, str], directory: Path
         argv += ['--bind', str(codex_home), str(codex_home)]
         argv += ['--bind', str(output), str(directory),
                  '--ro-bind', str(repo), str(repo), '--ro-bind', str(task), str(task)]
+        for snapshot, target in network_files:
+            argv += ['--ro-bind', str(snapshot), str(target)]
         # Apply masks last, including keys configured outside apps/ or via symlinks.
         for path in sorted(hidden):
             if path.is_dir():

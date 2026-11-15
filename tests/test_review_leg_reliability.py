@@ -588,6 +588,104 @@ class ReaderFailureClassificationTests(LegCase):
 
 
 class PublisherIsolationTests(unittest.TestCase):
+    def test_dns_with_resolver_configuration_under_private_run(self):
+        import socket
+        import socketserver
+        import struct
+
+        class Resolver(socketserver.BaseRequestHandler):
+            def handle(self):
+                query, connection = self.request
+                end = 12
+                while query[end]:
+                    end += query[end] + 1
+                end += 5
+                question = query[12:end]
+                answer = (b'\xc0\x0c' + struct.pack('!HHIH', 1, 1, 0, 4)
+                          + socket.inet_aton('192.0.2.7'))
+                connection.sendto(query[:2] + struct.pack('!HHHHH', 0x8180, 1, 1, 0, 0)
+                                  + question + answer, self.client_address)
+
+        # The suite owns an isolated network namespace. This DNS server cannot
+        # send queries outside it and never needs a real model or provider key.
+        with socketserver.UDPServer(('127.0.0.54', 53), Resolver) as resolver, \
+                tempfile.TemporaryDirectory() as name:
+            thread = threading.Thread(target=resolver.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(resolver.shutdown)
+            root = Path(name)
+            output = root / 'output'
+            output.mkdir()
+            repo = output / 'repo'
+            repo.mkdir()
+            apps = root / 'apps'
+            apps.mkdir()
+            (apps / 'review.env').write_text('KEY=/run/publisher-key\n')
+            task = output / 'task.py'
+            task.write_text('''import pathlib, socket, sys
+assert socket.getaddrinfo('model.example.test', 443, socket.AF_INET)[0][4][0] == '192.0.2.7'
+assert socket.getaddrinfo('model.hosts.test', 443, socket.AF_INET)[0][4][0] == '192.0.2.8'
+assert not pathlib.Path('/run/publisher.sock').exists()
+with socket.socket(socket.AF_UNIX) as channel:
+    try:
+        channel.connect('/run/publisher.sock')
+    except OSError:
+        pass
+    else:
+        raise AssertionError('publisher socket exposed')
+try:
+    pathlib.Path('/run/publisher-key').read_bytes()
+except OSError:
+    pass
+else:
+    raise AssertionError('publisher key exposed')
+for path in ('/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf'):
+    try:
+        pathlib.Path(path).write_text('injected')
+    except OSError:
+        pass
+    else:
+        raise AssertionError('network configuration is writable')
+(pathlib.Path(sys.argv[1]) / 'report.md').write_text('Conclusion: PASS\\n')
+''')
+            driver = root / 'driver.py'
+            driver.write_text('''import os, pathlib, socket, subprocess, sys
+sys.path.insert(0, sys.argv[1])
+from _leg_session import run_isolated_leg
+root = pathlib.Path(sys.argv[2])
+subprocess.run(['mount', '--make-rprivate', '/'], check=True)
+# All changes below are inside this disposable mount namespace, not host /etc.
+for path in ('/run', '/etc'):
+    subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', path], check=True)
+configuration = pathlib.Path('/run/systemd/resolve') if sys.argv[3] == 'run' else root / 'network'
+configuration.mkdir(parents=True)
+(configuration / 'stub-resolv.conf').write_text('nameserver 127.0.0.54\\noptions timeout:1 attempts:1\\n')
+(configuration / 'hosts').write_text('192.0.2.8 model.hosts.test\\n')
+(configuration / 'nsswitch.conf').write_text('hosts: files resolve [!UNAVAIL=return] dns\\n')
+for name, target in (('resolv.conf', 'stub-resolv.conf'), ('hosts', 'hosts'), ('nsswitch.conf', 'nsswitch.conf')):
+    alias = '../run/systemd/resolve/' + target if sys.argv[3] == 'run' else str(configuration / target)
+    pathlib.Path('/etc', name).symlink_to(alias)
+pathlib.Path('/run/publisher-key').write_text('disposable publisher credential')
+with socket.socket(socket.AF_UNIX) as publisher:
+    publisher.bind('/run/publisher.sock')
+    publisher.listen()
+    # Anchor: this exact resolver layout works before entering the leg boundary.
+    assert socket.getaddrinfo('model.example.test', 443, socket.AF_INET)[0][4][0] == '192.0.2.7'
+    output = root / 'output'
+    result = run_isolated_leg([sys.executable, str(output / 'task.py'), str(output)],
+        env=dict(os.environ, AIWORK_APPS_DIR=str(root / 'apps')), directory=output,
+        repo=output / 'repo', task=output / 'task.py', bin_dir=pathlib.Path(sys.argv[1]))
+    print(result.stderr, file=sys.stderr)
+    raise SystemExit(result.returncode)
+''')
+            for layout in ('run', 'tmp'):
+                with self.subTest(layout=layout):
+                    result = subprocess.run(['unshare', '-m', '--', sys.executable, str(driver),
+                                             str(BIN), str(root), layout], text=True,
+                                            capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual((output / 'report.md').read_text(), 'Conclusion: PASS\n')
+
     def test_leg_cannot_read_key_or_change_publisher_but_can_return_report(self):
         import _leg_session as session
         with tempfile.TemporaryDirectory() as name:
