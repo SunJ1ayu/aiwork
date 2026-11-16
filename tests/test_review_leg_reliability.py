@@ -28,6 +28,273 @@ BIN = Path(__file__).resolve().parents[1] / 'bin'
 DIFF_MARKER = 'UNIQUE_DIFF_CONTENT_7015'
 
 
+class SeparateAccountTests(unittest.TestCase):
+    def setUp(self):
+        import pwd
+        self.temp = tempfile.TemporaryDirectory(dir='/var/tmp')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.root.chmod(0o755)
+        self.publisher = self.root / 'publisher'
+        self.publisher.mkdir(mode=0o700)
+        self.tools = self.publisher / 'bin'
+        shutil.copytree(BIN, self.tools)
+        self.config = self.publisher / 'settings'
+        shutil.copytree(os.environ['AIWORK_CONFIG_DIR'], self.config, symlinks=True)
+        (self.config / 'review.env').write_text('location=local\n')
+        (self.config / 'review-user.env').write_text('user=nobody\n')
+        self.data = self.publisher / 'data'
+        self.data.mkdir()
+        self.output = self.data / 'current'
+        self.output.mkdir()
+        self.repo = self.output / 'repo'
+        self.repo.mkdir()
+        self.key = self.publisher / 'fake-key'
+        self.key.write_text('disposable publisher key')
+        self.key.chmod(0o600)
+        apps = self.config / 'apps'
+        apps.mkdir(exist_ok=True)
+        (apps / 'review.env').write_text('KEY=' + str(self.key) + '\n')
+        self.program = self.publisher / 'publisher-program'
+        self.program.write_text('publisher deployment')
+        self.record = self.data / 'prior-record'
+        self.record.write_text('previous result')
+        account = pwd.getpwnam('nobody')
+        self.uid, self.gid = account.pw_uid, account.pw_gid
+        self.home = self.root / 'leg-home'
+        (self.home / '.config').mkdir(parents=True)
+        shutil.copytree(self.config, self.home / '.config/aiwork', symlinks=True,
+                        ignore=shutil.ignore_patterns('apps', 'review.env', 'review-user.env'))
+        programs = self.home / '.config/aiwork/programs'
+        for item in programs.iterdir():
+            if item.is_symlink():
+                item.unlink()
+                item.symlink_to(Path(sys.executable).resolve() if item.name == 'python3' else '/usr/bin/true')
+        (self.home / '.local/share/aiwork').mkdir(parents=True)
+        (self.home / '.fixture').mkdir()
+        (self.home / '.fixture/login').write_text('initial fixture login')
+        self.home.chmod(0o700)
+        for path in [self.home, *self.home.rglob('*')]:
+            os.chown(path, self.uid, self.gid, follow_symlinks=False)
+        replacement = pwd.struct_passwd((account.pw_name, account.pw_passwd, self.uid,
+                                        self.gid, account.pw_gecos, str(self.home), '/bin/bash'))
+        self.lookup = patch('pwd.getpwnam', return_value=replacement)
+        self.lookup.start()
+        self.addCleanup(self.lookup.stop)
+        self.environment = patch.dict(os.environ, HOME=str(self.publisher),
+                                      AIWORK_CONFIG_DIR=str(self.config), AIWORK_DATA_DIR=str(self.data),
+                                      FAKE_PUBLISHER_SECRET='not-a-real-secret')
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def test_leg_identity_cannot_access_publisher_and_can_refresh_own_login(self):
+        import _leg_session as session
+        protected = [self.key, self.program, self.record]
+        self.assertTrue(all(os.access(path, os.R_OK | os.W_OK) for path in protected))
+        task = self.output / 'task.json'
+        task.write_text(json.dumps({'protected': list(map(str, protected)), 'uid': self.uid}))
+        probe = self.tools / 'subcodex'
+        probe.write_text('''#!/usr/bin/python3
+import json, os, pathlib, subprocess, sys
+data = json.loads(pathlib.Path(sys.argv[2]).read_text())
+exposed = [path for path in data['protected'] if os.access(path, os.R_OK) or os.access(path, os.W_OK)]
+assert not exposed, 'publisher files accessible to leg'
+assert os.getuid() == data['uid'] and os.geteuid() == data['uid']
+assert not os.getgroups()
+assert os.environ.get('FAKE_PUBLISHER_SECRET') is None
+assert 'NoNewPrivs:\\t1' in pathlib.Path('/proc/self/status').read_text()
+login = pathlib.Path.home() / '.fixture/login'
+assert login.read_text() == 'initial fixture login'
+login.write_text('renewed fixture login')
+subprocess.run([str(pathlib.Path(os.environ['AIWORK_REVIEW_RESULT_BIN']).parent / 'ro-repo-exec'),
+    sys.argv[4], '--', '/bin/true'], check=True)
+pathlib.Path(sys.argv[3]).write_text('ordinary account completed')
+pathlib.Path(os.environ['AIWORK_REVIEW_REPORT_PATH']).write_text('Conclusion: PASS\\n')
+subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
+    '--output', os.environ['AIWORK_REVIEW_FACTS_PATH'],
+    '--requested-model', 'gpt-6-sol', '--invoked-model', 'gpt-6-sol',
+    '--git-object-format', 'sha1', '--head-oid', 'a' * 40,
+    '--index-tree-oid', 'b' * 40, '--worktree-tree-oid', 'b' * 40,
+    '--view-delivery-state', 'complete', '--view-mode', 'full_snapshot',
+    '--billing-mode', 'subscription', '--process-state', 'exited',
+    '--evidence-completeness', 'complete', '--failure-kind', 'none'], check=True)
+''')
+        probe.chmod(0o755)
+        result, report = session.run_leg_attempt('subcodex', 'openai', task, self.repo,
+            self.output, dict(os.environ), 'fixture-run', None, bin_dir=self.tools)
+        self.assertEqual(result['process']['exit_code'], 0, (self.output / 'leg.stderr').read_text())
+        self.assertEqual(result['verdict'], 'PASS')
+        self.assertEqual(report.read_text(), 'Conclusion: PASS\n')
+        self.assertEqual((self.home / '.fixture/login').read_text(), 'renewed fixture login')
+        self.assertEqual(self.program.read_text(), 'publisher deployment')
+        self.assertEqual(self.record.read_text(), 'previous result')
+        # Real terminal normalization and saved-publication checks; only the
+        # GitHub transport is a stub, never an actual external review.
+        review = load_script()
+        model = review.publishable_model(result)
+        body = review.build_body('subcodex', model, report.read_text(),
+                                 {'head_sha': 'a' * 40, 'verdict': result['verdict']})
+        review.save_publication(self.output, body=body, repository='fixture/project',
+                                number=12, leg='subcodex', head='a' * 40)
+        with patch.object(review, 'review_token', return_value='fixture-token'), \
+                patch.object(review, 'pr_state', return_value={'head': {'sha': 'a' * 40}, 'state': 'open'}), \
+                patch.object(review, 'github', return_value={'html_url': 'https://github.com/fixture/project/pull/12#review'}) as post:
+            self.assertEqual(review.publish_saved(self.output, repository='fixture/project',
+                number=12, leg='subcodex'), 'https://github.com/fixture/project/pull/12#review')
+        self.assertEqual(post.call_args.args[2]['commit_id'], 'a' * 40)
+        self.assertIn('Conclusion: PASS', post.call_args.args[2]['body'])
+
+    def test_model_and_reader_settings_come_from_the_leg_account(self):
+        import _leg_session as session
+        config = self.home / '.config/aiwork'
+        (config / 'models.env').write_text('cursor=gpt-6-sol\n')
+        (config / 'runtime.env').write_text('SUBCODEX_TIMEOUT=456\n')
+        os.chown(config / 'runtime.env', self.uid, self.gid)
+        with patch.dict(os.environ, SUBCODEX_TIMEOUT='789'):
+            self.assertEqual(session.reader_environment('subcodex', dict(os.environ))['SUBCODEX_TIMEOUT'], '456')
+        with patch.dict(os.environ):
+            os.environ.pop('CURSOR_MODEL', None)
+            self.assertEqual(session.choose_leg('subcursor', self.tools), ('openai', 'gpt-6-sol'))
+
+    def test_all_registered_adapters_run_as_the_ordinary_account(self):
+        import _leg_session as session
+        from _aiwork_config import RUNTIME_OPTIONS
+        from _test_settings import kimi_fixture_launcher
+        from test_review_homes import STUBS
+        from test_leg_finish import LegFinish
+        fixture = LegFinish(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        shutil.copytree(fixture.repo, self.repo, dirs_exist_ok=True)
+        shutil.copytree(BIN.parent / 'kimi-review-home', self.publisher / 'kimi-review-home')
+        native = self.home / '.fixture/bin'
+        native.mkdir()
+        for cli in set(STUBS.values()):
+            source = (fixture.bin / cli).read_text().replace('case = os.environ["FINISH_CASE"]', 'case = "pass"')
+            source = source.replace('\nimport ', '\nimport os\nassert os.getuid() == ' + str(self.uid) + '\nimport ', 1)
+            (native / cli).write_text(source)
+            (native / cli).chmod(0o755)
+        # The parent has already enforced no egress. The fake native CLI runs in
+        # another PID namespace, so attest the inherited network namespace by
+        # kernel identity rather than comparing its new /proc/1 with itself.
+        shutil.copy(BIN.parent / 'tests/_kimi_cli.py', native / '_kimi_cli.py')
+        (native / '_no_egress.py').write_text('import os\nassert os.readlink("/proc/self/ns/net") == '
+            + repr(os.readlink('/proc/self/ns/net')) + '\n')
+        schema = native / 'fixtures/kimi-code-0.36.1'
+        schema.mkdir(parents=True)
+        shutil.copy(BIN.parent / 'tests/fixtures/kimi-code-0.36.1/reader-tools.json', schema)
+        wrapper = kimi_fixture_launcher(fixture.root / 'settings/programs', fixture.bin / 'kimi')
+        (native / 'kimi-launch').write_text(wrapper.read_text()
+            .replace(str(fixture.bin), str(native))
+            .replace(str(BIN.parent / 'tests'), str(native))
+            .replace(str(fixture.root / 'settings/programs'), str(native))
+            .replace(sys.executable, str(Path(sys.executable).resolve())))
+        (native / 'kimi-launch').chmod(0o755)
+        programs = self.home / '.config/aiwork/programs'
+        for cli in set(STUBS.values()):
+            (programs / cli).unlink()
+            (programs / cli).symlink_to(native / ('kimi-launch' if cli == 'kimi' else cli))
+        (programs / 'node').unlink()
+        shutil.copy2(Path(shutil.which('node')).resolve(), native / 'node')
+        (programs / 'node').symlink_to(native / 'node')
+        (self.home / '.config/aiwork/deepseek.env').write_text('DEEPSEEK_API_KEY=fixture\n')
+        (self.home / '.config/cursor').mkdir()
+        (self.home / '.config/cursor/auth.json').write_text('{"accessToken":"fixture"}\n')
+        (self.home / '.kimi-code/credentials').mkdir(parents=True)
+        (self.home / '.kimi-code/credentials/kimi-code.json').write_text('{}\n')
+        for path in [self.home, *self.home.rglob('*')]:
+            os.chown(path, self.uid, self.gid, follow_symlinks=False)
+        task = self.output / 'task.md'
+        task.write_text('Review the fixture.\n')
+        for leg in RUNTIME_OPTIONS:
+            with self.subTest(leg=leg):
+                self.assertIn(leg, STUBS)
+                family, model = session.choose_leg(leg, self.tools)
+                result, _ = session.run_leg_attempt(leg, family, task, self.repo,
+                    self.output, session.reader_environment(leg, {}), 'fixture-native', model, bin_dir=self.tools)
+                self.assertEqual(result['process']['exit_code'], 0, (self.output / 'leg.stderr').read_text())
+                self.assertEqual(result['verdict'], 'PASS')
+
+    def test_missing_or_root_account_fails_closed(self):
+        import _leg_session as account
+        import pwd
+        (self.config / 'review-user.env').unlink()
+        with self.assertRaises((OSError, ValueError)):
+            account.account()
+        (self.config / 'review-user.env').write_text('user=root\n')
+        with patch('pwd.getpwnam', return_value=pwd.struct_passwd(('root', 'x', 0, 0, '', str(self.publisher), '/bin/bash'))):
+            with self.assertRaises(ValueError):
+                account.account()
+
+    def test_readable_publisher_home_is_rejected(self):
+        import _leg_session as account
+        self.publisher.chmod(0o755)
+        with self.assertRaisesRegex(ValueError, '隔离预检'):
+            with account.tools(self.tools):
+                self.fail('must not start a leg')
+
+    def test_leg_cannot_own_the_account_selection_file(self):
+        import _leg_session as account
+        os.chown(self.config / 'review-user.env', self.uid, self.gid)
+        with self.assertRaisesRegex(ValueError, '配置须由发布账号'):
+            account.account()
+
+    def test_role_configuration_is_not_executed_when_owned_by_the_leg(self):
+        import _leg_session as account
+        role = self.config / 'apps/review.env'
+        marker = self.publisher / 'untrusted-role-ran'
+        role.write_text('KEY=' + str(self.key) + '\ntouch ' + str(marker) + '\n')
+        os.chown(role, self.uid, self.gid)
+        with self.assertRaisesRegex(ValueError, '角色配置'):
+            with account.tools(self.tools):
+                pass
+        self.assertFalse(marker.exists())
+
+    def test_registered_keys_are_never_copied_as_public_runtime_tools(self):
+        import _leg_session as account
+        moved = self.tools / 'credential'
+        self.key.rename(moved)
+        (self.config / 'apps/review.env').write_text('KEY=' + str(moved) + '\n')
+        with account.tools(self.tools) as (_, _, bundle, _):
+            self.assertFalse((bundle / moved.name).exists())
+            self.assertFalse((bundle / 'review-pr').exists())
+            self.assertFalse((bundle / 'gh-app-token').exists())
+        self.assertEqual(moved.read_text(), 'disposable publisher key')
+        os.link(moved, self.tools / 'alias')
+        with self.assertRaisesRegex(ValueError, '独立普通文件'):
+            with account.tools(self.tools):
+                self.fail('hardlinked credential must not be copied')
+
+    def test_links_fifos_and_hardlinked_results_are_not_collected(self):
+        import _leg_session as session
+        task = self.output / 'task.md'
+        task.write_text('fixture')
+        probe = self.tools / 'subcodex'
+        for kind, operation in (
+                ('symlink', 'os.symlink(' + repr(str(self.record)) + ', report)'),
+                ('fifo', 'os.mkfifo(report)'),
+                ('hardlink', "pathlib.Path('payload').write_text('fixture'); os.link('payload', report)")):
+            with self.subTest(kind=kind):
+                probe.write_text('#!/usr/bin/python3\nimport os,pathlib\n'
+                                 "report = os.environ['AIWORK_REVIEW_REPORT_PATH']\n" + operation + '\n')
+                probe.chmod(0o755)
+                with self.assertRaises((OSError, ValueError)):
+                    session.run_leg_attempt('subcodex', 'openai', task, self.repo,
+                        self.output, dict(os.environ), 'fixture-run', None, bin_dir=self.tools)
+                self.assertEqual(self.record.read_text(), 'previous result')
+
+    def test_leg_owned_source_is_not_accepted_as_readonly(self):
+        import _leg_session as account
+        with account.tools(self.tools) as (selected, root, bundle, env):
+            work = root / 'work'
+            work.mkdir(mode=0o700)
+            os.chown(work, self.uid, self.gid)
+            result = account.execute(selected, [bundle / 'ro-repo-exec', work, '--', '/bin/true'],
+                                     env=env, cwd=work)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('只读保护', result.stderr)
+
+
 class ReliabilityTests(unittest.TestCase):
     def setUp(self):
         self.review = load_script()

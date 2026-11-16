@@ -139,6 +139,10 @@ done
 # PID namespace teardown kills the whole tree before temporary-home cleanup.
 run_cursor() (
   cd "$EMPTY_WORKSPACE" || exit 78
+  CURSOR_NS=(unshare --pid --fork --kill-child --mount-proc)
+  # Formal account execution already owns a PID namespace before dropping uid.
+  # Direct ordinary-account execution cannot create another privileged namespace.
+  [[ "$EUID" -eq 0 ]] || CURSOR_NS=()
   env ${CURSOR_ENV_UNSET[@]+"${CURSOR_ENV_UNSET[@]}"} \
     HOME="$RUNTIME_HOME" XDG_CONFIG_HOME="$RUNTIME_HOME/.config" \
     XDG_CACHE_HOME="$RUNTIME_HOME/.cache" NODE_COMPILE_CACHE="$RUNTIME_HOME/.cache/node" \
@@ -147,7 +151,7 @@ run_cursor() (
     ${AUTH_ENV[@]+"${AUTH_ENV[@]}"} \
     "$BIN_DIR/ro-repo-exec" "$SOURCE_REPO" -- \
     "$BIN_DIR/aiwork-timeout" -k 10 "$TIMEOUT_SECONDS" \
-      unshare --pid --fork --kill-child --mount-proc "$CURSOR_BIN" "$@"
+      ${CURSOR_NS[@]+"${CURSOR_NS[@]}"} "$CURSOR_BIN" "$@"
 )
 set +e
 run_cursor --workspace "$EMPTY_WORKSPACE" --add-dir "$REPO_DIR" \

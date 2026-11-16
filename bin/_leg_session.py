@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
+import pwd
+import shutil
+import stat
+import tempfile
 from pathlib import Path
 import re
 import subprocess
@@ -11,6 +16,8 @@ import sys
 from typing import NamedTuple, cast
 
 from _review_result import load_result, sha256_file
+from _aiwork_config import (RUNTIME_OPTIONS, app_key, apps_dir, data_dir,
+                            review_location, setting_path, setting_value)
 
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -22,8 +29,12 @@ class ReviewError(ValueError):
 
 def reader_environment(leg: str, env: dict[str, str]) -> dict[str, str]:
     """Freeze resolved reader parameters before the direct wrapper sees them."""
-    from _aiwork_config import ConfigError, runtime_settings
+    from _aiwork_config import ConfigError, RUNTIME_OPTIONS, runtime_settings
     try:
+        if enabled():
+            values = {spec[0]: query(Path(__file__).parent, 'runtime', leg, option,
+                      '--context', 'reader') for option, spec in RUNTIME_OPTIONS[leg].items()}
+            return dict(env, **values)
         return dict(env, **runtime_settings(leg, context="reader", environ=env))
     except ConfigError as exc:
         raise ReviewError(str(exc)) from exc
@@ -59,7 +70,11 @@ def choose_leg(name: str, bin_dir: Path) -> tuple[str, str | None]:
     model = None
     if name == "subcursor":
         try:
-            model = configured_model("cursor", os.environ.get("CURSOR_MODEL"))
+            if enabled():
+                args = ['model', 'cursor'] + ([os.environ['CURSOR_MODEL']] if os.environ.get('CURSOR_MODEL') else [])
+                model = query(bin_dir, *args)
+            else:
+                model = configured_model("cursor", os.environ.get("CURSOR_MODEL"))
         except ConfigError as exc:
             raise ReviewError(str(exc)) from exc
     identity = leg_identity(name, model)
@@ -256,8 +271,12 @@ def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, director
     report = directory / "report.md"
     result_file, diagnostic = directory / "result.json", directory / "leg.stderr"
     env = dict(env, AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_REPORT_PATH=str(report))
-    leg = subprocess.run([str(bin_dir / leg_name), mode, str(task), str(log), str(repo)],
-                         text=True, capture_output=True, env=env, check=False)
+    command = [str(bin_dir / leg_name), mode, str(task), str(log), str(repo)]
+    if mode == 'review' and enabled():
+        leg = run_leg(command, env=env, directory=directory,
+                                   repo=repo, task=task, bin_dir=bin_dir)
+    else:
+        leg = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
     diagnostic.write_text(leg.stderr, encoding="utf-8")
     command = [sys.executable, str(bin_dir / "_review_result.py"), "emit", "--result", str(result_file),
                "--run-id", run_id, "--name", leg_name, "--family", family, "--adapter", leg_name,
@@ -272,3 +291,181 @@ def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, director
         command += ["--review-contract-version", str(review_contract_version)]
     run(command)
     return load_result(result_file), report
+
+
+def enabled():
+    return review_location() == 'local'
+
+
+def account():
+    info = setting_path('review-user.env').stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_nlink != 1:
+        raise ReviewError('评审账号配置须由发布账号独立持有，不能由腿修改')
+    name = setting_value('review-user.env', 'user')
+    try:
+        selected = pwd.getpwnam(name)
+    except KeyError as exc:
+        raise ReviewError('评审腿账号尚未部署') from exc
+    home = Path(selected.pw_dir)
+    if (os.geteuid() != 0 or selected.pw_uid == 0 or selected.pw_gid == 0
+            or not home.is_absolute() or not home.is_dir()
+            or home.stat().st_uid != selected.pw_uid):
+        raise ReviewError('发布程序须由 root 运行，评审腿须使用拥有独立 home 的普通账号')
+    return selected
+
+
+def environment(selected):
+    # Do not enumerate publisher secrets: nothing is inherited except public
+    # review parameters selected below. Provider credentials belong to this home.
+    return {'HOME': selected.pw_dir, 'USER': selected.pw_name, 'LOGNAME': selected.pw_name,
+            'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8'}
+
+
+def execute(selected, command, *, env, cwd):
+    for tool in ('/usr/bin/unshare', '/usr/bin/setpriv'):
+        if not os.access(tool, os.X_OK):
+            raise ReviewError('评审账号运行需要 util-linux；未启动评审腿')
+    # Only /proc changes. The account retains its ordinary filesystem, DNS and
+    # writable login files. Namespace PID 1 exiting reaps even detached workers.
+    return subprocess.run([
+        '/usr/bin/unshare', '--mount', '--propagation', 'private', '--pid', '--fork',
+        '--kill-child', '--mount-proc', '--', '/usr/bin/setpriv',
+        '--reuid=' + str(selected.pw_uid), '--regid=' + str(selected.pw_gid),
+        '--clear-groups', '--bounding-set=-all', '--inh-caps=-all',
+        '--ambient-caps=-all', '--no-new-privs', '--', *map(str, command)],
+        env=env, cwd=cwd, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False)
+
+
+def protected_paths(bin_dir, directory=None):
+    paths = [Path.home(), setting_path('apps').parent, apps_dir(), data_dir(), bin_dir]
+    if directory is not None:
+        paths.append(directory)
+    for role in apps_dir().glob('*.env'):
+        fd = os.open(role, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_nlink != 1:
+                raise ReviewError('角色配置须由发布账号独立持有，不能由腿修改')
+            result = subprocess.run(['/bin/bash', '-c',
+                'set -eu; KEY=; . "$1"; printf "%s" "${KEY:?}"', 'key-path', '/proc/self/fd/' + str(fd)],
+                pass_fds=(fd,), text=True, capture_output=True, check=False)
+        finally:
+            os.close(fd)
+        if result.returncode:
+            raise ReviewError('无法核实发布凭证权限；未启动评审腿')
+        key = app_key(result.stdout).resolve(strict=True)
+        if not stat.S_ISREG(key.stat().st_mode) or key.stat().st_nlink != 1 or key.stat().st_uid != 0:
+            raise ReviewError('发布凭证不是独立普通文件；未启动评审腿')
+        paths.append(key)
+    return paths
+
+
+@contextmanager
+def tools(bin_dir, directory=None):
+    selected = account()
+    env = environment(selected)
+    # Probe access only; never read a key or copy a publisher setting/login.
+    private = protected_paths(bin_dir, directory)
+    probe = execute(selected, ['/bin/sh', '-c',
+        'for p do if test -r "$p" || test -w "$p" || test -x "$p"; then exit 78; fi; done',
+        'publisher-permissions', *private], env=env, cwd=selected.pw_dir)
+    if probe.returncode:
+        raise ReviewError('评审账号隔离预检失败；核对账号切换及发布目录、凭证的私有权限')
+    with tempfile.TemporaryDirectory(prefix='aiwork-leg-', dir='/var/tmp') as name:
+        root = Path(name)
+        os.chown(root, 0, selected.pw_gid)
+        root.chmod(0o750)
+        runtime = root / 'runtime'
+        bundle = runtime / 'bin'
+        credentials = [apps_dir().resolve(), *(path.resolve() for path in private if path.is_file())]
+        # Git is the authority for public runtime inputs. Do not copy ignored
+        # local settings, credentials or caches, and do not maintain a second
+        # list of every adapter's helper/configuration dependencies.
+        checkout = Path(__file__).resolve().parent.parent
+        manifest = subprocess.run(['git', '-c', 'safe.directory=' + str(checkout),
+            '-C', str(checkout), 'ls-files', '-z'], capture_output=True, check=False)
+        if manifest.returncode:
+            raise ReviewError('无法取得公开运行文件清单；未启动评审腿')
+        runtime.mkdir()
+        for relative in map(Path, os.fsdecode(manifest.stdout).split('\0')):
+            if relative == Path('.') or relative in (Path('bin/review-pr'), Path('bin/gh-app-token')):
+                continue
+            source = bin_dir.parent / relative
+            if any(source.resolve().is_relative_to(path) for path in credentials):
+                continue
+            if source.is_symlink():
+                raise ReviewError('公开运行文件含链接；未启动评审腿')
+            if source.is_file():
+                target = runtime / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        # Public runtime code is readable but not owned/writable by a leg.
+        # Operational publisher paths remain private and were checked above.
+        for path in root.rglob('*'):
+            if path.is_symlink():
+                raise ReviewError('评审运行工具含链接；未启动评审腿')
+            os.chown(path, 0, selected.pw_gid)
+            path.chmod(0o750 if path.is_dir() or path.stat().st_mode & 0o111 else 0o640)
+        yield selected, root, bundle, env
+
+
+def query(bin_dir, *arguments):
+    with tools(bin_dir) as (selected, root, bundle, env):
+        result = execute(selected, [bundle / 'aiwork-config', *arguments], env=env,
+                         cwd=selected.pw_dir)
+        if result.returncode:
+            raise ReviewError('评审账号的程序或模型设置不可用：' + result.stderr[-800:])
+        return result.stdout.strip()
+
+
+def run_leg(command, *, env, directory, repo, task, bin_dir):
+    with tools(bin_dir, directory) as (selected, root, bundle, child_env):
+        source = root / 'repo'
+        shutil.copytree(repo, source, symlinks=True)
+        task_copy = root / 'task.md'
+        shutil.copyfile(task, task_copy)
+        os.chown(task_copy, 0, selected.pw_gid)
+        task_copy.chmod(0o640)
+        for path in [source, *source.rglob('*')]:
+            if not path.is_symlink():
+                os.chown(path, 0, selected.pw_gid)
+                path.chmod(0o750 if path.is_dir() or path.stat().st_mode & 0o111 else 0o640)
+        work = root / 'work'
+        work.mkdir(mode=0o700)
+        os.chown(work, selected.pw_uid, selected.pw_gid)
+        # Local clone/upload-pack clears repository-scoped config environment.
+        # A per-run global file trusts only this root-owned source (both Git
+        # spellings), without editing the leg account's persistent Git config.
+        git_config = root / 'gitconfig'
+        git_config.write_text('[safe]\n\tdirectory = ' + str(source)
+                              + '\n\tdirectory = ' + str(source / '.git') + '\n')
+        os.chown(git_config, 0, selected.pw_gid)
+        git_config.chmod(0o640)
+        # These are public invocation parameters, not arbitrary publisher env.
+        parameters = {'PANEL_DIFF_BASE', 'AIWORK_REVIEW_PR', 'CURSOR_MODEL'}
+        parameters.update(spec[0] for settings in RUNTIME_OPTIONS.values() for spec in settings.values())
+        child_env.update({key: value for key, value in env.items() if key in parameters})
+        child_env.update(AIWORK_REVIEW_RESULT_BIN=str(bundle / '_review_result.py'),
+            AIWORK_REVIEW_FACTS_PATH=str(work / 'facts.json'),
+            AIWORK_REVIEW_REPORT_PATH=str(work / 'report.md'),
+            GIT_CONFIG_GLOBAL=str(git_config))
+        # Pin the leg's output directory. A link or replacement cannot redirect
+        # a privileged collector into publisher files, FIFOs or device nodes.
+        fd = os.open(work, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            result = execute(selected, [bundle / Path(command[0]).name, command[1], task_copy,
+                work / 'review.log', source], env=child_env, cwd=work)
+            for name in ('review.log', 'facts.json', 'report.md', 'review.stream.jsonl',
+                         'review.stream-summary.json', 'review.log.stream.jsonl', 'review.stderr'):
+                try:
+                    output = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                except FileNotFoundError:
+                    continue
+                with os.fdopen(output, 'rb') as stream:
+                    info = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                        raise ReviewError('评审输出不是独立普通文件；拒绝接收')
+                    (directory / name).write_bytes(stream.read())
+            return result
+        finally:
+            os.close(fd)

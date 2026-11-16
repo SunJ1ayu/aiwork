@@ -112,6 +112,32 @@ if command -v git >/dev/null 2>&1; then
   done
 fi
 
+# An ordinary review account cannot mount filesystems. The publisher gives it
+# a root-owned source beneath a root-owned directory; POSIX permissions protect
+# that source while the adapter builds its own writable working snapshot.
+if [[ "$EUID" -ne 0 ]]; then
+  [[ ${#RW[@]} -eq 0 ]] || die '普通账号不能为受保护源仓开写口'
+  "$AIWORK_PROGRAMS/python3" - "$REPO" "$GITDIRS" <<'PY' || die '源仓未由发布账号只读保护；拒跑'
+import os, pathlib, sys
+roots = [pathlib.Path(sys.argv[1]), *(pathlib.Path(p) for p in sys.argv[2].splitlines() if p)]
+for root in roots:
+    assert root.parent.stat().st_uid == 0 and not os.access(root.parent, os.W_OK)
+    for path in [root, *root.rglob('*')]:
+        if not path.is_symlink():
+            assert path.stat().st_uid == 0 and not os.access(path, os.W_OK)
+    probe = root / ('.aiwork-ro-check-' + str(os.getpid()))
+    try:
+        fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except PermissionError:
+        pass
+    else:
+        os.close(fd)
+        probe.unlink()
+        raise AssertionError('source writable')
+PY
+  exec "$@"
+fi
+
 # 「挂上了没有」必须有实证,不能靠退出码猜:命令自己也可能返回 78。
 # 标记文件落在仓外(仓在 namespace 里是只读的,仓外照常可写)。
 MARK="$(mktemp)" || die "建不了标记文件"

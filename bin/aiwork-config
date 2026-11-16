@@ -39,7 +39,7 @@ def main():
     commands.add_parser('review-location')
     roles = commands.add_parser('check-app-role')
     roles.add_argument('role')
-    names = ('review.env', 'models.env', 'runtime.env', 'deepseek.env', 'mimo.env', 'apps', 'private-terms')
+    names = ('review.env', 'review-user.env', 'models.env', 'runtime.env', 'deepseek.env', 'mimo.env', 'apps', 'private-terms')
     paths = commands.add_parser('path')
     paths.add_argument('name', choices=names)
     values = commands.add_parser('value')
