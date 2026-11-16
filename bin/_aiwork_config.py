@@ -11,6 +11,17 @@ import sys
 import time
 
 
+# Persistent provider state allowed into an ordinary-account review. Runtime
+# settings and executable installations are deliberately outside this registry.
+MODEL_LOGINS = {'codex': '.codex', 'cursor': '.config/cursor', 'kimi': '.kimi-code/credentials'}
+
+
+def model_login_path(provider):
+    if provider == 'cursor' and os.environ.get('XDG_CONFIG_HOME'):
+        return Path(os.environ['XDG_CONFIG_HOME']) / 'cursor'
+    return Path.home() / MODEL_LOGINS[provider]
+
+
 class ConfigError(ValueError):
     pass
 
@@ -77,6 +88,12 @@ def data_path(name: str = '') -> Path:
 # kind 只取 工作产物 / 运行目录 / 其他。数据目录不放凭证。
 # 每次运行的产物各占登记项下第一层的一个单位，只由创建它的那次运行写入；不共用多次运行的容器。
 DATA_ENTRIES = (
+    {
+        'name': 'review-account',
+        'purpose': '普通评审账号的私有运行区和不重复使用的运行组计数器。',
+        'kind': '运行目录',
+        'keep_days': None,
+    },
     {
         'name': 'label-dispatch',
         'purpose': '派活来源的占位、去重、待交付事件与查询记录。',

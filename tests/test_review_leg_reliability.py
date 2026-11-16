@@ -72,7 +72,14 @@ class SeparateAccountTests(unittest.TestCase):
                 item.symlink_to(Path(sys.executable).resolve() if item.name == 'python3' else '/usr/bin/true')
         (self.home / '.local/share/aiwork').mkdir(parents=True)
         (self.home / '.fixture').mkdir()
-        (self.home / '.fixture/login').write_text('initial fixture login')
+        self.profile = self.root / 'runtime-settings'
+        shutil.copytree(self.home / '.config/aiwork', self.profile, symlinks=True)
+        for path in [self.profile, *self.profile.rglob('*')]:
+            if not path.is_symlink():
+                path.chmod(0o755 if path.is_dir() else 0o644)
+        (self.config / 'review-user.env').write_text('user=nobody\nsettings=' + str(self.profile) + '\n')
+        (self.home / '.kimi-code/credentials').mkdir(parents=True)
+        (self.home / '.kimi-code/credentials/login').write_text('initial fixture login')
         self.home.chmod(0o700)
         for path in [self.home, *self.home.rglob('*')]:
             os.chown(path, self.uid, self.gid, follow_symlinks=False)
@@ -92,7 +99,7 @@ class SeparateAccountTests(unittest.TestCase):
         protected = [self.key, self.program, self.record]
         self.assertTrue(all(os.access(path, os.R_OK | os.W_OK) for path in protected))
         task = self.output / 'task.json'
-        task.write_text(json.dumps({'protected': list(map(str, protected)), 'uid': self.uid}))
+        task.write_text(json.dumps({'protected': list(map(str, protected)), 'uid': self.uid, 'gid': self.gid}))
         probe = self.tools / 'subcodex'
         probe.write_text('''#!/usr/bin/python3
 import json, os, pathlib, subprocess, sys
@@ -100,10 +107,10 @@ data = json.loads(pathlib.Path(sys.argv[2]).read_text())
 exposed = [path for path in data['protected'] if os.access(path, os.R_OK) or os.access(path, os.W_OK)]
 assert not exposed, 'publisher files accessible to leg'
 assert os.getuid() == data['uid'] and os.geteuid() == data['uid']
-assert not os.getgroups()
+assert os.getgroups() == [data['gid']]
 assert os.environ.get('FAKE_PUBLISHER_SECRET') is None
 assert 'NoNewPrivs:\\t1' in pathlib.Path('/proc/self/status').read_text()
-login = pathlib.Path.home() / '.fixture/login'
+login = pathlib.Path.home() / '.kimi-code/credentials/login'
 assert login.read_text() == 'initial fixture login'
 login.write_text('renewed fixture login')
 subprocess.run([str(pathlib.Path(os.environ['AIWORK_REVIEW_RESULT_BIN']).parent / 'ro-repo-exec'),
@@ -125,7 +132,7 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
         self.assertEqual(result['process']['exit_code'], 0, (self.output / 'leg.stderr').read_text())
         self.assertEqual(result['verdict'], 'PASS')
         self.assertEqual(report.read_text(), 'Conclusion: PASS\n')
-        self.assertEqual((self.home / '.fixture/login').read_text(), 'renewed fixture login')
+        self.assertEqual((self.home / '.kimi-code/credentials/login').read_text(), 'renewed fixture login')
         self.assertEqual(self.program.read_text(), 'publisher deployment')
         self.assertEqual(self.record.read_text(), 'previous result')
         # Real terminal normalization and saved-publication checks; only the
@@ -144,12 +151,12 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
         self.assertEqual(post.call_args.args[2]['commit_id'], 'a' * 40)
         self.assertIn('Conclusion: PASS', post.call_args.args[2]['body'])
 
-    def test_model_and_reader_settings_come_from_the_leg_account(self):
+    def test_model_and_reader_settings_come_from_the_root_owned_profile(self):
         import _leg_session as session
-        config = self.home / '.config/aiwork'
+        config = self.profile
         (config / 'models.env').write_text('cursor=gpt-6-sol\n')
         (config / 'runtime.env').write_text('SUBCODEX_TIMEOUT=456\n')
-        os.chown(config / 'runtime.env', self.uid, self.gid)
+        (config / 'runtime.env').chmod(0o644)
         with patch.dict(os.environ, SUBCODEX_TIMEOUT='789'):
             self.assertEqual(session.reader_environment('subcodex', dict(os.environ))['SUBCODEX_TIMEOUT'], '456')
         with patch.dict(os.environ):
@@ -167,10 +174,13 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
         self.addCleanup(fixture.tearDown)
         shutil.copytree(fixture.repo, self.repo, dirs_exist_ok=True)
         shutil.copytree(BIN.parent / 'kimi-review-home', self.publisher / 'kimi-review-home')
-        native = self.home / '.fixture/bin'
-        native.mkdir()
+        native = self.root / 'native'
+        native.mkdir(mode=0o755)
+        native.chmod(0o755)
         for cli in set(STUBS.values()):
             source = (fixture.bin / cli).read_text().replace('case = os.environ["FINISH_CASE"]', 'case = "pass"')
+            if cli == 'cursor-agent' and getattr(self, 'cursor_worker', False):
+                source = source.replace('case = \"pass\"', 'case = \"pass\"\nimport subprocess\nsubprocess.Popen([\"/bin/sleep\", \"20\"], start_new_session=True)')
             source = source.replace('\nimport ', '\nimport os\nassert os.getuid() == ' + str(self.uid) + '\nimport ', 1)
             (native / cli).write_text(source)
             (native / cli).chmod(0o755)
@@ -190,20 +200,22 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
             .replace(str(fixture.root / 'settings/programs'), str(native))
             .replace(sys.executable, str(Path(sys.executable).resolve())))
         (native / 'kimi-launch').chmod(0o755)
-        programs = self.home / '.config/aiwork/programs'
+        programs = self.profile / 'programs'
         for cli in set(STUBS.values()):
             (programs / cli).unlink()
             (programs / cli).symlink_to(native / ('kimi-launch' if cli == 'kimi' else cli))
         (programs / 'node').unlink()
         shutil.copy2(Path(shutil.which('node')).resolve(), native / 'node')
         (programs / 'node').symlink_to(native / 'node')
-        (self.home / '.config/aiwork/deepseek.env').write_text('DEEPSEEK_API_KEY=fixture\n')
+        (self.profile / 'deepseek.env').write_text('DEEPSEEK_API_KEY=fixture\n')
         (self.home / '.config/cursor').mkdir()
         (self.home / '.config/cursor/auth.json').write_text('{"accessToken":"fixture"}\n')
-        (self.home / '.kimi-code/credentials').mkdir(parents=True)
+        (self.home / '.kimi-code/credentials').mkdir(parents=True, exist_ok=True)
         (self.home / '.kimi-code/credentials/kimi-code.json').write_text('{}\n')
         for path in [self.home, *self.home.rglob('*')]:
             os.chown(path, self.uid, self.gid, follow_symlinks=False)
+        for path in native.rglob('*'):
+            path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
         task = self.output / 'task.md'
         task.write_text('Review the fixture.\n')
         for leg in RUNTIME_OPTIONS:
@@ -214,6 +226,153 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
                     self.output, session.reader_environment(leg, {}), 'fixture-native', model, bin_dir=self.tools)
                 self.assertEqual(result['process']['exit_code'], 0, (self.output / 'leg.stderr').read_text())
                 self.assertEqual(result['verdict'], 'PASS')
+
+    def test_upgrade_with_root_owned_legacy_workspace(self):
+        # Mount an isolated /tmp: never chmod/remove a real old deployment.
+        result = subprocess.run(['unshare', '--mount', '--propagation', 'private', '--',
+            '/bin/sh', '-ec', 'mount -t tmpfs tmpfs /tmp; '
+            'mkdir -m 700 /tmp/aiwork-review-workspaces; exec "$@"', 'legacy-workspace',
+            str(Path(sys.executable).resolve()), str(Path(__file__).resolve()),
+            'SeparateAccountTests.test_all_registered_adapters_run_as_the_ordinary_account'],
+            text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr[-6000:])
+
+    def test_account_cannot_replace_future_runtime_settings(self):
+        import _leg_session as session
+        with session.tools(self.tools) as (selected, root, bundle, env):
+            result = session.execute(selected, [bundle / 'aiwork-config', 'path', 'models.env'],
+                                     env=env, cwd=selected.pw_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = result.stdout.strip()
+            result = session.execute(selected, ['/bin/sh', '-c',
+                'test ! -w "$1" && test ! -w "$(dirname "$1")"', 'immutable-settings', target],
+                env=env, cwd=selected.pw_dir)
+            self.assertEqual(result.returncode, 0, ('leg can poison next review settings', target, result.stderr))
+
+    def test_outside_account_cannot_replace_result_before_collection(self):
+        import _leg_session as session
+        task = self.output / 'task.md'
+        task.write_text('fixture')
+        probe = self.tools / 'subcodex'
+        probe.write_text('#!/bin/sh\nprintf "Conclusion: BLOCK\\n" > "$AIWORK_REVIEW_REPORT_PATH"\n')
+        probe.chmod(0o755)
+        original = session.execute
+        attacks = []
+        def intercept(selected, command, *, env, cwd):
+            result = original(selected, command, env=env, cwd=cwd)
+            if Path(command[0]).name == 'subcodex':
+                target = Path(env['AIWORK_REVIEW_REPORT_PATH'])
+                attacks.append(subprocess.run(['/usr/bin/setpriv', '--reuid=' + str(self.uid),
+                    '--regid=' + str(self.gid), '--clear-groups', '/bin/sh', '-c',
+                    'printf "Conclusion: PASS\\n" > "$1"', 'outside-account', str(target)],
+                    text=True, capture_output=True))
+            return result
+        with patch.object(session, 'execute', side_effect=intercept):
+            session.run_leg(['subcodex', 'review'], env={}, directory=self.output,
+                            repo=self.repo, task=task, bin_dir=self.tools)
+        self.assertEqual(len(attacks), 1)
+        self.assertNotEqual(attacks[0].returncode, 0, 'outside process rewrote result')
+        self.assertEqual((self.output / 'report.md').read_text(), 'Conclusion: BLOCK\n')
+
+    def test_outside_account_cannot_enter_a_live_job_through_proc(self):
+        import _leg_session as session
+        import time
+        with session.tools(self.tools) as (selected, root, bundle, env):
+            work = root / 'work'
+            if not work.exists():
+                work.mkdir(mode=0o700)
+                os.chown(work, self.uid, self.gid)
+            view = Path(json.loads(Path(env['AIWORK_ACCOUNT_SETUP']).read_text())['view']) \
+                if 'AIWORK_ACCOUNT_SETUP' in env else root
+            outcomes = []
+            def invoke():
+                outcomes.append(session.execute(selected, ['/bin/sh', '-c',
+                    'echo ready > "$1"; sleep 3', 'live-job', work / 'ready'], env=env, cwd=work))
+            thread = threading.Thread(target=invoke)
+            thread.start()
+            try:
+                deadline = time.monotonic() + 2
+                while not (work / 'ready').exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue((work / 'ready').exists(), 'job failed to start')
+                processes = []
+                for entry in Path('/proc').iterdir():
+                    if entry.name.isdigit():
+                        try:
+                            if (entry.stat().st_uid == self.uid and
+                                    os.readlink(entry / 'cwd') == str(view / 'work')):
+                                processes.append(entry)
+                        except (FileNotFoundError, PermissionError, ProcessLookupError):
+                            pass
+                self.assertTrue(processes)
+                for entry in processes:
+                    access = subprocess.run(['/usr/bin/setpriv', '--reuid=' + str(self.uid),
+                        '--regid=' + str(self.gid), '--clear-groups', '/bin/sh', '-c',
+                        'test ! -r "$1" && ! readlink "$2/0" >/dev/null 2>&1', 'outside-proc',
+                        str(entry / 'root' / str(view / 'work/ready').lstrip('/')),
+                        str(entry / 'fd')], text=True, capture_output=True)
+                    self.assertEqual(access.returncode, 0, 'outside account can enter live job')
+            finally:
+                thread.join(timeout=10)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(outcomes[0].returncode, 0, outcomes[0].stderr)
+
+    def test_persistent_cli_configuration_is_not_a_future_job_input(self):
+        import _leg_session as session
+        (self.home / '.config/aiwork/models.env').write_text('cursor=grok-4.7-high\n')
+        (self.profile / 'models.env').write_text('cursor=gpt-6-sol\n')
+        (self.home / '.codex').mkdir()
+        (self.home / '.codex/config.toml').write_text('poisoned persistent config')
+        (self.home / '.codex/auth.json').write_text('{"fixture":"initial"}')
+        for path in (self.home / '.codex').rglob('*'):
+            os.chown(path, self.uid, self.gid)
+        os.chown(self.home / '.codex', self.uid, self.gid)
+        with patch.dict(os.environ):
+            os.environ.pop('CURSOR_MODEL', None)
+            self.assertEqual(session.choose_leg('subcursor', self.tools), ('openai', 'gpt-6-sol'))
+        task = self.output / 'task.md'
+        task.write_text('fixture')
+        probe = self.tools / 'subcodex'
+        probe.write_text('''#!/bin/sh
+set -eu
+test ! -e "$HOME/.codex/config.toml"
+test -f "$HOME/.codex/auth.json"
+printf '{"fixture":"renewed"}' > "$HOME/.codex/auth.json"
+''')
+        probe.chmod(0o755)
+        result = session.run_leg(['subcodex', 'review'], env={}, directory=self.output,
+                                 repo=self.repo, task=task, bin_dir=self.tools)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.home / '.codex/auth.json').read_text()), {'fixture': 'renewed'})
+        self.assertEqual((self.home / '.codex/config.toml').read_text(), 'poisoned persistent config')
+
+    def test_cli_supervisor_runs_only_as_the_ordinary_account(self):
+        import _leg_session as session
+        with session.tools(self.tools) as (selected, root, bundle, env):
+            result = session.execute(selected,
+                [self.profile / 'programs/python3', bundle / '_leg_session.py',
+                 '--account-cli', '/usr/bin/id', '-u'], env=env, cwd=selected.pw_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(self.uid))
+
+    def test_cli_timeout_closes_its_output_pipeline(self):
+        import _leg_session as session
+        import time
+        with session.tools(self.tools) as (selected, root, bundle, env):
+            started = time.monotonic()
+            result = session.execute(selected, ['/bin/bash', '-o', 'pipefail', '-c',
+                '"$1" 1 "$2" "$3" --account-cli /bin/sleep 20 | /bin/cat', 'cancel-cli',
+                bundle / 'aiwork-timeout', self.profile / 'programs/python3', bundle / '_leg_session.py'],
+                env=env, cwd=selected.pw_dir)
+            self.assertEqual(result.returncode, 124, result.stderr)
+            self.assertLess(time.monotonic() - started, 5, 'cancelled CLI still holds stdout')
+
+    def test_cursor_detached_worker_does_not_hold_the_pipeline_open(self):
+        self.cursor_worker = True
+        import time
+        started = time.monotonic()
+        self.test_all_registered_adapters_run_as_the_ordinary_account()
+        self.assertLess(time.monotonic() - started, 15, 'Cursor worker held pipeline open')
 
     def test_missing_or_root_account_fails_closed(self):
         import _leg_session as account
@@ -287,7 +446,6 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
         import _leg_session as account
         with account.tools(self.tools) as (selected, root, bundle, env):
             work = root / 'work'
-            work.mkdir(mode=0o700)
             os.chown(work, self.uid, self.gid)
             result = account.execute(selected, [bundle / 'ro-repo-exec', work, '--', '/bin/true'],
                                      env=env, cwd=work)
