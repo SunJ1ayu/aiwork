@@ -231,7 +231,7 @@ Answer the task in your final message. If context is insufficient, return NEEDS_
 } > "$LOG_FILE"
 
 RC=0
-STREAM="${LOG_FILE}.stream.jsonl"
+STREAM="$(review_artifact_path kimi_stream)" || exit 78
 (
   cd "$REPO_DIR"
   KIMI_CODE_HOME="$REVIEW_HOME" \

@@ -198,7 +198,9 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
             .replace(str(fixture.bin), str(native))
             .replace(str(BIN.parent / 'tests'), str(native))
             .replace(str(fixture.root / 'settings/programs'), str(native))
-            .replace(sys.executable, str(Path(sys.executable).resolve())))
+            .replace(sys.executable, str(Path(sys.executable).resolve()))
+            .replace(repr(str(native / 'kimi-probe-capture.json')),
+                     "os.path.join(os.environ['TMPDIR'], 'kimi-probe-capture.json')"))
         (native / 'kimi-launch').chmod(0o755)
         programs = self.profile / 'programs'
         for cli in set(STUBS.values()):
@@ -208,6 +210,7 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
         shutil.copy2(Path(shutil.which('node')).resolve(), native / 'node')
         (programs / 'node').symlink_to(native / 'node')
         (self.profile / 'deepseek.env').write_text('DEEPSEEK_API_KEY=fixture\n')
+        (self.profile / 'deepseek.env').chmod(0o644)
         (self.home / '.config/cursor').mkdir()
         (self.home / '.config/cursor/auth.json').write_text('{"accessToken":"fixture"}\n')
         (self.home / '.kimi-code/credentials').mkdir(parents=True, exist_ok=True)
@@ -222,10 +225,27 @@ subprocess.run([sys.executable, os.environ['AIWORK_REVIEW_RESULT_BIN'], 'facts',
             with self.subTest(leg=leg):
                 self.assertIn(leg, STUBS)
                 family, model = session.choose_leg(leg, self.tools)
-                result, _ = session.run_leg_attempt(leg, family, task, self.repo,
-                    self.output, session.reader_environment(leg, {}), 'fixture-native', model, bin_dir=self.tools)
-                self.assertEqual(result['process']['exit_code'], 0, (self.output / 'leg.stderr').read_text())
-                self.assertEqual(result['verdict'], 'PASS')
+                leg_output = self.output / leg
+                leg_output.mkdir()
+                produced = {}
+                execute = session.execute
+                def record_outputs(selected, command, *, env, cwd):
+                    result = execute(selected, command, env=env, cwd=cwd)
+                    if Path(command[0]).name in RUNTIME_OPTIONS:
+                        # Observe real adapter outputs independently of the
+                        # collector's naming authority; do not copy its list.
+                        produced.update({path.name: path.read_bytes()
+                            for path in Path(cwd).iterdir() if path.is_file()})
+                    return result
+                with patch.object(session, 'execute', side_effect=record_outputs):
+                    result, _ = session.run_leg_attempt(leg, family, task, self.repo,
+                        leg_output, session.reader_environment(leg, {}), 'fixture-native', model, bin_dir=self.tools)
+                self.assertEqual(result['process']['exit_code'], 0, (leg_output / 'leg.stderr').read_text())
+                self.assertEqual(result['verdict'], 'PASS', (leg_output / 'leg.stderr').read_text())
+                self.assertTrue(produced, 'no adapter outputs observed')
+                for name, content in produced.items():
+                    self.assertTrue((leg_output / name).is_file(), 'uncollected adapter output: ' + name)
+                    self.assertEqual((leg_output / name).read_bytes(), content, name)
 
     def test_upgrade_with_root_owned_legacy_workspace(self):
         # Mount an isolated /tmp: never chmod/remove a real old deployment.

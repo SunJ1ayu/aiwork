@@ -23,7 +23,7 @@ import subprocess
 import sys
 from typing import NamedTuple, cast
 
-from _review_result import load_result, sha256_file
+from _review_result import load_result, sha256_file, managed_artifacts
 from _aiwork_config import (RUNTIME_OPTIONS, app_key, apps_dir, data_dir,
                             review_location, setting_path, setting_value, data_path, MODEL_LOGINS)
 
@@ -275,8 +275,8 @@ def run_leg_attempt(leg_name: str, family: str, task: Path, repo: Path, director
                     env: dict[str, str], run_id: str, frozen_model: str | None, *,
                     bin_dir: Path, mode: str = "review",
                     review_contract_version: int | None = None):
-    log, facts = directory / "review.log", directory / "facts.json"
-    report = directory / "report.md"
+    artifacts = managed_artifacts(directory)
+    log, facts, report = (artifacts[kind] for kind in ("log", "facts", "report"))
     result_file, diagnostic = directory / "result.json", directory / "leg.stderr"
     env = dict(env, AIWORK_REVIEW_FACTS_PATH=str(facts), AIWORK_REVIEW_REPORT_PATH=str(report))
     command = [str(bin_dir / leg_name), mode, str(task), str(log), str(repo)]
@@ -425,8 +425,8 @@ def next_group():
         return gid
 
 
-OUTPUT_FILES = ('review.log', 'facts.json', 'report.md', 'review.stream.jsonl',
-                'review.stream-summary.json', 'review.log.stream.jsonl', 'review.stderr')
+SEALED_DIRECTORY = 'sealed'
+SEALED_COMPLETE = '.complete'
 
 
 def login_fds(selected):
@@ -488,8 +488,8 @@ def account_job(setup_path):
     home = view / 'home'
     if home.exists():
         shutil.rmtree(home)
-    if (root / 'sealed').exists():
-        shutil.rmtree(root / 'sealed')
+    if (root / SEALED_DIRECTORY).exists():
+        shutil.rmtree(root / SEALED_DIRECTORY)
     home.mkdir(mode=0o700)
     templates = Path(setup['profile']) / 'home'
     if templates.exists():
@@ -598,11 +598,12 @@ def account_job(setup_path):
             break
     work = view / 'work'
     if work.exists():
-        sealed = root / 'sealed'
+        sealed = root / SEALED_DIRECTORY
         sealed.mkdir(mode=0o700)
         fd = os.open(work, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            for name in OUTPUT_FILES:
+            for path in managed_artifacts(work).values():
+                name = path.name
                 try:
                     output = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
                 except FileNotFoundError:
@@ -614,7 +615,7 @@ def account_job(setup_path):
                     (sealed / name).write_bytes(stream.read())
         finally:
             os.close(fd)
-        (sealed / '.complete').touch(mode=0o600)
+        (sealed / SEALED_COMPLETE).touch(mode=0o600)
     return result.returncode
 
 
@@ -749,7 +750,8 @@ def query(bin_dir, *arguments):
 
 def run_leg(command, *, env, directory, repo, task, bin_dir):
     with tools(bin_dir, directory) as (selected, root, bundle, child_env):
-        gid = json.loads((root / 'setup.json').read_text())['gid']
+        setup = json.loads(Path(child_env['AIWORK_ACCOUNT_SETUP']).read_text())
+        gid = setup['gid']
         source = root / 'repo'
         shutil.copytree(repo, source, symlinks=True)
         task_copy = root / 'task.md'
@@ -765,7 +767,7 @@ def run_leg(command, *, env, directory, repo, task, bin_dir):
         # A per-run global file trusts only this root-owned source (both Git
         # spellings), without editing the leg account's persistent Git config.
         git_config = root / 'gitconfig'
-        view_source = Path(json.loads((root / 'setup.json').read_text())['view']) / 'repo'
+        view_source = Path(setup['view']) / 'repo'
         git_config.write_text('[safe]\n\tdirectory = ' + str(view_source)
                               + '\n\tdirectory = ' + str(view_source / '.git') + '\n')
         os.chown(git_config, 0, gid)
@@ -774,16 +776,18 @@ def run_leg(command, *, env, directory, repo, task, bin_dir):
         parameters = {'PANEL_DIFF_BASE', 'AIWORK_REVIEW_PR', 'CURSOR_MODEL'}
         parameters.update(spec[0] for settings in RUNTIME_OPTIONS.values() for spec in settings.values())
         child_env.update({key: value for key, value in env.items() if key in parameters})
+        artifacts = managed_artifacts(work)
         child_env.update(AIWORK_REVIEW_RESULT_BIN=str(bundle / '_review_result.py'),
-            AIWORK_REVIEW_FACTS_PATH=str(work / 'facts.json'),
-            AIWORK_REVIEW_REPORT_PATH=str(work / 'report.md'),
+            AIWORK_REVIEW_FACTS_PATH=str(artifacts['facts']),
+            AIWORK_REVIEW_REPORT_PATH=str(artifacts['report']),
             GIT_CONFIG_GLOBAL=str(git_config))
         result = execute(selected, [bundle / Path(command[0]).name, command[1], task_copy,
-            work / 'review.log', source], env=child_env, cwd=work)
-        sealed = root / 'sealed'
-        if not (sealed / '.complete').exists():
+            artifacts['log'], source], env=child_env, cwd=work)
+        sealed = root / SEALED_DIRECTORY
+        if not (sealed / SEALED_COMPLETE).exists():
             raise ReviewError('账号监管未封存结果：' + result.stderr[-800:])
-        for name in OUTPUT_FILES:
+        for path in artifacts.values():
+            name = path.name
             if (sealed / name).exists():
                 (directory / name).write_bytes((sealed / name).read_bytes())
         return result

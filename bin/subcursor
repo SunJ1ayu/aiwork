@@ -24,8 +24,8 @@ Environment:
   CURSOR_AUTH_FILE   login credentials (default $XDG_CONFIG_HOME/cursor/auth.json,
                      or $HOME/.config/cursor/auth.json)
   CURSOR_API_KEY     explicit API-key authentication instead of session login
-Logs: LOG_FILE = header + assistant text; sibling .stream.jsonl contains
-raw events, and .stream-summary.json records completion, reported model and usage.
+Logs: LOG_FILE = header + assistant text. Locate raw events and completion metadata
+with _review_result.py artifact-path --log LOG_FILE --kind stream|summary.
 Runtime settings and code fallbacks: aiwork-config runtime --help (see README: 本机设置)
 EOF
 }
@@ -118,8 +118,8 @@ printf '\nRepository snapshot to read: %s\n--- TASK ---\n' "$REPO_DIR" >> "$PROM
 printf 'Snapshot diff to read: %s/review.diff\n' "$EMPTY_WORKSPACE" >> "$PROMPT_FILE"
 cat "$TASK_FILE" >> "$PROMPT_FILE"
 mkdir -p "$(dirname "$LOG_FILE")"
-BASE="${LOG_FILE%.log}"
-STREAM="$BASE.stream.jsonl"; SUMMARY="$BASE.stream-summary.json"
+STREAM="$(review_artifact_path stream)" || exit 78
+SUMMARY="$(review_artifact_path summary)" || exit 78
 # Same header shape as the other legs. The report file is the model's last message.
 {
   echo "# subcursor $MODE log"
