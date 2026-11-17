@@ -110,14 +110,17 @@ review_workspace__outside_source() { # path
   return 0
 }
 
-# One report path. Call before review_workspace_prepare. Sets REPORT and
-# removes the previous run's file.
+# Resolve adapter paths through the same authority the collector imports.
+review_artifact_path() { # kind
+  local args=(artifact-path --log "$LOG_FILE" --kind "$1")
+  [[ -z "${AIWORK_REVIEW_FACTS_PATH:-}" ]] || args+=(--facts "$AIWORK_REVIEW_FACTS_PATH")
+  [[ -z "${AIWORK_REVIEW_REPORT_PATH:-}" ]] || args+=(--report "$AIWORK_REVIEW_REPORT_PATH")
+  "$AIWORK_PROGRAMS/python3" "$REVIEW_WORKSPACE_BIN/_review_result.py" "${args[@]}"
+}
+
+# Call before review_workspace_prepare; removes the previous run's report.
 review_workspace_reset_report() {
-  if [[ -n "${AIWORK_REVIEW_REPORT_PATH:-}" ]]; then
-    REPORT="$AIWORK_REVIEW_REPORT_PATH"
-  else
-    REPORT="${LOG_FILE}.report"
-  fi
+  REPORT="$(review_artifact_path report)" || return 78
   rm -f -- "$REPORT"
 }
 

@@ -6,7 +6,7 @@ import json
 import sys
 
 from _aiwork_config import (
-    ConfigError, RUNTIME_OPTIONS, review_location, check_app_role, program, check_programs,
+    ConfigError, RUNTIME_OPTIONS, MODEL_LOGINS, model_login_path, review_location, check_app_role, program, check_programs,
     app_key, apps_dir, data_path,
     model, model_family, kimi_settings, prune_data, runtime_value, setting_path, setting_value,
 )
@@ -37,9 +37,11 @@ def main():
         option for settings in RUNTIME_OPTIONS.values() for option in settings)))
     runtime.add_argument('--context', choices=('direct', 'reader'), default='direct')
     commands.add_parser('review-location')
+    logins = commands.add_parser('login-path')
+    logins.add_argument('provider', choices=tuple(MODEL_LOGINS))
     roles = commands.add_parser('check-app-role')
     roles.add_argument('role')
-    names = ('review.env', 'models.env', 'runtime.env', 'deepseek.env', 'mimo.env', 'apps', 'private-terms')
+    names = ('review.env', 'review-user.env', 'models.env', 'runtime.env', 'deepseek.env', 'mimo.env', 'apps', 'private-terms')
     paths = commands.add_parser('path')
     paths.add_argument('name', choices=names)
     values = commands.add_parser('value')
@@ -58,6 +60,8 @@ def main():
     try:
         if args.command == 'review-location':
             value = review_location()
+        elif args.command == 'login-path':
+            value = model_login_path(args.provider)
         elif args.command == 'check-app-role':
             check_app_role(args.role)
             return 0

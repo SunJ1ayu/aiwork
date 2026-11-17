@@ -20,6 +20,27 @@ from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 
 
+# Artifact naming is shared by adapters and the privileged collector. Values
+# are trusted code, never a manifest supplied by a leg.
+ARTIFACT_SUFFIXES = {'stream': ('base', '.stream.jsonl'),
+                     'summary': ('base', '.stream-summary.json'),
+                     'stderr': ('base', '.stderr'),
+                     'kimi_stream': ('log', '.stream.jsonl')}
+
+
+def artifact_paths(log: Path, *, facts=None, report=None):
+    anchors = {'log': str(log), 'base': str(log).removesuffix('.log')}
+    paths = {'log': log, 'facts': Path(facts) if facts else log.parent / 'facts.json',
+             'report': Path(report) if report else Path(str(log) + '.report')}
+    paths.update({kind: Path(anchors[anchor] + suffix)
+                  for kind, (anchor, suffix) in ARTIFACT_SUFFIXES.items()})
+    return paths
+
+
+def managed_artifacts(directory: Path):
+    return artifact_paths(directory / 'review.log', report=directory / 'report.md')
+
+
 SCHEMA_VERSION = 2
 SUBJECT_MANIFEST_VERSION = 1
 NORMALIZER_VERSION = 1
@@ -721,6 +742,11 @@ def _error(error: ReviewResultError) -> int:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="_review_result.py")
     commands = top.add_subparsers(dest="command", required=True)
+    artifacts = commands.add_parser('artifact-path', help='shared adapter artifact path')
+    artifacts.add_argument('--log', type=Path, required=True)
+    artifacts.add_argument('--kind', choices=tuple(artifact_paths(Path('log'))), required=True)
+    artifacts.add_argument('--facts', type=Path)
+    artifacts.add_argument('--report', type=Path)
     family = commands.add_parser("cursor-family", help="resolve a Cursor model's coverage family")
     family.add_argument("model")
     normalize = commands.add_parser("normalize", help="normalize the verdict in a review report")
@@ -787,6 +813,9 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
+        if args.command == 'artifact-path':
+            print(artifact_paths(args.log, facts=args.facts, report=args.report)[args.kind])
+            return 0
         if args.command == "cursor-family":
             family = cursor_model_family(args.model)
             if family is None:

@@ -641,7 +641,10 @@ def main() -> int:
             _leg_session.check_leg_platform(args.leg, BIN)
         data_dir()
         if not args.retry_publish:
-            check_programs(args.leg)
+            if _leg_session.enabled():
+                _leg_session.query(BIN, 'check-programs', args.leg)
+            else:
+                check_programs(args.leg)
         main_sha = aiwork_main_commit()
         if not args.dry_run:
             require_latest_aiwork_main(main_sha)

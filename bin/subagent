@@ -205,7 +205,7 @@ if [[ "$READ_ONLY" == 1 ]]; then
   review_reader_context "$REPO_DIR" || exit 78
 fi
 
-STREAM_FILE="${LOG_FILE%.log}.stream.jsonl"
+STREAM_FILE="$(review_artifact_path stream)" || exit 78
 ERR_FILE="$(mktemp)"
 
 {

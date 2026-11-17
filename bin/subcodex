@@ -36,8 +36,8 @@ Environment:
   SUBCODEX_TIMEOUT  wall-clock seconds
 Runtime settings and code fallbacks: aiwork-config runtime --help (see README: 本机设置)
 
-Logs: LOG_FILE = header + codex's final message; <log>.stream.jsonl = --json events;
-<log>.stderr = codex stderr.
+Logs: LOG_FILE = header + codex's final message. Locate sibling diagnostics with
+_review_result.py artifact-path --log LOG_FILE --kind stream|stderr.
 EOF
 }
 
@@ -181,8 +181,8 @@ printf '\n--- TASK ---\n' >> "$PROMPT_FILE"
 cat "$TASK_FILE" >> "$PROMPT_FILE"
 
 mkdir -p "$(dirname "$LOG_FILE")"
-BASE="${LOG_FILE%.log}"
-STREAM="$BASE.stream.jsonl"; STDERR_LOG="$BASE.stderr"
+STREAM="$(review_artifact_path stream)" || exit 78
+STDERR_LOG="$(review_artifact_path stderr)" || exit 78
 {
   echo "# subcodex $MODE log"
   echo "time: $(date -Iseconds)"

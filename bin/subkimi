@@ -129,7 +129,7 @@ review_home_guard kimi "$REVIEW_HOME" "$SOURCE_REPO" KIMI_REVIEW_HOME || exit 1
 # 只在用默认 home 时同步:显式指定 KIMI_REVIEW_HOME 的调用方自己负责(判据夹具靠这个)。
 KIMI_SEED_HOME="$BIN_DIR/../kimi-review-home"
 if [[ -z "${KIMI_REVIEW_HOME:-}" ]]; then
-  KIMI_CREDENTIALS_DIR="$HOME/.kimi-code/credentials"
+  KIMI_CREDENTIALS_DIR="$("$BIN_DIR/aiwork-config" login-path kimi)" || exit 78
   [[ -f "$KIMI_CREDENTIALS_DIR/kimi-code.json" ]] || die "Kimi 凭证缺少 kimi-code.json；先用 kimi 登录"
   ln -s -- "$KIMI_CREDENTIALS_DIR" "$REVIEW_HOME/credentials" || die 'cannot link Kimi CLI credentials'
   umask 077
@@ -231,7 +231,7 @@ Answer the task in your final message. If context is insufficient, return NEEDS_
 } > "$LOG_FILE"
 
 RC=0
-STREAM="${LOG_FILE}.stream.jsonl"
+STREAM="$(review_artifact_path kimi_stream)" || exit 78
 (
   cd "$REPO_DIR"
   KIMI_CODE_HOME="$REVIEW_HOME" \
