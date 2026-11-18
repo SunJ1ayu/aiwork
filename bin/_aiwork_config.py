@@ -557,11 +557,16 @@ BUILDER_APP_ROLES = {
 
 def check_app_role(role: str) -> str:
     family = os.environ.get('AIWORK_BUILDER_FAMILY')
-    if role == 'build' and family is not None:
+    if (role == 'build' or role in BUILDER_APP_ROLES.values()) and family is not None:
         if family not in BUILDER_APP_ROLES:
             raise ConfigError('AIWORK_BUILDER_FAMILY: unknown builder family')
-        role = BUILDER_APP_ROLES[family]
+        selected = BUILDER_APP_ROLES[family]
+        if role != 'build' and role != selected:
+            raise ConfigError('构建角色与派活执行家族不一致')
+        role = selected
 
+    if role in BUILDER_APP_ROLES.values() and family is None:
+        raise ConfigError('独立构建角色需要派活执行家族')
     location = review_location()
     if location == 'unisolated':
         return role

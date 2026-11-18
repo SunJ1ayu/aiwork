@@ -31,7 +31,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 
 ## 修改轮数显示
 
-项目可在策略中配置 `modification_rounds`，其中可选的 `limit` 是正整数覆盖值（省略时的上限来源见下段），`summary_account` 是汇总账号，不能兼任评审机器人或合并申请人（含业主）。汇总账号与 Builder 的互斥检查按 [业主决定](https://github.com/SunJ1ayu/aiwork/issues/107#issuecomment-6536969415) 推迟；SunJ1ayuBoT 暂时保留原 Builder 登记。未配置时，关卡输出和行为保持原样。aiwork 启用此项；其他项目要用时修改自己的策略。
+项目可在策略中配置 `modification_rounds`，其中可选的 `limit` 是正整数覆盖值（省略时的上限来源见下段），`summary_account` 是汇总账号，不能兼任评审机器人或合并申请人（含业主）。汇总账号也不能兼任 Builder，依据见 [业主决定](https://github.com/SunJ1ayu/aiwork/issues/43#issuecomment-6888714838)。接入项目升级共享关卡前，先将汇总账号移出执行方名单。未配置时，关卡输出和行为保持原样。aiwork 启用此项；其他项目要用时修改自己的策略。
 
 上限与停的定义见 `REVIEW-RULES.md` 第三节第 1 条。记录格式和计数约定见 `workflow/skills/summary/SKILL.md`「汇总的格式」，由 `tests/test_aiwork_gate_rounds.mjs` 从定义读取并对照。关卡复用已经取全的 PR 评审与 GraphQL 改写时间，不增加请求；`decide.mjs` 只追加显示，`run.mjs` 在共享 head 的结论中保留每个 PR 的轮数和停信号，G1–G8 和合并条件不变。新汇总通过已有评审门铃重算。
 

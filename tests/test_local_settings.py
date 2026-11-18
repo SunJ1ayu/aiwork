@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +82,14 @@ class SettingsTest(unittest.TestCase):
         (self.config / 'review.env').write_text('location=unisolated\n')
         config.check_app_role('build')
         config.check_app_role('review')
+
+    def test_explicit_builder_role_must_match_dispatch_family(self):
+        import _aiwork_config as config
+        with unittest.mock.patch.dict(os.environ, {'AIWORK_BUILDER_FAMILY': 'openai'}):
+            self.assertEqual(config.check_app_role('build-codex'), 'build-codex')
+            for role in ('build-deepseek', 'build-mimo'):
+                with self.assertRaises(config.ConfigError):
+                    config.check_app_role(role)
 
     def test_external_review_rejected_before_any_github_access(self):
         (self.config / 'review.env').write_text('location=external\n')
