@@ -9,7 +9,9 @@
   "gate_app_id": 5121026,
   "owner": "SunJ1ayu",
   "builders": {
-    "SunJ1ayuBoT": "anthropic"
+    "aiwork-build-codex[bot]": "openai",
+    "aiwork-build-deepseek[bot]": "deepseek",
+    "aiwork-build-mimo[bot]": "xiaomi"
   },
   "reviewer_bot": "aiwork-review[bot]",
   "merge_label": "aiwork:merge",

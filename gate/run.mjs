@@ -47,7 +47,8 @@ export function validatePolicy(p) {
   if (p && Object.hasOwn(p, "modification_rounds")) {
     const c = p.modification_rounds;
     const account = c?.summary_account;
-    const otherRoles = [p.reviewer_bot, p.owner, ...(Array.isArray(requesters) ? requesters : [])];
+    const otherRoles = [p.reviewer_bot, p.owner, ...(Array.isArray(requesters) ? requesters : []),
+      ...Object.keys(p.builders ?? {})];
     if ((Object.hasOwn(c ?? {}, "limit") && (!Number.isSafeInteger(c.limit) || c.limit <= 0)) || typeof account !== "string" ||
         !/^[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?$/.test(account) ||
         otherRoles.some((r) => typeof r === "string" && r.toLowerCase() === account.toLowerCase())) {

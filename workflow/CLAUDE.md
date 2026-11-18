@@ -54,6 +54,9 @@ review-pr PR --repo owner/name --leg LEG --retry-publish RUN_ID
 ## 机器人推送与开 PR
 
 执行方推送和开 PR 只用构建机器人身份，令牌只从仓库的 `bin/gh-app-token` 换，不用个人账号。
+
+家族派活的启动入口按 [Mac 运行手册](https://github.com/SunJ1ayu/aiwork/blob/main/docs/mac-host.md#安装与本机设置) 设置 `AIWORK_BUILDER_FAMILY`。推送、开 PR 和交回评审请求都从这个入口继承家族，核对推送者和 PR 作者对应项目策略登记的账号。
+
 防的是 PR #44 首次推送把令牌放进命令行参数，进程列表能看到；来历见 [#43](https://github.com/SunJ1ayu/aiwork/issues/43)。
 
 新机器先按 README「本机设置」安装 App 配置和程序，确认 `gh-app-token` 在 PATH 中。在目标仓库的共享检出执行下面的配置（工作树继承它），示例目标是 aiwork；其他仓库须替换本节所有命令中的仓库名（包括助手、授权核对、取令牌和开 PR）及远端，并核对角色配置允许该仓库。只配置本仓库，不修改全局凭证设置。

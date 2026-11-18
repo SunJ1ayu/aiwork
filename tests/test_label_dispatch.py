@@ -21,8 +21,8 @@ spec = importlib.util.spec_from_file_location('dispatch', ROOT/'bin/_label_dispa
 d = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(d)
 
-TASK,FIX = d.LABELS
-PROJECT = {'repo':'example/project','owner':'owner','bot':'builder'}
+TASK,FIX = 'aiwork:task', 'aiwork:fix'
+PROJECT = {'repo':'example/project','owner':'owner','bot':'builder','rule':'legacy'}
 def event(i, action='labeled', actor='owner', label=TASK):
     return {'id':i,'event':action,'actor':{'login':actor},'label':{'name':label}}
 def item(n, events, labels=(TASK,), state='open', repo='example/project'):
@@ -47,6 +47,19 @@ class Admission(unittest.TestCase):
         p=self.plan([item(2,[event(2)]),item(1,[event(1)])])
         self.assertEqual(p['candidate']['subject'],d.issue_subject(PROJECT['repo'],1))
         self.assertIsNone(self.plan([item(97,[event(10)]),item(124,[event(12)])],self.active())['candidate'])
+
+    def test_family_labels_keep_the_same_trust_and_serial_slot(self):
+        task = 'aiwork:task:deepseek'
+        fix = 'aiwork:fix:deepseek'
+        self.assertIsNone(self.plan([item(1, [event(1, actor='outsider', label=task)], (task,))])['candidate'])
+        row = item(1, [event(1, label=task)], (task,))
+        self.assertIsNone(self.plan([row])['candidate'])
+        row['project']['builder_rules'] = {'deepseek': 'deepseek-builder'}
+        result = self.plan([row])
+        self.assertEqual(result['candidate']['event']['label']['name'], task)
+        self.assertEqual(d.LABELS[task], 'issues.task.deepseek')
+        self.assertEqual(d.LABELS[fix], 'issues.fix.deepseek')
+        self.assertEqual(d.label_route(row['project'], fix), 'deepseek-builder')
 
     def test_trusted_removal_releases_97_for_124(self):
         for actor,allowed in [('owner',True),('builder',True),('outsider',False)]:
@@ -303,6 +316,26 @@ class Orchestration(unittest.TestCase):
                 db.executemany('insert into runs values(?,?)',[
                     ('a/repo#1','done'),('a/repo#2','unknown'),('b/repo#1','queued')])
             self.assertEqual(d.Backend({'hub_db':str(p)}).busy(),{'a/repo#2','b/repo#1'})
+
+    def test_family_delivery_is_acknowledged_only_by_its_configured_rule(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'hub.db'
+            candidate = self_candidate()
+            label = 'aiwork:task:xiaomi'
+            candidate['event']['label']['name'] = label
+            candidate['project']['builder_rules'] = {'xiaomi': 'mimo-builder'}
+            backend = d.Backend({'hub_db': str(path), 'source': 'labels'})
+            with sqlite3.connect(path) as db:
+                db.execute('create table runs(id integer, rule text)')
+                db.execute('create table run_events(run_id integer, event_id integer)')
+                db.execute('create table events(id integer, source text, key text)')
+                db.execute('insert into events values(1, ?, ?)', ('labels', candidate['key']))
+                db.execute('insert into run_events values(1, 1)')
+                db.execute('insert into runs values(1, ?)', ('legacy',))
+            self.assertFalse(backend.accepted(candidate))
+            with sqlite3.connect(path) as db:
+                db.execute('update runs set rule = ?', ('mimo-builder',))
+            self.assertTrue(backend.accepted(candidate))
 
     def test_reference_written_before_event_and_stable_event_key(self):
         class Response:

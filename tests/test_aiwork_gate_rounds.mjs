@@ -171,7 +171,7 @@ test("所有汇总输入只追加显示，不改变任何 G1–G8 结果；未�
 test("策略保留 Builder 家族登记，轮数功能可选且必须完整", () => {
   assert.doesNotThrow(() => validatePolicy(baseline));
   for (const builders of [{}, []]) assert.throws(() => validatePolicy({ ...policy, builders }), /builders/);
-  assert.doesNotThrow(() => validatePolicy({ ...policy, modification_rounds: { ...rounds, summary_account: "sunj1ayubot" } }));
+  assert.throws(() => validatePolicy({ ...policy, modification_rounds: { ...rounds, summary_account: "sunj1ayubot" } }), /modification_rounds/);
   for (const modification_rounds of [null, {}, { ...rounds, limit: 0 }, { ...rounds, limit: 1.5 },
     { ...rounds, limit: "2" }, { ...rounds, summary_account: "" },
     { ...rounds, summary_account: baseline.reviewer_bot }]) {
@@ -234,37 +234,34 @@ test("summary skill 的唯一定义直接生成格式对照用例", () => {
   assert.equal(DEFAULT_MODIFICATION_ROUND_LIMIT, 3);
   assert.equal(Object.hasOwn(current.modification_rounds, "limit"), false, "aiwork 直接使用共享默认值，不抄第二份数字");
   assert.equal(current.modification_rounds.summary_account, "SunJ1ayuBoT");
-  assert.deepEqual(current.builders, { SunJ1ayuBoT: "anthropic" });
   validatePolicy(current);
 });
 
-test("真实策略保留 main 的 UNKNOWN 家族边界：Claude PASS 不能单独或在 high 凑数", () => {
+test("真实策略的 UNKNOWN 作者只计入未登记为 Builder 的评审家族", () => {
   const current = JSON.parse(read("../.aiwork/policy.json"));
   const approval = { id: 90, login: current.owner, type: "User", state: "APPROVED", commit_id: HEAD,
     submitted_at: "2026-10-30T04:00:00Z", body: "" };
   const reviewed = (family, id) => ({ ...pass, id, body: pass.body.replace('"openai"', JSON.stringify(family)) });
   const unknown = { covers_head: true, actors: ["aiwork-build[bot]"] };
-  const independent = ["openai", "deepseek", "moonshot", "xiaomi"].slice(0, current.high_min_families - 1);
-  const reviews = [reviewed("anthropic", 1), ...independent.map((f, i) => reviewed(f, i + 2)), approval];
+  const builderFamilies = [...new Set(Object.values(current.builders))];
+  const independent = "moonshot";
+  const reviews = [...builderFamilies.map((f, i) => reviewed(f, i + 1)), reviewed(independent, 10), approval];
   const high = decide(facts([], { pushes: unknown, files: ["bin/gh-app-token"], reviews }), current);
   assert.equal(high.title, `不放行:high 路径要 ${current.high_min_families} 家不同家族都 PASS`);
-  assert.deepEqual(high.passes.map((r) => r.family).sort(), independent.sort());
-  const ordinary = decide(facts([], { pushes: unknown, reviews: [reviewed("anthropic", 1), approval] }), current);
+  assert.deepEqual(high.passes.map((r) => r.family).sort(), [independent]);
+  const ordinary = decide(facts([], { pushes: unknown, reviews: [reviewed(builderFamilies[0], 1), approval] }), current);
   assert.equal(ordinary.author.known, false);
   assert.equal(ordinary.title, "不放行:缺合格评审");
-  assert.equal(decide(facts([], { pushes: unknown, reviews: [reviewed("openai", 2), approval] }), current).title, "放行");
-  assert.deepEqual([...new Set(Object.values(current.builders))], ["anthropic"]);
+  assert.equal(decide(facts([], { pushes: unknown, reviews: [reviewed(independent, 2), approval] }), current).title, "放行");
 });
 
-test("真实策略仅删除轮数配置仍合法；汇总暂可保留 Builder 登记", () => {
+test("真实策略仅删除轮数配置仍合法", () => {
   const current = JSON.parse(read("../.aiwork/policy.json"));
   const enabled = decide(facts([]), current);
   delete current.modification_rounds;
   const disabled = decide(facts([]), current);
   assert.deepEqual({ ...enabled, summary: disabled.summary, round_line: undefined }, { ...disabled, round_line: undefined });
   assert.doesNotThrow(() => validatePolicy(current));
-  assert.doesNotThrow(() => validatePolicy({ ...current, builders: { SunJ1ayuBoT: "anthropic" },
-    modification_rounds: { limit: 3, summary_account: "SunJ1ayuBoT" } }));
 });
 
 test("上限那张单刚发、修复中和新 head 等汇总时不停；修后仍有 P1 或超限派单才停", () => {

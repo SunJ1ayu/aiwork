@@ -43,12 +43,12 @@ print('201')
         self.env = dict(os.environ, AIWORK_APPS_DIR=str(config), FAKE_REQUEST=str(self.request),
                         PATH=str(fake) + os.pathsep + os.environ["PATH"])
 
-    def invoke(self, args, repos, permissions=None, helper=None):
+    def invoke(self, args, repos, permissions=None, helper=None, role="review"):
         grant = {"token": "fake-test-token", "expires_at": "2099-01-01T00:00:00Z",
                  "permissions": permissions or {"contents": "read", "pull_requests": "write", "metadata": "read"},
                  "repositories": [{"name": r.split('/')[1], "full_name": r} for r in repos]}
         env = dict(self.env, FAKE_GRANT=json.dumps(grant))
-        return subprocess.run([str(helper or ROOT / "bin/gh-app-token"), "review", *args], env=env,
+        return subprocess.run([str(helper or ROOT / "bin/gh-app-token"), role, *args], env=env,
                               capture_output=True, text=True, timeout=10)
 
     def test_external_location_refuses_review_key_before_config_or_network(self):
@@ -66,6 +66,33 @@ print('201')
         self.assertIn('派活方', result.stderr)
         self.assertFalse(marker.exists())
         self.assertFalse(self.request.exists())
+
+    def test_external_builder_family_selects_its_role_without_fallback(self):
+        from _test_settings import write_programs
+        config = self.root / 'settings'
+        config.mkdir()
+        write_programs(config)
+        (config / 'review.env').write_text('location=external\n')
+        self.env['AIWORK_CONFIG_DIR'] = str(config)
+        apps = self.root / 'apps'
+        contents = (apps / 'review.env').read_text()
+        (apps / 'review.env').unlink()
+        (apps / 'build.env').write_text('exit 99\n')
+        roles = {'openai': 'codex', 'deepseek': 'deepseek', 'xiaomi': 'mimo'}
+        selected_role = self.root / 'selected-role'
+        for role in roles.values():
+            (apps / f'build-{role}.env').write_text(contents + f"printf '%s' {role} > '{selected_role}'\n")
+        for family in roles:
+            with self.subTest(family=family):
+                self.env['AIWORK_BUILDER_FAMILY'] = family
+                result = self.invoke(['--repo', 'SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'], role='build')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(selected_role.read_text(), roles[family])
+        (apps / 'build-mimo.env').unlink()
+        result = self.invoke(['--repo', 'SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'], role='build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(result.returncode, 99)
+        self.assertEqual(result.stdout, '')
 
     def test_symlink_invocation_mints_the_same_scoped_token(self):
         installed = self.root / "installed"

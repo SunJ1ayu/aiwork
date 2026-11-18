@@ -41,6 +41,7 @@ def main():
     logins.add_argument('provider', choices=tuple(MODEL_LOGINS))
     roles = commands.add_parser('check-app-role')
     roles.add_argument('role')
+    roles.add_argument('--resolve', action='store_true')
     names = ('review.env', 'review-user.env', 'models.env', 'runtime.env', 'deepseek.env', 'mimo.env', 'apps', 'private-terms')
     paths = commands.add_parser('path')
     paths.add_argument('name', choices=names)
@@ -63,8 +64,9 @@ def main():
         elif args.command == 'login-path':
             value = model_login_path(args.provider)
         elif args.command == 'check-app-role':
-            check_app_role(args.role)
-            return 0
+            value = check_app_role(args.role)
+            if not args.resolve:
+                return 0
         elif args.command == 'program':
             value = program(args.name)
         elif args.command == 'check-programs':
