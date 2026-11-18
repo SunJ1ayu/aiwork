@@ -15,9 +15,14 @@ from typing import NamedTuple
 import urllib.parse
 import urllib.request
 
-from _aiwork_config import data_path
+from _aiwork_config import BUILDER_APP_ROLES, data_path
 
-LABELS = {'aiwork:task':'issues.task', 'aiwork:fix':'issues.fix'}
+LABELS = {'aiwork:task': 'issues.task', 'aiwork:fix': 'issues.fix'}
+LABELS.update({
+    f'{label}:{family}': f'{event_type}.{family}'
+    for label, event_type in LABELS.items()
+    for family in BUILDER_APP_ROLES
+})
 TERMINAL = ('done','nothing','cancelled')
 
 
@@ -41,6 +46,7 @@ class Reason:
     CLOSED = 'closed'
     LABEL_ABSENT = 'label_absent'
     UNTRUSTED = 'untrusted_actor'
+    UNROUTED = 'builder_route_missing'
     STOPPED = 'owner_stopped'
     SENT = 'already_dispatched'
     ELIGIBLE = 'eligible'
@@ -86,6 +92,13 @@ def actor(event):
 
 def trusted_accounts(project):
     return {project[k].lower() for k in ('owner','bot')}
+
+
+def label_route(project, label):
+    parts = label.split(':', 2)
+    if len(parts) == 2:
+        return project['rule']
+    return project.get('builder_rules', {}).get(parts[2])
 
 
 def relevant(row):
@@ -134,6 +147,7 @@ def plan(rows, original, busy, stops):
             reason=(Reason.CLOSED if row['issue']['state']!='open' else
                     Reason.LABEL_ABSENT if label not in present or e['event']!='labeled' else
                     Reason.UNTRUSTED if actor(e) not in trusted else
+                    Reason.UNROUTED if not label_route(row['project'], label) else
                     Reason.STOPPED if name in stops or name in state['stopped'] else
                     Reason.SENT if key in state['sent'] else None)
             if reason:decisions.append({'subject':name,'event_id':eid,'reason':reason})
@@ -224,6 +238,7 @@ class Backend:
         for project in self.config['projects']:
             issues={}
             for label in LABELS:
+                if not label_route(project, label):continue
                 for issue in self.pages(project,ISSUES_ROUTE+'?state=open&labels='+urllib.parse.quote(label,safe='')):
                     issues[issue['number']]=issue
             active=state.get('active')
@@ -246,7 +261,7 @@ class Backend:
         with self.db() as db:
             return bool(db.execute('select count(*) from run_events re join runs r on r.id=re.run_id '
                 'join events e on e.id=re.event_id where r.rule=? and e.source=? and e.key=?',
-                (c['project']['rule'],self.config['source'],c['key'])).fetchone()[0])
+                (label_route(c['project'], c['event']['label']['name']),self.config['source'],c['key'])).fetchone()[0])
 
     def post(self,c):
         project=c['project'];n=c['issue']['number'];event=c['event']
@@ -284,7 +299,13 @@ def validate(config):
         for name in ('token_command','reference_command'):
             if not isinstance(p[name],list) or not p[name] or not all(isinstance(v,str) and v for v in p[name]):
                 raise ValueError('invalid adapter command')
-        if not p['rule'] or not p['reference_root'].startswith('/'):raise ValueError('invalid project settings')
+        rules = p.get('builder_rules', {})
+        if not isinstance(rules, dict) or not rules.keys() <= BUILDER_APP_ROLES.keys():
+            raise ValueError('invalid builder rules')
+        routes = [p['rule'], *rules.values()]
+        if (not all(isinstance(rule, str) and rule.strip() for rule in routes)
+                or len(set(routes)) != len(routes) or not p['reference_root'].startswith('/')):
+            raise ValueError('invalid project settings')
 
 
 def poll(config,folder,preview=False,backend=None):

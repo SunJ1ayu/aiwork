@@ -79,6 +79,15 @@ class ReviewHandoffTests(unittest.TestCase):
         self.assertIn('--expected-head', request['argv'])
         self.assertNotIn('fixture-token', json.dumps(request))
 
+    def test_request_rejects_family_mismatch_before_reading_github(self):
+        module = load_script()
+        args = ['review-pr', '12', '--repo', 'fixture/project', '--request', '--builder-family', 'openai']
+        with patch.dict(os.environ, {'AIWORK_BUILDER_FAMILY': 'xiaomi'}), \
+                patch('sys.argv', args), \
+                patch.object(module, 'review_request') as request:
+            self.assertNotEqual(module.main(), 0)
+        request.assert_not_called()
+
     def test_auto_handoff_rejects_changed_head_before_dispatch(self):
         module = load_script()
         with tempfile.TemporaryDirectory() as folder, \

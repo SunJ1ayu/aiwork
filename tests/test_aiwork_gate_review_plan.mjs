@@ -9,7 +9,7 @@ const head = 'a'.repeat(40);
 const review = (family, id = 1) => ({id, login:policy.reviewer_bot, type:'Bot', state:'COMMENTED', commit_id:head,
   submitted_at:'2026-11-10T00:00:00Z', body:'```json\n'+JSON.stringify({verdict:'PASS',head_sha:head,model:family+'-test',family,completeness:'complete'})+'\n```'});
 const facts = (families, files=['bin/subcodex']) => ({pr:{number:1,state:'open',head_sha:head},files,
-  ci:{state:'success'},pushes:{covers_head:true,actors:['SunJ1ayuBoT']},
+  ci:{state:'success'},pushes:{covers_head:true,actors:['aiwork-build-codex[bot]']},
   reviews:[...families.map((f,i)=>review(f,i+1)),{id:99,login:policy.owner,type:'User',state:'APPROVED',commit_id:head,submitted_at:'2026-11-10T01:00:00Z',body:''}]});
 test('tiers use main policy: ordinary documents, code, judging documents, isolation', () => {
   for (const [files,tier,target,minimum] of [
@@ -75,7 +75,7 @@ test('关卡只把当前 head 上有效、完整、独立的评审计为已交�
     [{...block,state:'DISMISSED'},[]],
     [{...block,body:'unreadable'},[]],
     [{...review('deepseek'),body:review('deepseek').body+'\nConclusion: BLOCK'},[]],
-    [{...block,body:block.body.replace('"deepseek"','"anthropic"')},[]],
+    [{...block,body:block.body.replace('"deepseek"','"openai"')},[]],
   ];
   for (const [record,expected] of cases) {
     const result=decide({...facts([]),reviews:[record]},policy);

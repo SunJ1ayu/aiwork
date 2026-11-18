@@ -548,15 +548,34 @@ def review_location() -> str:
     return rows[0][2]
 
 
-def check_app_role(role: str) -> None:
+BUILDER_APP_ROLES = {
+    'openai': 'build-codex',
+    'deepseek': 'build-deepseek',
+    'xiaomi': 'build-mimo',
+}
+
+
+def check_app_role(role: str) -> str:
+    family = os.environ.get('AIWORK_BUILDER_FAMILY')
+    if (role == 'build' or role in BUILDER_APP_ROLES.values()) and family is not None:
+        if family not in BUILDER_APP_ROLES:
+            raise ConfigError('AIWORK_BUILDER_FAMILY: unknown builder family')
+        selected = BUILDER_APP_ROLES[family]
+        if role != 'build' and role != selected:
+            raise ConfigError('构建角色与派活执行家族不一致')
+        role = selected
+
+    if role in BUILDER_APP_ROLES.values() and family is None:
+        raise ConfigError('独立构建角色需要派活执行家族')
     location = review_location()
     if location == 'unisolated':
-        return
-    allowed = 'review' if location == 'local' else 'build'
-    if role != allowed:
+        return role
+    allowed = {'review'} if location == 'local' else {'build', *BUILDER_APP_ROLES.values()}
+    if role not in allowed:
         raise ConfigError('本机角色不允许使用这把机器人钥匙；评审由派活方交给评审机器')
     try:
-        if any(path.name != allowed + '.env' for path in apps_dir().iterdir() if path.name.endswith('.env')):
+        if any(path.stem not in allowed for path in apps_dir().iterdir() if path.name.endswith('.env')):
             raise ConfigError('隔离机器存在其他角色配置；先核实凭证部署，不读取钥匙')
     except OSError as exc:
         raise ConfigError('无法检查本机机器人角色配置') from exc
+    return role

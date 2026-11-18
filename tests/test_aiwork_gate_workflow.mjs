@@ -1,3 +1,4 @@
+import { authorOf } from "../gate/decide.mjs";
 // 项目接入关卡只有一种方式：.aiwork/policy.json，加上与 templates/ 相同的两份 workflow。
 // 跑法:node --test tests/test_aiwork_gate_workflow.mjs
 import { test } from "node:test";
@@ -240,7 +241,14 @@ test("aiwork 自己的策略：真拦截，不登记共用的 build 账号，罩
   assert.equal(policy.check_name, "aiwork-gate");
   assert.equal(policy.builders["aiwork-build[bot]"], undefined);
   assert.equal(policy.modification_rounds.summary_account, "SunJ1ayuBoT");
-  assert.equal(policy.builders[policy.modification_rounds.summary_account], "anthropic");
+  assert.equal(policy.builders[policy.modification_rounds.summary_account], undefined);
+  for (const [login, family] of Object.entries({
+    "aiwork-build-codex[bot]": "openai",
+    "aiwork-build-deepseek[bot]": "deepseek",
+    "aiwork-build-mimo[bot]": "xiaomi",
+  })) {
+    assert.equal(authorOf({ covers_head: true, actors: [login] }, policy).family, family);
+  }
   assert.equal(policy.high_min_families, 2);
   for (const path of [
     ".github/workflows/ci.yml",

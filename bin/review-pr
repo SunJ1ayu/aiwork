@@ -613,6 +613,9 @@ def main() -> int:
             if (args.auto or args.leg or args.dry_run or args.retry_publish or args.expected_head
                     or args.pr < 1 or not re.fullmatch(r'[a-z][a-z0-9-]*', args.builder_family or '')):
                 raise ReviewError('--request requires PR and --builder-family, without review options')
+            configured_family = os.environ.get('AIWORK_BUILDER_FAMILY')
+            if configured_family is not None and configured_family != args.builder_family:
+                raise ReviewError('--builder-family does not match AIWORK_BUILDER_FAMILY')
             print(json.dumps(review_request(args.repo or repository_from_origin(), args.pr,
                                             args.builder_family), ensure_ascii=False, indent=2))
             return 0
