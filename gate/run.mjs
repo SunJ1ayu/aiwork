@@ -34,6 +34,12 @@ export function validatePolicy(p) {
   if (typeof p?.owner !== "string" || !p.owner) bad.push("owner");
   if (!p?.builders || typeof p.builders !== "object" ||
       Array.isArray(p.builders) || !Object.keys(p.builders).length) bad.push("builders");
+  const extraFamilies = p?.unknown_author_extra_families;
+  if (p && Object.hasOwn(p, "unknown_author_extra_families") &&
+      (!Array.isArray(extraFamilies) || !extraFamilies.every((family) =>
+        typeof family === "string" && /^[a-z][a-z0-9-]*$/.test(family)))) {
+    bad.push("unknown_author_extra_families");
+  }
   if (typeof p?.reviewer_bot !== "string" || !p.reviewer_bot.endsWith("[bot]")) bad.push("reviewer_bot");
   if (typeof p?.ci?.workflow_path !== "string" || typeof p?.ci?.event !== "string") bad.push("ci");
   if (!Array.isArray(p?.judging_surface) || !Array.isArray(p?.high)) bad.push("judging_surface/high");

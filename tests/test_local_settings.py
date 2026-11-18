@@ -83,6 +83,11 @@ class SettingsTest(unittest.TestCase):
         config.check_app_role('build')
         config.check_app_role('review')
 
+    def test_builder_role_families_match_project_policy(self):
+        from _aiwork_config import BUILDER_APP_ROLES
+        policy = json.loads((ROOT / '.aiwork/policy.json').read_text())
+        self.assertEqual(set(BUILDER_APP_ROLES), set(policy['builders'].values()))
+
     def test_explicit_builder_role_must_match_dispatch_family(self):
         import _aiwork_config as config
         with unittest.mock.patch.dict(os.environ, {'AIWORK_BUILDER_FAMILY': 'openai'}):

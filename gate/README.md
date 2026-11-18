@@ -195,7 +195,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 
 作者识别继续用 `collect.mjs` 的实际推送活动和 `decide.mjs` 的 `authorOf`，策略来源仍是 main。
 已知作者时，登记过的其他 Builder 家族可以审这次 PR；审核排除只针对本次作者家族。
-作者 UNKNOWN 时保留原有保守处理，不从共享 build 账号猜测实际模型。
+作者 UNKNOWN 时，排除 `builders` 登记的家族以及项目策略可选的 `unknown_author_extra_families`。后者用于可能通过共用账号写代码的其他家族。
 本改动不新增可信执行来源，也不改变 App 权限、模型账号配置或云平台接入。
 
 ## 首次部署验收(shadow:检查名 `aiwork-gate-shadow`,只报不拦)

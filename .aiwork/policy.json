@@ -13,6 +13,7 @@
     "aiwork-build-deepseek[bot]": "deepseek",
     "aiwork-build-mimo[bot]": "xiaomi"
   },
+  "unknown_author_extra_families": ["anthropic"],
   "reviewer_bot": "aiwork-review[bot]",
   "merge_label": "aiwork:merge",
   "merge_requesters": [],

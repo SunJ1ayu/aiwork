@@ -237,19 +237,19 @@ test("summary skill 的唯一定义直接生成格式对照用例", () => {
   validatePolicy(current);
 });
 
-test("真实策略的 UNKNOWN 作者只计入未登记为 Builder 的评审家族", () => {
+test("真实策略的 UNKNOWN 作者排除已登记及使用共享账号的执行家族", () => {
   const current = JSON.parse(read("../.aiwork/policy.json"));
   const approval = { id: 90, login: current.owner, type: "User", state: "APPROVED", commit_id: HEAD,
     submitted_at: "2026-10-30T04:00:00Z", body: "" };
   const reviewed = (family, id) => ({ ...pass, id, body: pass.body.replace('"openai"', JSON.stringify(family)) });
   const unknown = { covers_head: true, actors: ["aiwork-build[bot]"] };
-  const builderFamilies = [...new Set(Object.values(current.builders))];
+  const builderFamilies = [...new Set([...Object.values(current.builders), "anthropic"])];
   const independent = "moonshot";
   const reviews = [...builderFamilies.map((f, i) => reviewed(f, i + 1)), reviewed(independent, 10), approval];
   const high = decide(facts([], { pushes: unknown, files: ["bin/gh-app-token"], reviews }), current);
   assert.equal(high.title, `不放行:high 路径要 ${current.high_min_families} 家不同家族都 PASS`);
   assert.deepEqual(high.passes.map((r) => r.family).sort(), [independent]);
-  const ordinary = decide(facts([], { pushes: unknown, reviews: [reviewed(builderFamilies[0], 1), approval] }), current);
+  const ordinary = decide(facts([], { pushes: unknown, reviews: [reviewed("anthropic", 1), approval] }), current);
   assert.equal(ordinary.author.known, false);
   assert.equal(ordinary.title, "不放行:缺合格评审");
   assert.equal(decide(facts([], { pushes: unknown, reviews: [reviewed(independent, 2), approval] }), current).title, "放行");
