@@ -5,10 +5,11 @@ description: 每小时核对评审、合并收尾与派活进展。
 
 # 每小时巡检
 
-先做便宜检查：开着的 PR 当前 head 是否已有任务单要求的全部评审、是否已有该 head 的汇总；最近两小时合并的 PR 所 Closes 的 issue 是否仍开着；带派活标签的进行中 issue（标签从 `bin/_label_dispatch.py` 的 `LABELS` 读取，操作入口见 `docs/mac-host.md`）；派活 issue 或 PR 是否满四小时没有新推送、新评审。没有开着的 PR 且没有进行中的派活 issue，也算需要处理。以上均无需处理时只回「无变化」，不读规则、不留言。
+先做便宜检查：开着的 PR 上执行方是否有尚未答复的新问题；开着的 PR 当前 head 是否已有任务单要求的全部评审、是否已有该 head 的汇总；最近两小时合并的 PR 所 Closes 的 issue 是否仍开着；带派活标签的进行中 issue（标签从 `bin/_label_dispatch.py` 的 `LABELS` 读取，操作入口见 `docs/mac-host.md`）；派活 issue 或 PR 是否满四小时没有新推送、新评审。没有开着的 PR 且没有进行中的派活 issue，也算需要处理。以上均无需处理时只回「无变化」，不读规则、不留言。
 
 有事时先读 REVIEW-RULES.md，依 summary / delegate skill 处理：
 
+- 执行方提问：按 `workflow/CLAUDE.md`「执行方提问与续接」答复、交业主和续派。
 - 评审齐全且未汇总：核实后在当前 head 发布 COMMENT 和 aiwork-summary 记录；照单修附完整修改单，先去掉旧派活标签再打修改类派活标签；合并或交业主时去掉派活标签。
 - 合并收尾：核实 PR 的 Closes 关联，手动关闭仍开着的对应 issue，并去掉派活标签。
 - 空闲派活：按 #43 有效决定和路线图写下一张任务单进对应 issue，打任务类派活标签，一次一单；拿不准交业主。
