@@ -171,12 +171,12 @@ Cursor 的 CLI 由发布侧监管入口创建独立进程空间，再降到普�
 
 Mac 本机部署验收另交本人完成，PR 中的 Linux 测试不能代替：
 
-1. 记录两台独立实例与代码版本；各自运行 `check-vm-isolation`，核对没有共享、互相登录通道；角色配置按 [角色检查入口](../bin/_aiwork_config.py) 核对。执行方三家各带本家派活家族（`AIWORK_BUILDER_FAMILY`）运行 `aiwork-config check-app-role build`，解析到[执行方角色登记](../bin/_aiwork_config.py)里本家的角色并各自通过，本家角色换令牌（`gh-app-token build --grant`）也各自成功；不带派活家族只解析成通用 `build`，只放 `build.env` 也能通过，验不出三家角色是否部署。评审方 `aiwork-config check-app-role review` 应通过；交换角色检查均应拒绝。
+1. 记录两台独立实例与代码版本；各自运行 `check-vm-isolation`，核对没有共享、互相登录通道；角色配置按 [角色检查入口](../bin/_aiwork_config.py) 核对。执行方各带本家派活家族（`AIWORK_BUILDER_FAMILY`）运行 `aiwork-config check-app-role build`，解析到[执行方角色登记](../bin/_aiwork_config.py)里本家的角色并各自通过，本家角色换令牌（`gh-app-token build --grant`）也各自成功；不带派活家族只解析成通用 `build`，只放 `build.env` 也能通过，验不出各执行方角色是否部署。评审方 `aiwork-config check-app-role review` 应通过；交换角色检查均应拒绝。
 2. 执行方不放评审私钥，直接运行正式评审及重发入口应在联网前拒绝；只生成交接资料。评审方不放构建和汇总钥匙，构建取令牌入口应在换令牌前拒绝。检查真实文件部署，不能只信角色设置。
 3. 从派活方发送一单本人授权的评审，核实实际 worker、PR head、作者与发布结果；旧 head 交接应拒绝，失败保存和重发仅留在评审机。两台重启后重新检查隔离与路由。
 4. 按上方账号部署与真机清单核实评审机内部边界；上述验收不代表可以取消业主批准。任何一步缺证据，都不能写已通过。
-5. 写代码机三家各真接一张单：真读到一张派来的任务单、连上 GitHub；其余对照 [#171 决定一](https://github.com/SunJ1ayu/aiwork/issues/171#issuecomment-6998669468)的同一份共同执行规矩逐项核对，三家共用这一份，不各家各写一套。
-6. 每次部署改动都要用一张真单从头跑一遍才算验收（[业主 2026-11-19 决定](https://github.com/SunJ1ayu/aiwork/issues/43#issuecomment-7000910124)「另定」），三家各自核对，不能只核一家。
+5. 写代码机每家各真接一张单：真读到一张派来的任务单、连上 GitHub；其余对照 [#171 决定一](https://github.com/SunJ1ayu/aiwork/issues/171#issuecomment-6998669468)的同一份共同执行规矩逐项核对，共用这一份，不各写一套。
+6. 以后每次部署改动，都要用一张真单从头跑一遍才算验收（[业主 2026-11-19 决定](https://github.com/SunJ1ayu/aiwork/issues/43#issuecomment-7000910124)「另定」）。
 
 ## 4. autoloop：只安装和连接，不配置派活
 
