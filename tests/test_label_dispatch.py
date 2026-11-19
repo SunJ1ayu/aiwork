@@ -61,6 +61,43 @@ class Admission(unittest.TestCase):
         self.assertEqual(d.LABELS[fix], 'issues.fix.deepseek')
         self.assertEqual(d.label_route(row['project'], fix), 'deepseek-builder')
 
+    def test_legacy_and_family_labels_never_dispatch_twice(self):
+        for base in (TASK, FIX):
+            family = base + ':openai'
+            row = item(1, [event(1, label=base), event(2, label=family)], (base, family))
+            row['project']['builder_rules'] = {'openai': 'codex-builder'}
+            for sent in ([], [d.event_key(PROJECT['repo'], 1)]):
+                with self.subTest(base=base, sent=sent):
+                    original = dict(state(), sent=sent)
+                    result = self.plan([row], original)
+                    self.assertIsNone(result['candidate'])
+                    self.assertTrue(any(x['reason'] == d.Reason.CONFLICT
+                                        for x in result['decisions']))
+            # Removing the obsolete label enables the family route.
+            row['issue']['labels'] = [{'name': family}]
+            row['events'].append(event(3, 'unlabeled', label=base))
+            self.assertEqual(self.plan([row])['candidate']['event']['id'], 2)
+
+    def test_ineligible_peer_does_not_block_routed_label(self):
+        for base in (TASK, FIX):
+            for valid in (base, base + ':openai'):
+                for peer, login, reason in (
+                        (base + ':opneai', 'owner', d.Reason.UNROUTED),
+                        (base + ':deepseek', 'owner', d.Reason.UNROUTED),
+                        (base + ':xiaomi', 'outsider', d.Reason.UNTRUSTED)):
+                    with self.subTest(valid=valid, peer=peer, login=login):
+                        row = item(1, [event(1, label=valid),
+                                      event(2, actor=login, label=peer)], (valid, peer))
+                        row['project']['builder_rules'] = {
+                            'openai': 'codex-builder', 'xiaomi': 'mimo-builder'}
+                        result = self.plan([row])
+                        self.assertIsNotNone(result['candidate'])
+                        self.assertEqual(result['candidate']['event']['id'], 1)
+                        self.assertIn({'subject': d.subject(row), 'event_id': 2,
+                                       'reason': reason}, result['decisions'])
+                        self.assertFalse(any(x['reason'] == d.Reason.CONFLICT
+                                             for x in result['decisions']))
+
     def test_trusted_removal_releases_97_for_124(self):
         for actor,allowed in [('owner',True),('builder',True),('outsider',False)]:
             p=self.plan([item(97,[event(10),event(11,'unlabeled',actor)],labels=()),
@@ -275,6 +312,28 @@ class Orchestration(unittest.TestCase):
             d.atomic(files['stops'],[])
             self.assertTrue(d.poll({},folder,backend=Fake())['ok'])
 
+    def test_observe_unrouted_family_labels_records_reason(self):
+        for family in ('openai', 'opneai'):
+            for base in (TASK, FIX):
+                with self.subTest(family=family, base=base):
+                    label = base + ':' + family
+                    row = item(1, [event(1, label=label)], (label,))
+                    backend = d.Backend({'projects': [PROJECT]})
+                    def api(project, path):
+                        if path.startswith(d.ISSUES_ROUTE + '?'):
+                            return [row['issue']] if ('labels=' not in path or
+                                d.urllib.parse.quote(label, safe='') in path) else []
+                        return row['events']
+                    backend.api = api
+                    backend.busy = lambda: set()
+                    with tempfile.TemporaryDirectory() as td:
+                        record = d.poll({}, Path(td), True, backend)
+                        self.assertTrue(record['ok'])
+                        self.assertEqual(record['decisions'], [{
+                            'subject': d.subject(row), 'event_id': 1,
+                            'reason': d.Reason.UNROUTED}])
+                        self.assertEqual(record['observed'][0]['label'], label)
+
     def test_observe_backfills_active_outside_open_labels(self):
         for status,labels in [('closed',()),('open',())]:
             with self.subTest(status=status):
@@ -297,14 +356,18 @@ class Orchestration(unittest.TestCase):
     def test_pagination_and_pr_fix_observation(self):
         backend=d.Backend({'projects':[PROJECT]})
         pr={'number':1,'state':'open','labels':[{'name':FIX}],'pull_request':{}}
+        unrelated={'number':2,'state':'open','labels':[{'name':'help wanted'}]}
         calls=[]
         def api(project,path):
             calls.append(path)
-            if path.startswith(d.ISSUES_ROUTE+'?'):return [pr] if d.urllib.parse.quote(FIX,safe='') in path else []
+            if path.startswith(d.ISSUES_ROUTE+'?'):
+                return ([unrelated] * 100 if '&page=1' in path else [pr])
             return [event(1,label=FIX)]
         backend.api=api
         rows=backend.observe(state())
         self.assertEqual(len(rows),1)
+        self.assertTrue(any('page=2' in path for path in calls))
+        self.assertFalse(any(d.issue_path(2, d.EVENTS_SUFFIX) in path for path in calls))
         self.assertIsNotNone(d.plan(rows,state(),set(),set())['candidate'])
         self.assertTrue(all('per_page=100' in path for path in calls))
 
