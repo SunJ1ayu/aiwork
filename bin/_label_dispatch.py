@@ -148,22 +148,25 @@ def plan(rows, original, busy, stops):
         present={x['name'] for x in row['issue']['labels']}
         events=relevant(row)
         kinds = {}
-        for label in present:
-            kind = label_kind(label)
-            if kind:
-                kinds.setdefault(kind, set()).add(label)
         for label in sorted({e['label']['name'] for e in events}):
             matching=[e for e in events if e['label']['name']==label]
             e=matching[-1]; eid=int(e['id']); key=event_key(row['project']['repo'],eid)
             reason=(Reason.CLOSED if row['issue']['state']!='open' else
                     Reason.LABEL_ABSENT if label not in present or e['event']!='labeled' else
                     Reason.UNTRUSTED if actor(e) not in trusted else
-                    Reason.UNROUTED if not label_route(row['project'], label) else
-                    Reason.CONFLICT if len(kinds.get(label_kind(label), ())) > 1 else
-                    Reason.STOPPED if name in stops or name in state['stopped'] else
-                    Reason.SENT if key in state['sent'] else None)
-            if reason:decisions.append({'subject':name,'event_id':eid,'reason':reason})
-            else:candidates.append({'subject':name,'key':key,'event':e,'project':row['project'],'issue':row['issue']})
+                    Reason.UNROUTED if not label_route(row['project'], label) else None)
+            if reason:
+                decisions.append({'subject':name,'event_id':eid,'reason':reason})
+            else:
+                kinds.setdefault(label_kind(label), []).append((e, key))
+        # Only trusted, present, routed labels can compete for the same dispatch.
+        for group in kinds.values():
+            for e, key in group:
+                reason=(Reason.CONFLICT if len(group) > 1 else
+                        Reason.STOPPED if name in stops or name in state['stopped'] else
+                        Reason.SENT if key in state['sent'] else None)
+                if reason:decisions.append({'subject':name,'event_id':int(e['id']),'reason':reason})
+                else:candidates.append({'subject':name,'key':key,'event':e,'project':row['project'],'issue':row['issue']})
     candidates.sort(key=lambda c:(int(c['event']['id']),c['subject']))
     available=not state.get('active') and not busy
     # Fixes on the active issue may continue its conversation, but only while no round is live.

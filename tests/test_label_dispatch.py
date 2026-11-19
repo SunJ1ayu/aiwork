@@ -71,7 +71,7 @@ class Admission(unittest.TestCase):
                     original = dict(state(), sent=sent)
                     result = self.plan([row], original)
                     self.assertIsNone(result['candidate'])
-                    self.assertTrue(any(x['reason'] == 'conflicting_dispatch_labels'
+                    self.assertTrue(any(x['reason'] == d.Reason.CONFLICT
                                         for x in result['decisions']))
             # Removing the obsolete label enables the family route.
             row['issue']['labels'] = [{'name': family}]
