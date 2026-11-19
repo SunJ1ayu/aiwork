@@ -47,6 +47,7 @@ class Reason:
     LABEL_ABSENT = 'label_absent'
     UNTRUSTED = 'untrusted_actor'
     UNROUTED = 'builder_route_missing'
+    CONFLICT = 'conflicting_dispatch_labels'
     STOPPED = 'owner_stopped'
     SENT = 'already_dispatched'
     ELIGIBLE = 'eligible'
@@ -101,9 +102,15 @@ def label_route(project, label):
     return project.get('builder_rules', {}).get(parts[2])
 
 
+def label_kind(label):
+    parts = label.split(':', 2)
+    base = ':'.join(parts[:2])
+    return base if base in LABELS and (len(parts) == 2 or parts[2]) else None
+
+
 def relevant(row):
     return sorted((e for e in row['events'] if e.get('event') in ('labeled','unlabeled')
-                   and (e.get('label') or {}).get('name') in LABELS),key=lambda e:int(e['id']))
+                   and label_kind((e.get('label') or {}).get('name', ''))),key=lambda e:int(e['id']))
 
 
 def plan(rows, original, busy, stops):
@@ -140,14 +147,19 @@ def plan(rows, original, busy, stops):
         trusted=trusted_accounts(row['project'])
         present={x['name'] for x in row['issue']['labels']}
         events=relevant(row)
-        for label in LABELS:
+        kinds = {}
+        for label in present:
+            kind = label_kind(label)
+            if kind:
+                kinds.setdefault(kind, set()).add(label)
+        for label in sorted({e['label']['name'] for e in events}):
             matching=[e for e in events if e['label']['name']==label]
-            if not matching:continue
             e=matching[-1]; eid=int(e['id']); key=event_key(row['project']['repo'],eid)
             reason=(Reason.CLOSED if row['issue']['state']!='open' else
                     Reason.LABEL_ABSENT if label not in present or e['event']!='labeled' else
                     Reason.UNTRUSTED if actor(e) not in trusted else
                     Reason.UNROUTED if not label_route(row['project'], label) else
+                    Reason.CONFLICT if len(kinds.get(label_kind(label), ())) > 1 else
                     Reason.STOPPED if name in stops or name in state['stopped'] else
                     Reason.SENT if key in state['sent'] else None)
             if reason:decisions.append({'subject':name,'event_id':eid,'reason':reason})
@@ -237,10 +249,10 @@ class Backend:
         rows=[]
         for project in self.config['projects']:
             issues={}
-            for label in LABELS:
-                if not label_route(project, label):continue
-                for issue in self.pages(project,ISSUES_ROUTE+'?state=open&labels='+urllib.parse.quote(label,safe='')):
-                    issues[issue['number']]=issue
+            # Discover labels independently of configured routes, including misspelled families.
+            for issue in self.pages(project, ISSUES_ROUTE + '?state=open'):
+                if any(label_kind(label['name']) for label in issue['labels']):
+                    issues[issue['number']] = issue
             active=state.get('active')
             if active:
                 repo,n=split_subject(active['subject'])

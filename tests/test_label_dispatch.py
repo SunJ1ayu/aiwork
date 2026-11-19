@@ -336,14 +336,18 @@ class Orchestration(unittest.TestCase):
     def test_pagination_and_pr_fix_observation(self):
         backend=d.Backend({'projects':[PROJECT]})
         pr={'number':1,'state':'open','labels':[{'name':FIX}],'pull_request':{}}
+        unrelated={'number':2,'state':'open','labels':[{'name':'help wanted'}]}
         calls=[]
         def api(project,path):
             calls.append(path)
-            if path.startswith(d.ISSUES_ROUTE+'?'):return [pr] if d.urllib.parse.quote(FIX,safe='') in path else []
+            if path.startswith(d.ISSUES_ROUTE+'?'):
+                return ([unrelated] * 100 if '&page=1' in path else [pr])
             return [event(1,label=FIX)]
         backend.api=api
         rows=backend.observe(state())
         self.assertEqual(len(rows),1)
+        self.assertTrue(any('page=2' in path for path in calls))
+        self.assertFalse(any(d.issue_path(2, d.EVENTS_SUFFIX) in path for path in calls))
         self.assertIsNotNone(d.plan(rows,state(),set(),set())['candidate'])
         self.assertTrue(all('per_page=100' in path for path in calls))
 
