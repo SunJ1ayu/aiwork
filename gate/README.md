@@ -200,17 +200,17 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 
 ## 首次部署验收(shadow:检查名 `aiwork-gate-shadow`,只报不拦)
 
-合并后,用一个无害的测试 PR(云端 Claude 以机器账号开)逐条看。每条写下 PR 号、提交号和检查的链接。
+合并后,用一个无害的测试 PR 逐条看。测试 PR 用 `builders` 登记的执行方本家构建机器人开:作者未知时的排除集见「模型按任务切换角色」,S3、S6 的预期凑不出来。每条写下 PR 号、提交号和检查的链接。
 
 | # | 做什么 | 预期 | 证明了什么 |
 |---|---|---|---|
 | S0 | 合并本 PR 后看 main 上 CI 跑完触发的那次 aiwork-gate | 运行成功,只重算开着的 PR;main 的提交上**没有** `aiwork-gate-shadow` | 事件只是门铃,不往非 head 的提交上写 |
 | S1 | 开测试 PR | 立刻出现 `aiwork-gate-shadow`(重算中 / 等 CI);检查的 app 是 `aiwork-gate`(id 5121026),不是 GitHub Actions | 占位先行;结果由 App 发出 |
-| S2 | 等 CI 跑完 | failure「不放行:缺合格评审」;作者是 `builders` 里的账号,不在名单里就是 UNKNOWN | CI 按本 PR 认;活动记录接口在 `GITHUB_TOKEN` 下读得到 |
-| S3 | 本机 `review-pr` 在当前 head 发 PASS(openai) | 一两分钟内自动重算为 success「放行」 | 评审 → `aiwork-review-ping` → 关卡重算这条链通 |
+| S2 | 等 CI 跑完 | failure「不放行:缺合格评审」;G4 显示作者是开 PR 的本家构建机器人 | CI 按本 PR 认;活动记录接口在 `GITHUB_TOKEN` 下读得到 |
+| S3 | 本机 `review-pr` 在当前 head 发 PASS(家族不是开 PR 的那个执行方家族) | 一两分钟内自动重算为 success「放行」 | 评审 → `aiwork-review-ping` → 关卡重算这条链通 |
 | S4 | 同一 head 再发一条 BLOCK | failure(G5);业主**在 BLOCK 之后**批准 → success | BLOCK 与批准的先后被认 |
-| S5 | 业主在网页上改测试 PR 的一个文件(非机器账号推送) | failure,作者 UNKNOWN(G4);业主在新 head 批准 + 有 PASS → success | 混合作者要业主批准 |
-| S6 | 测试 PR 改 `judging_surface` 里的一个文件 / 改 `high` 里的一个文件 | 分别要业主批准(G2)/ `high_min_families` 家不同家族 PASS + 业主批准(G6) | 判卷面与 high 路径 |
+| S5 | 业主在网页上改测试 PR 的一个文件(非构建机器人推送) | failure,作者 UNKNOWN(G4);业主在新 head 批准 + 排除集之外家族的合格 PASS → success | 混合作者要业主批准 |
+| S6 | 测试 PR 改 `judging_surface` 里的一个文件 / 改 `high` 里的一个文件 | 分别要业主批准(G2)/ `high_min_families` 家不同家族 PASS(都不是开 PR 的本家)+ 业主批准(G6) | 判卷面与 high 路径 |
 | S7 | 给 PR 加标签 `aiwork:recheck` | 重算一次;算的时候合并框里这条检查显示"重算中" | 手动重算可用;占位压得住上一次的结论 |
 | S8 | 编辑测试 PR 的标题;再改一次目标分支 | 各重算一次;改目标分支后 G1 ❌「目标分支在这次 CI 之后改过」,推一个新提交(或关掉再重开 PR)让 CI 重跑后恢复 | edited 事件会触发重判;旧目标上的 CI 不算数 |
 | S9 | 连着触发两次重算（比如先后加两个标签），看 Actions 里 aiwork-gate 的运行 | 两次运行一个跑完另一个才开始 | 同一时间只有一次运行 |
@@ -220,7 +220,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 | # | 做什么 | 预期 | 证明了什么 |
 |---|---|---|---|
 | S10 | 业主给一个会放行的测试 PR 贴 `aiwork:merge` | 那次运行放行后当场合并:合并者是 `aiwork-gate` App,合进去的是判过的 head | 合并用的是刚判过的数据和 head |
-| S11 | 机器账号(Builder)给另一个会放行的测试 PR 贴 `aiwork:merge` | 不合并;运行摘要里写"是 SunJ1ayuBoT 提的,不算数" | Builder 合不了自己的 PR |
+| S11 | 登记执行方的本家构建机器人给自己开的会放行测试 PR 贴 `aiwork:merge` | 不合并;运行摘要里写明这次合并请求是谁提的、不算数(只认业主和 `merge_requesters`) | 登记的执行方合不了自己的 PR |
 | S12 | 业主给一个还缺评审的测试 PR 贴 `aiwork:merge`,不推新提交，之后补上 PASS | 贴的时候不合;PASS 之后那次运行合并 | 同一提交的请求留着,放行时才合 |
 | S12a | 在旧提交贴合并标签后、关卡运行前推新提交，再补齐新提交的放行条件 | 不合新提交；检查摘要提示摘掉重贴。重贴并保存后可合 | 绑定的是原始标签事件的提交；旧标签和无记录不授权新提交 |
 | S13 | 两个都会放行、都指向 main 的测试 PR,业主都贴上 `aiwork:merge` | 合进去一个;另一个被 GitHub 拒(分支落后于 main),摘要里写明,请求留着 | 连着合并时,后一个必须先和新的 main 一起测过 |
@@ -236,4 +236,4 @@ S0–S13 验收全部符合预期,且之后至少 5 个真实 PR 上 shadow 的�
 
 1. 发一个 PR 把 `policy.json` 的 `check_name` 改为 `aiwork-gate`(连同钉住它的那条测试;判卷面,要业主批准);
 2. 业主按「已接入仓库迁移」第 1–2 步配置 main 规则。
-3. 确认:故意缺评审的 PR 合并按钮被挡住;机器账号在网页上合并被拒;按 S15 验收;贴了标签、放行的 PR 由 App 合进去。
+3. 确认:故意缺评审的 PR 合并按钮被挡住;执行方的构建机器人在网页上合并被拒;按 S15 验收;贴了标签、放行的 PR 由 App 合进去。
