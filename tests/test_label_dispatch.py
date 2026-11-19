@@ -78,6 +78,26 @@ class Admission(unittest.TestCase):
             row['events'].append(event(3, 'unlabeled', label=base))
             self.assertEqual(self.plan([row])['candidate']['event']['id'], 2)
 
+    def test_ineligible_peer_does_not_block_routed_label(self):
+        for base in (TASK, FIX):
+            for valid in (base, base + ':openai'):
+                for peer, login, reason in (
+                        (base + ':opneai', 'owner', d.Reason.UNROUTED),
+                        (base + ':deepseek', 'owner', d.Reason.UNROUTED),
+                        (base + ':xiaomi', 'outsider', d.Reason.UNTRUSTED)):
+                    with self.subTest(valid=valid, peer=peer, login=login):
+                        row = item(1, [event(1, label=valid),
+                                      event(2, actor=login, label=peer)], (valid, peer))
+                        row['project']['builder_rules'] = {
+                            'openai': 'codex-builder', 'xiaomi': 'mimo-builder'}
+                        result = self.plan([row])
+                        self.assertIsNotNone(result['candidate'])
+                        self.assertEqual(result['candidate']['event']['id'], 1)
+                        self.assertIn({'subject': d.subject(row), 'event_id': 2,
+                                       'reason': reason}, result['decisions'])
+                        self.assertFalse(any(x['reason'] == d.Reason.CONFLICT
+                                             for x in result['decisions']))
+
     def test_trusted_removal_releases_97_for_124(self):
         for actor,allowed in [('owner',True),('builder',True),('outsider',False)]:
             p=self.plan([item(97,[event(10),event(11,'unlabeled',actor)],labels=()),
