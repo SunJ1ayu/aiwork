@@ -7,7 +7,7 @@ description: 每小时核对评审、合并收尾与派活进展。
 
 「谁来做」（谁巡检、谁答复执行方的提问、发现后归谁）见 `workflow/CLAUDE.md`「执行方提问与续接」的唯一定义。
 
-**巡检每小时查哪些地方**（唯一定义，别处只写指向）：先做便宜检查：开着的 PR 和带派活标签的进行中 issue 上执行方是否有尚未答复的新问题；开着的 PR 当前 head 是否已有任务单要求的全部评审、是否已有该 head 的汇总（草稿状态的 PR 不催评审和汇总，标记见 `workflow/CLAUDE.md`「执行方提问与续接」）；最近两小时合并的 PR 所 Closes 的 issue 是否仍开着；带派活标签的进行中 issue（标签从 `bin/_label_dispatch.py` 的 `LABELS` 读取，操作入口见 `docs/mac-host.md`）。没有开着的 PR 且没有进行中的派活 issue，也算需要处理。以上均无需处理时只回「无变化」，不读规则、不留言。
+**巡检每小时查哪些地方**（唯一定义，别处只写指向）：先做便宜检查：开着的 PR 和带派活标签的进行中 issue 上执行方是否有尚未答复的新问题；开着的 PR 当前 head 是否已有任务单要求的全部评审、是否已有该 head 的汇总（草稿状态的 PR 不催评审和汇总，见 `workflow/CLAUDE.md`「执行方提问与续接」）；最近两小时合并的 PR 所 Closes 的 issue 是否仍开着；带派活标签的进行中 issue（标签从 `bin/_label_dispatch.py` 的 `LABELS` 读取，操作入口见 `docs/mac-host.md`）。没有开着的 PR 且没有进行中的派活 issue，也算需要处理。以上均无需处理时只回「无变化」，不读规则、不留言。
 
 有事时先读 REVIEW-RULES.md，依 summary / delegate skill 处理：
 
