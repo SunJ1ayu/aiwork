@@ -68,13 +68,26 @@ jwt="$head.$claims.$sig"
 
 body=$(jq -cn --arg r "$REPOS" --argjson p "$PERMISSIONS" \
   '{repositories: ($r | split(" ") | map(select(. != ""))), permissions: $p}')
-out=$(curl -sS --connect-timeout 10 --max-time 30 --retry 2 --retry-all-errors --retry-delay 1 -X POST -w '\n%{http_code}' \
+for attempt in 1 2 3; do
+  request_failed=0
+out=$(curl -sS --connect-timeout 10 --max-time 30 -X POST -w '\n%{http_code}' \
   -H @<(printf 'Authorization: Bearer %s\n' "$jwt") \
   -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
   --data-binary @<(printf '%s' "$body") \
-  "https://api.github.com/app/installations/$INSTALLATION_ID/access_tokens")
+  "https://api.github.com/app/installations/$INSTALLATION_ID/access_tokens") || request_failed=1
 code=${out##*$'\n'}
 resp=${out%$'\n'*}
+  if [ "$request_failed" = 0 ] && [ "$code" = 201 ]; then
+    break
+  fi
+  if [ "$attempt" = 3 ]; then
+    break
+  fi
+  case "$code" in
+    429|5??|000) sleep "$attempt" ;;
+    *) if [ "$request_failed" = 1 ]; then sleep "$attempt"; else break; fi ;;
+  esac
+done
 if [ "$code" != 201 ]; then
   echo "gh-app-token: 换令牌失败 HTTP $code:$(jq -r '.message // empty' <<<"$resp" 2>/dev/null)" >&2
   exit 1

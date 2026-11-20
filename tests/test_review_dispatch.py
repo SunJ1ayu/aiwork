@@ -153,7 +153,10 @@ class PublisherIntegrationTests(unittest.TestCase):
             with self.subTest(complete=complete):
                 self.publisher_case(complete)
 
-    def publisher_case(self, complete):
+    def test_notice_failure_preserves_report_and_exit(self):
+        self.publisher_case(False, OSError('network unavailable'))
+
+    def publisher_case(self, complete, notice_error=None):
         import tempfile, json, io, subprocess
         from unittest.mock import patch
         from contextlib import redirect_stdout, redirect_stderr
@@ -166,7 +169,7 @@ class PublisherIntegrationTests(unittest.TestCase):
                          bool(complete), bool(complete), 0 if complete else 1)
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
         with tempfile.TemporaryDirectory() as directory, \
-             patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
+             patch.object(publisher, 'publish_dispatch_failure', side_effect=notice_error) as failure_publication, \
              patch.object(publisher, 'data_path', return_value=Path(directory)), \
              patch.object(publisher, 'read_dispatch_state', side_effect=lambda *args: state.copy()) as read, \
              patch.object(publisher._leg_session, 'choose_leg', return_value=('moonshot', 'kimi-test')), \
@@ -198,7 +201,7 @@ class PublisherIntegrationTests(unittest.TestCase):
                 publisher.read_dispatch_state('example/repo', 1, 'openai')
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as directory, \
-             patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
+             patch.object(publisher, 'publish_dispatch_failure', side_effect=notice_error) as failure_publication, \
              patch.object(publisher, 'data_path', return_value=Path(directory)), \
              patch.object(publisher, 'read_dispatch_state', side_effect=publisher.ReviewError('facts timed out')), \
              redirect_stderr(stderr):

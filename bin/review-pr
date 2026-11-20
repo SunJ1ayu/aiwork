@@ -560,6 +560,13 @@ def publish_dispatch_failure(repository, number, head, attempted):
     github(token, f'repos/{repository}/issues/{number}/comments', payload)
 
 
+def record_dispatch_failure(repository, number, head, attempted):
+    try:
+        publish_dispatch_failure(repository, number, head, attempted)
+    except (ValueError, OSError) as exc:
+        print('review-pr: failure record could not be published: ' + redact(str(exc)), file=sys.stderr)
+
+
 def auto_dispatch(repository: str, number: int, builder_family: str, *,
                   expected_head: str | None = None) -> int:
     from _review_dispatch import dispatch
@@ -601,16 +608,13 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
                           lambda leg: _leg_session.choose_leg(leg, BIN), run, builder_family)
     except (ValueError, OSError) as exc:
         (directory / 'failure.txt').write_text(redact(str(exc)), encoding='utf-8')
-        try:
-            publish_dispatch_failure(repository, number, expected_head, attempts + ['未启动：' + ', '.join(leg for leg in planned if leg not in attempts)])
-        except (ValueError, OSError) as publication_error:
-            print('review-pr: failure record could not be published: ' + redact(str(publication_error)), file=sys.stderr)
+        record_dispatch_failure(repository, number, expected_head, attempts)
         raise
     finally:
         print(f'review-pr: dispatch record {directory}', file=sys.stderr)
     (directory / 'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     if not report['target_met'] or not report['reviewed_families']:
-        publish_dispatch_failure(repository, number, report['head'], attempts)
+        record_dispatch_failure(repository, number, report['head'], attempts)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report['minimum_met'] else 2
 
