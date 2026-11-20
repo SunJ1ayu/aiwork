@@ -32,3 +32,6 @@ if(JSON.stringify(before)!==JSON.stringify(decide(f,policy)))process.exit(1);
 if(before.blocks.length)process.exit(2);
 '''
         subprocess.run(['node','--input-type=module','-e',script],input=json.dumps(payload),text=True,cwd=ROOT,check=True)
+
+if __name__ == '__main__':
+    unittest.main()
