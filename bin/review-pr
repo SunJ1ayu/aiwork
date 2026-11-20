@@ -151,7 +151,9 @@ def github(token: str, endpoint: str, payload: dict | None = None, *,
         command += ["--method", "POST", "--input", "-"]
     if timeout is not None:
         command = [str(BIN / "aiwork-timeout"), "-k", "1", str(timeout), *command]
-    data = _leg_session.run(command, env=env, input_text=json.dumps(payload) if payload is not None else None)
+    def request():
+        return _leg_session.run(command, env=env, input_text=json.dumps(payload) if payload is not None else None)
+    data = _leg_session.network_read(request) if payload is None else request()
     if raw:
         return data
     try:
@@ -544,6 +546,22 @@ def review_request(repository: str, number: int, builder_family: str) -> dict:
                       '--builder-family', builder_family, '--expected-head', head])
 
 
+def publish_dispatch_failure(repository, number, head, attempted):
+    body = ('评审派发未完成。部分评审未启动或未确认发布；本轮不能视为评审通过。\n\n'
+            + '交接 head：' + (head or '未取得') + '\n'
+            + '已启动：' + (', '.join(attempted) or '无')
+            + '\n失败详情保存在本轮派发日志，需核实后按正式流程继续。')
+    payload = {'event': 'COMMENT', 'body': body}
+    if head:
+        payload['commit_id'] = head
+    with tempfile.TemporaryDirectory(prefix='dispatch-failure-') as temporary:
+        body_path = Path(temporary) / 'body.md'
+        body_path.write_text(body, encoding='utf-8')
+        _leg_session.run([str(BIN / 'privacy-check'), '--files', str(body_path)])
+    token = review_token(repository)
+    github(token, f'repos/{repository}/pulls/{number}/reviews', payload)
+
+
 def auto_dispatch(repository: str, number: int, builder_family: str, *,
                   expected_head: str | None = None) -> int:
     from _review_dispatch import dispatch
@@ -552,6 +570,7 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory = Path(tempfile.mkdtemp(prefix=f'review-dispatch-{number}-', dir=root))
     attempts = []
+    planned = []
 
     def run(leg, model, head):
         env = dict(os.environ)
@@ -573,9 +592,10 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
                     {'reason': 'review-pr returned no publication URL'}))
 
     def read_state(family):
-        state = read_dispatch_state(repository, number, family)
+        state = _leg_session.network_read(lambda: read_dispatch_state(repository, number, family))
         if expected_head and state["head"] != expected_head:
             raise ReviewError("PR head changed since handoff; no review dispatched")
+        planned[:] = state['plan']['order']
         return state
 
     try:
@@ -583,10 +603,16 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
                           lambda leg: _leg_session.choose_leg(leg, BIN), run, builder_family)
     except (ValueError, OSError) as exc:
         (directory / 'failure.txt').write_text(redact(str(exc)), encoding='utf-8')
+        try:
+            publish_dispatch_failure(repository, number, expected_head, attempts + ['未启动：' + ', '.join(leg for leg in planned if leg not in attempts)])
+        except (ValueError, OSError) as publication_error:
+            print('review-pr: failure record could not be published: ' + redact(str(publication_error)), file=sys.stderr)
         raise
     finally:
         print(f'review-pr: dispatch record {directory}', file=sys.stderr)
     (directory / 'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    if not report['target_met'] or not report['reviewed_families']:
+        publish_dispatch_failure(repository, number, report['head'], attempts)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report['minimum_met'] else 2
 

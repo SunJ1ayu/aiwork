@@ -166,6 +166,7 @@ class PublisherIntegrationTests(unittest.TestCase):
                          bool(complete), bool(complete), 0 if complete else 1)
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
         with tempfile.TemporaryDirectory() as directory, \
+             patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
              patch.object(publisher, 'data_path', return_value=Path(directory)), \
              patch.object(publisher, 'read_dispatch_state', side_effect=lambda *args: state.copy()) as read, \
              patch.object(publisher._leg_session, 'choose_leg', return_value=('moonshot', 'kimi-test')), \
@@ -178,6 +179,7 @@ class PublisherIntegrationTests(unittest.TestCase):
             report = json.loads(reports[0].read_text())
             self.assertEqual(report['pass_families'], ['moonshot'] if complete else [])
             self.assertEqual(report['target_met'], bool(complete))
+            self.assertEqual(failure_publication.call_count, 0 if complete else 1)
             self.assertTrue(all(call.args == ('example/repo', 1, 'openai') for call in read.call_args_list))
         command, kwargs = seen[0]
         self.assertEqual(command[-2:], ['--expected-head', 'a' * 40])
@@ -196,6 +198,7 @@ class PublisherIntegrationTests(unittest.TestCase):
                 publisher.read_dispatch_state('example/repo', 1, 'openai')
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as directory, \
+             patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
              patch.object(publisher, 'data_path', return_value=Path(directory)), \
              patch.object(publisher, 'read_dispatch_state', side_effect=publisher.ReviewError('facts timed out')), \
              redirect_stderr(stderr):
@@ -203,6 +206,7 @@ class PublisherIntegrationTests(unittest.TestCase):
                 publisher.auto_dispatch('example/repo', 1, 'openai')
             failures = list(Path(directory).glob('*/failure.txt'))
             self.assertEqual(len(failures), 1)
+            failure_publication.assert_called_once()
             self.assertIn(str(failures[0].parent), stderr.getvalue())
 
 
