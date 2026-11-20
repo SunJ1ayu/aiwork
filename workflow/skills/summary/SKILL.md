@@ -8,7 +8,7 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 评审与修复规则见 [REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md)，项目已接受风险见项目 main 的
 `.aiwork/accepted-risks.md`，放行条件见项目关卡策略。这里只说汇总这一步怎么做。
 
-汇总是流程里固定的一步，不是谁的习惯：谁来做汇总见 `workflow/CLAUDE.md`「执行方提问与续接」的唯一定义（巡检与答复归属），做法都按这份。
+汇总是流程里固定的一步，不是谁的习惯：谁来做汇总见 `workflow/CLAUDE.md`「执行方提问与续接」的唯一定义（谁来做），做法都按这份。
 
 ## 什么时候做
 
@@ -27,7 +27,7 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 2. 核实：按 [REVIEW-RULES 第二节第 3 条「核实与五级证据」](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md#3-核实与五级证据)执行，逐条对照本 skill「汇总核对清单」。
 3. 定级：见 REVIEW-RULES 第二节第 1 条。
 4. 决定下一步：按 REVIEW-RULES 第三节第 5 条的优先顺序。选「合并」之前，先看关卡在当前 head 上的结论：除了业主批准还缺别的（比如额度不够、凑不齐几家不同家族的 PASS），就选交业主，写明缺什么。派修改单的规则和格式见 `delegate` skill。P2 放不放进这张单，见 REVIEW-RULES 第三节第 4 条。
-5. 发到 PR 上：使用项目策略 `modification_rounds.summary_account` 登记的账号，向这次核实的完整 head 提交一条 COMMENT 评审，正文按本 skill「汇总的格式」。发出后不编辑；纠错先交业主，不用改写或再发一条相互冲突的记录覆盖。关卡复用评审和改写记录读取它；汇总不批准、不贴合并标签、不推代码。未启用该策略的项目的汇总账号，按 `workflow/CLAUDE.md`「执行方提问与续接」的唯一定义（谁的话算指令）确定，关卡不显示轮数。
+5. 发到 PR 上：发汇总记录的账号按「谁的话算指令」的唯一定义（见 `workflow/CLAUDE.md`「执行方提问与续接」）确定，向这次核实的完整 head 提交一条 COMMENT 评审，正文按本 skill「汇总的格式」。发出后不编辑；纠错先交业主，不用改写或再发一条相互冲突的记录覆盖。关卡复用评审和改写记录读取它；汇总不批准、不贴合并标签、不推代码。没启用 `modification_rounds` 的项目，关卡不显示轮数。
 6. 下一步写「合并」或「交业主」的那次汇总，当场把这个 PR 历次汇总里还没记的 P2 都按 REVIEW-RULES 第二节第 1 条「待办与业主决定」记入项目待办。
 
 ## 汇总核对清单
