@@ -547,19 +547,17 @@ def review_request(repository: str, number: int, builder_family: str) -> dict:
 
 
 def publish_dispatch_failure(repository, number, head, attempted):
-    body = ('评审派发未完成。部分评审未启动或未确认发布；本轮不能视为评审通过。\n\n'
+    body = ('评审派发未完成。部分评审未启动或未确认发布；合并条件以关卡结论为准。\n\n'
             + '交接 head：' + (head or '未取得') + '\n'
             + '已启动：' + (', '.join(attempted) or '无')
             + '\n失败详情保存在本轮派发日志，需核实后按正式流程继续。')
-    payload = {'event': 'COMMENT', 'body': body}
-    if head:
-        payload['commit_id'] = head
+    payload = {'body': body}
     with tempfile.TemporaryDirectory(prefix='dispatch-failure-') as temporary:
         body_path = Path(temporary) / 'body.md'
         body_path.write_text(body, encoding='utf-8')
         _leg_session.run([str(BIN / 'privacy-check'), '--files', str(body_path)])
     token = review_token(repository)
-    github(token, f'repos/{repository}/pulls/{number}/reviews', payload)
+    github(token, f'repos/{repository}/issues/{number}/comments', payload)
 
 
 def auto_dispatch(repository: str, number: int, builder_family: str, *,
