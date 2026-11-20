@@ -88,7 +88,7 @@ resp=${out%$'\n'*}
     *) if [ "$request_failed" = 1 ]; then sleep "$attempt"; else break; fi ;;
   esac
 done
-if [ "$code" != 201 ]; then
+if [ "$request_failed" != 0 ] || [ "$code" != 201 ]; then
   echo "gh-app-token: 换令牌失败 HTTP $code:$(jq -r '.message // empty' <<<"$resp" 2>/dev/null)" >&2
   exit 1
 fi

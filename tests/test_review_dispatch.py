@@ -201,7 +201,7 @@ class PublisherIntegrationTests(unittest.TestCase):
                 publisher.read_dispatch_state('example/repo', 1, 'openai')
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as directory, \
-             patch.object(publisher, 'publish_dispatch_failure', side_effect=notice_error) as failure_publication, \
+             patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
              patch.object(publisher, 'data_path', return_value=Path(directory)), \
              patch.object(publisher, 'read_dispatch_state', side_effect=publisher.ReviewError('facts timed out')), \
              redirect_stderr(stderr):
