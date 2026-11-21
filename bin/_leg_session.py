@@ -8,6 +8,7 @@ import os
 import array
 import fcntl
 import json
+import random
 import signal
 import select
 import socket
@@ -36,15 +37,31 @@ class ReviewError(ValueError):
     pass
 
 
+# The review machine's TLS drops come in episodes seconds to minutes long
+# (measured 2026-11-21, issue #193): retries spaced 1-2s all landed in the
+# same episode and every attempt was gone before a leg could start its model.
+# Waits therefore spread over [span/2, span] with span doubling per retry, so
+# attempts decorrelate, and both the count and each wait stay bounded.
+RETRY_ATTEMPTS = 5
+RETRY_BACKOFF_BASE = 4.0
+RETRY_BACKOFF_CAP = 60.0
+
+
+def retry_delay(attempt: int) -> float:
+    """Seconds to wait after failed try `attempt` (0-based): uniform in [span/2, span]."""
+    span = min(RETRY_BACKOFF_CAP, RETRY_BACKOFF_BASE * 2 ** attempt)
+    return random.uniform(span / 2, span)
+
+
 def network_read(operation):
     """Bound retries for remote reads; never wrap publication writes."""
-    for attempt in range(3):
+    for attempt in range(RETRY_ATTEMPTS):
         try:
             return operation()
         except (ReviewError, OSError):
-            if attempt == 2:
+            if attempt == RETRY_ATTEMPTS - 1:
                 raise
-            time.sleep(attempt + 1)
+            time.sleep(retry_delay(attempt))
 
 
 def reader_environment(leg: str, env: dict[str, str]) -> dict[str, str]:
@@ -234,6 +251,12 @@ def collect_review_diff(repo: Path, merge_base: str, head: str
     return files, diff, changes
 
 
+# One fetch attempt may not run forever: a transfer that stops passing bytes
+# would otherwise hold the leg until the machine is touched. Slowest observed
+# success took 86s, so the deadline leaves headroom before counting a try lost.
+SNAPSHOT_FETCH_TIMEOUT = 240
+
+
 def snapshot(token: str, pr: dict, directory: Path, *, repository: str):
     repo = directory / "repo"
     repo.mkdir()
@@ -248,8 +271,16 @@ def snapshot(token: str, pr: dict, directory: Path, *, repository: str):
                AIWORK_REVIEW_GIT_TOKEN=token)
     head = pr["head"]["sha"]
     base = pr["base"]["sha"]
-    network_read(lambda: run(["git", "-C", str(repo), "-c", "credential.helper=", "fetch", "-q", "--no-tags",
-         f"https://github.com/{repository}.git", head, base, "refs/heads/main:refs/aiwork/main"], env=env))
+    # http.version pins the transport that measured steadier on the review
+    # machine (HTTP/2 3/10 fetches vs HTTP/1.1 8/10, 2026-11-21, issue #193).
+    # Attribution to the protocol is unproven; this is the measured config and
+    # costs one line to revert.
+    fetch = ["git", "-C", str(repo), "-c", "credential.helper=", "-c", "http.version=HTTP/1.1",
+             "fetch", "-q", "--no-tags",
+             f"https://github.com/{repository}.git", head, base, "refs/heads/main:refs/aiwork/main"]
+    fetch = [str(Path(__file__).parent / "aiwork-timeout"), "-k", "1",
+             str(SNAPSHOT_FETCH_TIMEOUT), *fetch]
+    network_read(lambda: run(fetch, env=env))
     run(["git", "-C", str(repo), "checkout", "-q", "--detach", head])
     # The reviewer sees a complete checkout, not a sparse or partial worktree.
     assert_snapshot_checkout(repo, head, label="PR head")
