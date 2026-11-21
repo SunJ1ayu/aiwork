@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""Local review routing adapter. Event text never becomes executable arguments."""
+#!/bin/sh
+"""exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
+Review routing adapter. Event text never becomes executable arguments."""
 import fcntl
 import json
 import os
@@ -24,7 +25,8 @@ def retry(operation):
 
 
 def retryable(record):
-    return record.get('state') == 'finished' and record.get('entry_exit') != 0
+    return (record.get('state') == 'finished' and type(record.get('entry_exit')) is int
+            and record['entry_exit'] != 0)
 
 
 def requested_pr(context, repository, source):
@@ -129,10 +131,23 @@ def claim(path, facts):
         return False
 
 
+def load_settings(path):
+    settings = json.loads(Path(path).read_text())
+    if not isinstance(settings, dict) or set(settings) != {'checkout', 'programs', 'repository', 'event_source'}:
+        raise ValueError('invalid local settings fields')
+    if any(not isinstance(value, str) or not value for value in settings.values()):
+        raise ValueError('invalid local settings values')
+    if not all(Path(settings[key]).is_absolute() for key in ('checkout', 'programs')):
+        raise ValueError('local paths must be absolute')
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', settings['repository']):
+        raise ValueError('invalid repository')
+    return settings
+
+
 def main():
     os.umask(0o077)
     context = json.loads(Path(sys.argv[1]).read_text())
-    settings = json.loads(Path(sys.argv[2]).read_text())
+    settings = load_settings(sys.argv[2])
     repo = Path(settings['checkout']).resolve()
     repository = settings['repository']
     source = settings['event_source']
