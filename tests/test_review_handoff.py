@@ -113,4 +113,19 @@ class Handoff(unittest.TestCase):
             _,_,family,_=worker.builder_for({'head':{'sha':head},'user':{'login':'builder'}},{head:{'target-family'}},policy)
             worker.verify_dispatch_state({'head':head,'policy_sha':blob,'gate':{'summary':'✅ G1 CI'},'excluded':['target-family']},head,actual,family,policy)
 
+    def test_gate_summary_and_family_contract_from_definitions(self):
+        import subprocess,json,re
+        root=Path(__file__).resolve().parents[1]
+        bridge=(root/'bin/_review_dispatch.mjs').read_text()
+        self.assertIn('/^'+worker.FAMILY_PATTERN+'$/',bridge)
+        script="""import {decide} from './gate/decide.mjs';
+import fs from 'node:fs';
+const policy=JSON.parse(fs.readFileSync('tests/fixtures/gate-logic-policy.json'));
+const f={pr:{number:1,state:'open',head_sha:'a'.repeat(40)},files:['file.txt'],reviews:[],ci:{state:'success',detail:'test'},pushes:{covers_head:true,actors:[]}};
+console.log(JSON.stringify(decide(f,policy)));
+"""
+        result=json.loads(subprocess.check_output(['node','--input-type=module','-e',script],cwd=root,text=True))
+        policy={'builders':{'builder':'openai'},'unknown_author_extra_families':[]}
+        worker.verify_dispatch_state({'head':'a'*40,'policy_sha':'blob','gate':result,'excluded':['openai']},'a'*40,'blob',None,policy)
+
 if __name__=='__main__':unittest.main()

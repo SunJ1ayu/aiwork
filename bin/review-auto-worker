@@ -16,6 +16,8 @@ import time
 from datetime import datetime, timezone
 
 
+FAMILY_PATTERN = r'[a-z][a-z0-9-]*'
+
 def retry(operation):
     for attempt in range(3):
         try:
@@ -53,7 +55,7 @@ def requested_pr(context, repository, source):
         family = detail.get('builder_family') if isinstance(detail, dict) else None
         if (not isinstance(detail, dict) or detail.get('repository') != repository
                 or type(detail.get('pr')) is not int or detail['pr'] != number
-                or not isinstance(family, str) or not re.fullmatch(r'[a-z][a-z0-9-]*', family)
+                or not isinstance(family, str) or not re.fullmatch(FAMILY_PATTERN, family)
                 or not isinstance(detail.get('head'), str)
                 or not re.fullmatch(r'[0-9a-f]{40}', detail['head'])):
             raise ValueError('public request facts disagree')
@@ -77,7 +79,7 @@ def main_policy(api, token, repository):
     builders = policy.get('builders')
     extra = policy.get('unknown_author_extra_families', [])
     if (not isinstance(builders, dict) or not builders or not isinstance(extra, list)
-            or not all(isinstance(family, str) and re.fullmatch(r'[a-z][a-z0-9-]*', family)
+            or not all(isinstance(family, str) and re.fullmatch(FAMILY_PATTERN, family)
                        for family in [*builders.values(), *extra])):
         raise ValueError('invalid builder registration in main policy')
     return policy, blob

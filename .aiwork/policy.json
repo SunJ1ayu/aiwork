@@ -67,6 +67,7 @@
     "bin/gh-app-token",
     "bin/privacy-check",
     "bin/review-pr",
+    "bin/review-auto-worker",
     "bin/ro-repo-exec",
     "bin/subagent",
     "bin/subcodex",
