@@ -261,3 +261,5 @@ bash bin/rust-check-review-tooling
 5. Mac 回环监听、guest 经 `host.lima.internal` 连回中台、Mac 局域网地址连接应失败、重启 guest 后接单程序自行恢复；只验新 worker，不触发正式工作。没有另一台局域网设备实测时明确标注。
 
 任一步失败停止切换，记录具体版本与结果交汇总；不要把未验证项写成已通过。
+
+评审交接适配器的仓库与本机边界、安装设置见 [评审交接入口](review-handoff.md)。
