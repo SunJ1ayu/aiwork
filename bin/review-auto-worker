@@ -27,8 +27,10 @@ def retry(operation):
 
 
 def retryable(record):
-    return (record.get('state') == 'finished' and type(record.get('entry_exit')) is int
-            and record['entry_exit'] != 0)
+    # Called only after acquiring the lock held for the whole dispatch.
+    return (record.get('state') == 'started' or
+            (record.get('state') == 'finished' and type(record.get('entry_exit')) is int
+             and record['entry_exit'] != 0))
 
 
 def requested_pr(context, repository, source):
@@ -227,5 +229,5 @@ if __name__ == '__main__':
     except Exception as exc:
         # No raw subprocess/API output or credential data in the receipt.
         message = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
-        print('评审交接预检拒绝；未派评审腿：' + message)
+        print('评审交接未完成；请核实交接记录与评审状态：' + message)
         sys.exit(1)

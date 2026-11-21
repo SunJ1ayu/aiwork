@@ -13,7 +13,7 @@ class Handoff(unittest.TestCase):
     def test_failed_finished_retries_success_does_not(self):
         self.assertTrue(worker.retryable({'state':'finished','entry_exit':2}))
         self.assertFalse(worker.retryable({'state':'finished','entry_exit':0}))
-        self.assertFalse(worker.retryable({'state':'started'}))
+        self.assertTrue(worker.retryable({'state':'started'}))
 
     def test_preflight_recovers_and_has_limit(self):
         with patch.object(worker.time,'sleep'), patch.object(worker.subprocess,'run',side_effect=[OSError('network'),'ok']) as run:
@@ -45,7 +45,13 @@ class Handoff(unittest.TestCase):
             path.write_text(json.dumps({'checkout':'relative','programs':'/programs','repository':'example/repo','event_source':'trusted'}))
             with self.assertRaises(ValueError):worker.load_settings(path)
 
+    def test_interrupted_dispatch_can_retry(self):
+        self.main_sequence(interrupted=True)
+
     def test_main_failed_head_can_retry_then_success_deduplicates(self):
+        self.main_sequence(interrupted=False)
+
+    def main_sequence(self, interrupted):
         import tempfile,json,sys,subprocess,os,io
         from contextlib import redirect_stdout,redirect_stderr
         with tempfile.TemporaryDirectory() as directory:
@@ -64,12 +70,17 @@ class Handoff(unittest.TestCase):
             def command(argv,**kwargs):
                 if argv[0].endswith('review-pr'):
                     models.append(argv)
+                    if interrupted and len(models)==1:
+                        raise OSError('dispatch start failed')
                     return subprocess.CompletedProcess(argv,2 if len(models)==1 else 0,'{}','')
                 return subprocess.CompletedProcess(argv,0,'','')
             previous_umask=os.umask(0o077)
             try:
                 with patch.object(sys,'argv',['worker',str(context),str(settings)]), patch.dict(os.environ), patch.object(worker.time,'sleep'), patch.object(worker.runpy,'run_path',return_value=api), patch.object(worker,'main_policy',return_value=(policy,'blob')), patch.object(worker.subprocess,'run',side_effect=command), patch.object(worker.subprocess,'check_output',return_value='commit'), redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
-                    worker.main()
+                    if interrupted:
+                        with self.assertRaises(OSError):worker.main()
+                    else:
+                        worker.main()
                     worker.main()
                     worker.main()
             finally:os.umask(previous_umask)
