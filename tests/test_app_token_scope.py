@@ -51,6 +51,29 @@ print('201')
         return subprocess.run([str(helper or ROOT / "bin/gh-app-token"), role, *args], env=env,
                               capture_output=True, text=True, timeout=10)
 
+    def test_retry_uses_only_final_response(self):
+        curl = self.root / 'bin/curl'
+        original = curl.read_text()
+        curl.write_text(original.replace("print(os.environ['FAKE_GRANT'])", """counter=pathlib.Path(os.environ['FAKE_REQUEST']+'.count')
+n=int(counter.read_text()) if counter.exists() else 0
+counter.write_text(str(n+1))
+if n==0 or os.environ.get('FAIL_ALWAYS'):
+    print('{"message":"temporary"}')
+    if '--retry' in args:
+        print(os.environ['FAKE_GRANT'])
+        print('201')
+    else:
+        print('502')
+    sys.exit(0)
+print(os.environ['FAKE_GRANT'])"""))
+        result = self.invoke(['--repo','SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'fake-test-token')
+        self.env['FAIL_ALWAYS']='1'
+        failed = self.invoke(['--repo','SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'])
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(failed.stdout, '')
+
     def test_external_location_refuses_review_key_before_config_or_network(self):
         from _test_settings import write_programs
         config = self.root / 'settings'
