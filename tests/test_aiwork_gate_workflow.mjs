@@ -131,6 +131,7 @@ function binCalledByFramework(framework, readSource = read) {
 // high 同样不手列:bin 里真正碰私钥、令牌、git push、gh release 的文件。
 const HIGH_RE = new RegExp([
   /PRIVATE KEY/.source,
+  /\breview_token\b/.source,
   /openssl [^\n]*\s-sign\b/.source,
   /\bapp[-_]key\b/.source,
   /\/access_tokens\b/.source,

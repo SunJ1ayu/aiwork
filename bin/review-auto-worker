@@ -1,0 +1,235 @@
+#!/bin/sh
+"""exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
+Review routing adapter. Event text never becomes executable arguments."""
+import base64
+import urllib.parse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import runpy
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+
+
+FAMILY_PATTERN = r'[a-z][a-z0-9-]*'
+
+def retry(operation):
+    for attempt in range(3):
+        try:
+            return operation()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            if attempt == 2:
+                raise
+            time.sleep(attempt + 1)
+
+
+def retryable(record):
+    # Called only after acquiring the lock held for the whole dispatch.
+    return (record.get('state') == 'started' or
+            (record.get('state') == 'finished' and type(record.get('entry_exit')) is int
+             and record['entry_exit'] != 0))
+
+
+def requested_pr(context, repository, source):
+    events = context.get('events', [])
+    if not events:
+        raise ValueError('at least one review request is required')
+    number = None
+    requests = {}
+    for event in events:
+        if event.get('source') != source or event.get('type') != 'reviews.request':
+            raise ValueError('unexpected review event')
+        match = re.fullmatch(re.escape(repository) + r'#([1-9][0-9]*)', event.get('subject', ''))
+        if not match:
+            raise ValueError('invalid repository/PR subject')
+        current_number = int(match[1])
+        if number is not None and current_number != number:
+            raise ValueError('mixed PR subjects')
+        number = current_number
+        detail = json.loads(event.get('detail', ''))
+        family = detail.get('builder_family') if isinstance(detail, dict) else None
+        if (not isinstance(detail, dict) or detail.get('repository') != repository
+                or type(detail.get('pr')) is not int or detail['pr'] != number
+                or not isinstance(family, str) or not re.fullmatch(FAMILY_PATTERN, family)
+                or not isinstance(detail.get('head'), str)
+                or not re.fullmatch(r'[0-9a-f]{40}', detail['head'])):
+            raise ValueError('public request facts disagree')
+        requests.setdefault(detail['head'], set()).add(family)
+    # argv, summaries, links and all other prose never become command arguments.
+    # Coalesced requests are resolved against GitHub's current head, not arrival order.
+    return number, requests
+
+
+def main_policy(api, token, repository):
+    metadata = retry(lambda: api['github'](token, f'repos/{repository}'))
+    branch = metadata.get('default_branch')
+    if not isinstance(branch, str) or not branch:
+        raise ValueError('target default branch is missing')
+    ref = urllib.parse.quote(branch, safe='')
+    response = retry(lambda: api['github'](token, f'repos/{repository}/contents/.aiwork/policy.json?ref={ref}'))
+    blob = response.get('sha')
+    if not isinstance(blob, str) or not re.fullmatch(r'[0-9a-f]{40}', blob):
+        raise ValueError('target policy blob is missing')
+    policy = json.loads(base64.b64decode(''.join(response['content'].split()), validate=True))
+    builders = policy.get('builders')
+    extra = policy.get('unknown_author_extra_families', [])
+    if (not isinstance(builders, dict) or not builders or not isinstance(extra, list)
+            or not all(isinstance(family, str) and re.fullmatch(FAMILY_PATTERN, family)
+                       for family in [*builders.values(), *extra])):
+        raise ValueError('invalid builder registration in main policy')
+    return policy, blob
+
+
+def builder_for(pr, requests, policy):
+    head = pr['head']['sha']
+    claimed = requests.get(head, set())
+    if not claimed:
+        raise ValueError('PR head changed since request; no review dispatched')
+    if len(claimed) != 1:
+        raise ValueError('conflicting builder families for current PR head')
+    author = (pr.get('user') or {}).get('login')
+    if not isinstance(author, str) or not author:
+        raise ValueError('PR author missing from GitHub metadata')
+    family = policy['builders'].get(author)
+    if family is not None:
+        if claimed != {family}:
+            raise ValueError('requested builder family disagrees with main policy for PR author')
+        return head, author, family, family
+
+    # review-pr requires a family argument. An unregistered author must not
+    # inherit a family from the request or from the host launch arguments.
+    registered = set(policy['builders'].values()) | set(policy.get('unknown_author_extra_families', []))
+    placeholder = 'unknown-author'
+    while placeholder in registered:
+        placeholder += '-unregistered'
+    return head, author, None, placeholder
+
+
+def verify_dispatch_state(state, head, blob, family, policy):
+    if state.get('head') != head:
+        raise ValueError('PR head changed during verification')
+    if state.get('policy_sha') != blob:
+        raise ValueError('GitHub policy changed during verification')
+    summary = state.get('gate', {}).get('summary', '')
+    if not re.search(r'^✅ G1 ', summary, re.M):
+        raise ValueError('gate G1 has not confirmed current-head CI success')
+    required = {family}
+    if family is None:
+        if not re.search(r'^❌ G4 作者 UNKNOWN:', summary, re.M):
+            raise ValueError('unregistered PR author lacks a conservative gate result')
+        required = set(policy['builders'].values()) | set(policy.get('unknown_author_extra_families', []))
+    excluded = state.get('excluded')
+    if not isinstance(excluded, list) or not required.issubset(excluded):
+        raise ValueError('gate state is missing required builder-family exclusions')
+
+
+def command_for(base, number, verified_head, dispatch_family):
+    return [base[0], str(number), *base[1:-1], dispatch_family, '--expected-head', verified_head]
+
+
+def claim(path, facts):
+    try:
+        with path.open('x') as stream:
+            json.dump(facts, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return True
+    except FileExistsError:
+        return False
+
+
+def load_settings(path):
+    settings = json.loads(Path(path).read_text())
+    if not isinstance(settings, dict) or set(settings) != {'checkout', 'programs', 'repository', 'event_source'}:
+        raise ValueError('invalid local settings fields')
+    if any(not isinstance(value, str) or not value for value in settings.values()):
+        raise ValueError('invalid local settings values')
+    if not all(Path(settings[key]).is_absolute() for key in ('checkout', 'programs')):
+        raise ValueError('local paths must be absolute')
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', settings['repository']):
+        raise ValueError('invalid repository')
+    return settings
+
+
+def main():
+    os.umask(0o077)
+    context = json.loads(Path(sys.argv[1]).read_text())
+    settings = load_settings(sys.argv[2])
+    repo = Path(settings['checkout']).resolve()
+    repository = settings['repository']
+    source = settings['event_source']
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) or not source:
+        raise ValueError('invalid local settings')
+    base = [str(repo / 'bin/review-pr'), '--repo', repository, '--auto', '--builder-family', 'unused']
+    repository = base[2]
+    number, requests = requested_pr(context, repository, source)
+    repo = Path(base[0]).resolve().parent.parent
+    env = dict(os.environ, PATH=str(Path(settings['programs']).resolve()) + ':' + str(repo / 'bin') + ':/usr/local/bin:/usr/bin:/bin')
+    clean = subprocess.run(['git', '-C', str(repo), 'status', '--porcelain'], capture_output=True, text=True, check=True)
+    if clean.stdout.strip():
+        raise ValueError('review checkout is not clean')
+    retry(lambda: subprocess.run(['git', '-C', str(repo), 'fetch', 'origin', 'main'], env=env, check=True, capture_output=True))
+    subprocess.run(['git', '-C', str(repo), 'checkout', '--detach', 'origin/main'], env=env, check=True, capture_output=True)
+    os.environ.update(env)
+    api = runpy.run_path(base[0], run_name='review_handoff_preflight')
+    token = retry(lambda: api['review_token'](repository))
+    pr = retry(lambda: api['pr_state'](token, number, repository=repository))
+    policy, blob = main_policy(api, token, repository)
+    head, author, family, dispatch_family = builder_for(pr, requests, policy)
+    state = retry(lambda: api['read_dispatch_state'](repository, number, dispatch_family))
+    verify_dispatch_state(state, head, blob, family, policy)
+    root = api['data_path']('tasks') / 'review-auto-handoffs'
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key = str(number) + '-' + head
+    record = root / (key + '.json')
+    with (root / '.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if record.exists() and not retryable(json.loads(record.read_text())):
+            print('没事可做：同一 PR 同一 head 已交接，不重复派腿。')
+            return
+        directory = Path(tempfile.mkdtemp(prefix=key + '-', dir=root))
+        facts = {'pr': number, 'head': head, 'builder_family': family,
+                 'author': author, 'ci_g1': True, 'policy_sha': blob,
+                 'aiwork_main': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
+                 'started_at': datetime.now(timezone.utc).isoformat(), 'state': 'started'}
+        if record.exists():
+            os.replace(record, directory / 'previous.json')
+        if not claim(record, facts):
+            print('没事可做：同一 PR 同一 head 已交接，不重复派腿。')
+            return
+        print('Verified formal review started: ' + json.dumps(facts), flush=True, file=sys.stderr)
+        result = subprocess.run(command_for(base, number, head, dispatch_family), env=env, capture_output=True, text=True)
+        redact = api['redact']
+        (directory / 'stdout.log').write_text(redact(result.stdout))
+        (directory / 'stderr.log').write_text(redact(result.stderr))
+        facts.update(state='finished', entry_exit=result.returncode,
+                     finished_at=datetime.now(timezone.utc).isoformat())
+        try:
+            report = json.loads(result.stdout)
+        except ValueError:
+            report = None
+        if isinstance(report, dict):
+            facts['report'] = report
+        else:
+            facts['error'] = redact(result.stderr[-3000:])
+        tmp = record.with_suffix('.tmp')
+        tmp.write_text(json.dumps(facts, ensure_ascii=False, indent=2))
+        os.replace(tmp, record)
+        print('正式评审本轮已结束；等待汇总。' if report else '正式评审未完成；失败记录已保存，等待处理。')
+        print(json.dumps(facts, ensure_ascii=False, indent=2))
+        # Do not retry the entire model run automatically after a partial failure.
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as exc:
+        # No raw subprocess/API output or credential data in the receipt.
+        message = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+        print('评审交接未完成；请核实交接记录与评审状态：' + message)
+        sys.exit(1)
