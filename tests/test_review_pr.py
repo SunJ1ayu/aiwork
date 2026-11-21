@@ -62,6 +62,26 @@ def published_review(body, *, head='a' * 40, state='COMMENTED',
             'html_url': 'https://github.com/SunJ1ayu/aiwork/pull/12#pullrequestreview-101'}
 
 
+def snapshot_git(commands):
+    """Canned git answers for session.snapshot(); every command lands in `commands`."""
+    def fake_git(command, **kwargs):
+        commands.append(command)
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            return "a" * 40
+        if "merge-base" in command:
+            return "c" * 40
+        if "--binary" in command:
+            return "patch"
+        if kwargs.get("binary"):
+            if "--numstat" in command:
+                return b"1\t0\tsrc/a.py\0"
+            if "--name-status" in command:
+                return b"M\0src/a.py\0"
+            return b""
+        return ""
+    return fake_git
+
+
 class ReviewHandoffTests(unittest.TestCase):
     def test_request_binds_repository_head_and_builder_without_review_key(self):
         module = load_script()
@@ -1559,25 +1579,8 @@ grep -q -F -- "$3" "$clone/$4"
     def test_snapshot_fetches_the_selected_repository_and_its_main(self):
         pr = {"head": {"sha": "a" * 40}, "base": {"sha": "b" * 40}}
         commands = []
-
-        def fake_git(command, **kwargs):
-            commands.append(command)
-            if command[-2:] == ["rev-parse", "HEAD"]:
-                return "a" * 40
-            if "merge-base" in command:
-                return "c" * 40
-            if "--binary" in command:
-                return "patch"
-            if kwargs.get("binary"):
-                if "--numstat" in command:
-                    return b"1\t0\tsrc/a.py\0"
-                if "--name-status" in command:
-                    return b"M\0src/a.py\0"
-                return b""
-            return ""
-
         with tempfile.TemporaryDirectory() as temporary, \
-                patch.object(self.session, "run", side_effect=fake_git):
+                patch.object(self.session, "run", side_effect=snapshot_git(commands)):
             _, base, files, *_rest = self.session.snapshot(FAKE_TOKEN, pr, Path(temporary),
                                                          repository="SunJ1ayu/aiwork")
         fetch = next(command for command in commands if "fetch" in command)
@@ -1585,6 +1588,42 @@ grep -q -F -- "$3" "$clone/$4"
         self.assertNotIn("https://github.com/SunJ1ayu/OpenDesign.git", fetch)
         self.assertIn("refs/heads/main:refs/aiwork/main", fetch)
         self.assertEqual((base, files), ("c" * 40, ["src/a.py"]))
+
+    def test_snapshot_fetch_is_time_bounded_and_stays_on_the_measured_transport(self):
+        # 评审机 2026-11-21 实测（issue #193）：同一份快照默认 HTTP/2 十次只成三次、
+        # 强制 HTTP/1.1 成八次。单次拉取还要有时限：网络挂死不能把腿无限拖住。
+        pr = {"head": {"sha": "a" * 40}, "base": {"sha": "b" * 40}}
+        commands = []
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(self.session, "run", side_effect=snapshot_git(commands)):
+            self.session.snapshot(FAKE_TOKEN, pr, Path(temporary), repository="SunJ1ayu/aiwork")
+        fetch = next(command for command in commands if "fetch" in command)
+        self.assertEqual(Path(fetch[0]).name, "aiwork-timeout")
+        self.assertEqual(fetch[1:4], ["-k", "1", str(self.session.SNAPSHOT_FETCH_TIMEOUT)])
+        self.assertGreater(float(self.session.SNAPSHOT_FETCH_TIMEOUT), 0)
+        self.assertIn("http.version=HTTP/1.1", fetch)
+
+    def test_main_commit_remote_read_is_retried(self):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            if len(calls) < 3:
+                raise self.review.ReviewError("git ls-remote failed (rc=128): early EOF")
+            return "d" * 40 + "\trefs/heads/main\n"
+
+        with patch.object(self.session, "run", side_effect=fake_run), patch("time.sleep"):
+            self.assertEqual(self.review.aiwork_main_commit(), "d" * 40)
+        self.assertEqual(len(calls), 3)
+
+    def test_publication_writes_are_never_retried(self):
+        # 发布评审这类写操作不能因网络重试被重复执行（issue #193 任务单边界）。
+        with patch.object(self.session, "run",
+                          side_effect=self.review.ReviewError("post failed")) as run:
+            with self.assertRaises(self.review.ReviewError):
+                self.review.github(FAKE_TOKEN, "repos/SunJ1ayu/aiwork/pulls/12/reviews",
+                                   {"body": "x"})
+        run.assert_called_once()
 
     def test_cursor_model_is_frozen_for_leg_and_result(self):
         rc, calls, _stdout, stderr = self.run_main_with_leg_result("gpt-5.6")

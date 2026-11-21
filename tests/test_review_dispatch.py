@@ -204,6 +204,7 @@ class PublisherIntegrationTests(unittest.TestCase):
              patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
              patch.object(publisher, 'data_path', return_value=Path(directory)), \
              patch.object(publisher, 'read_dispatch_state', side_effect=publisher.ReviewError('facts timed out')), \
+             patch('time.sleep'), \
              redirect_stderr(stderr):
             with self.assertRaisesRegex(publisher.ReviewError, 'timed out'):
                 publisher.auto_dispatch('example/repo', 1, 'openai')

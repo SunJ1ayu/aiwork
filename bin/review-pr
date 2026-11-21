@@ -213,9 +213,9 @@ def aiwork_main_commit() -> str:
     repository, _path = REVIEW_RULES_SOURCE
     unread = "review-pr 只能从最新 main 的 aiwork 检出跑\n读不到 aiwork 的 main"
     try:
-        output = _leg_session.run([
+        output = _leg_session.network_read(lambda: _leg_session.run([
             "git", "-C", str(BIN), "ls-remote", "--exit-code", "--refs",
-            f"https://github.com/{repository}.git", "refs/heads/main"])
+            f"https://github.com/{repository}.git", "refs/heads/main"]))
     except ReviewError as exc:
         raise ReviewError(f"{unread}\n{exc}") from exc
     fields = output.strip().split()
