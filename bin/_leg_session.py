@@ -13,6 +13,7 @@ import select
 import socket
 import struct
 import threading
+import time
 import pwd
 import shutil
 import stat
@@ -33,6 +34,17 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 
 class ReviewError(ValueError):
     pass
+
+
+def network_read(operation):
+    """Bound retries for remote reads; never wrap publication writes."""
+    for attempt in range(3):
+        try:
+            return operation()
+        except (ReviewError, OSError):
+            if attempt == 2:
+                raise
+            time.sleep(attempt + 1)
 
 
 def reader_environment(leg: str, env: dict[str, str]) -> dict[str, str]:
@@ -236,8 +248,8 @@ def snapshot(token: str, pr: dict, directory: Path, *, repository: str):
                AIWORK_REVIEW_GIT_TOKEN=token)
     head = pr["head"]["sha"]
     base = pr["base"]["sha"]
-    run(["git", "-C", str(repo), "-c", "credential.helper=", "fetch", "-q", "--no-tags",
-         f"https://github.com/{repository}.git", head, base, "refs/heads/main:refs/aiwork/main"], env=env)
+    network_read(lambda: run(["git", "-C", str(repo), "-c", "credential.helper=", "fetch", "-q", "--no-tags",
+         f"https://github.com/{repository}.git", head, base, "refs/heads/main:refs/aiwork/main"], env=env))
     run(["git", "-C", str(repo), "checkout", "-q", "--detach", head])
     # The reviewer sees a complete checkout, not a sparse or partial worktree.
     assert_snapshot_checkout(repo, head, label="PR head")
