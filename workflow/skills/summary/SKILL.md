@@ -8,7 +8,7 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 评审与修复规则见 [REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md)，项目已接受风险见项目 main 的
 `.aiwork/accepted-risks.md`，放行条件见项目关卡策略。这里只说汇总这一步怎么做。
 
-汇总是流程里固定的一步，不是谁的习惯：现在由业主派的一个独立会话做，以后由 OpenClaw 叫醒一个能读代码、跑测试的强模型来做，做法都按这份。
+汇总是流程里固定的一步，不是谁的习惯：谁来做汇总见 `workflow/CLAUDE.md`「执行方提问与续接」的唯一定义（谁来做），做法都按这份。
 
 ## 什么时候做
 
