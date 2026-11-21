@@ -80,4 +80,26 @@ class Handoff(unittest.TestCase):
             self.assertEqual(json.loads(records[0].read_text())['entry_exit'],0)
             self.assertEqual(len(list((root/'data').rglob('previous.json'))),1)
 
+    def test_target_policy_differs_from_tool_checkout(self):
+        import base64,json,tempfile,subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            repo=Path(directory)
+            subprocess.run(['git','init','-q',str(repo)],check=True)
+            (repo/'.aiwork').mkdir()
+            (repo/'.aiwork/policy.json').write_text(json.dumps({'builders':{'builder':'local-family'}}))
+            target={'builders':{'builder':'target-family'}}
+            content=base64.b64encode(json.dumps(target).encode()).decode()
+            blob='b'*40
+            calls=[]
+            def github(token,endpoint):
+                calls.append(endpoint)
+                return {'default_branch':'release/test'} if endpoint=='repos/example/project' else {'sha':blob,'content':content}
+            policy,actual=worker.main_policy({'github':github},'token','example/project')
+            self.assertEqual(policy,target)
+            self.assertEqual(actual,blob)
+            self.assertIn('ref=release%2Ftest',calls[-1])
+            head='a'*40
+            _,_,family,_=worker.builder_for({'head':{'sha':head},'user':{'login':'builder'}},{head:{'target-family'}},policy)
+            worker.verify_dispatch_state({'head':head,'policy_sha':blob,'gate':{'summary':'✅ G1 CI'},'excluded':['target-family']},head,actual,family,policy)
+
 if __name__=='__main__':unittest.main()

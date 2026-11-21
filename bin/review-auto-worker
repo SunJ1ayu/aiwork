@@ -1,6 +1,8 @@
 #!/bin/sh
 """exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
 Review routing adapter. Event text never becomes executable arguments."""
+import base64
+import urllib.parse
 import fcntl
 import json
 import os
@@ -59,11 +61,17 @@ def requested_pr(context, repository, source):
     return number, requests
 
 
-def main_policy(repo):
-    source = 'HEAD:.aiwork/policy.json'
-    raw = subprocess.check_output(['git', '-C', str(repo), 'show', source], text=True)
-    blob = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', source], text=True).strip()
-    policy = json.loads(raw)
+def main_policy(api, token, repository):
+    metadata = retry(lambda: api['github'](token, f'repos/{repository}'))
+    branch = metadata.get('default_branch')
+    if not isinstance(branch, str) or not branch:
+        raise ValueError('target default branch is missing')
+    ref = urllib.parse.quote(branch, safe='')
+    response = retry(lambda: api['github'](token, f'repos/{repository}/contents/.aiwork/policy.json?ref={ref}'))
+    blob = response.get('sha')
+    if not isinstance(blob, str) or not re.fullmatch(r'[0-9a-f]{40}', blob):
+        raise ValueError('target policy blob is missing')
+    policy = json.loads(base64.b64decode(''.join(response['content'].split()), validate=True))
     builders = policy.get('builders')
     extra = policy.get('unknown_author_extra_families', [])
     if (not isinstance(builders, dict) or not builders or not isinstance(extra, list)
@@ -167,7 +175,7 @@ def main():
     api = runpy.run_path(base[0], run_name='review_handoff_preflight')
     token = retry(lambda: api['review_token'](repository))
     pr = retry(lambda: api['pr_state'](token, number, repository=repository))
-    policy, blob = main_policy(repo)
+    policy, blob = main_policy(api, token, repository)
     head, author, family, dispatch_family = builder_for(pr, requests, policy)
     state = retry(lambda: api['read_dispatch_state'](repository, number, dispatch_family))
     verify_dispatch_state(state, head, blob, family, policy)
