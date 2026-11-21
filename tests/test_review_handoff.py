@@ -45,4 +45,39 @@ class Handoff(unittest.TestCase):
             path.write_text(json.dumps({'checkout':'relative','programs':'/programs','repository':'example/repo','event_source':'trusted'}))
             with self.assertRaises(ValueError):worker.load_settings(path)
 
+    def test_main_failed_head_can_retry_then_success_deduplicates(self):
+        import tempfile,json,sys,subprocess,os,io
+        from contextlib import redirect_stdout,redirect_stderr
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            settings=root/'settings.json'
+            settings.write_text(json.dumps({'checkout':str(root),'programs':str(root),'repository':'example/repo','event_source':'trusted'}))
+            context=root/'context.json'
+            context.write_text(json.dumps({'events':[{'source':'trusted','type':'reviews.request','subject':'example/repo#1','detail':json.dumps({'repository':'example/repo','pr':1,'head':'a'*40,'builder_family':'openai'})}]}))
+            policy={'builders':{'builder':'openai'}}
+            pr={'head':{'sha':'a'*40},'user':{'login':'builder'}}
+            state={'head':'a'*40,'policy_sha':'blob','excluded':['openai'],'gate':{'summary':'✅ G1 current CI'}}
+            from unittest.mock import Mock
+            read_pr=Mock(side_effect=[OSError('network'),pr,pr,pr])
+            api={'review_token':lambda repo:'token','pr_state':read_pr,'read_dispatch_state':lambda *args:state,'data_path':lambda name:root/'data','redact':lambda value:value}
+            models=[]
+            def command(argv,**kwargs):
+                if argv[0].endswith('review-pr'):
+                    models.append(argv)
+                    return subprocess.CompletedProcess(argv,2 if len(models)==1 else 0,'{}','')
+                return subprocess.CompletedProcess(argv,0,'','')
+            previous_umask=os.umask(0o077)
+            try:
+                with patch.object(sys,'argv',['worker',str(context),str(settings)]), patch.dict(os.environ), patch.object(worker.time,'sleep'), patch.object(worker.runpy,'run_path',return_value=api), patch.object(worker,'main_policy',return_value=(policy,'blob')), patch.object(worker.subprocess,'run',side_effect=command), patch.object(worker.subprocess,'check_output',return_value='commit'), redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
+                    worker.main()
+                    worker.main()
+                    worker.main()
+            finally:os.umask(previous_umask)
+            self.assertEqual(len(models),2)
+            self.assertEqual(read_pr.call_count,4)
+            records=list((root/'data/review-auto-handoffs').glob('*.json'))
+            self.assertEqual(len(records),1)
+            self.assertEqual(json.loads(records[0].read_text())['entry_exit'],0)
+            self.assertEqual(len(list((root/'data').rglob('previous.json'))),1)
+
 if __name__=='__main__':unittest.main()
