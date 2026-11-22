@@ -74,6 +74,11 @@ class KimiPreflight(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.helper().preflight(self.cli("deny-and-read"), self.home, self.profile)
 
+    def test_empty_grep_must_be_denied_without_reading(self):
+        for mode in ("empty-grep-read", "empty-grep-deny-and-read"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                self.helper().preflight(self.cli(mode), self.home, self.profile)
+
     def test_search_that_follows_directory_links_refuses(self):
         for mode in ("follow-links", "glob-follow-links", "grep-follow-links"):
             with self.subTest(mode=mode), self.assertRaises(ValueError):

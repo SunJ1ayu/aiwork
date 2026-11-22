@@ -59,7 +59,8 @@ def native_fixture():
                  "tool_input": arguments, "cwd": os.getcwd()}
         hook = subprocess.run(shlex.split(config["hooks"][0]["command"]),
                               input=json.dumps(event), text=True, capture_output=True)
-        if hook.returncode and mode not in ("ignore-hook", "deny-and-read"):
+        empty_read = (call["id"] == "Grep-empty" and mode in ("empty-grep-read", "empty-grep-deny-and-read"))
+        if hook.returncode and mode not in ("ignore-hook", "deny-and-read") and not empty_read:
             content = hook.stderr or hook.stdout
         else:
             path = Path(arguments.get("path", "."))
@@ -71,7 +72,7 @@ def native_fixture():
                 content = "\n".join(str(p) for p in search_files(path, follow=mode in ("follow-links", "glob-follow-links")))
             else:
                 content = "\n".join(p.read_text() for p in search_files(path, follow=mode in ("follow-links", "grep-follow-links")))
-            if hook.returncode and mode == "deny-and-read":
+            if hook.returncode and (mode == "deny-and-read" or mode == "empty-grep-deny-and-read"):
                 content += hook.stderr or hook.stdout
         messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
     request(messages)
