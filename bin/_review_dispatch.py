@@ -3,14 +3,29 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
+from enum import Enum
 from random import SystemRandom
+
+
+class StopReason(str, Enum):
+    """Dispatcher control-flow codes and their safe public descriptions."""
+    def __new__(cls, code, description):
+        obj = str.__new__(cls, code)
+        obj._value_ = code
+        obj.description = description
+        return obj
+
+    HEAD_CHANGED = ('head_changed', 'PR 提交已变化')
+    POLICY_CHANGED = ('policy_changed', '项目策略已变化')
+    STATE_UNAVAILABLE = ('state_unavailable', '无法确认当前关卡状态')
+    DISPATCH_ERROR = ('dispatch_error', '派发流程中止，状态待核实')
 
 
 class DispatchStopped(ValueError):
     """A known dispatcher stop, independent of any individual leg outcome."""
     def __init__(self, reason):
-        self.reason = reason
-        super().__init__(reason)
+        self.reason = StopReason(reason).value
+        super().__init__(self.reason)
 
 
 def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=None):
@@ -20,7 +35,7 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
         except DispatchStopped:
             raise
         except (ValueError, OSError) as exc:
-            raise DispatchStopped('state_unavailable') from exc
+            raise DispatchStopped(StopReason.STATE_UNAVAILABLE) from exc
 
     state = read()
     head, policy_sha = state['head'], state['policy_sha']
@@ -48,9 +63,9 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
     def refresh():
         value = read()
         if value['head'] != head:
-            raise DispatchStopped('head_changed')
+            raise DispatchStopped(StopReason.HEAD_CHANGED)
         if value['policy_sha'] != policy_sha:
-            raise DispatchStopped('policy_changed')
+            raise DispatchStopped(StopReason.POLICY_CHANGED)
         return value
 
     def report():

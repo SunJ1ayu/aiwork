@@ -84,6 +84,46 @@ class Notice(unittest.TestCase):
                 else:
                     self.assertFalse(public['attempts'][0]['confirmed'])
 
+    def test_every_defined_stop_reason_is_public_and_unknown_stop_stays_stopped(self):
+        unknown = '/srv/fixture-user on fixture-host: unknown stop'
+        public = publisher.public_dispatch_report({'stopped': unknown})
+        self.assertTrue(public['stopped'])
+        self.assertTrue(public['stop_reason'])
+        self.assertNotIn(unknown, json.dumps(public))
+
+        from _review_dispatch import StopReason, DispatchStopped
+        for reason in StopReason:
+            with self.subTest(reason=reason):
+                stop = DispatchStopped(reason)
+                public = publisher.public_dispatch_report({'stopped': stop.reason,
+                    'attempts': [{'leg': 'subkimi', 'confirmed': True}]})
+                self.assertEqual(public['stopped'], reason.value)
+                self.assertEqual(public['stop_reason'], reason.description)
+                self.assertNotIn('confirmed', public['attempts'][0])
+
+    def test_dispatch_producers_use_the_shared_stop_definition(self):
+        from _review_dispatch import dispatch, DispatchStopped, StopReason
+        from test_review_dispatch import view
+        for field, expected in (('head', StopReason.HEAD_CHANGED),
+                                ('policy_sha', StopReason.POLICY_CHANGED),
+                                (None, StopReason.STATE_UNAVAILABLE)):
+            with self.subTest(field=field):
+                state = view(order=['subkimi'])
+                reads = 0
+                def read(_):
+                    nonlocal reads
+                    reads += 1
+                    if reads > 1:
+                        if field is None:
+                            raise OSError('local diagnostic')
+                        state[field] += 'x'
+                    return state.copy()
+                with self.assertRaises(DispatchStopped) as caught:
+                    dispatch(read, lambda _: ('moonshot', None), lambda *a: {}, 'openai')
+                public = publisher.public_dispatch_report({'stopped': caught.exception.reason})
+                self.assertEqual(public['stopped'], expected.value)
+                self.assertEqual(public['stop_reason'], expected.description)
+
     def test_privacy_failure_prevents_publication(self):
         with patch.object(publisher._leg_session, 'run', side_effect=publisher.ReviewError('privacy blocked')), \
              patch.object(publisher, 'github', return_value={'id': 123}) as api:

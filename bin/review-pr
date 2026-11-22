@@ -21,6 +21,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
 import _review_ci
+from _review_dispatch import DispatchStopped, StopReason, dispatch
 from _review_result import ADAPTER_IDENTITIES, leg_identity, sha256_bytes
 from _aiwork_config import (
     check_app_role, ConfigError, check_programs, data_dir, data_path, prune_data, program,
@@ -546,15 +547,6 @@ def review_request(repository: str, number: int, builder_family: str) -> dict:
                       '--builder-family', builder_family, '--expected-head', head])
 
 
-# Only dispatcher control-flow reasons are public; individual leg diagnoses stay local.
-DISPATCH_STOP_REASONS = {
-    'head_changed': 'PR 提交已变化',
-    'policy_changed': '项目策略已变化',
-    'state_unavailable': '无法确认当前关卡状态',
-    'dispatch_error': '派发流程中止，状态待核实',
-}
-
-
 def public_dispatch_report(report):
     legs = set(ADAPTER_IDENTITIES) | {'subcursor'}
     public = {}
@@ -570,8 +562,12 @@ def public_dispatch_report(report):
     if plan.get('tier') in ('documentation', 'code', 'high'):
         public['plan']['tier'] = plan['tier']
     stopped = report.get('stopped')
-    if stopped in DISPATCH_STOP_REASONS:
-        public.update(stopped=stopped, stop_reason=DISPATCH_STOP_REASONS[stopped])
+    if stopped:
+        try:
+            reason = StopReason(stopped)
+        except (ValueError, TypeError):
+            reason = StopReason.DISPATCH_ERROR
+        public.update(stopped=reason.value, stop_reason=reason.description)
     public['attempts'] = []
     for attempt in report.get('attempts', []):
         if attempt.get('leg') not in legs:
@@ -609,7 +605,7 @@ def publish_dispatch_record(repository, number, report, comment_id=None):
 
 def publish_dispatch_failure(repository, number, head, attempted, report=None):
     if report is None:
-        report = dict(head=head, stopped='dispatch_error',
+        report = dict(head=head, stopped=StopReason.DISPATCH_ERROR.value,
                       attempts=[dict(leg=leg, started=True) for leg in attempted])
     body = ('评审派发状态通知；合并条件以关卡结论为准。仅列已知事实，不判断腿的失败原因。\n\n```json\n'
             + json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2) + '\n```')
@@ -625,7 +621,6 @@ def record_dispatch_failure(repository, number, head, attempted, report=None):
 
 def auto_dispatch(repository: str, number: int, builder_family: str, *,
                   expected_head: str | None = None) -> int:
-    from _review_dispatch import DispatchStopped, dispatch
     # Logs stay outside the repository and are not included in later legs' tasks.
     root = data_path('logs')
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -670,7 +665,7 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
     def read_state(family):
         state = _leg_session.network_read(lambda: read_dispatch_state(repository, number, family))
         if expected_head and state["head"] != expected_head:
-            raise DispatchStopped('head_changed')
+            raise DispatchStopped(StopReason.HEAD_CHANGED)
         return state
 
     try:
@@ -683,7 +678,7 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
             causes.append(str(cause))
             cause = cause.__cause__
         (directory / 'failure.txt').write_text(redact('\n'.join(causes)), encoding='utf-8')
-        stopped = dict(latest, stopped=exc.reason if isinstance(exc, DispatchStopped) else 'dispatch_error')
+        stopped = dict(latest, stopped=exc.reason if isinstance(exc, DispatchStopped) else StopReason.DISPATCH_ERROR.value)
         stopped.setdefault('head', expected_head)
         outcomes = {item['leg']: item for item in latest.get('attempts', [])}
         stopped['attempts'] = [dict(outcomes.get(leg, {}), leg=leg, started=True) for leg in attempts]
