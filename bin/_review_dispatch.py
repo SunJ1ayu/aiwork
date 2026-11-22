@@ -6,8 +6,20 @@ from copy import deepcopy
 from random import SystemRandom
 
 
+class DispatchStopped(ValueError):
+    """A known dispatcher stop, independent of any individual leg outcome."""
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=None):
-    state = read_state(builder_family)
+    try:
+        state = read_state(builder_family)
+    except DispatchStopped:
+        raise
+    except (ValueError, OSError) as exc:
+        raise DispatchStopped('state_unavailable') from exc
     head, policy_sha = state['head'], state['policy_sha']
     plan = state['plan']
     if not plan['order']:
@@ -18,7 +30,7 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
         try:
             family, model = identify(leg)
         except (ValueError, OSError) as exc:
-            attempts.append(dict(leg=leg, ok=False, failure_kind='identity_mismatch', reason=str(exc)))
+            attempts.append(dict(leg=leg, ok=False, reason=str(exc)))
             continue
         if family in families:
             continue
@@ -31,11 +43,16 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
     running = {}
 
     def refresh():
-        value = read_state(builder_family)
+        try:
+            value = read_state(builder_family)
+        except DispatchStopped:
+            raise
+        except (ValueError, OSError) as exc:
+            raise DispatchStopped('state_unavailable') from exc
         if value['head'] != head:
-            raise ValueError('PR head changed during dispatch; stop and rerun for the new head')
+            raise DispatchStopped('head_changed')
         if value['policy_sha'] != policy_sha:
-            raise ValueError('default-branch policy changed during dispatch; stop and rerun')
+            raise DispatchStopped('policy_changed')
         return value
 
     def report():
@@ -73,13 +90,14 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
                 available -= 1
             if not running:
                 break
+            emit()
             done, _ = wait(running, return_when=FIRST_COMPLETED)
             for future in done:
                 attempt = running.pop(future)
                 try:
                     outcome = future.result()
                 except (ValueError, OSError) as exc:
-                    outcome = dict(ok=False, failure_kind='runtime', reason=str(exc))
+                    outcome = dict(ok=False, reason=str(exc))
                 attempt.update(outcome, status='finished')
             state = refresh()
             emit()

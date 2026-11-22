@@ -26,10 +26,10 @@ class Notice(unittest.TestCase):
             self.assertEqual(identifier, 123)
             self.assertEqual(api.call_args.args[1], 'repos/example/repo/issues/1/comments')
             body = api.call_args.args[2]['body']
-            self.assertIn('运行超时', body)
+            self.assertNotIn('运行超时', body)
             public = json.loads(body.split('```json\n')[1].split('\n```')[0])
             self.assertEqual(public['draw'], report['draw'])
-            self.assertEqual(public['attempts'][0]['failure_kind'], 'timeout')
+            self.assertNotIn('failure_kind', public['attempts'][0])
             publisher.publish_dispatch_record('example/repo', 1, report, identifier)
             self.assertEqual(api.call_args.args[1], 'repos/example/repo/issues/comments/123')
             self.assertEqual(api.call_args.kwargs, {'method': 'PATCH'})
@@ -56,8 +56,33 @@ class Notice(unittest.TestCase):
         for value in ('fixture-user', 'fixture-host', '/srv/', 'token: invalid'):
             self.assertNotIn(value, body)
         public = json.loads(body.split('```json\n')[1].split('\n```')[0])
-        self.assertEqual(public['attempts'][0]['failure_kind'], 'auth')
+        self.assertNotIn('failure_kind', public['attempts'][0])
         self.assertNotIn('gate', public)
+
+    def test_timeout_is_not_public_failure_and_stop_preserves_started_legs(self):
+        cases = [
+            {'head': 'a'*40, 'attempts': [{'leg': 'subkimi', 'status': 'finished',
+              'ok': False, 'confirmed': False, 'failure_kind': 'timeout', 'reason': 'review leg failed: timeout'}]},
+            {'head': 'a'*40, 'stopped': 'head_changed', 'attempts': [{'leg': 'subkimi',
+              'status': 'finished', 'ok': True, 'confirmed': True}]},
+        ]
+        with patch.object(publisher, 'review_token', return_value='token'), \
+             patch.object(publisher._leg_session, 'run'), \
+             patch.object(publisher, 'github', return_value={'id': 123}) as api:
+            for report in cases:
+                publisher.publish_dispatch_failure('example/repo', 1, 'a'*40, ['subkimi'], report)
+                body = api.call_args.args[2]['body']
+                public = json.loads(body.split('```json\n')[1].split('\n```')[0])
+                for item in public['attempts']:
+                    self.assertNotIn('ok', item)
+                    self.assertNotIn('failure_kind', item)
+                    self.assertNotIn('reason', item)
+                    self.assertTrue(item['started'])
+                if report.get('stopped'):
+                    self.assertEqual(public['stopped'], 'head_changed')
+                    self.assertNotIn('confirmed', public['attempts'][0])
+                else:
+                    self.assertFalse(public['attempts'][0]['confirmed'])
 
     def test_privacy_failure_prevents_publication(self):
         with patch.object(publisher._leg_session, 'run', side_effect=publisher.ReviewError('privacy blocked')), \

@@ -21,7 +21,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
 import _review_ci
-from _review_result import ADAPTER_IDENTITIES, infer_failure_kind, leg_identity, sha256_bytes
+from _review_result import ADAPTER_IDENTITIES, leg_identity, sha256_bytes
 from _aiwork_config import (
     check_app_role, ConfigError, check_programs, data_dir, data_path, prune_data, program,
 )
@@ -546,13 +546,12 @@ def review_request(repository: str, number: int, builder_family: str) -> dict:
                       '--builder-family', builder_family, '--expected-head', head])
 
 
-# Public dispatch data is a projection, never a redacted diagnostic dump.
-# Unknown values are omitted or mapped to a fixed label before serialization.
-DISPATCH_FAILURE_LABELS = {
-    'auth': '认证失败', 'quota': '额度不足', 'rate_limit': '服务限流',
-    'timeout': '运行超时', 'runtime': '子进程执行失败',
-    'identity_mismatch': '评审身份或模型设置不可用',
-    'no_verdict': '未确认完整评审', 'unknown': '失败原因未确认',
+# Only dispatcher control-flow reasons are public; individual leg diagnoses stay local.
+DISPATCH_STOP_REASONS = {
+    'head_changed': 'PR 提交已变化',
+    'policy_changed': '项目策略已变化',
+    'state_unavailable': '无法确认当前关卡状态',
+    'dispatch_error': '派发流程中止，状态待核实',
 }
 
 
@@ -570,26 +569,18 @@ def public_dispatch_report(report):
                       if type(value := plan.get(key)) is int and value >= 0}
     if plan.get('tier') in ('documentation', 'code', 'high'):
         public['plan']['tier'] = plan['tier']
-    for key in ('minimum_met', 'target_met'):
-        if type(report.get(key)) is bool:
-            public[key] = report[key]
-    if type(report.get('missing_target')) is int and report['missing_target'] >= 0:
-        public['missing_target'] = report['missing_target']
+    stopped = report.get('stopped')
+    if stopped in DISPATCH_STOP_REASONS:
+        public.update(stopped=stopped, stop_reason=DISPATCH_STOP_REASONS[stopped])
     public['attempts'] = []
     for attempt in report.get('attempts', []):
         if attempt.get('leg') not in legs:
             continue
         item = {'leg': attempt['leg']}
-        for key in ('ok', 'confirmed'):
-            if type(attempt.get(key)) is bool:
-                item[key] = attempt[key]
-        if attempt.get('status') in ('running', 'finished'):
-            item['status'] = attempt['status']
-        if attempt.get('ok') is False or attempt.get('confirmed') is False:
-            kind = attempt.get('failure_kind', 'no_verdict' if attempt.get('confirmed') is False else 'unknown')
-            if kind not in DISPATCH_FAILURE_LABELS:
-                kind = 'unknown'
-            item.update(failure_kind=kind, reason=DISPATCH_FAILURE_LABELS[kind])
+        if attempt.get('status') in ('running', 'finished') or attempt.get('started') is True:
+            item['started'] = True
+        if not stopped and type(attempt.get('confirmed')) is bool:
+            item['confirmed'] = attempt['confirmed']
         public['attempts'].append(item)
     return public
 
@@ -618,8 +609,9 @@ def publish_dispatch_record(repository, number, report, comment_id=None):
 
 def publish_dispatch_failure(repository, number, head, attempted, report=None):
     if report is None:
-        report = dict(head=head, attempts=[dict(leg=leg, ok=False) for leg in attempted])
-    body = ('评审派发未完成；合并条件以关卡结论为准。以下仅为公开状态，详细诊断留在本机。\n\n```json\n'
+        report = dict(head=head, stopped='dispatch_error',
+                      attempts=[dict(leg=leg, started=True) for leg in attempted])
+    body = ('评审派发状态通知；合并条件以关卡结论为准。仅列已知事实，不判断腿的失败原因。\n\n```json\n'
             + json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2) + '\n```')
     return publish_dispatch_comment(repository, number, body)
 
@@ -633,16 +625,18 @@ def record_dispatch_failure(repository, number, head, attempted, report=None):
 
 def auto_dispatch(repository: str, number: int, builder_family: str, *,
                   expected_head: str | None = None) -> int:
-    from _review_dispatch import dispatch
+    from _review_dispatch import DispatchStopped, dispatch
     # Logs stay outside the repository and are not included in later legs' tasks.
     root = data_path('logs')
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory = Path(tempfile.mkdtemp(prefix=f'review-dispatch-{number}-', dir=root))
     attempts = []
     comment_id = None
+    latest = {}
 
     def record(report):
-        nonlocal comment_id
+        nonlocal comment_id, latest
+        latest = report
         (directory / "summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         try:
             comment_id = publish_dispatch_record(repository, number, report, comment_id)
@@ -668,25 +662,33 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
         diagnostic = redact(result.stdout + result.stderr)
         (directory / f'{leg}.log').write_text(diagnostic, encoding='utf-8')
         if result.returncode:
-            return dict(ok=False, reason=redact(result.stderr[-2000:]) or f'review-pr exited {result.returncode}',
-                        failure_kind=infer_failure_kind(result.stderr, '',
-                            'timed_out' if result.returncode == 124 else 'exited', result.returncode))
+            return dict(ok=False, reason=redact(result.stderr[-2000:]) or f'review-pr exited {result.returncode}')
         urls = [line for line in result.stdout.splitlines() if line.startswith('https://github.com/')]
         return dict(ok=bool(urls), **({'url': urls[-1]} if urls else
-                    {'reason': 'review-pr returned no publication URL', 'failure_kind': 'no_verdict'}))
+                    {'reason': 'review-pr returned no publication URL'}))
 
     def read_state(family):
         state = _leg_session.network_read(lambda: read_dispatch_state(repository, number, family))
         if expected_head and state["head"] != expected_head:
-            raise ReviewError("PR head changed since handoff; no review dispatched")
+            raise DispatchStopped('head_changed')
         return state
 
     try:
         report = dispatch(read_state,
                           lambda leg: _leg_session.choose_leg(leg, BIN), run, builder_family, record=record)
     except (ValueError, OSError) as exc:
-        (directory / 'failure.txt').write_text(redact(str(exc)), encoding='utf-8')
-        record_dispatch_failure(repository, number, expected_head, attempts)
+        causes = []
+        cause = exc
+        while cause is not None:
+            causes.append(str(cause))
+            cause = cause.__cause__
+        (directory / 'failure.txt').write_text(redact('\n'.join(causes)), encoding='utf-8')
+        stopped = dict(latest, stopped=exc.reason if isinstance(exc, DispatchStopped) else 'dispatch_error')
+        stopped.setdefault('head', expected_head)
+        outcomes = {item['leg']: item for item in latest.get('attempts', [])}
+        stopped['attempts'] = [dict(outcomes.get(leg, {}), leg=leg, started=True) for leg in attempts]
+        record(stopped)
+        record_dispatch_failure(repository, number, expected_head, attempts, stopped)
         raise
     finally:
         print(f'review-pr: dispatch record {directory}', file=sys.stderr)

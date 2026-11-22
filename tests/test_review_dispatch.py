@@ -369,6 +369,42 @@ class PublisherIntegrationTests(unittest.TestCase):
             self.assertNotIn('fixture-host', body)
             self.assertNotIn('/srv/', body)
 
+    def test_published_leg_then_head_change_reports_stop_without_failure(self):
+        import tempfile, io, subprocess, json
+        from unittest.mock import patch
+        from contextlib import redirect_stdout, redirect_stderr
+        publisher = self.load_publisher()
+        state = view(target=1, order=['subkimi', 'submimo'])
+        reads, bodies, calls = [], [], []
+        def read(*args):
+            reads.append(None)
+            value = state.copy()
+            if calls:
+                value['head'] = 'c'*40
+            return value
+        def run(command, **kwargs):
+            calls.append(command[command.index('--leg')+1])
+            return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
+        def api(token, endpoint, payload, **kwargs):
+            bodies.append(payload['body'])
+            return {'id': 123}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(publisher, 'data_path', return_value=Path(directory)), \
+             patch.object(publisher, 'read_dispatch_state', side_effect=read), \
+             patch.object(publisher._leg_session, 'choose_leg', return_value=('moonshot', None)), \
+             patch.object(publisher.subprocess, 'run', side_effect=run), \
+             patch.object(publisher._leg_session, 'run'), \
+             patch.object(publisher, 'review_token', return_value='token'), \
+             patch.object(publisher, 'github', side_effect=api), \
+             patch('random.SystemRandom.shuffle', side_effect=lambda items: None), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with self.assertRaises(ValueError):
+                publisher.auto_dispatch('example/repo', 1, 'openai')
+        public = json.loads(bodies[-1].split('```json\n')[1].split('\n```')[0])
+        self.assertEqual(calls, ['subkimi'])
+        self.assertEqual(public.get('stopped'), 'head_changed')
+        self.assertEqual(public['attempts'], [{'leg': 'subkimi', 'started': True}])
+
     def test_facts_timeout_is_recorded_and_prints_its_directory(self):
         import tempfile, io, subprocess
         from unittest.mock import patch
@@ -387,7 +423,7 @@ class PublisherIntegrationTests(unittest.TestCase):
              patch.object(publisher, 'read_dispatch_state', side_effect=publisher.ReviewError('facts timed out')), \
              patch('time.sleep'), \
              redirect_stderr(stderr):
-            with self.assertRaisesRegex(publisher.ReviewError, 'timed out'):
+            with self.assertRaisesRegex(ValueError, 'state_unavailable'):
                 publisher.auto_dispatch('example/repo', 1, 'openai')
             failures = list(Path(directory).glob('*/failure.txt'))
             self.assertEqual(len(failures), 1)

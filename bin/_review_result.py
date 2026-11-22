@@ -159,36 +159,6 @@ def cursor_model_family(model: str | None) -> str | None:
     return None
 
 
-def infer_failure_kind(diagnostic_text, evidence_text, process_state, exit_code,
-                       verdict="UNKNOWN", review_contract_version=REVIEW_CONTRACT_VERSION):
-    """Classify diagnostics without returning any diagnostic text."""
-    failure_text = diagnostic_text if diagnostic_text.strip() else evidence_text
-    if process_state == "timed_out":
-        failure_kind = "timeout"
-    elif process_state != "exited" or exit_code != 0:
-        # 窗口限额只认**我们自己的诊断**里的原话:回落到模型正文时,正文里谈到 "usage limit"
-        # (比如正在审这段代码)不许把一次崩溃变成「会自己恢复、不计连败」(外审第一轮 Kimi F1)。
-        # rate_limit 在健康池里意味着「只冷却、不计连败」,所以它**只能**来自我们自己的诊断;
-        # 正文回落时连原有的 `rate.?limit` 也不认(否则审到这段代码的腿一崩就被豁免)。
-        diagnostic_backed = bool(diagnostic_text.strip())
-        if (diagnostic_backed and WINDOW_LIMIT_RE.search(failure_text)
-                and not BILLING_FAILURE_RE.search(failure_text)):
-            failure_kind = "rate_limit"
-        elif AUTH_FAILURE_RE.search(failure_text):
-            failure_kind = "auth"
-        elif diagnostic_backed and RATE_LIMIT_RE.search(failure_text):
-            failure_kind = "rate_limit"
-        elif QUOTA_FAILURE_RE.search(failure_text):
-            failure_kind = "quota"
-        else:
-            failure_kind = "runtime"
-    elif verdict == "UNKNOWN" and review_contract_version != EXPLORE_CONTRACT_VERSION:
-        failure_kind = "no_verdict"
-    else:
-        failure_kind = "none"
-    return failure_kind
-
-
 def leg_identity(adapter: str, model: str | None) -> tuple[str, str] | None:
     """(family, required model prefix) of one leg run; None when it cannot be attributed.
 
@@ -618,11 +588,33 @@ def _emit_result(args: argparse.Namespace) -> dict[str, Any]:
     # panel 就是这样把一条活着的 DeepSeek 腿记成"凭证坏了"(真因是没交裁决行)。
     # 所以先只读我们自己的诊断;只有我们一个字都没说时才回落到正文
     # (agent 底座会把 401 打在 stdout 上,那种真报警不能漏)。
+    failure_text = diagnostic_text if diagnostic_text.strip() else evidence_text
     process_state = facts["process_state"] if facts is not None and facts["process_state"] is not None else args.process_state
     failure_kind = facts["failure_kind"] if facts is not None and facts["failure_kind"] is not None else args.failure_kind
     if failure_kind is None:
-        failure_kind = infer_failure_kind(diagnostic_text, evidence_text, process_state,
-                                          args.exit_code, verdict, args.review_contract_version)
+        if process_state == "timed_out":
+            failure_kind = "timeout"
+        elif process_state != "exited" or args.exit_code != 0:
+            # 窗口限额只认**我们自己的诊断**里的原话:回落到模型正文时,正文里谈到 "usage limit"
+            # (比如正在审这段代码)不许把一次崩溃变成「会自己恢复、不计连败」(外审第一轮 Kimi F1)。
+            # rate_limit 在健康池里意味着「只冷却、不计连败」,所以它**只能**来自我们自己的诊断;
+            # 正文回落时连原有的 `rate.?limit` 也不认(否则审到这段代码的腿一崩就被豁免)。
+            diagnostic_backed = bool(diagnostic_text.strip())
+            if (diagnostic_backed and WINDOW_LIMIT_RE.search(failure_text)
+                    and not BILLING_FAILURE_RE.search(failure_text)):
+                failure_kind = "rate_limit"
+            elif AUTH_FAILURE_RE.search(failure_text):
+                failure_kind = "auth"
+            elif diagnostic_backed and RATE_LIMIT_RE.search(failure_text):
+                failure_kind = "rate_limit"
+            elif QUOTA_FAILURE_RE.search(failure_text):
+                failure_kind = "quota"
+            else:
+                failure_kind = "runtime"
+        elif verdict == "UNKNOWN" and args.review_contract_version != EXPLORE_CONTRACT_VERSION:
+            failure_kind = "no_verdict"
+        else:
+            failure_kind = "none"
     view_delivery_state = facts["view"]["delivery_state"] if facts is not None else args.view_delivery_state
     view_mode = facts["view"]["mode"] if facts is not None else args.view_mode
     if view_delivery_state == "none":
