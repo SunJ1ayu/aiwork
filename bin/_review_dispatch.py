@@ -14,12 +14,15 @@ class DispatchStopped(ValueError):
 
 
 def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=None):
-    try:
-        state = read_state(builder_family)
-    except DispatchStopped:
-        raise
-    except (ValueError, OSError) as exc:
-        raise DispatchStopped('state_unavailable') from exc
+    def read():
+        try:
+            return read_state(builder_family)
+        except DispatchStopped:
+            raise
+        except (ValueError, OSError) as exc:
+            raise DispatchStopped('state_unavailable') from exc
+
+    state = read()
     head, policy_sha = state['head'], state['policy_sha']
     plan = state['plan']
     if not plan['order']:
@@ -43,12 +46,7 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
     running = {}
 
     def refresh():
-        try:
-            value = read_state(builder_family)
-        except DispatchStopped:
-            raise
-        except (ValueError, OSError) as exc:
-            raise DispatchStopped('state_unavailable') from exc
+        value = read()
         if value['head'] != head:
             raise DispatchStopped('head_changed')
         if value['policy_sha'] != policy_sha:
