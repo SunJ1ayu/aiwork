@@ -44,9 +44,12 @@ test('invalid targets and dispatch orders fail closed; legacy projects retain th
     p=>p.review_dispatch.targets.high=1,
     p=>p.review_dispatch.targets.code=0,
     p=>p.review_dispatch.targets.documentation=1.5,
-    p=>p.review_dispatch.order.push(p.review_dispatch.order[0]),
-    p=>p.review_dispatch.order=['../subcodex'],
+    p=>p.review_dispatch.candidates.push(p.review_dispatch.candidates[0]),
+    p=>p.review_dispatch.candidates=['../subcodex'],
     p=>p.review_dispatch.documentation_paths=[''],
+    p=>p.review_dispatch.selection='fixed',
+    p=>p.review_dispatch.high_only=[],
+    p=>p.review_dispatch.order=[],
   ]) {const p=structuredClone(policy); mutate(p); assert.throws(()=>validatePolicy(p));}
   const old=structuredClone(policy); delete old.review_dispatch;
   validatePolicy(old); assert.equal(validateReviewPolicy(old),undefined);
@@ -81,5 +84,13 @@ test('关卡只把当前 head 上有效、完整、独立的评审计为已交�
     const result=decide({...facts([]),reviews:[record]},policy);
     assert.deepEqual(result.review_state.reviewed_families,expected);
     assert.equal(result.review_state.minimum_met,false);
+  }
+});
+
+test('every tier offers the entire randomized candidate pool', () => {
+  for (const files of [['README.md'], ['bin/tool'], ['bin/subcodex']]) {
+    const plan = reviewPlan(files, policy);
+    assert.deepEqual(plan.order, policy.review_dispatch.candidates);
+    assert.equal(plan.selection, 'random');
   }
 });

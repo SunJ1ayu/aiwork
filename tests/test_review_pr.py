@@ -114,7 +114,7 @@ class ReviewHandoffTests(unittest.TestCase):
                 patch.object(module, 'data_path', return_value=Path(folder)), \
                 patch.object(module, 'read_dispatch_state', return_value={'head': 'b' * 40}), \
                 patch('sys.argv', ['review-pr', '12']):
-            with self.assertRaises(module.ReviewError):
+            with self.assertRaisesRegex(ValueError, "head_changed"):
                 module.auto_dispatch('fixture/project', 12, 'openai', expected_head='a' * 40)
 
 

@@ -23,9 +23,9 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 
 ## 评审分档与派发
 
-项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发目标、普通文档路径和固定顺序；`high_min_families` 仍是 high 底线。`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`order` 是腿的尝试顺序；`high_only` 中的腿留给 high。high 优先于其他档位。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测目标或顺序。
+项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发策略；`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`candidates` 是所有档位共用的候选腿，`selection: "random"` 要求排除作者及执行方家族、已交卷家族，再按家族等概率洗牌，前面的补足目标，余下的是有序备用。high 优先于其他档位，底线仍由 `high_min_families` 定义。`review-pr --auto` 同时启动所缺目标家数；每家结束后重新读关卡，只有未确认完整交卷留下的空位才补派，补派与尚在跑的腿并行，目标凑够后不再启动。BLOCK 也是完整交卷，不因未达 PASS 底线无限补腿。每轮启动前在 PR 普通评论公开 head、策略版本、抽选结果和备用顺序，结束后更新该评论，仅包含实际启动的腿及关卡确认结果；中途停止时公开停止状态和派发停止原因，不推断单腿结果，不写单腿失败原因、类别或日志原文；这份记录不作为评审结论。公开内容只从已知事实的固定字段生成，再过隐私检查；完整诊断留在本机。公开记录检查或发布失败仅记本机日志，不影响评审和补派。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测候选或目标。旧的 `order`、`high_only` 字段不再接受，接入项目需在自己的策略 PR 中迁移。
 
-工具用法见 README「Review commands」；失败记录由汇总读取。关卡摘要显示目标与底线，只有底线参与 G3 / G6；其他规则不变。隔离保障链的推导和漏项检查见 `tests/test_aiwork_gate_workflow.mjs`。
+工具用法见 README「Review commands」；汇总读取 PR 上的公开派发记录，本地诊断不作为公开记录的一部分。关卡摘要显示目标与底线，只有底线参与 G3 / G6；其他规则不变。隔离保障链的推导和漏项检查见 `tests/test_aiwork_gate_workflow.mjs`。
 
 `decide.mjs` 的 `review_state` 是派发器消费的机器状态：底线是否满足、已排除家族、完整已交卷家族及目标缺口均在那里定义。派发桥只读取默认分支策略、收集事实并转交该状态；Python 只按状态选择下一条腿，不计算评审资格或底线。派发桥仅在选择腿的排除集合中加入实际执行方；关卡返回的作者、评审资格、底线及原文保持原样。读取桥与关卡入口共用 `github.mjs`，配置仍由入口环境提供。
 
