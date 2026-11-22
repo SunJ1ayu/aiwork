@@ -4,8 +4,8 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
-function deny(reason) {
-  const message = `[review-only sandbox] ${process.env.AIWORK_KIMI_GUARD_PROBE_TAG ?? ""} ${reason}`;
+function deny(reason, policyMessage = false) {
+  const message = policyMessage ? reason : `[review-only sandbox] ${process.env.AIWORK_KIMI_GUARD_PROBE_TAG ?? ""} ${reason}`;
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       permissionDecision: "deny",
@@ -30,6 +30,9 @@ try {
     timeout: 9000,
   });
   if (!result.error && result.status === 0) process.exit(0);
+  if (!result.error && result.status === 4 && result.stdout.trim()) {
+    deny(result.stdout.trim(), true);
+  }
   deny("tool or path is not permitted, or reader policy failed");
 } catch (e) {
   deny(`guard error (fail closed): ${e?.message ?? e}`);
