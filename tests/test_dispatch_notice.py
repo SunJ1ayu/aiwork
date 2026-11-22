@@ -15,6 +15,32 @@ publisher = importlib.util.module_from_spec(spec)
 loader.exec_module(publisher)
 
 class Notice(unittest.TestCase):
+    def test_public_draw_record_is_privacy_checked_and_updated_in_same_comment(self):
+        report = {'head': 'a'*40, 'draw': ['subkimi', 'submimo'],
+                  'initial': ['subkimi'], 'reserve': ['submimo'],
+                  'attempts': [{'leg': 'subkimi', 'ok': False, 'reason': 'timed out'}]}
+        with patch.object(publisher, 'review_token', return_value='token'), \
+             patch.object(publisher._leg_session, 'run') as privacy, \
+             patch.object(publisher, 'github', return_value={'id': 123}) as api:
+            identifier = publisher.publish_dispatch_record('example/repo', 1, report)
+            self.assertEqual(identifier, 123)
+            self.assertEqual(api.call_args.args[1], 'repos/example/repo/issues/1/comments')
+            body = api.call_args.args[2]['body']
+            self.assertIn('timed out', body)
+            self.assertEqual(json.loads(body.split('```json\n')[1].split('\n```')[0]), report)
+            publisher.publish_dispatch_record('example/repo', 1, report, identifier)
+            self.assertEqual(api.call_args.args[1], 'repos/example/repo/issues/comments/123')
+            self.assertEqual(api.call_args.kwargs, {'method': 'PATCH'})
+            self.assertEqual(privacy.call_count, 2)
+            self.assertTrue(all(call.args[0][1] == '--files' for call in privacy.call_args_list))
+
+    def test_privacy_failure_prevents_publication(self):
+        with patch.object(publisher._leg_session, 'run', side_effect=publisher.ReviewError('privacy blocked')), \
+             patch.object(publisher, 'github') as api:
+            with self.assertRaisesRegex(publisher.ReviewError, 'privacy blocked'):
+                publisher.publish_dispatch_record('example/repo', 1, {'draw': []})
+            api.assert_not_called()
+
     def test_notice_is_comment_and_gate_unchanged(self):
         with patch.object(publisher, 'review_token', return_value='token'), patch.object(publisher._leg_session, 'run'), patch.object(publisher, 'github') as api:
             publisher.publish_dispatch_failure('example/repo', 1, 'a'*40, ['subkimi'])

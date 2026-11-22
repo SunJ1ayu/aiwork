@@ -94,18 +94,14 @@
       "*.txt",
       "**/*.txt"
     ],
-    "order": [
+    "minimum_families": 1,
+    "candidates": [
       "subdeepseek-agent",
       "subkimi",
       "subcursor",
       "subcodex",
       "submimo"
     ],
-    "high_only": [
-      "subkimi",
-      "subcursor",
-      "subcodex"
-    ],
-    "minimum_families": 1
+    "selection": "random"
   }
 }

@@ -144,11 +144,11 @@ def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = T
 
 
 def github(token: str, endpoint: str, payload: dict | None = None, *,
-           raw: bool = False, timeout: float | None = None) -> dict | str:
+           raw: bool = False, timeout: float | None = None, method: str = "POST") -> dict | str:
     env = dict(os.environ, GH_TOKEN=token)
     command = ["gh", "api", endpoint]
     if payload is not None:
-        command += ["--method", "POST", "--input", "-"]
+        command += ["--method", method, "--input", "-"]
     if timeout is not None:
         command = [str(BIN / "aiwork-timeout"), "-k", "1", str(timeout), *command]
     def request():
@@ -560,6 +560,25 @@ def publish_dispatch_failure(repository, number, head, attempted):
     github(token, f'repos/{repository}/issues/{number}/comments', payload)
 
 
+def publish_dispatch_record(repository, number, report, comment_id=None):
+    """One public, privacy-checked comment per draw, updated as legs finish."""
+    body = ('评审派发记录（合并条件以关卡为准）\n\n```json\n'
+            + redact(json.dumps(report, ensure_ascii=False, indent=2)) + '\n```')
+    with tempfile.TemporaryDirectory(prefix='dispatch-record-') as temporary:
+        path = Path(temporary) / 'body.md'
+        path.write_text(body, encoding='utf-8')
+        _leg_session.run([str(BIN / 'privacy-check'), '--files', str(path)])
+    token = review_token(repository)
+    if comment_id is None:
+        result = github(token, f'repos/{repository}/issues/{number}/comments', {'body': body})
+    else:
+        result = github(token, f'repos/{repository}/issues/comments/{comment_id}', {'body': body}, method='PATCH')
+    identifier = result.get('id')
+    if not isinstance(identifier, int) or isinstance(identifier, bool) or identifier < 1:
+        raise ReviewError('dispatch comment response has no valid id')
+    return identifier
+
+
 def record_dispatch_failure(repository, number, head, attempted):
     try:
         publish_dispatch_failure(repository, number, head, attempted)
@@ -575,7 +594,12 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory = Path(tempfile.mkdtemp(prefix=f'review-dispatch-{number}-', dir=root))
     attempts = []
-    planned = []
+    comment_id = None
+
+    def record(report):
+        nonlocal comment_id
+        (directory / "summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        comment_id = publish_dispatch_record(repository, number, report, comment_id)
 
     def run(leg, model, head):
         env = dict(os.environ)
@@ -584,12 +608,12 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
         if model is not None:
             env['CURSOR_MODEL'] = model
         print(f'review-pr: dispatch {leg} at {head[:12]}', file=sys.stderr, flush=True)
+        attempts.append(leg)
         result = subprocess.run([str(BIN / 'review-pr'), str(number), '--repo', repository,
                                  '--leg', leg, '--expected-head', head],
                                 env=env, text=True, capture_output=True, check=False)
         diagnostic = redact(result.stdout + result.stderr)
-        (directory / f'{len(attempts) + 1}-{leg}.log').write_text(diagnostic, encoding='utf-8')
-        attempts.append(leg)
+        (directory / f'{leg}.log').write_text(diagnostic, encoding='utf-8')
         if result.returncode:
             return dict(ok=False, reason=redact(result.stderr[-2000:]) or f'review-pr exited {result.returncode}')
         urls = [line for line in result.stdout.splitlines() if line.startswith('https://github.com/')]
@@ -600,12 +624,11 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
         state = _leg_session.network_read(lambda: read_dispatch_state(repository, number, family))
         if expected_head and state["head"] != expected_head:
             raise ReviewError("PR head changed since handoff; no review dispatched")
-        planned[:] = state['plan']['order']
         return state
 
     try:
         report = dispatch(read_state,
-                          lambda leg: _leg_session.choose_leg(leg, BIN), run, builder_family)
+                          lambda leg: _leg_session.choose_leg(leg, BIN), run, builder_family, record=record)
     except (ValueError, OSError) as exc:
         (directory / 'failure.txt').write_text(redact(str(exc)), encoding='utf-8')
         record_dispatch_failure(repository, number, expected_head, attempts)
