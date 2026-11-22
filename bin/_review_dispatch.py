@@ -18,7 +18,7 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
         try:
             family, model = identify(leg)
         except (ValueError, OSError) as exc:
-            attempts.append(dict(leg=leg, ok=False, reason=str(exc)))
+            attempts.append(dict(leg=leg, ok=False, failure_kind='identity_mismatch', reason=str(exc)))
             continue
         if family in families:
             continue
@@ -54,8 +54,8 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
         if record:
             record(report())
 
-    # Publish the draw before starting any model; publish each outcome before
-    # spending a replacement slot. Only the main thread touches the gate/record.
+    # Attempt the draw/outcome record before starting models or replacements.
+    # Only the main thread touches the gate/record; the caller handles write failures.
     emit()
     with ThreadPoolExecutor(max_workers=max(1, slots)) as pool:
         while True:
@@ -79,7 +79,7 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
                 try:
                     outcome = future.result()
                 except (ValueError, OSError) as exc:
-                    outcome = dict(ok=False, reason=str(exc))
+                    outcome = dict(ok=False, failure_kind='runtime', reason=str(exc))
                 attempt.update(outcome, status='finished')
             state = refresh()
             emit()

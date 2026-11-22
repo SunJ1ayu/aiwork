@@ -23,7 +23,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 
 ## 评审分档与派发
 
-项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发策略；`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`candidates` 是所有档位共用的候选腿，`selection: "random"` 要求排除作者及执行方家族、已交卷家族，再按家族等概率洗牌，前面的补足目标，余下的是有序备用。high 优先于其他档位，底线仍由 `high_min_families` 定义。`review-pr --auto` 同时启动所缺目标家数；每家结束后重新读关卡，只有未确认完整交卷留下的空位才补派，补派与尚在跑的腿并行，目标凑够后不再启动。BLOCK 也是完整交卷，不因未达 PASS 底线无限补腿。每轮启动前在 PR 普通评论公开 head、策略版本、抽选结果和备用顺序，结束后更新该评论，包含失败原因及关卡确认结果；这份记录不作为评审结论。公开记录先过隐私检查，写不成功就停止补派。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测候选或目标。旧的 `order`、`high_only` 字段不再接受，接入项目需在自己的策略 PR 中迁移。
+项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发策略；`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`candidates` 是所有档位共用的候选腿，`selection: "random"` 要求排除作者及执行方家族、已交卷家族，再按家族等概率洗牌，前面的补足目标，余下的是有序备用。high 优先于其他档位，底线仍由 `high_min_families` 定义。`review-pr --auto` 同时启动所缺目标家数；每家结束后重新读关卡，只有未确认完整交卷留下的空位才补派，补派与尚在跑的腿并行，目标凑够后不再启动。BLOCK 也是完整交卷，不因未达 PASS 底线无限补腿。每轮启动前在 PR 普通评论公开 head、策略版本、抽选结果和备用顺序，结束后更新该评论，包含固定的失败类别及关卡确认结果，不复制本地诊断、模型设置或日志原文；这份记录不作为评审结论。公开内容只从固定字段和类别生成，再过隐私检查；完整诊断留在本机。公开记录检查或发布失败仅记本机日志，不影响评审和补派。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测候选或目标。旧的 `order`、`high_only` 字段不再接受，接入项目需在自己的策略 PR 中迁移。
 
 工具用法见 README「Review commands」；失败记录由汇总读取。关卡摘要显示目标与底线，只有底线参与 G3 / G6；其他规则不变。隔离保障链的推导和漏项检查见 `tests/test_aiwork_gate_workflow.mjs`。
 

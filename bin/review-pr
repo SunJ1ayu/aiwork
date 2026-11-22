@@ -21,7 +21,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
 import _review_ci
-from _review_result import leg_identity, sha256_bytes
+from _review_result import ADAPTER_IDENTITIES, infer_failure_kind, leg_identity, sha256_bytes
 from _aiwork_config import (
     check_app_role, ConfigError, check_programs, data_dir, data_path, prune_data, program,
 )
@@ -546,24 +546,55 @@ def review_request(repository: str, number: int, builder_family: str) -> dict:
                       '--builder-family', builder_family, '--expected-head', head])
 
 
-def publish_dispatch_failure(repository, number, head, attempted):
-    body = ('评审派发未完成。部分评审未启动或未确认发布；合并条件以关卡结论为准。\n\n'
-            + '交接 head：' + (head or '未取得') + '\n'
-            + '已启动：' + (', '.join(attempted) or '无')
-            + '\n失败详情保存在本轮派发日志，需核实后按正式流程继续。')
-    payload = {'body': body}
-    with tempfile.TemporaryDirectory(prefix='dispatch-failure-') as temporary:
-        body_path = Path(temporary) / 'body.md'
-        body_path.write_text(body, encoding='utf-8')
-        _leg_session.run([str(BIN / 'privacy-check'), '--files', str(body_path)])
-    token = review_token(repository)
-    github(token, f'repos/{repository}/issues/{number}/comments', payload)
+# Public dispatch data is a projection, never a redacted diagnostic dump.
+# Unknown values are omitted or mapped to a fixed label before serialization.
+DISPATCH_FAILURE_LABELS = {
+    'auth': '认证失败', 'quota': '额度不足', 'rate_limit': '服务限流',
+    'timeout': '运行超时', 'runtime': '子进程执行失败',
+    'identity_mismatch': '评审身份或模型设置不可用',
+    'no_verdict': '未确认完整评审', 'unknown': '失败原因未确认',
+}
 
 
-def publish_dispatch_record(repository, number, report, comment_id=None):
-    """One public, privacy-checked comment per draw, updated as legs finish."""
-    body = ('评审派发记录（合并条件以关卡为准）\n\n```json\n'
-            + redact(json.dumps(report, ensure_ascii=False, indent=2)) + '\n```')
+def public_dispatch_report(report):
+    legs = set(ADAPTER_IDENTITIES) | {'subcursor'}
+    public = {}
+    for key in ('head', 'policy_sha'):
+        value = report.get(key)
+        if isinstance(value, str) and SHA.fullmatch(value):
+            public[key] = value
+    for key in ('draw', 'initial', 'reserve'):
+        public[key] = [leg for leg in report.get(key, []) if isinstance(leg, str) and leg in legs]
+    plan = report.get('plan', {})
+    public['plan'] = {key: value for key in ('target', 'minimum')
+                      if type(value := plan.get(key)) is int and value >= 0}
+    if plan.get('tier') in ('documentation', 'code', 'high'):
+        public['plan']['tier'] = plan['tier']
+    for key in ('minimum_met', 'target_met'):
+        if type(report.get(key)) is bool:
+            public[key] = report[key]
+    if type(report.get('missing_target')) is int and report['missing_target'] >= 0:
+        public['missing_target'] = report['missing_target']
+    public['attempts'] = []
+    for attempt in report.get('attempts', []):
+        if attempt.get('leg') not in legs:
+            continue
+        item = {'leg': attempt['leg']}
+        for key in ('ok', 'confirmed'):
+            if type(attempt.get(key)) is bool:
+                item[key] = attempt[key]
+        if attempt.get('status') in ('running', 'finished'):
+            item['status'] = attempt['status']
+        if attempt.get('ok') is False or attempt.get('confirmed') is False:
+            kind = attempt.get('failure_kind', 'no_verdict' if attempt.get('confirmed') is False else 'unknown')
+            if kind not in DISPATCH_FAILURE_LABELS:
+                kind = 'unknown'
+            item.update(failure_kind=kind, reason=DISPATCH_FAILURE_LABELS[kind])
+        public['attempts'].append(item)
+    return public
+
+
+def publish_dispatch_comment(repository, number, body, comment_id=None):
     with tempfile.TemporaryDirectory(prefix='dispatch-record-') as temporary:
         path = Path(temporary) / 'body.md'
         path.write_text(body, encoding='utf-8')
@@ -579,11 +610,25 @@ def publish_dispatch_record(repository, number, report, comment_id=None):
     return identifier
 
 
-def record_dispatch_failure(repository, number, head, attempted):
+def publish_dispatch_record(repository, number, report, comment_id=None):
+    body = ('评审派发记录（合并条件以关卡为准）\n\n```json\n'
+            + json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2) + '\n```')
+    return publish_dispatch_comment(repository, number, body, comment_id)
+
+
+def publish_dispatch_failure(repository, number, head, attempted, report=None):
+    if report is None:
+        report = dict(head=head, attempts=[dict(leg=leg, ok=False) for leg in attempted])
+    body = ('评审派发未完成；合并条件以关卡结论为准。以下仅为公开状态，详细诊断留在本机。\n\n```json\n'
+            + json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2) + '\n```')
+    return publish_dispatch_comment(repository, number, body)
+
+
+def record_dispatch_failure(repository, number, head, attempted, report=None):
     try:
-        publish_dispatch_failure(repository, number, head, attempted)
-    except (ValueError, OSError) as exc:
-        print('review-pr: failure record could not be published: ' + redact(str(exc)), file=sys.stderr)
+        publish_dispatch_failure(repository, number, head, attempted, report)
+    except (ValueError, OSError):
+        print('review-pr: failure notice could not be published; details remain local', file=sys.stderr)
 
 
 def auto_dispatch(repository: str, number: int, builder_family: str, *,
@@ -599,7 +644,15 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
     def record(report):
         nonlocal comment_id
         (directory / "summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        comment_id = publish_dispatch_record(repository, number, report, comment_id)
+        try:
+            comment_id = publish_dispatch_record(repository, number, report, comment_id)
+        except (ValueError, OSError) as exc:
+            try:
+                with (directory / 'record-errors.log').open('a', encoding='utf-8') as stream:
+                    stream.write(redact(str(exc)) + '\n')
+            except OSError:
+                pass
+            print('review-pr: public record unavailable; continuing dispatch', file=sys.stderr)
 
     def run(leg, model, head):
         env = dict(os.environ)
@@ -615,10 +668,12 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
         diagnostic = redact(result.stdout + result.stderr)
         (directory / f'{leg}.log').write_text(diagnostic, encoding='utf-8')
         if result.returncode:
-            return dict(ok=False, reason=redact(result.stderr[-2000:]) or f'review-pr exited {result.returncode}')
+            return dict(ok=False, reason=redact(result.stderr[-2000:]) or f'review-pr exited {result.returncode}',
+                        failure_kind=infer_failure_kind(result.stderr, '',
+                            'timed_out' if result.returncode == 124 else 'exited', result.returncode))
         urls = [line for line in result.stdout.splitlines() if line.startswith('https://github.com/')]
         return dict(ok=bool(urls), **({'url': urls[-1]} if urls else
-                    {'reason': 'review-pr returned no publication URL'}))
+                    {'reason': 'review-pr returned no publication URL', 'failure_kind': 'no_verdict'}))
 
     def read_state(family):
         state = _leg_session.network_read(lambda: read_dispatch_state(repository, number, family))
@@ -637,8 +692,8 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
         print(f'review-pr: dispatch record {directory}', file=sys.stderr)
     (directory / 'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     if not report['target_met'] or not report['reviewed_families']:
-        record_dispatch_failure(repository, number, report['head'], attempts)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+        record_dispatch_failure(repository, number, report['head'], attempts, report)
+    print(json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2))
     return 0 if report['minimum_met'] else 2
 
 

@@ -297,6 +297,78 @@ class PublisherIntegrationTests(unittest.TestCase):
         self.assertEqual(kwargs['env']['CURSOR_MODEL'], 'kimi-test')
         self.assertNotIn('GH_TOKEN', kwargs['env'])
 
+    def test_failed_child_diagnostics_stay_local_and_record_errors_do_not_stop_reserve(self):
+        import tempfile, io, subprocess, json
+        from unittest.mock import patch
+        from contextlib import redirect_stdout, redirect_stderr
+        publisher = self.load_publisher()
+        state = view(target=1, order=['subkimi', 'submimo'])
+        private = '/srv/fixture-user/failures/demo fixture-user@fixture-host token: invalid'
+        calls, bodies = [], []
+        def run(command, **kwargs):
+            leg = command[command.index('--leg')+1]
+            calls.append(leg)
+            if leg == 'subkimi':
+                return subprocess.CompletedProcess(command, 2, '', private)
+            result_frame(state, ['xiaomi'], ['xiaomi'], True, True, 0)
+            return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
+        def api(token, endpoint, payload, **kwargs):
+            bodies.append(payload['body'])
+            return {'id': 123}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(publisher, 'data_path', return_value=Path(directory)), \
+             patch.object(publisher, 'read_dispatch_state', side_effect=lambda *args: state.copy()), \
+             patch.object(publisher._leg_session, 'choose_leg', side_effect=lambda leg, _: ('moonshot' if leg == 'subkimi' else 'xiaomi', None)), \
+             patch.object(publisher.subprocess, 'run', side_effect=run), \
+             patch.object(publisher._leg_session, 'run', side_effect=publisher.ReviewError('privacy: '+private)), \
+             patch.object(publisher, 'github', side_effect=api), \
+             patch('random.SystemRandom.shuffle', side_effect=lambda items: None), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(publisher.auto_dispatch('example/repo', 1, 'openai'), 0)
+            self.assertEqual(calls, ['subkimi', 'submimo'])
+            self.assertEqual(bodies, [])
+            self.assertIn('fixture-user@fixture-host', next(Path(directory).glob('*/subkimi.log')).read_text())
+            report = json.loads(next(Path(directory).glob('*/summary.json')).read_text())
+            self.assertTrue(report['target_met'])
+
+    def test_private_child_error_is_published_only_as_category_and_replaced(self):
+        import tempfile, io, subprocess
+        from unittest.mock import patch
+        from contextlib import redirect_stdout, redirect_stderr
+        publisher = self.load_publisher()
+        state = view(target=1, order=['subkimi', 'submimo'])
+        private = '/srv/fixture-user/failures/demo fixture-user@fixture-host auth failed'
+        calls, bodies = [], []
+        def run(command, **kwargs):
+            leg = command[command.index('--leg')+1]
+            calls.append(leg)
+            if leg == 'subkimi':
+                return subprocess.CompletedProcess(command, 2, '', private)
+            result_frame(state, ['xiaomi'], ['xiaomi'], True, True, 0)
+            return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
+        def api(token, endpoint, payload, **kwargs):
+            bodies.append(payload['body'])
+            if len(bodies) == 2:
+                raise OSError('comment temporarily unavailable '+private)
+            return {'id': 123}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(publisher, 'data_path', return_value=Path(directory)), \
+             patch.object(publisher, 'read_dispatch_state', side_effect=lambda *args: state.copy()), \
+             patch.object(publisher._leg_session, 'choose_leg', side_effect=lambda leg, _: ('moonshot' if leg == 'subkimi' else 'xiaomi', None)), \
+             patch.object(publisher.subprocess, 'run', side_effect=run), \
+             patch.object(publisher._leg_session, 'run'), \
+             patch.object(publisher, 'review_token', return_value='token'), \
+             patch.object(publisher, 'github', side_effect=api), \
+             patch('random.SystemRandom.shuffle', side_effect=lambda items: None), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(publisher.auto_dispatch('example/repo', 1, 'openai'), 0)
+        self.assertEqual(calls, ['subkimi', 'submimo'])
+        self.assertGreaterEqual(len(bodies), 3)
+        for body in bodies:
+            self.assertNotIn('fixture-user', body)
+            self.assertNotIn('fixture-host', body)
+            self.assertNotIn('/srv/', body)
+
     def test_facts_timeout_is_recorded_and_prints_its_directory(self):
         import tempfile, io, subprocess
         from unittest.mock import patch
