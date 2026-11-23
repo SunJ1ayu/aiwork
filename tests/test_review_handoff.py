@@ -3,7 +3,9 @@ import importlib.machinery
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
 from unittest.mock import patch
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 loader=importlib.machinery.SourceFileLoader('handoff',str(Path(__file__).resolve().parents[1]/'bin/review-auto-worker'))
 spec=importlib.util.spec_from_loader(loader.name,loader)
 worker=importlib.util.module_from_spec(spec)
