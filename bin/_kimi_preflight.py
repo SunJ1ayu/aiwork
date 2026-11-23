@@ -17,7 +17,7 @@ import tomllib
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _reader_tools import KIMI_TOOL_INPUTS, KIMI_TOOL_SCHEMAS, KIMI_EMPTY_GREP_DENIAL, semantic_schema
+from _reader_tools import KIMI_TOOL_INPUTS, KIMI_TOOL_SCHEMAS, kimi_empty_grep_denied, semantic_schema
 
 PROBE_MODEL = "aiwork-local-probe"
 
@@ -114,7 +114,7 @@ def _preflight(cli, home, profile, *, timeout):
                             raise ValueError("native reader probe results are incomplete")
                         empty = next(message for message in body["messages"]
                                      if message.get("tool_call_id") == "Grep-empty")
-                        if empty.get("content", "").strip() != KIMI_EMPTY_GREP_DENIAL:
+                        if not kimi_empty_grep_denied(empty.get("content")):
                             raise ValueError("empty Grep was not denied without content")
                         for name in KIMI_TOOL_INPUTS:
                             if tag not in results[name + "-outside"] or tag in results[name + "-inside"]:

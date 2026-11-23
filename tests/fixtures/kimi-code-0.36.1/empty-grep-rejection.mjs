@@ -118,3 +118,40 @@ function makeErrorToolResult$1(call, args, output) {
 		}
 		async execution(args, signal, searchPaths) {
 			if (signal.aborted) return {
+
+// main.mjs lines 126202-126229
+				return;
+			}
+		}
+	};
+}));
+//#endregion
+//#region ../../packages/agent-core/src/agent/context/tool-result-render.ts
+function renderToolResultForModel$1(result) {
+	const rendered = renderStatus$1(result);
+	if (result.note === void 0 || result.note.length === 0) return rendered;
+	const only = rendered[0];
+	if (rendered.length === 1 && only?.type === "text") return [textPart$1(`${only.text}\n${result.note}`)];
+	return [...rendered, textPart$1(result.note)];
+}
+function renderStatus$1(result) {
+	const output = result.output;
+	const single = typeof output === "string" ? output : singleTextPart$1(output);
+	if (single !== void 0) {
+		if (result.isError === true) {
+			if (single.length === 0) return [textPart$1(TOOL_EMPTY_ERROR_STATUS$1)];
+			return [textPart$1(`${TOOL_ERROR_STATUS$1}\n${single}`)];
+		}
+		return isEmptyOutputText$1(single) ? [textPart$1(TOOL_EMPTY_STATUS$1)] : [textPart$1(single)];
+	}
+	const parts = output;
+	if (isEmptyEquivalentContentArray$1(parts)) return [textPart$1(result.isError === true ? TOOL_EMPTY_ERROR_STATUS$1 : TOOL_EMPTY_STATUS$1)];
+	if (result.isError === true) return [textPart$1(TOOL_ERROR_STATUS$1), ...parts];
+	return [...parts];
+
+// main.mjs lines 126247-126251
+var TOOL_ERROR_STATUS$1, TOOL_EMPTY_STATUS$1, TOOL_EMPTY_ERROR_STATUS$1, TOOL_OUTPUT_EMPTY_TEXT$1;
+var init_tool_result_render = __esmMin((() => {
+	TOOL_ERROR_STATUS$1 = "<system>ERROR: Tool execution failed.</system>";
+	TOOL_EMPTY_STATUS$1 = "<system>Tool output is empty.</system>";
+	TOOL_EMPTY_ERROR_STATUS$1 = "<system>ERROR: Tool execution failed. Tool output is empty.</system>";

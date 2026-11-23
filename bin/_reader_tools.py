@@ -57,6 +57,18 @@ UNREADABLE = "输出里看不出这次调用了哪些工具 ⇒ 不发评审"
 KIMI_EMPTY_GREP_DENIAL = "[review-only sandbox] empty Grep path denied before execution"
 
 
+def kimi_empty_grep_denied(content):
+    """Exact, content-free results from the guard or CLI setup rejection.
+
+    Kimi 0.36.1 resolves the path before starting search or authorizing it;
+    see tests/fixtures/kimi-code-0.36.1/empty-grep-rejection.mjs.
+    """
+    native = "Path cannot be empty"
+    return isinstance(content, str) and content in (
+        KIMI_EMPTY_GREP_DENIAL, native,
+        "<system>ERROR: Tool execution failed.</system>\n" + native)
+
+
 def _empty_kimi_grep(name, arguments):
     return (name == "Grep" and _valid_input(KIMI_TOOL_SCHEMAS[name], arguments)
             and arguments.get("path") == "")
@@ -82,7 +94,7 @@ def _denied_empty_greps(text):
         function = call.get("function")
         if (event.get("role") != "assistant" or call.get("type") != "function"
                 or not isinstance(function, dict) or result_index <= index
-                or result.get("content") != KIMI_EMPTY_GREP_DENIAL):
+                or not kimi_empty_grep_denied(result.get("content"))):
             continue
         try:
             arguments = json.loads(function.get("arguments", ""))
@@ -238,8 +250,9 @@ def check_recorded_paths(text, repo, *, claude):
     """Check known calls even if the CLI subsequently fails or truncates output.
 
     This cannot prove the stream complete; the strict audit below still must
-    do that. A known violation, including a native permission denial, is enough
-    to reject the run regardless of its final verdict or process status.
+    do that. Except for the verified empty Grep rejections below, a known
+    violation (including a native permission denial) rejects the run regardless
+    of its final verdict or process status.
     """
     denied_empty = set() if claude else _denied_empty_greps(text)
     for line in text.split("\n"):
