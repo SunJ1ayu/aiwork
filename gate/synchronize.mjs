@@ -1,6 +1,15 @@
 // 关卡写入的同步意向 + 实际推送活动 + 双亲提交共同证明来源。
 // 意向先保存再调用带 expected_head_sha 的异步接口，进程中断也能由下一轮核实。
 import { paginate } from './collect.mjs';
+export class TransientPrState extends Error {}
+export function assertPrSnapshot(pr, expected) {
+  if (!sha(pr.head?.sha) || !sha(pr.base?.sha) || typeof pr.base?.ref !== 'string' ||
+      !['open','closed'].includes(pr.state)) throw new Error('GitHub PR 快照缺失或不合法');
+  if (pr.state !== 'open' || pr.head.sha !== expected.head_sha ||
+      pr.base.sha !== expected.base_sha || pr.base.ref !== expected.base_ref) {
+    throw new TransientPrState('PR 状态已改变，重新读取现状后再判定');
+  }
+}
 export const SYNC_CHECK = 'aiwork-main-sync';
 const sha = s => typeof s === 'string' && /^[0-9a-f]{40}$/.test(s);
 export function syncIntent(number, head, base, ref, headRef, actor, binding, reviewHeads, overlap, mergeBase) {
@@ -64,14 +73,15 @@ async function commitsBetween(api,repo,base,head) {
 }
 export async function prepareSynchronization(api,repo,number,facts,actor) {
   const pr=await api.get(`/repos/${repo}/pulls/${number}`);
-  if (pr.state !== 'open' || pr.head.sha !== facts.pr.head_sha || pr.base.sha !== facts.pr.base_sha || pr.base.ref !== facts.pr.base_ref) throw new Error('判定后 PR 已推进或关闭');
+  assertPrSnapshot(pr, facts.pr);
   const metadata=await api.get(`/repos/${repo}`);
   // 本任务只同步 main/default branch，同仓库分支；不给叉库增加写权限。
   if (pr.base.ref !== metadata.default_branch || pr.head.repo?.full_name !== repo) return null;
   const {first,commits}=await commitsBetween(api,repo,pr.head.sha,pr.base.sha);
   if (!commits.length) return null;
   if (pr.mergeable === false) return {conflict:true,note:'main 与本单有冲突，关卡不同步、不解冲突，留给人处理。'};
-  if (pr.mergeable !== true) throw new Error('GitHub 尚未算清能否干净同步');
+  if (pr.mergeable === null) throw new TransientPrState('GitHub 还在计算能否干净同步');
+  if (pr.mergeable !== true) throw new Error('GitHub 合并状态缺失或不合法');
   const touched=new Set();
   for (const c of commits) {
     const files=await paginate(api,`/repos/${repo}/commits/${c.sha}?per_page=100`,'files');
@@ -80,8 +90,7 @@ export async function prepareSynchronization(api,repo,number,facts,actor) {
   if (!sha(first.merge_base_commit?.sha) || !sha(pr.base.sha)) throw new Error('缺共同祖先或 main 提交');
   const overlap=facts.files.filter(f=>touched.has(f));
   const fresh=await api.get(`/repos/${repo}/pulls/${number}`);
-  if (fresh.head.sha !== pr.head.sha || fresh.base.sha !== pr.base.sha || fresh.base.ref !== pr.base.ref || fresh.state !== 'open')
-    throw new Error('核实文件期间分支已变化，下一轮重算');
+  assertPrSnapshot(fresh, facts.pr);
   return {intent:syncIntent(number,pr.head.sha,pr.base.sha,pr.base.ref,pr.head.ref,actor,
     facts.merge_request.key,facts.synchronization?.review_heads ?? [],overlap,first.merge_base_commit.sha),
     note:overlap.length ? `关卡将自动同步 main；main 碰了本单文件（${overlap.join('、')}），同步后须重新评审。`

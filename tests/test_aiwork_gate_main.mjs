@@ -27,6 +27,8 @@ function fakeGitHub(opts = {}) {
   const checks = new Map();
   if (opts.previousSuccess) checks.set(4241, { id: 4241, name: policy.check_name, status: "completed", conclusion: "success" });
   let nextCheck = 4242;
+  let baseSha=SYNC_BASE;
+
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -45,13 +47,19 @@ function fakeGitHub(opts = {}) {
         opts.onPause(); return;
       }
       if (u === '/app') return send(200,{id:policy.gate_app_id,slug:'aiwork-gate'});
-      if (u.startsWith('/repos/o/r/compare/')) return send(200,{total_commits:opts.sync?1:0,commits:opts.sync?[{sha:SYNC_BASE}]:[],merge_base_commit:{sha:'c'.repeat(40)}});
-      if (u.startsWith(`/repos/o/r/commits/${SYNC_BASE}?`)) return send(200,{files:[{filename:opts.overlap?'web/a.ts':'main-only.ts'}]});
-      if (u === '/repos/o/r/pulls/10/update-branch' && req.method === 'PUT') return send(opts.updateFails?422:202,{message:opts.updateFails?'branch moved':'updating'});
+      if (u.startsWith('/repos/o/r/compare/')) return send(200,{total_commits:opts.sync?1:0,commits:opts.sync?[{sha:baseSha}]:[],merge_base_commit:{sha:'c'.repeat(40)}});
+      if (u.startsWith(`/repos/o/r/commits/${baseSha}?`)) return send(200,{files:[{filename:opts.overlap?'web/a.ts':'main-only.ts'}]});
+      if (u === '/repos/o/r/pulls/10/update-branch' && req.method === 'PUT') {
+        if(opts.moveOnUpdate){opts.moveOnUpdate=false;baseSha='d'.repeat(40);return send(422,{message:'branch changed'});}
+        return send(opts.updateFails?422:202,{message:opts.updateFails?'branch moved':'updating'});
+      }
       if (u === "/repos/o/r/installation") return send(200, { id: 777 });
       // 按要的权限发不同的令牌,好分清哪个请求用的是哪张
       if (u === "/app/installations/777/access_tokens") return send(201, { token: JSON.parse(body).permissions.checks ? "app-check-token" : "app-merge-token" });
-      if (u === "/repos/o/r/pulls/10/merge" && req.method === "PUT") return send(200, { merged: true });
+      if (u === "/repos/o/r/pulls/10/merge" && req.method === "PUT") {
+        if(opts.moveOnMerge){opts.moveOnMerge=false;opts.sync=true;baseSha='d'.repeat(40);return send(409,{message:'base changed'});}
+        return send(200, { merged: true });
+      }
       if (u === "/repos/o/r/check-runs" && req.method === "POST") {
         if (opts.bindingFails && record.body.name === "aiwork-merge-request") return send(502, { message: "binding failed" });
         if (opts.syncRecordFails && record.body.name === 'aiwork-main-sync') return send(502,{message:'sync record failed'});
@@ -78,9 +86,16 @@ function fakeGitHub(opts = {}) {
       if (opts.prFails && u === "/repos/o/r/pulls/10") return send(502, { message: "bad gateway" });
       // mergeReady:有合格 PASS、业主贴了合并标签 → 放行并合并
       const labels = opts.mergeReady ? [{ name: policy.merge_label }] : [];
-      const pr10 = { number: 10, state: "open", changed_files: opts.files?.length ?? 1, labels, mergeable:opts.conflict?false:true, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main", sha:SYNC_BASE } };
+      const pr10 = { number: 10, state: "open", changed_files: opts.files?.length ?? 1, labels, mergeable:opts.conflict?false:true, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main", sha:baseSha } };
       if (u === "/repos/o/r/pulls?state=open&per_page=100") return send(200, [pr10]);
-      if (u === "/repos/o/r/pulls/10") return send(200, pr10);
+      if (u === "/repos/o/r/pulls/10") {
+        // collect 和 prepare 都读取 PR；在 prepare 读取时才推进状态样本。
+        if(opts.mergeableStates) {
+          const readCount=log.filter(r=>r.url===u).length;
+          pr10.mergeable=opts.mergeableStates[Math.min(Math.floor((readCount-1)/2),opts.mergeableStates.length-1)];
+        }
+        return send(200, pr10);
+      }
       if (u.startsWith("/repos/o/r/pulls/10/files")) {
         const files = (opts.files ?? ['web/a.ts']).map(filename=>({filename}));
         if (opts.paginateFiles && !u.includes('page=2')) {
@@ -615,6 +630,36 @@ test('整机：仅其他条件齐全时同步，先存意向，写权限只用�
    if(opts.conflict)assert.match(final.body.output.summary,/冲突/);
    if(opts.updateFails || opts.syncRecordFails)assert.equal(final.body.conclusion,'failure');
    if(expected && !opts.updateFails)assert.equal(final.body.status,'in_progress');
+  }finally{gh.server.close();}
+ }
+});
+
+test('瞬时合并状态在同次运行重读：null 转 true 才同步，转 false 才报冲突',async()=>{
+ for(const states of [[null,true],[null,false]]){
+  const gh=await fakeGitHub({sync:true,mergeReady:true,mergeableStates:states});
+  try{
+   const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+   const summaries=checkWrites(gh.log).filter(r=>r.method==='PATCH').map(r=>r.body.output);
+   assert.ok(summaries.every(o=>!o.title.includes('G8')),JSON.stringify(summaries));
+   assert.ok(summaries.some(o=>o.title.includes('重读')),JSON.stringify(summaries));
+   const updates=gh.log.filter(r=>r.url.endsWith('/update-branch'));
+   assert.equal(updates.length,states.at(-1)?1:0,out);
+   if(!states.at(-1))assert.match(summaries.at(-1).summary,/冲突/);
+  }finally{gh.server.close();}
+ }
+});
+
+test('同步或合并写入时 main 刚推进，当次重读后用新 main 同步，不把竞争写成失败',async()=>{
+ for(const opts of [{sync:true,mergeReady:true,moveOnUpdate:true},{mergeReady:true,moveOnMerge:true}]){
+  const gh=await fakeGitHub(opts);
+  try{
+   const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+   const patches=checkWrites(gh.log).filter(r=>r.method==='PATCH');
+   assert.ok(patches.every(r=>r.body.conclusion!=='failure'),out);
+   assert.ok(patches.some(r=>r.body.output.title.includes('重读')),out);
+   const intents=gh.log.filter(r=>r.method==='POST' && r.body?.name==='aiwork-main-sync');
+   assert.equal(JSON.parse(intents.at(-1).body.output.text).base,'d'.repeat(40));
+   assert.equal(patches.at(-1).body.status,'in_progress');
   }finally{gh.server.close();}
  }
 });

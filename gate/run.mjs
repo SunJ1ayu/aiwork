@@ -1,3 +1,4 @@
+import { TransientPrState } from './synchronize.mjs';
 // aiwork 放行关卡的流程。网络与 App 令牌由 main.mjs 注入;判定在 decide.mjs,读数据在 collect.mjs。
 //
 // 只守三件事:
@@ -101,8 +102,23 @@ async function openPrs(api, repo) {
   throw new Error("开着的 PR 连读四遍都对不上(一直有 PR 在开关或推送)");
 }
 
-export async function gate({ repo, policy, api, poster, bindingApi = api, merger = null, synchronizer = null, log = () => {} }) {
+// 同一运行重读整份事实，不能只重试最后一次写操作或沿用旧授权。
+export const MAX_STATE_READS = 8;
+export async function gate(options) {
+  const wait = options.waitForState ?? (() => new Promise(resolve => setTimeout(resolve, 1000)));
+  const syncing = new Set();
+  for (let attempt = 0; attempt < MAX_STATE_READS; attempt++) {
+    const {results, retry} = await gateAttempt(options, syncing);
+    if (!retry || attempt === MAX_STATE_READS - 1) return results;
+    await wait();
+  }
+}
+const pendingState = e => ({status:'in_progress',conclusion:null,title:'状态正在变化，重读后继续',
+  summary:`${e.message}；当前快照不再用于授权写入，不是数据读取失败。本次运行会重读事实；若持续变化超过重读预算，保留进行中，后续门铃继续核实。`});
+
+async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger = null, synchronizer = null, log = () => {} }, syncing) {
   const errors = [];
+  let retry = false;
   // 1. 所有开着的 PR,按 head 提交分组
   const heads = new Map();
   for (const { number, sha } of await openPrs(api, repo)) {
@@ -132,7 +148,8 @@ export async function gate({ repo, policy, api, poster, bindingApi = api, merger
     try {
       for (const n of numbers) {
         const facts = await collect(api, repo, n, policy, bindingApi);
-        if (facts.pr.state !== "open" || facts.pr.head_sha !== sha) continue; // 列出之后又推进 / 关了
+        if (facts.pr.state !== "open") continue;
+        if (facts.pr.head_sha !== sha) throw new TransientPrState('列出 PR 后 head 已推进');
         let r;
         try {
           r = decide(facts, policy);
@@ -149,7 +166,9 @@ export async function gate({ repo, policy, api, poster, bindingApi = api, merger
       if (synchronizer && result.status === 'completed' && result.conclusion === 'success') {
         for (const v of verdicts) {
           if (!v.mergeBy) continue;
-          v.sync = await synchronizer.prepare(v.number, v.facts);
+          v.sync = syncing.has(`${v.number}:${sha}`)
+            ? {note:'同步请求已接受，等待实际 head 变化后重算。'}
+            : await synchronizer.prepare(v.number, v.facts);
         }
         const plans = verdicts.filter(v=>v.sync);
         if (plans.length) {
@@ -161,7 +180,9 @@ export async function gate({ repo, policy, api, poster, bindingApi = api, merger
         }
       }
     } catch (e) {
-      result = g8(e.message);
+      syncReady = false;
+      if (e instanceof TransientPrState) { retry = true; result = pendingState(e); }
+      else result = g8(e.message);
     }
     try {
       await poster.finish(sha, result, ids.get(sha));
@@ -172,16 +193,19 @@ export async function gate({ repo, policy, api, poster, bindingApi = api, merger
     log(`${sha.slice(0, 7)}:${result.title}\n${result.summary}`);
     // 意向和同步都在本轮结论成功写回后执行；同步 head 留给下一轮重新收集。
     for (const v of (syncReady ? verdicts.filter(v=>v.sync?.intent) : [])) {
-      try { await synchronizer.apply(v.sync.intent); }
+      try {
+        await synchronizer.apply(v.sync.intent);
+        syncing.add(`${v.number}:${sha}`);
+      }
       catch (e) {
-        const failed={...result,status:'completed',conclusion:'failure',title:'自动同步 main 未完成',
+        const failed=e instanceof TransientPrState ? pendingState(e) : {...result,status:'completed',conclusion:'failure',title:'自动同步 main 未完成',
           summary:`PR #${v.number} 自动同步未完成：${e.message}\n\n${result.summary}`};
+        if (e instanceof TransientPrState) retry = true;
         result=failed;
         await poster.finish(sha,failed,ids.get(sha));
         log(failed.summary);
       }
     }
-    results.push({ sha, title: result.title, summary: result.summary });
     // 4. 合并:只在这个提交上的 App 放行结论写上了的时候;
     //    合并出错(判完又推了新提交、有冲突)只记下,请求留着
     for (const v of verdicts) {
@@ -194,13 +218,19 @@ export async function gate({ repo, policy, api, poster, bindingApi = api, merger
       if (!v.mergeBy || result.status !== "completed" || result.conclusion !== "success") continue;
       try {
         if (!merger) throw new Error("没有合并接口");
-        await merger.merge(v.number, sha);
+        await merger.merge(v.number, sha, v.facts.pr);
         log(`PR #${v.number}:按 ${v.mergeBy} 的请求合并了 ${sha.slice(0, 7)}`);
       } catch (e) {
+        if (e instanceof TransientPrState) {
+          retry = true;
+          result = pendingState(e);
+          await poster.finish(sha, result, ids.get(sha));
+        }
         log(`PR #${v.number}:按 ${v.mergeBy} 的请求合并 ${sha.slice(0, 7)} 没成:${e.message}`);
       }
     }
+    results.push({ sha, title: result.title, summary: result.summary });
   }
   if (errors.length) throw errors[0];
-  return results;
+  return {results, retry};
 }

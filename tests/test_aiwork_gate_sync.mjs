@@ -129,3 +129,19 @@ test('同步证明不足或后续有普通推送时，摘要写明为什么不�
   assert.match(decide(f,p).summary,/无法证明|普通推送/);
  }
 });
+
+test('同步前与文件核实后的 PR 快照改变均是瞬时状态，实际读取失败仍是错误',async()=>{
+ for(const phase of [1,2]){
+  const e=planning(),get=e.api.get.bind(e.api);let reads=0;
+  e.api.get=async path=>{
+   const result=await get(path);
+   if(path==='/repos/o/r/pulls/1' && ++reads===phase)result.head.sha=newer;
+   return result;
+  };
+  await assert.rejects(prepareSynchronization(e.api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),
+   error=>error.constructor.name==='TransientPrState');
+ }
+ const e=planning();e.api.get=async()=>{throw new Error('真实读取失败');};
+ await assert.rejects(prepareSynchronization(e.api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),
+  error=>error.constructor.name==='Error' && error.message==='真实读取失败');
+});

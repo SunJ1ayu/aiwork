@@ -90,7 +90,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
   同名检查后发的一定后写完,GitHub 按创建还是按完成时间取"最新",取到的都是
   最后一次运行的;运行半路死掉时,已创建且未完成的占位检查停在 in_progress,照样挡着,下一次运行全部重算。
 - job 上**不许**按事件过滤(比如只认某个标签):排队时被顶掉的运行,要靠顶掉它的那次来算。
-- 代价:稳定列表、各接口只需一页、没有待核实的关卡同步且不合并时，设开着的 PR 数为 P、不同 head 数为 H：
+- 代价:稳定列表、各接口只需一页、无瞬时状态重读、没有待核实的关卡同步且不合并时，设开着的 PR 数为 P、不同 head 数为 H：
   每次 `GITHUB_TOKEN` 要两次读 PR 列表、每 PR 六次 REST 读取和一次 GraphQL 查询，
   即约 `2 + 6P` 次 REST 请求和 P 次 GraphQL 查询；分页或列表不稳定会更多。
   App 另有每 head 两次检查写入，以及每次运行一次安装查询和一次换检查令牌请求；没有 head 且没有待保存的标签事件时不换 App 令牌。
@@ -181,6 +181,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
   见项目的 `.aiwork/accepted-risks.md`)。
 - **自动同步最新 main**：按[业主决定](https://github.com/SunJ1ayu/aiwork/issues/205#issuecomment-7088746460)，仅当 G1–G8 与合并请求都已满足时，关卡才检查默认分支是否落后。
   有冲突就停止同步并在检查摘要说明，关卡不解冲突。无冲突时先用 Checks 令牌保存 `synchronize.mjs` 定义的同步意向，再用现有合并令牌调用 [update-branch](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch)，带 `expected_head_sha`，拒绝同步已经推进的分支。
+  GitHub 尚在后台计算（`mergeable: null`）或 PR/目标分支在核实、写入期间推进时，不判为数据出错。关卡在同一次运行内等待并重读开放列表、事实、授权及全部放行条件；重读预算见 `run.mjs` 的 `MAX_STATE_READS`，耗尽后保留进行中。已接受的同步请求在该次运行内不重复发送，等实际 head 改变后再核实。真正的读取失败及不合法数据仍按 G8 拒绝；不修改门铃、定时或权限。背景计算与轮询方式见 [GitHub 文档](https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-your-git-database#checking-mergeability-of-pull-requests)。
   接口是异步的；请求获准不代表完成。下一轮从实际推送者、意向绑定的 PR/分支/双亲及完整 Git tree 差核实同步。
   只有同步前后 PR 自身的路径、对象类型、模式与 blob/gitlink 改动都相同，才延续同一次合并标签；任意普通推送（包括推回曾同步的 SHA）都会截断沿用。
   main 新提交未触及本单任何文件时，关卡沿用意向中原 head 的评审（包括反对及其改写、撤销），并在摘要列出来源；同路径有交集则须重新评审。main 改判卷面不单独触发重评，所有判定仍读取 main 的最新规则。
