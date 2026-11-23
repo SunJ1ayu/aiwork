@@ -61,7 +61,7 @@ def native_fixture():
                               input=json.dumps(event), text=True, capture_output=True)
         empty_read = (call["id"] == "Grep-empty" and mode in ("empty-grep-read", "empty-grep-deny-and-read"))
         if call["id"] == "Grep-empty" and mode.startswith("native-empty"):
-            content = "Path cannot be empty"
+            content = json.loads(Path(schemas).with_name("empty-grep-results.json").read_text())["provider"]["content"]
             if mode == "native-empty-content":
                 content += "\ninside.txt: file contents"
             elif mode == "native-empty-newline":
