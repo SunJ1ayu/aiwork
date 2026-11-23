@@ -55,3 +55,26 @@ Only descriptions outside the parameter schemas and unrelated request data
 were omitted. The provider used harmless temporary files and no real
 credentials; the existing no-egress test guard blocked external traffic.
 This captures the CLI request contract, not a vendor model response.
+
+`empty-grep-rejection.mjs` contains verbatim excerpts from the same installed
+0.36.1 `main.mjs` (SHA-256 above), inspected on 2026-11-23. Line ranges are
+recorded above each excerpt. `GrepTool$1.resolveExecution` resolves an explicitly
+provided path before returning the search closure; `resolvePathAccessPath$1`
+passes it to `resolvePathAccess$1`, then `canonicalizePath$1`, which throws
+`PathSecurityError$1("PATH_INVALID", "", "", "Path cannot be empty")` without
+filesystem I/O. `prepareToolCall` catches that setup error and settles an error
+result with exactly `error.message`, before authorization or starting execution.
+`makeErrorToolResult$1` preserves that output. These are source evidence
+(level: located in code), not a captured CLI stream or a reviewer-machine run.
+The native rejection text used by regression tests is taken from this code.
+
+`empty-grep-results.json` preserves the empty Grep tool messages captured on
+2026-11-23 by running the installed 0.36.1 CLI against the production local-only
+preflight provider (temporary files, placeholder credential, no vendor call).
+`stream` is the stdout JSONL tool event; `provider` is the subsequent HTTP
+request's tool message. The provider projector wraps error outputs with the
+fixed status prefix; the stream preserves the raw error. No paths, credentials
+or unrelated messages are included. Both contents are verbatim. The probe
+passed when its empty-result check matched the exact provider rendering;
+other schema, positive-reader, outside-boundary and traversal checks were
+unchanged. This is a coding-host CLI run, not reviewer-machine acceptance.

@@ -1,0 +1,12 @@
+{
+  "stream": {
+    "role": "tool",
+    "tool_call_id": "Grep-empty",
+    "content": "Path cannot be empty"
+  },
+  "provider": {
+    "role": "tool",
+    "tool_call_id": "Grep-empty",
+    "content": "<system>ERROR: Tool execution failed.</system>\nPath cannot be empty"
+  }
+}

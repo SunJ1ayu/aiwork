@@ -261,17 +261,20 @@ class ReaderToolAuditTests(unittest.TestCase):
     def test_kimi_denied_empty_grep_remains_publishable(self):
         sys.path.insert(0, str(ROOT / "bin"))
         policy = _load("_reader_tools.py")
-        stream = self._reader_stream("subkimi", "Grep", {"pattern": "x", "path": ""})
-        events = [json.loads(line) for line in stream.split("\n") if line]
-        next(event for event in events if event.get("role") == "tool")["content"] = policy.KIMI_EMPTY_GREP_DENIAL
-        stream = "".join(json.dumps(event) + "\n" for event in events)
-        result, body, facts, _log, slot = self._run_leg("subkimi", stream)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Conclusion: PASS", body)
-        self.assertIsNone(facts["failure_kind"])
-        emitted = self._emit("subkimi", "moonshot", result, slot / "facts.json",
-                             slot / "report.md", slot / "leg.log")
-        self.assertEqual(_load("review-pr").publishable_model(emitted), facts["model"]["requested"])
+        native = json.loads((ROOT / "tests/fixtures/kimi-code-0.36.1/empty-grep-results.json").read_text())
+        for denial in (policy.KIMI_EMPTY_GREP_DENIAL, native["stream"]["content"]):
+            with self.subTest(denial=denial):
+                stream = self._reader_stream("subkimi", "Grep", {"pattern": "x", "path": ""})
+                events = [json.loads(line) for line in stream.split("\n") if line]
+                next(event for event in events if event.get("role") == "tool")["content"] = denial
+                stream = "".join(json.dumps(event) + "\n" for event in events)
+                result, body, facts, _log, slot = self._run_leg("subkimi", stream)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Conclusion: PASS", body)
+                self.assertIsNone(facts["failure_kind"])
+                emitted = self._emit("subkimi", "moonshot", result, slot / "facts.json",
+                                     slot / "report.md", slot / "leg.log")
+                self.assertEqual(_load("review-pr").publishable_model(emitted), facts["model"]["requested"])
 
     def test_external_read_fails_and_cannot_publish_for_both_readers(self):
         for leg, family, key in (("submimo", "xiaomi", "file_path"), ("subkimi", "moonshot", "path")):
@@ -883,6 +886,19 @@ class KimiPreToolGuardTests(unittest.TestCase):
         result = self.audit_events(self.empty_grep_stream())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Grep", result.stdout)
+
+    def test_native_empty_grep_preserves_round_and_rejects_changed_results(self):
+        native = json.loads((ROOT / "tests/fixtures/kimi-code-0.36.1/empty-grep-results.json").read_text())
+        for content, accepted in ((native["stream"]["content"], True),
+                                  (native["provider"]["content"], True),
+                                  ("Path cannot be empty\n", False),
+                                  ("Path cannot be empty\nfile contents", False),
+                                  ("Path cannot be empty /tmp/outside.txt", False),
+                                  ("Search completed", False), (None, False)):
+            with self.subTest(content=content):
+                events = self.empty_grep_stream()
+                events[1]["content"] = content
+                self.assertEqual(self.audit_events(events).returncode == 0, accepted)
 
     def test_empty_grep_requires_unique_matching_denial_without_content(self):
         for mutation in ("missing", "wrong-id", "extra-content", "duplicate-result",
