@@ -228,6 +228,93 @@ class Handoff(unittest.TestCase):
             time.sleep(0.15)
             self.assertEqual(heartbeat.read_text(),last)
 
+    def test_legacy_success_is_preserved(self):
+        import tempfile,json
+        import _aiwork_config
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            legacy=root/'review-auto-handoffs';legacy.mkdir()
+            record=root/'current.json'
+            unit=root/'attempt';unit.mkdir()
+            facts={'pr':1,'head':'a'*40,'state':'finished','entry_exit':0}
+            (legacy/('1-'+'a'*40+'.json')).write_text(json.dumps(facts))
+            with patch.object(_aiwork_config,'data_path',return_value=root):
+                worker.preserve_legacy(record,unit,1,'a'*40)
+            self.assertEqual(worker.read_record(record),facts)
+            self.assertTrue((legacy/('1-'+'a'*40+'.json')).exists())
+
+    def test_full_worker_parallel_receipts_and_retry_after_timeout(self):
+        import tempfile,json,subprocess,sys,os,time
+        probe=subprocess.run(['/usr/bin/unshare','--mount','--pid','--fork','--mount-proc','--','true'],capture_output=True)
+        if probe.returncode:
+            if os.environ.get('CI'):self.fail('CI must support the production PID namespace')
+            self.skipTest('local environment does not permit PID/mount namespaces')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            source=root/'source';source.mkdir();(source/'bin').mkdir()
+            fake=source/'bin/review-pr'
+            fake.write_text("""#!/usr/bin/python3
+import base64,json,sys,time,os
+from pathlib import Path
+policy={'builders':{'builder':'openai'}}
+def review_token(repository):return 'fixture'
+def github(token,endpoint):
+    return {'sha':'b'*40,'content':base64.b64encode(json.dumps(policy).encode()).decode()} if '/contents/' in endpoint else {'default_branch':'main'}
+def pr_state(*args,**kwargs):return {'head':{'sha':'a'*40},'user':{'login':'builder'}}
+def read_dispatch_state(*args):return {'head':'a'*40,'policy_sha':'b'*40,'excluded':['openai'],'gate':{'summary':'✅ G1 CI'}}
+def redact(value):return value
+if __name__=='__main__':
+    (Path(os.environ['FIXTURE_MARKERS'])/sys.argv[1]).write_text(str(time.monotonic()))
+    time.sleep(float(os.environ.get('FIXTURE_SLEEP','0.4')))
+    print('{}')
+""")
+            fake.chmod(0o755)
+            subprocess.run(['git','init','-q','-b','main',str(source)],check=True)
+            subprocess.run(['git','-C',str(source),'add','.'],check=True)
+            subprocess.run(['git','-C',str(source),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fixture'],check=True)
+            subprocess.run(['git','-C',str(source),'remote','add','origin',str(source)],check=True)
+            data=root/'data';data.mkdir()
+            markers=root/'markers';markers.mkdir()
+            settings=root/'settings'
+            values={'checkout':str(source),'programs':str(root),'repository':'example/repo','event_source':'trusted','concurrency':2,'timeout_seconds':10}
+            settings.write_text(json.dumps(values))
+            env=dict(os.environ,AIWORK_DATA_DIR=str(data),FIXTURE_MARKERS=str(markers),FIXTURE_SLEEP='1.5')
+            command=[sys.executable,str(Path(worker.__file__).resolve())]
+            def context(number):
+                path=root/('context-'+str(number))
+                path.write_text(json.dumps({'events':[{'source':'trusted','type':'reviews.request','subject':'example/repo#'+str(number),'detail':json.dumps({'repository':'example/repo','pr':number,'head':'a'*40,'builder_family':'openai'})}]}))
+                return path
+            contexts=[context(1),context(2)]
+            processes=[subprocess.Popen([*command,str(path),str(settings)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for path in contexts]
+            try:
+                for process in processes:
+                    out,err=process.communicate(timeout=20)
+                    self.assertEqual(process.returncode,0,out+err)
+                stamps=[float((markers/str(n)).read_text()) for n in (1,2)]
+                self.assertLess(abs(stamps[0]-stamps[1]),1.5)
+                before=(markers/'1').read_text()
+                duplicate=subprocess.run([*command,str(contexts[0]),str(settings)],env=env,capture_output=True,text=True,timeout=20)
+                self.assertEqual(duplicate.returncode,0,duplicate.stdout+duplicate.stderr)
+                self.assertEqual((markers/'1').read_text(),before)
+                units=list((data/'tasks').glob('review-handoff-*'))
+                self.assertEqual(len(units),3)
+                self.assertEqual(len({str(unit/'checkout') for unit in units}),3)
+                self.assertEqual(len(list((data/'review-handoffs').rglob('*.json'))),2)
+                values['timeout_seconds']=3
+                settings.write_text(json.dumps(values))
+                third=context(3)
+                failed=subprocess.run([*command,str(third),str(settings)],env=dict(env,FIXTURE_SLEEP='60'),capture_output=True,text=True,timeout=15)
+                self.assertNotEqual(failed.returncode,0)
+                values['timeout_seconds']=30
+                settings.write_text(json.dumps(values))
+                recovered=subprocess.run([*command,str(third),str(settings)],env=env,capture_output=True,text=True,timeout=20)
+                self.assertEqual(recovered.returncode,0,recovered.stdout+recovered.stderr)
+                self.assertEqual(len(list((data/'tasks').rglob('previous.json'))),1)
+            finally:
+                for process in processes:
+                    if process.poll() is None:process.kill()
+                    process.wait()
+
     def test_target_policy_differs_from_tool_checkout(self):
         import base64,json,tempfile,subprocess
         with tempfile.TemporaryDirectory() as directory:
