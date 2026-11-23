@@ -18,6 +18,7 @@ import { join } from "node:path";
 const policy = JSON.parse(readFileSync(new URL("./fixtures/gate-logic-policy.json", import.meta.url), "utf8"));
 const MAIN = new URL("../gate/main.mjs", import.meta.url).pathname;
 const HEAD = "a".repeat(40);
+const SYNC_BASE = "b".repeat(40);
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const PEM = privateKey.export({ type: "pkcs8", format: "pem" });
 
@@ -26,6 +27,8 @@ function fakeGitHub(opts = {}) {
   const checks = new Map();
   if (opts.previousSuccess) checks.set(4241, { id: 4241, name: policy.check_name, status: "completed", conclusion: "success" });
   let nextCheck = 4242;
+  let baseSha=SYNC_BASE;
+
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -43,12 +46,23 @@ function fakeGitHub(opts = {}) {
       if (opts.pauseAt === u && (!opts.pausePermission || record.body?.permissions?.[opts.pausePermission])) {
         opts.onPause(); return;
       }
+      if (u === '/app') return send(200,{id:policy.gate_app_id,slug:'aiwork-gate'});
+      if (u.startsWith('/repos/o/r/compare/')) return send(200,{total_commits:opts.sync?1:0,commits:opts.sync?[{sha:baseSha}]:[],merge_base_commit:{sha:'c'.repeat(40)}});
+      if (u.startsWith(`/repos/o/r/commits/${baseSha}?`)) return send(200,{files:[{filename:opts.overlap?'web/a.ts':'main-only.ts'}]});
+      if (u === '/repos/o/r/pulls/10/update-branch' && req.method === 'PUT') {
+        if(opts.moveOnUpdate){opts.moveOnUpdate=false;baseSha='d'.repeat(40);return send(422,{message:'branch changed'});}
+        return send(opts.updateFails?422:202,{message:opts.updateFails?'branch moved':'updating'});
+      }
       if (u === "/repos/o/r/installation") return send(200, { id: 777 });
       // 按要的权限发不同的令牌,好分清哪个请求用的是哪张
       if (u === "/app/installations/777/access_tokens") return send(201, { token: JSON.parse(body).permissions.checks ? "app-check-token" : "app-merge-token" });
-      if (u === "/repos/o/r/pulls/10/merge" && req.method === "PUT") return send(200, { merged: true });
+      if (u === "/repos/o/r/pulls/10/merge" && req.method === "PUT") {
+        if(opts.moveOnMerge){opts.moveOnMerge=false;opts.sync=true;baseSha='d'.repeat(40);return send(409,{message:'base changed'});}
+        return send(200, { merged: true });
+      }
       if (u === "/repos/o/r/check-runs" && req.method === "POST") {
         if (opts.bindingFails && record.body.name === "aiwork-merge-request") return send(502, { message: "binding failed" });
+        if (opts.syncRecordFails && record.body.name === 'aiwork-main-sync') return send(502,{message:'sync record failed'});
         if (opts.appStartFails) return send(502, { message: "App start failed" });
         if (opts.hang && auth === "Bearer app-check-token") return; // 一直不回
         const id = nextCheck++;
@@ -72,9 +86,16 @@ function fakeGitHub(opts = {}) {
       if (opts.prFails && u === "/repos/o/r/pulls/10") return send(502, { message: "bad gateway" });
       // mergeReady:有合格 PASS、业主贴了合并标签 → 放行并合并
       const labels = opts.mergeReady ? [{ name: policy.merge_label }] : [];
-      const pr10 = { number: 10, state: "open", changed_files: opts.files?.length ?? 1, labels, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main" } };
+      const pr10 = { number: 10, state: "open", changed_files: opts.files?.length ?? 1, labels, mergeable:opts.conflict?false:true, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main", sha:baseSha } };
       if (u === "/repos/o/r/pulls?state=open&per_page=100") return send(200, [pr10]);
-      if (u === "/repos/o/r/pulls/10") return send(200, pr10);
+      if (u === "/repos/o/r/pulls/10") {
+        // collect 和 prepare 都读取 PR；在 prepare 读取时才推进状态样本。
+        if(opts.mergeableStates) {
+          const readCount=log.filter(r=>r.url===u).length;
+          pr10.mergeable=opts.mergeableStates[Math.min(Math.floor((readCount-1)/2),opts.mergeableStates.length-1)];
+        }
+        return send(200, pr10);
+      }
       if (u.startsWith("/repos/o/r/pulls/10/files")) {
         const files = (opts.files ?? ['web/a.ts']).map(filename=>({filename}));
         if (opts.paginateFiles && !u.includes('page=2')) {
@@ -147,8 +168,10 @@ test("整机:不追加 status，合并时只读申请检查，每轮新建放行
       const { code, out } = await runMain(gh.url);
       assert.equal(code, 0, out);
       const round = gh.log.slice(start);
-      assert.equal(round.filter((r) => r.auth === "Bearer read_token" && r.url !== "/graphql").length, Number(budget[1]) + Number(budget[2]),
-        "P=1 的实际 REST 请求数必须与 README 公式一致；合并的 App 请求不混入");
+      const readCount=round.filter((r) => r.auth === "Bearer read_token" && r.url !== "/graphql").length;
+      if (!ready) assert.equal(readCount, Number(budget[1]) + Number(budget[2]),
+        "不合并时 P=1 的实际 REST 请求数必须与 README 公式一致");
+      else assert.ok(readCount > Number(budget[1]) + Number(budget[2]),"合并前另读最新 main 和同步事实");
       assert.equal(round.filter((r) => r.url === "/graphql").length, 1);
       assert.ok(round.filter((r) => r.auth === "Bearer read_token").every((r) =>
         r.method === "GET" || r.url === "/graphql"), "workflow 凭证只读事实，不写检查");
@@ -582,4 +605,61 @@ test('整机:其他事件、仓库、申请人、标签或坏载荷不能保存�
       assert.equal(gh.log.filter(r => r.url.endsWith('/merge')).length, 0);
     } finally { gh.server.close(); }
   }
+});
+
+test('整机：仅其他条件齐全时同步，先存意向，写权限只用于 update-branch，head 被锁定',async()=>{
+ for(const opts of [{sync:true,mergeReady:true},{sync:true,mergeReady:false},{sync:true,mergeReady:true,conflict:true},
+  {sync:true,mergeReady:true,syncRecordFails:true},{sync:true,mergeReady:true,updateFails:true}]){
+  const gh=await fakeGitHub(opts);
+  try {
+   const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+   const updates=gh.log.filter(r=>r.url.endsWith('/update-branch'));
+   const expected=opts.mergeReady && !opts.conflict && !opts.syncRecordFails;
+   assert.equal(updates.length,expected?1:0,out);
+   assert.equal(gh.log.filter(r=>r.url.endsWith('/merge')).length,0,out);
+   if(expected){
+    assert.deepEqual(updates[0].body,{expected_head_sha:HEAD});
+    assert.equal(updates[0].auth,'Bearer app-merge-token');
+    const record=gh.log.find(r=>r.method==='POST' && r.body?.name==='aiwork-main-sync');
+    assert.ok(record && gh.log.indexOf(record)<gh.log.indexOf(updates[0]));
+    assert.equal(record.auth,'Bearer app-check-token');
+    const intent=JSON.parse(record.body.output.text);
+    assert.equal(intent.head,HEAD);assert.equal(intent.base,SYNC_BASE);assert.equal(intent.actor,'aiwork-gate[bot]');
+   }
+   const final=checkWrites(gh.log).filter(r=>r.method==='PATCH').at(-1);
+   if(opts.conflict)assert.match(final.body.output.summary,/冲突/);
+   if(opts.updateFails || opts.syncRecordFails)assert.equal(final.body.conclusion,'failure');
+   if(expected && !opts.updateFails)assert.equal(final.body.status,'in_progress');
+  }finally{gh.server.close();}
+ }
+});
+
+test('瞬时合并状态在同次运行重读：null 转 true 才同步，转 false 才报冲突',async()=>{
+ for(const states of [[null,true],[null,false]]){
+  const gh=await fakeGitHub({sync:true,mergeReady:true,mergeableStates:states});
+  try{
+   const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+   const summaries=checkWrites(gh.log).filter(r=>r.method==='PATCH').map(r=>r.body.output);
+   assert.ok(summaries.every(o=>!o.title.includes('G8')),JSON.stringify(summaries));
+   assert.ok(summaries.some(o=>o.title.includes('重读')),JSON.stringify(summaries));
+   const updates=gh.log.filter(r=>r.url.endsWith('/update-branch'));
+   assert.equal(updates.length,states.at(-1)?1:0,out);
+   if(!states.at(-1))assert.match(summaries.at(-1).summary,/冲突/);
+  }finally{gh.server.close();}
+ }
+});
+
+test('同步或合并写入时 main 刚推进，当次重读后用新 main 同步，不把竞争写成失败',async()=>{
+ for(const opts of [{sync:true,mergeReady:true,moveOnUpdate:true},{mergeReady:true,moveOnMerge:true}]){
+  const gh=await fakeGitHub(opts);
+  try{
+   const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+   const patches=checkWrites(gh.log).filter(r=>r.method==='PATCH');
+   assert.ok(patches.every(r=>r.body.conclusion!=='failure'),out);
+   assert.ok(patches.some(r=>r.body.output.title.includes('重读')),out);
+   const intents=gh.log.filter(r=>r.method==='POST' && r.body?.name==='aiwork-main-sync');
+   assert.equal(JSON.parse(intents.at(-1).body.output.text).base,'d'.repeat(40));
+   assert.equal(patches.at(-1).body.status,'in_progress');
+  }finally{gh.server.close();}
+ }
 });

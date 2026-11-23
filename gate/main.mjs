@@ -2,7 +2,8 @@
 // 这里只管"接线":真实的 GitHub API、aiwork-gate App 的令牌、发 / 改检查。流程和失败处理在 run.mjs。
 // 读数据用 GITHUB_TOKEN(权限见 templates/aiwork-gate.yml 的 permissions);发检查结果用 aiwork-gate App 的临时令牌 ——
 // 分支规则只认这个 App 发的结果,PR 自己加的 workflow 用 GITHUB_TOKEN 发一个同名检查也冒充不了。
-// 合并(run.mjs 第 4 步)另换一张 App 令牌,只在真要合并时才换:发检查的那张始终只有 checks: write。
+// 合并(run.mjs 第 4 步)另换一张 App 令牌,只在真要合并或同步时才换:发检查的那张始终只有 checks: write。
+import { prepareSynchronization, syncCheck, TransientPrState, assertPrSnapshot } from "./synchronize.mjs";
 import { createSign } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { bindingFromEvent } from "./merge-request.mjs";
@@ -28,14 +29,17 @@ const api = reader(env.GITHUB_TOKEN);
 const b64url = (x) => Buffer.from(x).toString("base64url");
 // 按权限分开换、分开缓存:一张令牌只带这一类请求要的权限
 const appTokens = new Map();
-async function appToken(permissions) {
-  const want = JSON.stringify(permissions);
-  if (appTokens.has(want)) return appTokens.get(want);
+function appJwt() {
   const key = env.AIWORK_GATE_PRIVATE_KEY;
   if (!key) throw new Error("缺 aiwork-gate App 的私钥(environment aiwork-gate 的 secret AIWORK_GATE_PRIVATE_KEY)");
   const now = Math.floor(Date.now() / 1000);
   const unsigned = `${b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.${b64url(JSON.stringify({ iat: now - 60, exp: now + 540, iss: String(policy.gate_app_id) }))}`;
-  const jwt = `${unsigned}.${b64url(createSign("RSA-SHA256").update(unsigned).sign(key))}`;
+  return `${unsigned}.${b64url(createSign("RSA-SHA256").update(unsigned).sign(key))}`;
+}
+async function appToken(permissions) {
+  const want = JSON.stringify(permissions);
+  if (appTokens.has(want)) return appTokens.get(want);
+  const jwt = appJwt();
   const inst = (await request("GET", `/repos/${repo}/installation`, jwt)).data;
   const tok = (
     await request("POST", `/app/installations/${inst.id}/access_tokens`, jwt, {
@@ -69,9 +73,39 @@ const poster = {
 };
 
 // 带上判过的 head:判完之后又推了新提交,接口就拒(409),不会把没判过的提交合进去
+async function recheckWrite(error, number, expected) {
+  const pr = await api.get(`/repos/${repo}/pulls/${number}`);
+  assertPrSnapshot(pr, expected);
+  if (pr.mergeable === null) throw new TransientPrState('GitHub 还在计算能否干净合并');
+  throw error;
+}
 const merger = {
-  async merge(number, sha) {
-    await request("PUT", `/repos/${repo}/pulls/${number}/merge`, await appToken(MERGE), { sha, merge_method: "merge" });
+  async merge(number, sha, expected) {
+    try {
+      await request("PUT", `/repos/${repo}/pulls/${number}/merge`, await appToken(MERGE), { sha, merge_method: "merge" });
+    } catch (e) { await recheckWrite(e, number, expected); }
+  },
+};
+
+let actor = null;
+const synchronizer = {
+  async prepare(number, facts) {
+    if (!actor) {
+      const app=(await request('GET','/app',appJwt())).data;
+      if (app.id !== policy.gate_app_id || !/^[a-z0-9-]+$/.test(app.slug ?? '')) throw new Error('关卡 App 身份不匹配');
+      actor=`${app.slug}[bot]`;
+    }
+    return prepareSynchronization(api,repo,number,facts,actor);
+  },
+  async apply(intent) {
+    // 先落可核实的意向，再请求同步。异步结果不能靠本进程自述当成成功。
+    await request('POST',`/repos/${repo}/check-runs`,await appToken(CHECKS),syncCheck(intent));
+    try {
+      await request('PUT',`/repos/${repo}/pulls/${intent.number}/update-branch`,await appToken(MERGE),
+        {expected_head_sha:intent.head});
+    } catch (e) {
+      await recheckWrite(e, intent.number, {head_sha:intent.head,base_sha:intent.base,base_ref:intent.ref});
+    }
   },
 };
 
@@ -97,6 +131,7 @@ await gate({
   // 使用已有的检查令牌读取绑定，不增加 workflow 凭证权限。
   bindingApi: { async getPage(path) { return reader(await appToken(CHECKS)).getPage(path); } },
   merger,
+  synchronizer,
   log: (line) => {
     console.log(line);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n\n`);

@@ -1,3 +1,4 @@
+import { proveSynchronizations } from "./synchronize.mjs";
 import { MERGE_BINDING_CHECK, mergeBindingKey } from "./merge-request.mjs";
 
 // aiwork 放行关卡的收集部分:从 GitHub API 读判定要的事实。只读,不执行、不检出 PR 的代码。
@@ -121,7 +122,7 @@ export async function collectReviewEdits(api, repo, prNumber) {
 const PUSH_TYPES = new Set(["push", "force_push", "branch_creation"]);
 
 // 只看分支这一世:从最新往回数,数到最近一次建分支为止;遇到删分支就停(那之前是上一世)。
-export async function collectPushes(api, repo, headRef, headSha) {
+export async function collectPushes(api, repo, headRef, headSha, includeActivities = false) {
   const acts = await paginate(
     api,
     `/repos/${repo}/activity?ref=${encodeURIComponent(`refs/heads/${headRef}`)}&direction=desc&per_page=100`,
@@ -139,6 +140,7 @@ export async function collectPushes(api, repo, headRef, headSha) {
   return {
     covers_head: pushes.some((a) => a.after === headSha),
     actors: pushes.map((a) => a.actor?.login ?? "(已注销账号)"),
+    ...(includeActivities ? { activities: pushes } : {}),
   };
 }
 
@@ -174,24 +176,37 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
 
   const sameRepo = pr.head.repo?.full_name === repo;
   const pushes = sameRepo
-    ? await collectPushes(api, repo, pr.head.ref, headSha)
+    ? await collectPushes(api, repo, pr.head.ref, headSha, true)
     : { covers_head: false, actors: [] };
 
+  const sync = sameRepo ? await proveSynchronizations(api, bindingApi, repo, pr, policy, pushes.activities) : {proven:new Map(),current:null};
+  if (sameRepo) {
+    pushes.actors = pushes.activities.filter(a => !sync.proven.has(a.id)).map(a => a.actor?.login ?? "(已注销账号)");
+    delete pushes.activities;
+  }
+  let synchronization = sync.reason ? {review_heads:[],note:sync.reason} : null;
+  if (sync.current) {
+    const v=sync.current;
+    synchronization={review_heads:v.review_heads,note:!v.unchanged ? "关卡同步后 PR 自身改动发生变化，须重新评审并重贴合并标签。" : v.review_heads.length
+      ? `沿用提交 ${v.review_heads.join("、")} 的评审：关卡自动干净同步，main 新提交未碰本单文件。`
+      : `关卡自动干净同步，但 main 碰了本单文件（${v.overlap.join("、")}），须重新评审。`};
+  }
   let mergeRequest = null;
   if ((pr.labels ?? []).some(l => l.name === policy.merge_label)) {
     let bound = false;
+    let key = null;
     if (mergeLabelBy && mergeLabelAt) {
       const records = await paginate(bindingApi,
         `/repos/${repo}/commits/${headSha}/check-runs?check_name=${MERGE_BINDING_CHECK}&filter=all&per_page=100`, "check_runs");
-      const key = mergeBindingKey(pr.number, policy.merge_label, mergeLabelAt, mergeLabelBy);
-      bound = records.some(r => r.name === MERGE_BINDING_CHECK && r.app?.id === policy.gate_app_id &&
+      key = mergeBindingKey(pr.number, policy.merge_label, mergeLabelAt, mergeLabelBy);
+      bound = (sync.current?.unchanged === true && sync.current.binding === key) || records.some(r => r.name === MERGE_BINDING_CHECK && r.app?.id === policy.gate_app_id &&
         r.head_sha === headSha && r.external_id === key && r.status === "completed" && r.conclusion === "neutral");
     }
-    mergeRequest = { by: mergeLabelBy, bound };
+    mergeRequest = { by: mergeLabelBy, bound, key };
   }
 
   return {
-    pr: { number: pr.number, state: pr.state, head_sha: headSha },
+    pr: { number: pr.number, state: pr.state, head_sha: headSha, base_sha: pr.base?.sha, base_ref: pr.base?.ref },
     files,
     reviews,
     ci,
@@ -199,5 +214,6 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
     pushes,
     // 申请人及版本绑定共用这一份事实；无记录、歧义均不授权合并。
     merge_request: mergeRequest,
+    ...(synchronization ? {synchronization} : {}),
   };
 }

@@ -172,14 +172,16 @@ test("R5d App 发不出占位(私钥坏了)→ 不读该提交的数据、不合
   assert.deepEqual(finishes(r.calls).map((f) => f[0]), [OTHER]);
 });
 
-test("R5e 列出之后 PR 又推进 / 关了 → 这个提交判 failure(已不是 head),新 head 由它的事件叫醒的下一次运行算", async () => {
-  for (const over of [{ readHead: OTHER }, { readState: "closed" }]) {
-    const r = recorder();
-    await run(r, prsApi(r.calls, one({ verdict: "PASS", ...over })));
-    const [f] = finishes(r.calls);
-    assert.deepEqual(f.slice(0, 3), [HEAD, "completed", "failure"]);
-    assert.match(f[3], /已不是开着的 PR 的 head/);
-  }
+test("R5e PR 已关闭不再处理；head 变化在本次运行重读而不写失败", async () => {
+  const closed = recorder();
+  await run(closed, prsApi(closed.calls, one({readState:"closed"})));
+  assert.deepEqual(finishes(closed.calls)[0].slice(0,3),[HEAD,"completed","failure"]);
+  const r=recorder(), prs=one({verdict:"PASS",readHead:OTHER});
+  await run(r,prsApi(r.calls,prs),{waitForState:async()=>{prs[10].head=OTHER;}});
+  const f=finishes(r.calls);
+  assert.deepEqual(f[0].slice(0,3),[HEAD,"in_progress",null]);
+  assert.equal(f.at(-1)[0],OTHER);
+  assert.equal(f.at(-1)[2],"success");
 });
 
 test("R14c App 写不回结论(PATCH 失败)→ 运行失败", async () => {
@@ -440,4 +442,32 @@ test("M12 绑定记录读不全按 G8 拒绝；同 head 多个 PR 的失效标�
   await run(r2, prsApi(r2.calls, prs, { fail: p => p.includes('/check-runs?') }), { merger: mergeRecorder(r2) });
   assert.deepEqual(merges(r2.calls), []);
   assert.match(finishes(r2.calls)[0][3], /G8/);
+});
+
+test('持续计算只保留进行中；恢复 true 前重读全部事实；真错误仍 G8',async()=>{
+ const {TransientPrState}=await import('../gate/synchronize.mjs');
+ const {MAX_STATE_READS}=await import('../gate/run.mjs');
+ for(const error of [new TransientPrState('仍在计算'),new Error('读请求失败')]){
+  const r=recorder();let waits=0,prepares=0,applied=0;
+  await run(r,prsApi(r.calls,one({verdict:"PASS",labels:[MERGE],events:[labeled(policy.owner)]})),{
+   waitForState:async()=>{waits++;},
+   synchronizer:{async prepare(){prepares++;throw error;},async apply(){applied++;}},
+   merger:mergeRecorder(r),
+  });
+  assert.equal(applied,0);
+  const f=finishes(r.calls).at(-1);
+  if(error instanceof TransientPrState){assert.equal(f[1],'in_progress');assert.equal(prepares,MAX_STATE_READS);assert.equal(waits,MAX_STATE_READS-1);}
+  else {assert.match(f[3],/G8/);assert.equal(prepares,1);assert.equal(waits,0);}
+ }
+});
+
+test('同次重读不重复发送另一个 PR 已接受的同步请求',async()=>{
+ const {TransientPrState}=await import('../gate/synchronize.mjs');
+ const r=recorder(),ps={10:{head:HEAD,files:['a'],labels:[MERGE],events:[labeled(policy.owner)]},11:{head:OTHER,files:['b'],labels:[MERGE],events:[labeled(policy.owner)]}};
+ let delayed=true;const applied=[];
+ await run(r,prsApi(r.calls,ps),{waitForState:async()=>{},synchronizer:{
+  async prepare(n){if(n===11 && delayed){delayed=false;throw new TransientPrState('计算中');}return {intent:{number:n},note:'同步'};},
+  async apply(i){applied.push(i.number);}
+ }});
+ assert.deepEqual(applied,[10,11]);
 });

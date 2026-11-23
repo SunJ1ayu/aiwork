@@ -8,9 +8,9 @@ import { reviewPlan } from "./review-plan.mjs";
 //
 //   G1 CI:当前 head 上、来自 ci.yml 的那次运行成功,且是在最后一次改目标分支之后触发的 —— 业主批准也豁免不了
 //   G2 判卷面:改了 CI / 测试入口 / 关卡自己 → 要业主批准
-//   G3 评审:当前 head 上至少一条合格 PASS(aiwork-review 发的、完整、家族不是本次作者的家族)—— 豁免不了
-//   G4 作者:这个分支上的每次推送都来自已知 Builder 账号,否则 UNKNOWN → 要业主批准
-//   G5 当前 head 上任何一条 BLOCK → 要业主在最后一条 BLOCK 之后批准。BLOCK = aiwork-review 在当前 head 上发的、
+//   G3 评审:当前 head 或 synchronize.mjs 核实的沿用来源上至少一条合格 PASS(aiwork-review 发的、完整、家族不是本次作者的家族)—— 豁免不了
+//   G4 作者:扣除已核实关卡同步后，这个分支上的每次推送都来自已知 Builder 账号,否则 UNKNOWN → 要业主批准
+//   G5 当前 head 及沿用来源上任何一条 BLOCK → 要业主在最后一条 BLOCK 之后批准。BLOCK = aiwork-review 在当前 head 上发的、
 //      除"格式完整且结论不是 BLOCK"以外的一切(BLOCK 结论、Request changes、正文结论行写 BLOCK、结论块看不懂),
 //      或任何其他评审人在当前 head 上最后一次表态是 Request changes / 被撤销(撤销只要写权限,Builder 就有,
 //      撤销抹不掉反对;被撤销的评审看不出原来是什么,一律按反对算,反对的时刻是撤销那一刻)
@@ -109,7 +109,7 @@ const isReviewerBot = (r, policy) => r.login === policy.reviewer_bot && r.type =
 
 // 交卷与合格 PASS 共用范围检查；BLOCK 的拦截仍先按 blockReason 处理。
 function reviewScopeReason(r, v, head, author, authorFamilies) {
-  if (v.head_sha !== head) return `结论写的是 ${v.head_sha.slice(0, 7)},不是当前 head`;
+  if (v.head_sha !== head) return `结论写的是 ${v.head_sha.slice(0, 7)},不是这条评审对应的提交`;
   if (r.state === "DISMISSED") return "已被撤销";
   if (v.completeness !== "complete") return `不完整(${v.completeness})`;
   if (authorFamilies.has(v.family)) return `${v.family} ${author.known ? "是本次作者家族" : "是可能的 Builder 家族"},不能提供独立评审`;
@@ -129,7 +129,7 @@ function effectiveAt(r, policy) {
 function stancesOnHead(reviews, policy, head) {
   const last = new Map();
   for (const r of reviews) {
-    if (r.commit_id !== head || isReviewerBot(r, policy)) continue;
+    if (!(head instanceof Set ? head.has(r.commit_id) : r.commit_id === head) || isReviewerBot(r, policy)) continue;
     if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) continue;
     const prev = last.get(r.login);
     const later = !prev || effectiveAt(r, policy) > effectiveAt(prev, policy) || (effectiveAt(r, policy) === effectiveAt(prev, policy) && r.id > prev.id);
@@ -239,7 +239,8 @@ export function decide(facts, policy) {
 
   // 评审
   const botReviews = facts.reviews.filter((r) => isReviewerBot(r, policy));
-  const onHead = botReviews.filter((r) => r.commit_id === head);
+  const reviewHeads = new Set([head, ...(facts.synchronization?.review_heads ?? [])]);
+  const onHead = botReviews.filter((r) => reviewHeads.has(r.commit_id));
   // 已知作者只排除本次实现家族:登记为 Builder 不代表写过所有 PR。
   // UNKNOWN 沿用保守边界,不能猜测共享账号这次实际调用的模型。
   const authorFamilies = new Set(author.known ? [author.family]
@@ -251,7 +252,7 @@ export function decide(facts, policy) {
   for (const r of onHead) {
     const p = parseReviewBlock(r.body);
     const why = blockReason(r, p);
-    const scopeReason = p.ok ? reviewScopeReason(r, p.value, head, author, authorFamilies) : null;
+    const scopeReason = p.ok ? reviewScopeReason(r, p.value, r.commit_id, author, authorFamilies) : null;
     if (p.ok && scopeReason === null && (why === null || why === "") && p.value.verdict !== "UNKNOWN") {
       reviewed.add(p.value.family);
     }
@@ -273,7 +274,7 @@ export function decide(facts, policy) {
   const stale = botReviews.length - onHead.length;
 
   // 人的表态:业主单独看(G7);其他人最后一次表态不是 Approve 的,都算 BLOCK(G5)
-  const stances = stancesOnHead(facts.reviews, policy, head);
+  const stances = stancesOnHead(facts.reviews.filter(r => r.login !== policy.owner || r.commit_id === head), policy, reviewHeads);
   const ownerLast = [...stances.values()].find((r) => r.login === policy.owner && r.type === "User") ?? null;
   for (const [login, r] of stances) {
     if (login === policy.owner || r.state === "APPROVED") continue;
@@ -342,7 +343,7 @@ export function decide(facts, policy) {
     status: pending ? "in_progress" : "completed",
     conclusion: pending ? null : pass ? "success" : "failure",
     title: verdictLine,
-    summary: [`head \`${head}\``, "", ...(roundLine ? [roundLine, ""] : []), ...lines].join("\n"),
+    summary: [`head \`${head}\``, "", ...(roundLine ? [roundLine, ""] : []), ...(facts.synchronization?.note ? [facts.synchronization.note, ""] : []), ...lines].join("\n"),
     ...(roundLine ? { round_line: roundLine } : {}),
     review_state: {
       plan,
