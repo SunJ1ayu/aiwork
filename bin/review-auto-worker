@@ -359,7 +359,9 @@ def main():
     control.mkdir(mode=0o700, exist_ok=True)
     if internal:
         def deadline(signum, frame):
-            raise TimeoutError('handoff deadline exceeded')
+            # Ordinary network/Git retry handlers catch OSError/Exception. A
+            # deadline must exit even if the supervising parent was killed.
+            raise SystemExit(124)
         signal.signal(signal.SIGALRM, deadline)
         signal.alarm(settings['timeout_seconds'])
         dispatch_attempt(settings, requests, number, Path(args[2]), control)
