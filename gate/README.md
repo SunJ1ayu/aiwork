@@ -10,6 +10,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 | 文件 | 做什么 |
 |---|---|
 | `github.mjs` | GitHub 请求、Link 分页与 GraphQL 的共享客户端；各入口传入本角色令牌 |
+| `synchronize.mjs` | 自动同步意向、实际推送和提交树差的核实；只有可证明的干净同步能沿用授权 |
 | `merge-request.mjs` | 合并标签事件的冻结提交与绑定记录格式 |
 | `collect.mjs` | 只读 GitHub API 收集事实;出错、分页没取完、条数对不上一律抛错(G8) |
 | `decide.mjs` | 纯判定,不碰网络(G1–G7) |
@@ -18,7 +19,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 | 调用方的 `.aiwork/policy.json` | 策略:判卷面、high 路径、`high_min_families`、Builder、评审 App、检查名、App ID、合并标签和谁贴的算数 |
 
 测试:`tests/test_aiwork_gate.mjs`(判定与收集)、`tests/test_aiwork_gate_run.mjs`(流程与失败处理)、
-`tests/test_aiwork_gate_main.mjs`(假 GitHub API 上真跑 `main.mjs`)、`tests/test_aiwork_gate_workflow.mjs`(workflow 形状和本仓库策略)。
+`tests/test_aiwork_gate_main.mjs`(假 GitHub API 上真跑 `main.mjs`)、`tests/test_aiwork_gate_workflow.mjs`(workflow 形状和本仓库策略)、`tests/test_aiwork_gate_sync.mjs`(同步来源、文件交集和沿用范围)。
 从 OpenDesign 仓库内容推导 policy 清单的测试留在 OpenDesign。
 
 ## 评审分档与派发
@@ -89,13 +90,16 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
   同名检查后发的一定后写完,GitHub 按创建还是按完成时间取"最新",取到的都是
   最后一次运行的;运行半路死掉时,已创建且未完成的占位检查停在 in_progress,照样挡着,下一次运行全部重算。
 - job 上**不许**按事件过滤(比如只认某个标签):排队时被顶掉的运行,要靠顶掉它的那次来算。
-- 代价:稳定列表、各接口只需一页、不合并时，设开着的 PR 数为 P、不同 head 数为 H：
+- 代价:稳定列表、各接口只需一页、没有待核实的关卡同步且不合并时，设开着的 PR 数为 P、不同 head 数为 H：
   每次 `GITHUB_TOKEN` 要两次读 PR 列表、每 PR 六次 REST 读取和一次 GraphQL 查询，
   即约 `2 + 6P` 次 REST 请求和 P 次 GraphQL 查询；分页或列表不稳定会更多。
   App 另有每 head 两次检查写入，以及每次运行一次安装查询和一次换检查令牌请求；没有 head 且没有待保存的标签事件时不换 App 令牌。
   有可唯一定位的合并标签时，每个带标签 PR 还要用检查令牌读取绑定记录（分页会增加请求）；
   可信的贴标签载荷另创建一条绑定检查，包括重跑。上述绑定读写不计入 GITHUB_TOKEN 的 REST 公式或下表每 head 的常规检查写入数。
-  合并时还会另查安装、换合并令牌并逐 PR 发合并请求，这些不算进上述 `GITHUB_TOKEN` REST 数。
+  合并前另读 PR、默认分支和提交比较；落后时逐提交读取 main 触及的文件（包括重命名旧路径），并重读 PR 防止期间推进。
+  核实历史关卡同步时，另读原 head 上的 App 同步意向、实际合并提交及完整 Git trees；每次都核实，不把缓存当事实。
+  上述额外事实读取使用 `GITHUB_TOKEN`，绑定及意向检查仍用 Checks 令牌，均不在基础公式内；有同步历史时应另计这些请求。
+  合并或同步时还会另查安装、换合并令牌并逐 PR 发写请求，这些 App 请求不算进上述 `GITHUB_TOKEN` REST 数。
   设 T 为模板 cron 每小时的分钟刻度数，D=24T；定时的 REST 用量为 `T × (2 + 6P)`/小时，
   每个 head 每天的 App 检查写入为 2D 次、新检查为 D 条；事件触发另加，Actions 和 runner 占用也增加。
   `GITHUB_TOKEN` 的 REST 限额 L 为每仓库每小时 1000 次（[GitHub 官方配额](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-github_token-in-github-actions)），
@@ -164,7 +168,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
   以关卡 App 创建 `merge-request.mjs` 定义的绑定检查。记录存在 GitHub，每次重算重新读；
   只认策略指定的关卡 App，不认构建机器人或其他 App 造的同名检查。不增加任何角色权限。
   标签载荷没有历史事件 ID，按 PR、标签、载荷的 `updated_at` 和申请人对应历史事件；同一秒出现多次该标签的摘贴时一律拒绝，避免旧载荷授权新申请。
-  只从当前 head 的检查中找对应这一次标签的记录；推进提交、摘掉重贴都不能借旧记录。
+  普通推送只从当前 head 的检查中找对应这一次标签的记录；推进提交、摘掉重贴都不能借旧记录。关卡自动干净同步的例外见下段。
   没有记录（含上线前的标签）、记录被平台淘汰、保存失败或同秒歧义时，不自动合并，并在检查摘要提示「合并标签不对应当前提交，要摘掉重贴」。
   检查记录的字段契约见 [GitHub Checks API](https://docs.github.com/en/rest/checks/runs)，事件载荷见 [GitHub Webhook 文档](https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request)。
 - **排队被顶掉时**：仍用原来的固定并发组，仍对全部开放 PR 重算。若贴标签的运行尚未开始就被顶掉，
@@ -173,15 +177,19 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 - **不另起一套判定**:关卡每次运行照常把所有开着的 PR 判一遍;某个 head 的 App 结论写上了、
   而且是放行,就当场合并这个 head 上有合并请求的 PR。合并用的就是这次刚读到的数据,调合并接口时带上判过的
   head(`sha`):判完之后又推了新提交,接口会拒,不会把没判过的提交合进去。
-- **没放行的请求留着**:只有提交和这一次标签均未改变，之后哪次运行判为放行，才在那次合。不想合了就撤掉标签(关卡正在合的那几秒里撤可能来不及,
+- **没放行的请求留着**:只有提交和这一次标签均未改变（或满足下段关卡自动干净同步的例外），之后哪次运行判为放行，才在那次合。不想合了就撤掉标签(关卡正在合的那几秒里撤可能来不及,
   见项目的 `.aiwork/accepted-risks.md`)。
-- **"在最新的 main 上测过"不归关卡判**:关卡读的输入(head、改动、评审、head 上的 CI、推送、标签)没有一样随 main
-  前进而变,main 动了重判一遍结论也一样。这一点靠 main 规则集的「合并前分支必须和 main 同步」,它对 App 的合并同样生效:
-  同一次运行里合了一个 PR,指向 main 的其他 PR 就落后了,GitHub 拒绝合并,请求留着;更新分支 → CI、评审重来 → 摘掉重贴合并标签 → 放行时再合。
-  关了这条规则,关卡会把没和最新 main 一起测过的 PR 合进去。
+- **自动同步最新 main**：按[业主决定](https://github.com/SunJ1ayu/aiwork/issues/205#issuecomment-7088746460)，仅当 G1–G8 与合并请求都已满足时，关卡才检查默认分支是否落后。
+  有冲突就停止同步并在检查摘要说明，关卡不解冲突。无冲突时先用 Checks 令牌保存 `synchronize.mjs` 定义的同步意向，再用现有合并令牌调用 [update-branch](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch)，带 `expected_head_sha`，拒绝同步已经推进的分支。
+  接口是异步的；请求获准不代表完成。下一轮从实际推送者、意向绑定的 PR/分支/双亲及完整 Git tree 差核实同步。
+  只有同步前后 PR 自身的路径、对象类型、模式与 blob/gitlink 改动都相同，才延续同一次合并标签；任意普通推送（包括推回曾同步的 SHA）都会截断沿用。
+  main 新提交未触及本单任何文件时，关卡沿用意向中原 head 的评审（包括反对及其改写、撤销），并在摘要列出来源；同路径有交集则须重新评审。main 改判卷面不单独触发重评，所有判定仍读取 main 的最新规则。
+  无论是否沿用，CI 只认新 head；业主的批准仍按 GitHub 实际返回的当前 head 表态认定，不自行搬移。
+  意向丢失、实际双亲不符或树差变化时不沿用；数据读不全按 G8 拒绝。同步只处理同仓库、指向默认分支的 PR。
+  main 规则集的「合并前分支必须和 main 同步」继续保留：同轮先合入另一单后，后续单在合并前重新读 main，先同步、等新 head 的 CI，再重算合并。
 - **合并没成**(分支落后于 main、有冲突、评审讨论没解决完、刚推了新提交):原因写在那次运行的摘要里,请求留着。
-  处理时若推了新提交，要摘掉重贴合并标签；未改提交的，评审等门铃会叫醒下一次运行再合;没有门铃的(比如把讨论标为已解决),加个 `aiwork:recheck`。
-- 合并用 App 另换的一张令牌(Contents / Pull requests / Workflows 写权限),只在真要合并时才换;发检查的那张始终只有 Checks。
+  处理时若普通推送了新提交，要摘掉重贴合并标签；关卡自动干净同步见上段。未改提交的，评审等门铃会叫醒下一次运行再合;没有门铃的(比如把讨论标为已解决),加个 `aiwork:recheck`。
+- 合并用 App 另换的一张令牌(Contents / Pull requests / Workflows 写权限),只在真要合并或同步时才换;发检查的那张始终只有 Checks。
 - main 的规则与迁移顺序见上方「已接入仓库迁移」；本轮写不了新结论时的显示结果与已接受风险见 `.aiwork/accepted-risks.md` 第 7 条。
   取消不撤销已经完成的合并；未合并的 PR 由下次运行重新判定后合并。
 
@@ -223,7 +231,10 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 | S11 | 登记执行方的本家构建机器人给会放行的测试 PR 贴 `aiwork:merge`,自己开的、别家执行方开的各贴一次 | 两次都不合并;运行摘要给出的原因见 `gate/run.mjs` | 登记的执行方合不了自己的 PR,也合不了别家的 PR |
 | S12 | 业主给一个还缺评审的测试 PR 贴 `aiwork:merge`,不推新提交，之后补上 PASS | 贴的时候不合;PASS 之后那次运行合并 | 同一提交的请求留着,放行时才合 |
 | S12a | 在旧提交贴合并标签后、关卡运行前推新提交，再补齐新提交的放行条件 | 不合新提交；检查摘要提示摘掉重贴。重贴并保存后可合 | 绑定的是原始标签事件的提交；旧标签和无记录不授权新提交 |
-| S13 | 两个都会放行、都指向 main 的测试 PR,业主都贴上 `aiwork:merge` | 合进去一个;另一个被 GitHub 拒(分支落后于 main),摘要里写明,请求留着 | 连着合并时,后一个必须先和新的 main 一起测过 |
+| S13 | 两个指向 main、改不同文件且其他条件齐全的测试 PR，业主都贴 `aiwork:merge`；等第一单合入 | 第二单由关卡同步 main，摘要列出沿用的原提交；作者仍是原 Builder；新 head CI 绿后自行合并，不重评、不重贴标签 | 干净同步、评审和标签沿用、新 head CI |
+| S13a | 两单改同一文件中不同位置，能自动合并，第一单先合入 | 第二单同步后摘要要求重评；旧 PASS 不满足 G3，补当前 head 的评审后才能继续 | 文件有交集不能沿用评审 |
+| S13b | 两单改同一处制造冲突；落后单其他条件补齐 | 检查摘要说明冲突；分支 head 不变，关卡不解冲突、不发同步写请求 | 冲突留给人 |
+| S13c | 在 S13 的同步后、CI 完成前，由 Builder 再推一个普通提交，补齐新 head 放行条件 | 旧合并标签失效，不自动合并；摘掉重贴后才可继续 | 同步例外不放松后续推送拦截 |
 | S15 | 用已满足其他合并条件、未贴 `aiwork:merge` 的测试 PR，以仓库管理员身份在网页上尝试合并 | 被 `main-gate-merge-only` 拒绝更新 main，PR 未合并 | 管理员不能借提交上的放行绕过关卡合并 |
 
 S14 是历史上的批准迁移样本，见 `ACCEPTANCE.md`「发现」；保留编号，不复用。

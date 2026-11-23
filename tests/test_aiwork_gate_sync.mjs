@@ -1,0 +1,124 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { decide } from '../gate/decide.mjs';
+const p = JSON.parse(readFileSync(new URL('./fixtures/gate-logic-policy.json', import.meta.url)));
+const old = 'b'.repeat(40), head = 'a'.repeat(40);
+const pass = (sha, verdict = 'PASS') => ({id:1, login:p.reviewer_bot,type:'Bot',state:'COMMENTED',commit_id:sha,
+ submitted_at:'2026-11-23T00:00:00Z',body:'```json\n'+JSON.stringify({verdict,head_sha:sha,model:'model',family:'openai',completeness:'complete'})+'\n```'});
+const facts = () => ({pr:{number:1,head_sha:head}, files:['web/a.ts'], ci:{state:'success'},
+ pushes:{covers_head:true,actors:['SunJ1ayuBoT']},reviews:[pass(old)],
+ synchronization:{review_heads:[old],note:`沿用 ${old}：关卡自动同步，main 未碰本单文件`}});
+test('干净同步且文件不重叠：旧评审沿用，CI 仍须当前 head 通过',()=>{
+ const f=facts(); assert.equal(decide(f,p).conclusion,'success');
+ f.ci={state:'pending'}; assert.notEqual(decide(f,p).conclusion,'success');
+});
+test('重叠文件不同步评审来源，必须重新评审',()=>{
+ const f=facts(); f.synchronization.review_heads=[];
+ assert.notEqual(decide(f,p).conclusion,'success');
+ f.reviews=[pass(head)]; assert.equal(decide(f,p).conclusion,'success');
+});
+test('沿用范围中的 BLOCK 不能被过滤掉',()=>{
+ const f=facts();f.reviews=[pass(old,'BLOCK'),{...pass(head),id:2}];
+ assert.notEqual(decide(f,p).conclusion,'success'); assert.equal(decide(f,p).blocks.length,1);
+});
+
+import { collect } from '../gate/collect.mjs';
+import { prepareSynchronization, syncIntent, syncCheck, SYNC_CHECK } from '../gate/synchronize.mjs';
+import { mergeBindingKey, MERGE_BINDING_CHECK } from '../gate/merge-request.mjs';
+const base='c'.repeat(40), common='d'.repeat(40), newer='e'.repeat(40);
+function environment(over={}) {
+ const at='2026-11-22T00:00:00Z', actor='aiwork-gate[bot]';
+ const key=mergeBindingKey(1,p.merge_label,at,p.owner);
+ const intent=syncIntent(1,old,base,'main','builder/one',actor,key,[],over.overlap?['web/a.ts']:[],common);
+ const pr={number:1,state:'open',changed_files:1,labels:[{name:p.merge_label}],mergeable:true,
+  head:{sha:head,ref:'builder/one',repo:{full_name:'o/r'}},base:{sha:base,ref:'main'}};
+ const activity=[{id:2,before:old,after:head,actor:{login:actor,type:'Bot'},activity_type:'push',timestamp:'2026-11-23'},
+  {id:1,before:'0'.repeat(40),after:old,actor:{login:'SunJ1ayuBoT',type:'User'},activity_type:'branch_creation',timestamp:'2026-11-22'}];
+ if(over.laterPush) {pr.head.sha=newer; activity.unshift({id:3,before:head,after:newer,actor:{login:'SunJ1ayuBoT',type:'User'},activity_type:'push',timestamp:'2026-11-24'});}
+ if(over.restore) activity.unshift({id:3,before:newer,after:head,actor:{login:'SunJ1ayuBoT',type:'User'},activity_type:'force_push',timestamp:'2026-11-24'});
+ if(over.foreignActor) activity[0].actor.login='untrusted[bot]';
+ const record={...syncCheck(intent),app:{id:over.foreignApp?999:p.gate_app_id}};
+ const binding={name:MERGE_BINDING_CHECK,head_sha:old,status:'completed',conclusion:'neutral',external_id:key,app:{id:p.gate_app_id}};
+ const entries=names=>names.map((path,i)=>({path,mode:'100644',type:'blob',sha:String(i+1).repeat(40)}));
+ // 路径对象保持相同的 blob id；同步不得移动 PR 自己的文件或改 blob。
+ const files={ [common]:[],[old]:entries(['web/a.ts']),[base]:[{path:'other.ts',mode:'100644',type:'blob',sha:'2'.repeat(40)}],
+  [head]:[...entries([over.changed?'moved/a.ts':'web/a.ts']),{path:'other.ts',mode:'100644',type:'blob',sha:'2'.repeat(40)}]};
+ const requests=[];
+ const api={async get(path){requests.push(path);
+  if(path==='/repos/o/r') return {default_branch:'main'};
+  if(path==='/repos/o/r/pulls/1') return structuredClone(pr);
+  if(path.startsWith('/repos/o/r/git/commits/')) {const id=path.split('/').at(-1);return {sha:id,tree:{sha:id},parents:id===head?[{sha:over.wrongParent?common:old},{sha:base}]:[]};}
+  if(path.includes('/git/trees/')) {const id=path.split('/').at(-1).split('?')[0];return {truncated:!!over.truncated,tree:files[id]};}
+  throw Error('unexpected get '+path);
+ },async getPage(path){requests.push(path);
+  if(path.includes('/pulls/1/files'))return {data:[{filename:'web/a.ts'}]};
+  if(path.includes('/pulls/1/reviews'))return {data:[{...pass(old),user:{login:p.reviewer_bot,type:'Bot'}}]};
+  if(path.includes('/actions/runs'))return {data:{total_count:1,workflow_runs:[{id:1,path:p.ci.workflow_path,head_sha:pr.head.sha,event:p.ci.event,status:'completed',conclusion:'success',pull_requests:[{number:1}]}]}};
+  if(path.includes('/issues/1/events'))return {data:[{id:1,event:'labeled',label:{name:p.merge_label},actor:{login:p.owner},created_at:at}]};
+  if(path.includes('/activity?'))return {data:activity};
+  if(path.includes('/check-runs?')){
+   const records=path.includes(`/commits/${old}/`)?(path.includes(`check_name=${SYNC_CHECK}`)?[record]:[binding]):[];
+   return {data:{total_count:records.length,check_runs:records}};
+  }
+  throw Error('unexpected page '+path);
+ },async graphql(){return {repository:{pullRequest:{reviews:{totalCount:1,nodes:[{databaseId:1,submittedAt:'2026-11-23T00:00:00Z'}],pageInfo:{hasNextPage:false}}}}};}};
+ return {api,pr,requests,record,intent};
+}
+test('收集与判定联测：关卡推送双亲与树差相同，作者仍是 Builder，旧标签及评审沿用',async()=>{
+ const e=environment();const f=await collect(e.api,'o/r',1,p);const r=decide(f,p);
+ assert.equal(r.conclusion,'success',r.summary);assert.equal(r.author.known,true);
+ assert.equal(f.merge_request.bound,true);assert.deepEqual(f.synchronization.review_heads,[old]);
+ assert.match(r.summary,/沿用提交/);
+});
+test('收集链：main 碰了同一文件，CI 通过仍缺新评审',async()=>{
+ const e=environment({overlap:true});const f=await collect(e.api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,true);assert.equal(decide(f,p).conclusion,'failure');
+ assert.match(f.synchronization.note,/须重新评审/);
+});
+test('同步后普通推送或推回同步 SHA 都截断标签和评审沿用',async()=>{
+ for(const over of [{laterPush:true},{restore:true}]){
+  const e=environment(over),f=await collect(e.api,'o/r',1,p);
+  assert.equal(f.merge_request.bound,false);assert.equal(f.synchronization,undefined);
+  assert.notEqual(decide(f,p).conclusion,'success');
+ }
+});
+test('其他 App、推送者或不匹配双亲不能冒充关卡同步',async()=>{
+ for(const over of [{foreignApp:true},{foreignActor:true},{wrongParent:true}]){
+  const e=environment(over),f=await collect(e.api,'o/r',1,p);
+  assert.equal(f.merge_request.bound,false);assert.equal(decide(f,p).author.known,false);
+ }
+});
+test('自动合并移动了 PR 文件仍不能沿用；树截断失败即拒',async()=>{
+ const e=environment({changed:true}),f=await collect(e.api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,false);assert.deepEqual(f.synchronization.review_heads,[]);
+ await assert.rejects(collect(environment({truncated:true}).api,'o/r',1,p),/tree 不完整/);
+});
+function planning(over={}) {
+ const e=environment();e.pr.head.sha=old;
+ if(over.conflict)e.pr.mergeable=false;
+ const original=e.api.get.bind(e.api);
+ e.api.get=async path=>{
+  if(path.includes('/compare/'))return {total_commits:1,merge_base_commit:{sha:common}};
+  return original(path);
+ };
+ const page=e.api.getPage.bind(e.api);
+ e.api.getPage=async path=>{
+  if(path.includes('/compare/'))return {data:{commits:over.incomplete?[]:[{sha:base}]}};
+  if(path.includes(`/commits/${base}?`))return {data:{files:[{filename:over.overlap?'web/a.ts':'other.ts',previous_filename:over.rename?'web/a.ts':undefined}]}};
+  return page(path);
+ };
+ return e;
+}
+const planningFacts=()=>({pr:{head_sha:old,base_sha:base,base_ref:'main'},files:['web/a.ts'],merge_request:{key:'frozen-label'}});
+test('同步计划：冲突不同步；逐提交含重命名旧路径的交集决定是否沿用',async()=>{
+ const a=await prepareSynchronization(planning().api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
+ assert.deepEqual(a.intent.review_heads,[old]);
+ for(const over of [{overlap:true},{rename:true}]){
+  const b=await prepareSynchronization(planning(over).api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
+  assert.deepEqual(b.intent.review_heads,[]);assert.deepEqual(b.intent.overlap,['web/a.ts']);
+ }
+ const conflict=await prepareSynchronization(planning({conflict:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
+ assert.equal(conflict.conflict,true);assert.equal(conflict.intent,undefined);
+ await assert.rejects(prepareSynchronization(planning({incomplete:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),/不完整/);
+});

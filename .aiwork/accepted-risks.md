@@ -3,7 +3,7 @@
 业主已经接受、评审时不当问题报的风险（见 [aiwork 的 REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md) 第二节）。在 `.aiwork/` 下，属于判卷面：加一条、改一条都要业主批准。
 
 1. **放行关卡的结论只能「最终一致」**：上限和原因见 [gate/README.md](https://github.com/SunJ1ayu/aiwork/blob/0e2b46067a17afb70a54fc4dbbc2aa6d03f41949/gate/README.md)「已知限制」和「合并」两节。业主接受于 2026-10-12（aiwork 关卡验收，[gate/ACCEPTANCE.md](https://github.com/SunJ1ayu/aiwork/blob/0e2b46067a17afb70a54fc4dbbc2aa6d03f41949/gate/ACCEPTANCE.md)，[PR #33 的业主批准](https://github.com/SunJ1ayu/aiwork/pull/33#pullrequestreview-5488563140)）。
-2. **把 main 合进 PR 分支后，GitHub 会把业主之前的批准挪到新提交上**，关卡因此不要求业主在新提交上重新批准。改了内容的推送不会被挪；评审机器人的 PASS 不会被挪，新提交上仍要重新评审；合并 main 时手工解决冲突的情况没有测过。证据见 [gate/ACCEPTANCE.md](https://github.com/SunJ1ayu/aiwork/blob/0e2b46067a17afb70a54fc4dbbc2aa6d03f41949/gate/ACCEPTANCE.md)「发现」。业主接受于 2026-10-12（[PR #33 的业主批准](https://github.com/SunJ1ayu/aiwork/pull/33#pullrequestreview-5488563140)）。
+2. **把 main 合进 PR 分支后，GitHub 会把业主之前的批准挪到新提交上**，关卡因此不要求业主在新提交上重新批准。改了内容的推送不会被挪；评审机器人的 PASS 不会被挪；关卡自动同步时是否沿用原评审，见 `gate/README.md`「合并」（[业主决定](https://github.com/SunJ1ayu/aiwork/issues/205#issuecomment-7088746460)）；合并 main 时手工解决冲突的情况没有测过。证据见 [gate/ACCEPTANCE.md](https://github.com/SunJ1ayu/aiwork/blob/0e2b46067a17afb70a54fc4dbbc2aa6d03f41949/gate/ACCEPTANCE.md)「发现」。业主接受于 2026-10-12（[PR #33 的业主批准](https://github.com/SunJ1ayu/aiwork/pull/33#pullrequestreview-5488563140)）。
 
 4. **DeepSeek 腿在 Linux 服务器上跑的命令能上网、能使用这条腿的密钥**：Claude Code 的命令沙箱在这台服务器上起不来；本条只适用于 Linux 服务器。出处：[PR #56 的业主批准](https://github.com/SunJ1ayu/aiwork/pull/56#pullrequestreview-5556373830)及 [PR #71 的业主批准](https://github.com/SunJ1ayu/aiwork/pull/71#pullrequestreview-5649588696)。由业主合并本条的 PR 时批准。
 

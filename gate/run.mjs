@@ -101,7 +101,7 @@ async function openPrs(api, repo) {
   throw new Error("开着的 PR 连读四遍都对不上(一直有 PR 在开关或推送)");
 }
 
-export async function gate({ repo, policy, api, poster, bindingApi = api, merger = null, log = () => {} }) {
+export async function gate({ repo, policy, api, poster, bindingApi = api, merger = null, synchronizer = null, log = () => {} }) {
   const errors = [];
   // 1. 所有开着的 PR,按 head 提交分组
   const heads = new Map();
@@ -127,6 +127,7 @@ export async function gate({ repo, policy, api, poster, bindingApi = api, merger
   for (const [sha, numbers] of heads) {
     if (!ids.has(sha)) continue;
     let result;
+    let syncReady = false;
     const verdicts = [];
     try {
       for (const n of numbers) {
@@ -142,9 +143,23 @@ export async function gate({ repo, policy, api, poster, bindingApi = api, merger
           const merge_note = "合并标签不对应当前提交，要摘掉重贴。";
           r = { ...r, merge_note, summary: `${merge_note}\n\n${r.summary}` };
         }
-        verdicts.push({ number: n, r, request: facts.merge_request, mergeBy: mergeRequester(facts, policy) });
+        verdicts.push({ number: n, r, facts, request: facts.merge_request, mergeBy: mergeRequester(facts, policy) });
       }
       result = verdicts.length ? combine(verdicts) : moved;
+      if (synchronizer && result.status === 'completed' && result.conclusion === 'success') {
+        for (const v of verdicts) {
+          if (!v.mergeBy) continue;
+          v.sync = await synchronizer.prepare(v.number, v.facts);
+        }
+        const plans = verdicts.filter(v=>v.sync);
+        if (plans.length) {
+          const conflict=plans.some(v=>v.sync.conflict);
+          syncReady = !conflict;
+          result={...result,status:conflict?'completed':'in_progress',conclusion:conflict?'failure':null,
+            title:conflict?'不同步：main 有冲突':'自动同步 main，等新 head CI',
+            summary:plans.map(v=>`PR #${v.number}：${v.sync.note}`).join('\n')+'\n\n'+result.summary};
+        }
+      }
     } catch (e) {
       result = g8(e.message);
     }
@@ -155,6 +170,17 @@ export async function gate({ repo, policy, api, poster, bindingApi = api, merger
       continue;
     }
     log(`${sha.slice(0, 7)}:${result.title}\n${result.summary}`);
+    // 意向和同步都在本轮结论成功写回后执行；同步 head 留给下一轮重新收集。
+    for (const v of (syncReady ? verdicts.filter(v=>v.sync?.intent) : [])) {
+      try { await synchronizer.apply(v.sync.intent); }
+      catch (e) {
+        const failed={...result,status:'completed',conclusion:'failure',title:'自动同步 main 未完成',
+          summary:`PR #${v.number} 自动同步未完成：${e.message}\n\n${result.summary}`};
+        result=failed;
+        await poster.finish(sha,failed,ids.get(sha));
+        log(failed.summary);
+      }
+    }
     results.push({ sha, title: result.title, summary: result.summary });
     // 4. 合并:只在这个提交上的 App 放行结论写上了的时候;
     //    合并出错(判完又推了新提交、有冲突)只记下,请求留着
