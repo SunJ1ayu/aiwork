@@ -60,8 +60,18 @@ def native_fixture():
         hook = subprocess.run(shlex.split(config["hooks"][0]["command"]),
                               input=json.dumps(event), text=True, capture_output=True)
         empty_read = (call["id"] == "Grep-empty" and mode in ("empty-grep-read", "empty-grep-deny-and-read"))
-        if hook.returncode and mode not in ("ignore-hook", "deny-and-read") and not empty_read:
-            content = hook.stderr or hook.stdout
+        if call["id"] == "Grep-empty" and mode.startswith("native-empty"):
+            content = "Path cannot be empty"
+            if mode == "native-empty-content":
+                content += "\ninside.txt: file contents"
+            elif mode == "native-empty-newline":
+                content += "\n"
+            elif mode == "native-empty-path":
+                content += " /tmp/outside.txt"
+            elif mode == "native-empty-changed":
+                content = "Search completed"
+        elif hook.returncode and mode not in ("ignore-hook", "deny-and-read") and not empty_read:
+            content = json.loads(hook.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
         else:
             path = Path(arguments.get("path", "."))
             if name == "Read":

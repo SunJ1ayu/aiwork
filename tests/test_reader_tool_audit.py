@@ -884,6 +884,17 @@ class KimiPreToolGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Grep", result.stdout)
 
+    def test_native_empty_grep_preserves_round_and_rejects_changed_results(self):
+        for content, accepted in (("Path cannot be empty", True),
+                                  ("Path cannot be empty\n", False),
+                                  ("Path cannot be empty\nfile contents", False),
+                                  ("Path cannot be empty /tmp/outside.txt", False),
+                                  ("Search completed", False), (None, False)):
+            with self.subTest(content=content):
+                events = self.empty_grep_stream()
+                events[1]["content"] = content
+                self.assertEqual(self.audit_events(events).returncode == 0, accepted)
+
     def test_empty_grep_requires_unique_matching_denial_without_content(self):
         for mutation in ("missing", "wrong-id", "extra-content", "duplicate-result",
                          "duplicate-call", "before-call", "generic-denial", "malformed"):
