@@ -29,7 +29,7 @@ import { mergeBindingKey, MERGE_BINDING_CHECK } from '../gate/merge-request.mjs'
 const base='c'.repeat(40), common='d'.repeat(40), newer='e'.repeat(40);
 function environment(over={}) {
  const at='2026-11-22T00:00:00Z', actor='aiwork-gate[bot]';
- const key=mergeBindingKey(1,p.merge_label,at,p.owner);
+ const key=mergeBindingKey(1,p.merge_label,old,p.owner);
  const intent=syncIntent(1,old,base,'main','builder/one',actor,key,[],over.overlap?['web/a.ts']:[],common);
  const pr={number:1,state:'open',changed_files:1,labels:[{name:p.merge_label}],mergeable:true,
   head:{sha:head,ref:'builder/one',repo:{full_name:'o/r'}},base:{sha:base,ref:'main'}};
@@ -144,4 +144,51 @@ test('同步前与文件核实后的 PR 快照改变均是瞬时状态，实际�
  const e=planning();e.api.get=async()=>{throw new Error('真实读取失败');};
  await assert.rejects(prepareSynchronization(e.api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),
   error=>error.constructor.name==='Error' && error.message==='真实读取失败');
+});
+
+import { bindingFromEvent } from '../gate/merge-request.mjs';
+function labelEnvironment(over={}) {
+ const e=environment();e.pr.head.sha=old;
+ const payload={action:'labeled',repository:{full_name:'o/r'},label:{name:p.merge_label},sender:{login:p.owner},
+  pull_request:{number:1,head:{sha:old},base:{repo:{full_name:'o/r'}},updated_at:'2026-11-22T00:00:01Z'}};
+ const binding={...bindingFromEvent('pull_request_target',payload,'o/r',p),app:{id:p.gate_app_id}};
+ const creation={id:1,activity_type:'branch_creation',before:'0'.repeat(40),after:old,timestamp:'2026-11-21',actor:{login:'SunJ1ayuBoT'}};
+ const activity=over.restore ? [{...creation,id:3,activity_type:'force_push',before:head,after:old,timestamp:'2026-11-24'},
+  {...creation,id:2,activity_type:'push',before:old,after:head,timestamp:'2026-11-23'},creation] : [creation];
+ const page=e.api.getPage.bind(e.api);
+ e.api.getPage=async path=>{
+  if(path.includes('/activity?'))return {data:over.incomplete?[]:activity};
+  if(path.includes('/issues/1/events'))return {data:[{id:1,event:'labeled',created_at:'2026-11-22T00:00:00Z',label:{name:p.merge_label},actor:{login:over.unauthorized?'stranger':p.owner}},
+   ...(over.relabel?[{id:2,event:'unlabeled',created_at:'2026-11-22T00:00:00Z',label:{name:p.merge_label},actor:{login:p.owner}},
+    {id:3,event:'labeled',created_at:'2026-11-22T00:00:00Z',label:{name:p.merge_label},actor:{login:p.owner}}]:[])]};
+  if(path.includes('/check-runs?'))return {data:{total_count:1,check_runs:[binding]}};
+  return page(path);
+ };
+ return e;
+}
+test('D：通知与历史差一秒，同提交摘掉重贴可沿用可信授权',async()=>{
+ for(const over of [{},{relabel:true}])assert.equal((await collect(labelEnvironment(over).api,'o/r',1,p)).merge_request.bound,true);
+});
+test('D：摘掉后推 B、重贴再强推回 A，不能借 A 的旧授权',async()=>{
+ const f=await collect(labelEnvironment({restore:true,relabel:true}).api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,false);assert.match(f.merge_request.reason,/回到|连续/);
+});
+test('D：没有完整活动记录不合；无权限的最新申请不合且给出真实原因',async()=>{
+ assert.equal((await collect(labelEnvironment({incomplete:true}).api,'o/r',1,p)).merge_request.bound,false);
+ const f=await collect(labelEnvironment({unauthorized:true}).api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,false);assert.match(f.merge_request.reason,/权限|不算数/);
+});
+
+test('D：不同可信申请人保存的授权可沿用，伪造账号和旧时间键不能充数',async()=>{
+ for(const variant of ['trusted','untrusted','legacy']){
+  const e=labelEnvironment(),page=e.api.getPage.bind(e.api);
+  e.api.getPage=async path=>{
+   const result=await page(path);
+   if(path.includes('/check-runs?'))result.data.check_runs[0].external_id=variant==='legacy'
+    ? JSON.stringify([1,p.merge_label,'2026-11-22T00:00:00Z',p.owner])
+    :mergeBindingKey(1,p.merge_label,old,variant==='trusted'?'merger':'stranger');
+   return result;
+  };
+  assert.equal((await collect(e.api,'o/r',1,{...p,merge_requesters:['merger']})).merge_request.bound,variant==='trusted');
+ }
 });

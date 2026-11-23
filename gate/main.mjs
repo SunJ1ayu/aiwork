@@ -111,7 +111,7 @@ const synchronizer = {
 
 // 只保存原始 labeled 载荷的冻结版本；从不拿随后查询到的 head 补记录。
 validatePolicy(policy);
-if (env.GITHUB_EVENT_NAME === "pull_request_target" && env.GITHUB_EVENT_PATH) {
+if (env.AIWORK_GATE_PHASE !== "recompute" && env.GITHUB_EVENT_NAME === "pull_request_target" && env.GITHUB_EVENT_PATH) {
   const binding = bindingFromEvent(env.GITHUB_EVENT_NAME,
     JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")), repo, policy);
   if (binding) {
@@ -123,7 +123,7 @@ if (env.GITHUB_EVENT_NAME === "pull_request_target" && env.GITHUB_EVENT_PATH) {
   }
 }
 
-await gate({
+if (env.AIWORK_GATE_PHASE !== "binding") await gate({
   repo,
   policy,
   api,

@@ -16,7 +16,7 @@
 #     aiwork main 的关卡代码变化由 schedule 定时补算，间隔与限制见门铃表。
 #     给 PR 加标签(如 `aiwork:recheck`)也能手动重算;加合并标签 `aiwork:merge` 就是请关卡在放行时合并
 #     (见 gate/README.md「合并」)。labeled 原始载荷只用于保存合并提交绑定；
-#     运行被排队顶掉时缺记录就不合并，不用后来的 head 补绑。
+#     保存任务不排关卡队列；重算等本次保存结束后再排队，不用后来的 head 补绑。
 #   · 发检查结果、合并用 aiwork-gate App 的私钥,放在只许 main 用的 environment `aiwork-gate` 里:
 #     同仓库分支的 PR 能拿到仓库级 secrets,拿不到只许 main 的 environment secrets。
 #
@@ -40,15 +40,53 @@ permissions:
   actions: read
   issues: read
 
-# 同一时间只有一次运行:组名固定(不随事件变),不取消正在跑的;排队的只留最新一个,它开始时读到的一定不比
-# 被它顶掉的旧。所以同一提交上后写的结论一定出自后读的数据。每次运行都重算全部开着的 PR,顶掉的那些不会漏算。
-concurrency:
-  group: aiwork-gate
-  cancel-in-progress: false
-
 jobs:
+  # 保存原始授权不排关卡队列；每次 labeled 都有自己的保存任务。
+  binding:
+    # 不按事件过滤(比如只认某个标签):排队时被顶掉的运行要靠顶掉它的那次来算,那次不能被跳过
+    if: github.event_name == 'pull_request_target' && github.event.action == 'labeled'
+    env:
+      AIWORK_GATE_PHASE: binding
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: aiwork-gate
+    steps:
+      - name: 检出本仓库 main 上的策略
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: caller
+          persist-credentials: false
+
+      - name: 检出 aiwork main 上的关卡代码
+        uses: actions/checkout@v4
+        with:
+          repository: SunJ1ayu/aiwork
+          ref: main
+          path: aiwork
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 判
+        working-directory: aiwork
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AIWORK_GATE_PRIVATE_KEY: ${{ secrets.AIWORK_GATE_PRIVATE_KEY }}
+          AIWORK_POLICY_PATH: ${{ github.workspace }}/caller/.aiwork/policy.json
+        run: node gate/main.mjs
+
   gate:
     # 不按事件过滤(比如只认某个标签):排队时被顶掉的运行要靠顶掉它的那次来算,那次不能被跳过
+    needs: binding
+    if: always()
+    concurrency:
+      group: aiwork-gate
+      cancel-in-progress: false
+    env:
+      AIWORK_GATE_PHASE: recompute
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: aiwork-gate
