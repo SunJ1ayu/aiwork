@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: aiwork-gate
-    steps:
+    steps: &gate-steps
       - name: 检出本仓库 main 上的策略
         uses: actions/checkout@v4
         with:
@@ -70,7 +70,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: 保存授权
+      - name: 处理本阶段
         working-directory: aiwork
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -90,30 +90,4 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: aiwork-gate
-    steps:
-      - name: 检出本仓库 main 上的策略
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          path: caller
-          persist-credentials: false
-
-      - name: 检出 aiwork main 上的关卡代码
-        uses: actions/checkout@v4
-        with:
-          repository: SunJ1ayu/aiwork
-          ref: main
-          path: aiwork
-          persist-credentials: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: 判
-        working-directory: aiwork
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          AIWORK_GATE_PRIVATE_KEY: ${{ secrets.AIWORK_GATE_PRIVATE_KEY }}
-          AIWORK_POLICY_PATH: ${{ github.workspace }}/caller/.aiwork/policy.json
-        run: node gate/main.mjs
+    steps: *gate-steps

@@ -11,6 +11,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 |---|---|
 | `github.mjs` | GitHub 请求、Link 分页与 GraphQL 的共享客户端；各入口传入本角色令牌 |
 | `synchronize.mjs` | 自动同步意向、实际推送和提交树差的核实；只有可证明的干净同步能沿用授权 |
+| `branch-history.mjs` | 分支活动分类、排序和生命周期边界的共用事实 |
 | `merge-request.mjs` | 合并标签事件的冻结提交与绑定记录格式 |
 | `collect.mjs` | 只读 GitHub API 收集事实;出错、分页没取完、条数对不上一律抛错(G8) |
 | `decide.mjs` | 纯判定,不碰网络(G1–G7) |
@@ -165,7 +166,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
   Builder 贴的不算,也写不进名单(策略校验会拒)—— 不然 Builder 能把自己的 PR 合进去。
   认的是 PR 事件里最后一次贴这个标签的人:撤掉再贴,按最后一次算。
 - **只授权通知里的提交**：`main.mjs` 从可信 `pull_request_target/labeled` 原始通知取 `pull_request.head.sha`，
-  由关卡 App 保存 `merge-request.mjs` 定义的版本化授权。每次重算从 GitHub 读，只认策略指定的关卡 App 和授权账号。
+  由关卡 App 保存 `merge-request.mjs` 定义的版本化授权。叉库 PR 不支持自动合并，摘要明确提示人工处理。每次重算从 GitHub 读，只认策略指定的关卡 App 和授权账号。
   采用[业主 D 方案决定](https://github.com/SunJ1ayu/aiwork/issues/153#issuecomment-7107164506)：同一 PR、标签、提交上的可信授权可复用，
   不再用通知的 `updated_at` 对历史事件的 `created_at`。标签仍挂着、最后一次贴合并标签的人可信时，
   即使同一提交上摘掉重贴的新通知未保存，也可沿用此前授权；最新贴标签的人无权限时先提示该原因，不能借授权合并。

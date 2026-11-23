@@ -192,3 +192,64 @@ test('D：不同可信申请人保存的授权可沿用，伪造账号和旧时�
   assert.equal((await collect(e.api,'o/r',1,{...p,merge_requesters:['merger']})).merge_request.bound,variant==='trusted');
  }
 });
+
+import { cpSync, mkdtempSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+async function maintenanceGate(pattern,replacement,check) {
+ const dir=mkdtempSync(join(tmpdir(),'gate-history-maintenance-'));
+ try {
+  cpSync(new URL('../gate/',import.meta.url),join(dir,'gate'),{recursive:true});
+  const definitions=readdirSync(join(dir,'gate')).filter(n=>n.endsWith('.mjs')).map(n=>join(dir,'gate',n))
+   .filter(path=>pattern.test(readFileSync(path,'utf8')));
+  assert.equal(definitions.length,1,'被维护的概念只有一个定义');
+  const path=definitions[0];
+  writeFileSync(path,readFileSync(path,'utf8').replace(pattern,replacement));
+  const {collectPushes}=await import(pathToFileURL(join(dir,'gate/collect.mjs')));
+  const {retainsAuthorization}=await import(pathToFileURL(join(dir,'gate/merge-request.mjs')));
+  await check(collectPushes,retainsAuthorization);
+ } finally {rmSync(dir,{recursive:true,force:true});}
+}
+test('P1-1：只在活动定义增加一种推进类型，作者与授权连续性一起识别',async()=>{
+ await maintenanceGate(/const PUSH_TYPES = new Set\(\[/,'const PUSH_TYPES = new Set(["maintenance_push", ',async(collectPushes,retainsAuthorization)=>{
+  const acts=[{id:2,timestamp:'2026-11-23',activity_type:'maintenance_push',before:old,after:head,actor:{login:'builder'}},
+   {id:1,timestamp:'2026-11-22',activity_type:'branch_creation',before:'0'.repeat(40),after:old,actor:{login:'builder'}}];
+  const collected=await collectPushes({getPage:async()=>({data:acts})},'o/r','branch',head,true);
+  assert.equal(collected.activities.length,2,'作者和同步证明读到新增活动');
+  assert.equal(retainsAuthorization(collected.history,head,head,new Map()),true,'同一次维护也适用于授权连续性');
+ });
+});
+test('P1-1：只改创建边界时，授权不能再使用旧边界补全历史',async()=>{
+ await maintenanceGate(/if \((\w+)\.activity_type === (?:"branch_creation"|'branch_creation'|CREATION)\)/,
+  "if ($1.activity_type === 'maintenance_creation')",async(collectPushes,retainsAuthorization)=>{
+   const acts=[{id:3,timestamp:'2026-11-23',activity_type:'push',before:old,after:head,actor:{login:'builder'}},
+    {id:2,timestamp:'2026-11-22',activity_type:'branch_creation',before:'0'.repeat(40),after:old,actor:{login:'builder'}},
+    {id:1,timestamp:'2026-11-21',activity_type:'push',before:old,after:newer,actor:{login:'prior-builder'}}];
+   const facts=await collectPushes({getPage:async()=>({data:acts})},'o/r','branch',head,true);
+   assert.ok(facts.actors.includes('prior-builder'),'创建边界的维护已经影响作者识别');
+   assert.equal(retainsAuthorization(facts.history,head,head,new Map()),false,'授权也必须采用维护后的边界');
+  });
+});
+
+test('P1-1：删除屏障与重建分支共用边界，缺创建记录不能借上一世补齐',async()=>{
+ const {collectPushes}=await import('../gate/collect.mjs');
+ const {retainsAuthorization}=await import('../gate/merge-request.mjs');
+ const creation={id:1,timestamp:'2026-11-20',activity_type:'branch_creation',before:'0'.repeat(40),after:old,actor:{login:'old-builder'}};
+ const deletion={id:2,timestamp:'2026-11-21',activity_type:'branch_deletion',before:old,after:'0'.repeat(40)};
+ const latest={id:4,timestamp:'2026-11-23',activity_type:'push',before:old,after:head,actor:{login:'new-builder'}};
+ for(const rebuilt of [false,true]){
+  const acts=[latest,...(rebuilt?[{...creation,id:3,timestamp:'2026-11-22',actor:{login:'new-builder'}}]:[]),deletion,creation];
+  const facts=await collectPushes({getPage:async()=>({data:acts})},'o/r','branch',head,true);
+  assert.ok(facts.actors.every(a=>a==='new-builder'));
+  assert.equal(retainsAuthorization(facts.history,head,head,new Map()),rebuilt);
+ }
+});
+
+test('P2：叉库的可信合并申请说明不支持自动合并，不要求无效重贴',async()=>{
+ const e=labelEnvironment(),get=e.api.get.bind(e.api);
+ e.api.get=async path=>{const value=await get(path);if(path==='/repos/o/r/pulls/1')value.head.repo.full_name='fork/r';return value;};
+ const f=await collect(e.api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,false);assert.match(f.merge_request.reason,/叉库.*不支持/);
+ assert.doesNotMatch(f.merge_request.reason,/重贴/);
+});

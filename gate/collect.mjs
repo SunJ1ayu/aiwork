@@ -1,3 +1,4 @@
+import { branchHistory } from "./branch-history.mjs";
 import { proveSynchronizations } from "./synchronize.mjs";
 import { MERGE_BINDING_CHECK, bindingIdentity, retainsAuthorization, isMergeRequester } from "./merge-request.mjs";
 
@@ -115,28 +116,18 @@ export async function collectReviewEdits(api, repo, prNumber) {
   throw new Error(`PR #${prNumber} 的评审改写记录超过 ${MAX_PAGES} 页还没取完`);
 }
 
-const PUSH_TYPES = new Set(["push", "force_push", "branch_creation"]);
-
-// 只看分支这一世:从最新往回数,数到最近一次建分支为止;遇到删分支就停(那之前是上一世)。
+// 读取分支活动；分类、排序与生命周期边界见 branch-history.mjs。
 export async function collectPushes(api, repo, headRef, headSha, includeActivities = false) {
   const acts = await paginate(
     api,
     `/repos/${repo}/activity?ref=${encodeURIComponent(`refs/heads/${headRef}`)}&direction=desc&per_page=100`,
   );
-  const sorted = [...acts].sort((a, b) =>
-    a.timestamp === b.timestamp ? b.id - a.id : a.timestamp < b.timestamp ? 1 : -1,
-  );
-  const life = [];
-  for (const a of sorted) {
-    if (a.activity_type === "branch_deletion") break;
-    life.push(a);
-    if (a.activity_type === "branch_creation") break;
-  }
-  const pushes = life.filter((a) => PUSH_TYPES.has(a.activity_type));
+  const history = branchHistory(acts);
+  const { pushes } = history;
   return {
     covers_head: pushes.some((a) => a.after === headSha),
     actors: pushes.map((a) => a.actor?.login ?? "(已注销账号)"),
-    ...(includeActivities ? { activities: pushes, history: sorted } : {}),
+    ...(includeActivities ? { activities: pushes, history } : {}),
   };
 }
 
@@ -194,6 +185,8 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
     if (!isMergeRequester(mergeLabelBy, policy)) {
       reason = mergeLabelBy ? `合并请求是 ${mergeLabelBy} 提的，不算数(只认业主和 merge_requesters)。`
         : '合并标签在历史中找不到有效申请人，不合并。';
+    } else if (!sameRepo) {
+      reason = '叉库 PR 不支持自动合并，请人工处理。';
     } else {
       const records = await paginate(bindingApi,
         `/repos/${repo}/commits/${headSha}/check-runs?check_name=${MERGE_BINDING_CHECK}&filter=all&per_page=100`, "check_runs");
@@ -202,7 +195,7 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
       if (sync.current?.unchanged === true) candidates.push(sync.current.binding);
       for (const candidate of candidates) {
         const source = bindingIdentity(candidate, pr.number, policy.merge_label, policy);
-        if (source && sameRepo && retainsAuthorization(pushes.history, headSha, source, sync.proven)) {
+        if (source && retainsAuthorization(pushes.history, headSha, source, sync.proven)) {
           key = candidate; bound = true; break;
         }
       }

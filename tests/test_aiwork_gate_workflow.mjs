@@ -177,7 +177,7 @@ test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwor
   assert.match(text, /group: aiwork-gate/);
   assert.match(text, /cancel-in-progress: false/);
   assert.match(text, /environment: aiwork-gate/);
-  assert.equal(text.match(/persist-credentials: false/g)?.length, 4);
+  assert.equal(text.match(/persist-credentials: false/g)?.length, 2);
   assert.match(text, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(text, /path: caller/);
   assert.match(text, /repository: SunJ1ayu\/aiwork/);
@@ -437,4 +437,12 @@ test('合并授权独立任务没有并发队列；重算等待保存完成，�
  const gate=text.split(/^  gate:/m)[1];
  assert.match(gate,/needs: binding/);assert.match(gate,/if:.*always\(\)/);
  assert.match(gate,/concurrency:/);assert.match(gate,/AIWORK_GATE_PHASE: recompute/);
+});
+
+test('保存与重算共用一个步骤定义，检出和令牌接线不会单边漂移',()=>{
+ const text=read('templates/aiwork-gate.yml');
+ const binding=text.split(/^  binding:/m)[1]?.split(/^  gate:/m)[0];
+ const anchor=binding?.match(/^    steps: &([\w-]+)$/m)?.[1];
+ assert.ok(anchor,'共享步骤需要唯一锚点');
+ assert.match(text.split(/^  gate:/m)[1],new RegExp(`^    steps: \\*${anchor}$`,'m'));
 });

@@ -29,17 +29,15 @@ export function bindingIdentity(key, number, label, policy) {
 
 // 活动必须覆盖本次分支创建，推送链连续；返回曾授权的提交是否一直留到现在。
 export function retainsAuthorization(history, current, source, synchronizations) {
-  if (!Array.isArray(history) || !history.length) return false;
-  const creation = history.findIndex(a => a.activity_type === 'branch_creation');
-  if (creation < 0 || history[0].after !== current) return false;
-  const life = history.slice(0, creation + 1);
-  if (life.some(a => !['push','force_push','branch_creation'].includes(a.activity_type) ||
-      !/^[0-9a-f]{40}$/.test(a.after ?? '') || !Number.isSafeInteger(a.id))) return false;
+  if (!history?.complete) return false;
+  const { all, life, pushes } = history;
+  if (!life.length || life[0].after !== current || pushes.length !== life.length) return false;
+  if (life.some(a => !/^[0-9a-f]{40}$/.test(a.after ?? '') || !Number.isSafeInteger(a.id))) return false;
   if (new Set(life.map(a => a.id)).size !== life.length) return false;
   for (let i = 0; i < life.length - 1; i++) if (life[i].before !== life[i + 1].after) return false;
   // 连分支重建之前的同 SHA 也计入：旧检查不会随删分支而消失。
-  if (history.filter(a => a.after === current).length !== 1 ||
-      history.filter(a => a.after === source).length !== 1) return false;
+  if (all.filter(a => a.after === current).length !== 1 ||
+      all.filter(a => a.after === source).length !== 1) return false;
   const arrival = life.findIndex(a => a.after === source);
   return arrival >= 0 && life.slice(0, arrival).every(a => synchronizations.get(a.id)?.unchanged === true);
 }
