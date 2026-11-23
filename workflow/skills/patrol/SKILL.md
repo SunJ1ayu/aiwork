@@ -23,7 +23,7 @@ description: 每小时核对评审、合并收尾与派活进展。
 
 ## 冲突续接
 
-依据：[业主 2026-11-23 决定](https://github.com/SunJ1ayu/aiwork/issues/207#issuecomment-7089010275)。本节是关卡报冲突后派单处理的唯一定义；关卡的自动同步行为见 `gate/README.md`「合并」。
+依据见 `workflow/skills/delegate/SKILL.md`「写单前」的冲突续接决定链接。本节是关卡报冲突后派单处理的唯一定义；关卡的自动同步行为见 `gate/README.md`「合并」。
 
 整点巡检确认关卡当前检查摘要报告 PR 与 main 有冲突、不能干净同步时，直接给这单原来的执行方派「把最新 main 合进来、解冲突」的单，不用先问业主。按 `workflow/skills/delegate/SKILL.md` 写单，沿原关联 issue 派活；原执行方、原 PR 与分支以及续接方式按 `workflow/CLAUDE.md`「执行方提问与续接」核对。已有尚未完成的同一解冲突单时不重复派；同一 PR 的修改时机仍按 REVIEW-RULES 开头「一轮」及第四节「多个修改方并行」办理，不让两张单同时修改该 PR。无法核实原执行方或关联时，按「执行方提问与续接」的分工处理，不猜身份另开 PR。
 

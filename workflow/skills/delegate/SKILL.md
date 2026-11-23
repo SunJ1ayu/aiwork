@@ -23,7 +23,7 @@ description: 派 PR 任务的任务单格式与写单前规则。
 不写行号级指导、挂在哪一行、代码里的字段名、建议实现，不写【建议做法】、自查表，也不列「写单方查过」或「汇总方查过」的清单。
 执行方自己读代码，自己按 REVIEW-RULES 第一节「同类一起扫」查找和处理同类问题。
 汇总核对清单见 `summary` skill「汇总核对清单」。
-关卡报冲突后的派单见 `workflow/skills/patrol/SKILL.md`「冲突续接」的唯一定义。
+[业主 2026-11-23 冲突续接决定](https://github.com/SunJ1ayu/aiwork/issues/207#issuecomment-7089010275)的执行规则，见 `workflow/skills/patrol/SKILL.md`「冲突续接」的唯一定义。
 
 ## 按内容分开派单
 
