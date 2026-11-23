@@ -184,7 +184,7 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
     pushes.actors = pushes.activities.filter(a => !sync.proven.has(a.id)).map(a => a.actor?.login ?? "(已注销账号)");
     delete pushes.activities;
   }
-  let synchronization = null;
+  let synchronization = sync.reason ? {review_heads:[],note:sync.reason} : null;
   if (sync.current) {
     const v=sync.current;
     synchronization={review_heads:v.review_heads,note:!v.unchanged ? "关卡同步后 PR 自身改动发生变化，须重新评审并重贴合并标签。" : v.review_heads.length

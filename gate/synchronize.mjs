@@ -46,7 +46,11 @@ export async function proveSynchronizations(api, bindingApi, repo, pr, policy, a
   // 仅连续的关卡同步能延续绑定；普通推送，即使又推回旧 SHA，也会截断。
   const latest=activities[0];
   const v=latest?.after === pr.head.sha ? proven.get(latest.id) : null;
-  return {proven, current:v ?? null};
+  const unknownBot = latest?.actor?.type === 'Bot' && !Object.hasOwn(policy.builders, latest.actor.login);
+  const reason = v ? null : proven.size
+    ? '关卡同步后又有普通推送，旧评审不沿用，须按当前 head 重新评审。'
+    : unknownBot ? '无法证明当前推送是关卡的干净同步，须按当前 head 重新评审。' : null;
+  return {proven, current:v ?? null, reason};
 }
 
 // compare 的提交列表逐页取全，再逐提交取文件；不能拿 300 个文件上限的首页猜“不重叠”。

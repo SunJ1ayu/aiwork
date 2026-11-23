@@ -79,7 +79,7 @@ test('收集链：main 碰了同一文件，CI 通过仍缺新评审',async()=>{
 test('同步后普通推送或推回同步 SHA 都截断标签和评审沿用',async()=>{
  for(const over of [{laterPush:true},{restore:true}]){
   const e=environment(over),f=await collect(e.api,'o/r',1,p);
-  assert.equal(f.merge_request.bound,false);assert.equal(f.synchronization,undefined);
+  assert.equal(f.merge_request.bound,false);assert.deepEqual(f.synchronization.review_heads,[]);
   assert.notEqual(decide(f,p).conclusion,'success');
  }
 });
@@ -121,4 +121,11 @@ test('同步计划：冲突不同步；逐提交含重命名旧路径的交集�
  const conflict=await prepareSynchronization(planning({conflict:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
  assert.equal(conflict.conflict,true);assert.equal(conflict.intent,undefined);
  await assert.rejects(prepareSynchronization(planning({incomplete:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),/不完整/);
+});
+
+test('同步证明不足或后续有普通推送时，摘要写明为什么不能沿用',async()=>{
+ for(const over of [{foreignApp:true},{wrongParent:true},{laterPush:true}]){
+  const e=environment(over),f=await collect(e.api,'o/r',1,p);
+  assert.match(decide(f,p).summary,/无法证明|普通推送/);
+ }
 });
