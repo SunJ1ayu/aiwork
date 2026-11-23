@@ -53,6 +53,45 @@ CLAUDE_READER_TOOLS = ("Read", "Glob", "Grep")
 OUTSIDE = "这次调用了只读清单以外的工具: {names} ⇒ 不发评审"
 UNREADABLE = "输出里看不出这次调用了哪些工具 ⇒ 不发评审"
 
+# This exact tool result proves the empty call was stopped before execution.
+KIMI_EMPTY_GREP_DENIAL = "[review-only sandbox] empty Grep path denied before execution"
+
+
+def _empty_kimi_grep(name, arguments):
+    return (name == "Grep" and _valid_input(KIMI_TOOL_SCHEMAS[name], arguments)
+            and arguments.get("path") == "")
+
+
+def _denied_empty_greps(text):
+    events = _events(text)
+    if events is None:
+        return set()
+    calls, results = {}, {}
+    for index, event in enumerate(events):
+        for call in event.get("tool_calls", []) if isinstance(event.get("tool_calls"), list) else []:
+            if isinstance(call, dict) and isinstance(call.get("id"), str):
+                calls.setdefault(call["id"], []).append((index, event, call))
+        if event.get("role") == "tool" and isinstance(event.get("tool_call_id"), str):
+            results.setdefault(event["tool_call_id"], []).append((index, event))
+    verified = set()
+    for ident, records in calls.items():
+        if not ident or len(records) != 1 or len(results.get(ident, [])) != 1:
+            continue
+        index, event, call = records[0]
+        result_index, result = results[ident][0]
+        function = call.get("function")
+        if (event.get("role") != "assistant" or call.get("type") != "function"
+                or not isinstance(function, dict) or result_index <= index
+                or result.get("content") != KIMI_EMPTY_GREP_DENIAL):
+            continue
+        try:
+            arguments = json.loads(function.get("arguments", ""))
+        except (ValueError, TypeError):
+            continue
+        if _empty_kimi_grep(function.get("name"), arguments):
+            verified.add(ident)
+    return verified
+
 
 class ReaderScopeError(ValueError):
     pass
@@ -202,6 +241,7 @@ def check_recorded_paths(text, repo, *, claude):
     do that. A known violation, including a native permission denial, is enough
     to reject the run regardless of its final verdict or process status.
     """
+    denied_empty = set() if claude else _denied_empty_greps(text)
     for line in text.split("\n"):
         try:
             event = json.loads(line)
@@ -222,7 +262,7 @@ def check_recorded_paths(text, repo, *, claude):
                     arguments = json.loads(function.get("arguments", ""))
                 except (TypeError, json.JSONDecodeError):
                     continue
-                if isinstance(arguments, dict):
+                if isinstance(arguments, dict) and call.get("id") not in denied_empty:
                     check_kimi_reader_path(function.get("name"), arguments, repo)
 
 
@@ -421,6 +461,9 @@ def main(argv):
                     or event.get("tool_name") not in KIMI_TOOLS
                     or not isinstance(event.get("tool_input"), dict)):
                 return 2
+            if _empty_kimi_grep(event["tool_name"], event["tool_input"]):
+                print(KIMI_EMPTY_GREP_DENIAL)
+                return 4  # guard.mjs converts this policy denial to hook exit 2.
             check_kimi_reader_path(event["tool_name"], event["tool_input"], repo)
         elif cmd == "claude-tools":
             print(",".join(CLAUDE_READER_TOOLS))

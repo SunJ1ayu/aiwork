@@ -258,6 +258,21 @@ class ReaderToolAuditTests(unittest.TestCase):
                         block.update(name=name, input=arguments)
         return "\n".join(json.dumps(event) for event in events) + "\n"
 
+    def test_kimi_denied_empty_grep_remains_publishable(self):
+        sys.path.insert(0, str(ROOT / "bin"))
+        policy = _load("_reader_tools.py")
+        stream = self._reader_stream("subkimi", "Grep", {"pattern": "x", "path": ""})
+        events = [json.loads(line) for line in stream.split("\n") if line]
+        next(event for event in events if event.get("role") == "tool")["content"] = policy.KIMI_EMPTY_GREP_DENIAL
+        stream = "".join(json.dumps(event) + "\n" for event in events)
+        result, body, facts, _log, slot = self._run_leg("subkimi", stream)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Conclusion: PASS", body)
+        self.assertIsNone(facts["failure_kind"])
+        emitted = self._emit("subkimi", "moonshot", result, slot / "facts.json",
+                             slot / "report.md", slot / "leg.log")
+        self.assertEqual(_load("review-pr").publishable_model(emitted), facts["model"]["requested"])
+
     def test_external_read_fails_and_cannot_publish_for_both_readers(self):
         for leg, family, key in (("submimo", "xiaomi", "file_path"), ("subkimi", "moonshot", "path")):
             with self.subTest(leg=leg):
@@ -844,6 +859,65 @@ class KimiPreToolGuardTests(unittest.TestCase):
                               input=json.dumps(event), cwd=self.repo,
                               env=self.env if env is None else env,
                               text=True, capture_output=True)
+
+    def empty_grep_stream(self, arguments=None):
+        arguments = {"pattern": "inside", "path": ""} if arguments is None else arguments
+        denied = self.guard("Grep", arguments)
+        self.assertEqual(denied.returncode, 2)
+        reason = json.loads(denied.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        return [
+            {"role": "assistant", "tool_calls": [{"id": "empty", "type": "function",
+                "function": {"name": "Grep", "arguments": json.dumps(arguments)}}]},
+            {"role": "tool", "tool_call_id": "empty", "content": reason},
+            {"role": "assistant", "content": "Conclusion: PASS"},
+        ]
+
+    def audit_events(self, events):
+        stream = self.root / "empty-grep.jsonl"
+        stream.write_text("".join(json.dumps(event) + "\n" for event in events))
+        return subprocess.run([sys.executable, str(ROOT / "bin/_reader_tools.py"),
+                               "audit-kimi", str(stream), str(self.repo)],
+                              capture_output=True, text=True)
+
+    def test_denied_empty_grep_preserves_round(self):
+        result = self.audit_events(self.empty_grep_stream())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Grep", result.stdout)
+
+    def test_empty_grep_requires_unique_matching_denial_without_content(self):
+        for mutation in ("missing", "wrong-id", "extra-content", "duplicate-result",
+                         "duplicate-call", "before-call", "generic-denial", "malformed"):
+            with self.subTest(mutation=mutation):
+                events = self.empty_grep_stream()
+                if mutation == "missing":
+                    events.pop(1)
+                elif mutation == "wrong-id":
+                    events[1]["tool_call_id"] = "other"
+                elif mutation == "extra-content":
+                    events[1]["content"] += "\noutside contents"
+                elif mutation == "duplicate-result":
+                    events.insert(2, dict(events[1]))
+                elif mutation == "duplicate-call":
+                    events.insert(2, events[0])
+                elif mutation == "before-call":
+                    events[0], events[1] = events[1], events[0]
+                elif mutation == "generic-denial":
+                    events[1]["content"] = "permission denied"
+                else:
+                    events.append("not an event")
+                self.assertNotEqual(self.audit_events(events).returncode, 0)
+
+    def test_empty_grep_does_not_excuse_other_violations(self):
+        for tool, arguments in (("Grep", {"pattern": "x", "path": "../outside.txt"}),
+                                ("Grep", {"pattern": "x", "path": "", "renamed_path": "../outside.txt"}),
+                                ("Grep", {"pattern": "x", "path": "", "-n": "true"}),
+                                ("Glob", {"pattern": "*", "path": ""}),
+                                ("Read", {"path": ""}), ("ReadMediaFile", {"path": ""})):
+            with self.subTest(tool=tool, arguments=arguments):
+                events = self.empty_grep_stream()
+                events.insert(2, {"role": "assistant", "tool_calls": [{"id": "bad",
+                    "function": {"name": tool, "arguments": json.dumps(arguments)}}]})
+                self.assertNotEqual(self.audit_events(events).returncode, 0)
 
     def test_readers_deny_outside_paths_before_execution(self):
         for tool in ("Read", "ReadMediaFile", "Glob", "Grep"):

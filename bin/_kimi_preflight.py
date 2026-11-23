@@ -17,7 +17,7 @@ import tomllib
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _reader_tools import KIMI_TOOL_INPUTS, KIMI_TOOL_SCHEMAS, semantic_schema
+from _reader_tools import KIMI_TOOL_INPUTS, KIMI_TOOL_SCHEMAS, KIMI_EMPTY_GREP_DENIAL, semantic_schema
 
 PROBE_MODEL = "aiwork-local-probe"
 
@@ -90,6 +90,9 @@ def _preflight(cli, home, profile, *, timeout):
                     arguments.update(pattern="AIWORK_KIMI_PROBE", output_mode="content")
                 calls.append({"index": len(calls), "id": name + "-" + scope, "type": "function",
                               "function": {"name": name, "arguments": json.dumps(arguments)}})
+        calls.append({"index": len(calls), "id": "Grep-empty", "type": "function",
+                      "function": {"name": "Grep", "arguments": json.dumps({
+                          "pattern": "AIWORK_KIMI_PROBE", "path": "", "output_mode": "content"})}})
         outcome = {"schema": False, "tools": False, "error": None}
 
         class Handler(BaseHTTPRequestHandler):
@@ -109,6 +112,10 @@ def _preflight(cli, home, profile, *, timeout):
                     if results:
                         if set(results) != {call["id"] for call in calls}:
                             raise ValueError("native reader probe results are incomplete")
+                        empty = next(message for message in body["messages"]
+                                     if message.get("tool_call_id") == "Grep-empty")
+                        if empty.get("content", "").strip() != KIMI_EMPTY_GREP_DENIAL:
+                            raise ValueError("empty Grep was not denied without content")
                         for name in KIMI_TOOL_INPUTS:
                             if tag not in results[name + "-outside"] or tag in results[name + "-inside"]:
                                 raise ValueError("native hook did not prove both boundaries: " + name)
