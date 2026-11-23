@@ -1,6 +1,9 @@
 #!/bin/sh
 """exec" "$(/usr/bin/dirname "$(/bin/realpath "$0")")/_python" "$0" "$@"
 Review routing adapter. Event text never becomes executable arguments."""
+from contextlib import contextmanager
+import hashlib
+import signal
 import base64
 import urllib.parse
 import fcntl
@@ -29,7 +32,7 @@ def retry(operation):
 
 
 def retryable(record):
-    # Called only after acquiring the lock held for the whole dispatch.
+    # Called only while holding this PR/head lock.
     return (record.get('state') == 'started' or
             (record.get('state') == 'finished' and type(record.get('entry_exit')) is int
              and record['entry_exit'] != 0))
@@ -66,12 +69,12 @@ def requested_pr(context, repository, source):
 
 
 def main_policy(api, token, repository):
-    metadata = retry(lambda: api['github'](token, f'repos/{repository}'))
+    metadata = api['github'](token, f'repos/{repository}')
     branch = metadata.get('default_branch')
     if not isinstance(branch, str) or not branch:
         raise ValueError('target default branch is missing')
     ref = urllib.parse.quote(branch, safe='')
-    response = retry(lambda: api['github'](token, f'repos/{repository}/contents/.aiwork/policy.json?ref={ref}'))
+    response = api['github'](token, f'repos/{repository}/contents/.aiwork/policy.json?ref={ref}')
     blob = response.get('sha')
     if not isinstance(blob, str) or not re.fullmatch(r'[0-9a-f]{40}', blob):
         raise ValueError('target policy blob is missing')
@@ -132,78 +135,192 @@ def command_for(base, number, verified_head, dispatch_family):
     return [base[0], str(number), *base[1:-1], dispatch_family, '--expected-head', verified_head]
 
 
-def claim(path, facts):
-    try:
-        with path.open('x') as stream:
-            json.dump(facts, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        return True
-    except FileExistsError:
-        return False
+# Missing settings preserve the existing machine's behaviour. No upper bound is
+# encoded here: capacity and the dispatch deadline are machine settings.
+LOCAL_DEFAULTS = {'concurrency': 1, 'timeout_seconds': 21600}
 
 
 def load_settings(path):
     settings = json.loads(Path(path).read_text())
-    if not isinstance(settings, dict) or set(settings) != {'checkout', 'programs', 'repository', 'event_source'}:
+    required = {'checkout', 'programs', 'repository', 'event_source'}
+    if (not isinstance(settings, dict) or not required <= set(settings)
+            or set(settings) - required - set(LOCAL_DEFAULTS)):
         raise ValueError('invalid local settings fields')
-    if any(not isinstance(value, str) or not value for value in settings.values()):
+    if any(not isinstance(settings[key], str) or not settings[key] for key in required):
         raise ValueError('invalid local settings values')
     if not all(Path(settings[key]).is_absolute() for key in ('checkout', 'programs')):
         raise ValueError('local paths must be absolute')
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', settings['repository']):
         raise ValueError('invalid repository')
+    for key, default in LOCAL_DEFAULTS.items():
+        value = settings.setdefault(key, default)
+        if type(value) is not int or value < 1:
+            raise ValueError('local setting ' + key + ' must be a positive integer')
     return settings
 
 
-def main():
-    os.umask(0o077)
-    context = json.loads(Path(sys.argv[1]).read_text())
-    settings = load_settings(sys.argv[2])
-    repo = Path(settings['checkout']).resolve()
-    repository = settings['repository']
-    source = settings['event_source']
-    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) or not source:
-        raise ValueError('invalid local settings')
-    base = [str(repo / 'bin/review-pr'), '--repo', repository, '--auto', '--builder-family', 'unused']
-    repository = base[2]
-    number, requests = requested_pr(context, repository, source)
-    repo = Path(base[0]).resolve().parent.parent
-    env = dict(os.environ, PATH=str(Path(settings['programs']).resolve()) + ':' + str(repo / 'bin') + ':/usr/local/bin:/usr/bin:/bin')
-    clean = subprocess.run(['git', '-C', str(repo), 'status', '--porcelain'], capture_output=True, text=True, check=True)
-    if clean.stdout.strip():
-        raise ValueError('review checkout is not clean')
-    retry(lambda: subprocess.run(['git', '-C', str(repo), 'fetch', 'origin', 'main'], env=env, check=True, capture_output=True))
-    subprocess.run(['git', '-C', str(repo), 'checkout', '--detach', 'origin/main'], env=env, check=True, capture_output=True)
+@contextmanager
+def locked(path):
+    with path.open('a') as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        yield stream
+
+
+@contextmanager
+def capacity(root, settings_path):
+    # The directory inode is the short admission mutex. Slot files are never
+    # unlinked: replacing an inode could admit two holders of the same slot.
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    mutex = os.open(root, os.O_RDONLY)
+    selected = None
+    try:
+        while selected is None:
+            fcntl.flock(mutex, fcntl.LOCK_EX)
+            try:
+                limit = load_settings(settings_path)['concurrency']
+                active = 0
+                free = []
+                for path in root.glob('slot-*'):
+                    stream = path.open('a')
+                    try:
+                        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        active += 1
+                        stream.close()
+                    else:
+                        free.append(stream)
+                if active < limit:
+                    selected = free.pop() if free else (root / ('slot-' + str(len(list(root.glob('slot-*')))))).open('a')
+                    fcntl.flock(selected, fcntl.LOCK_EX)
+                for stream in free:
+                    stream.close()
+            finally:
+                fcntl.flock(mutex, fcntl.LOCK_UN)
+            if selected is None:
+                time.sleep(0.2)
+        yield selected
+    finally:
+        if selected is not None:
+            selected.close()
+        os.close(mutex)
+
+
+def write_record(path, facts):
+    # Even a killed writer leaves either the previous complete record or the
+    # new complete record, never a partially written final path.
+    fd, name = tempfile.mkstemp(prefix='record-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(facts, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def read_record(path):
+    try:
+        record = json.loads(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get('state') not in ('started', 'finished'):
+        return None
+    if record['state'] == 'finished' and type(record.get('entry_exit')) is not int:
+        return None
+    return record
+
+
+def preserve_legacy(record, directory, number, head):
+    # The old adapter had one configured repository and no repository field in
+    # its record. During the upgrade retain its same-number/head success; do
+    # not reinterpret its absence as permission to dispatch again.
+    from _aiwork_config import data_path
+    legacy = data_path('tasks') / 'review-auto-handoffs'
+    if record.exists() or not legacy.is_dir():
+        return
+    with locked(legacy / '.lock'):
+        old = legacy / (str(number) + '-' + head + '.json')
+        facts = read_record(old)
+        if facts and not retryable(facts):
+            write_record(record, facts)
+        elif old.exists():
+            (directory / 'legacy-previous.json').write_bytes(old.read_bytes())
+
+
+def prepare_checkout(source, directory, env):
+    checkout = directory / 'checkout'
+    origin = subprocess.check_output(['git', '-C', str(source), 'remote', 'get-url', 'origin'], text=True).strip()
+    subprocess.run(['git', 'clone', '--no-hardlinks', '--no-checkout', str(source), str(checkout)], env=env, check=True, capture_output=True, timeout=120)
+    subprocess.run(['git', '-C', str(checkout), 'remote', 'set-url', 'origin', origin], env=env, check=True, capture_output=True, timeout=30)
+    retry(lambda: subprocess.run(['git', '-C', str(checkout), 'fetch', 'origin', 'main'], env=env, check=True, capture_output=True, timeout=120))
+    retry(lambda: subprocess.run(['git', '-C', str(checkout), 'checkout', '--detach', 'origin/main'], env=env, check=True, capture_output=True, timeout=30))
+    return checkout
+
+
+def run_dispatch(command, env, timeout, locks):
+    # PID-namespace init owns all descendants, including CLI sessions which
+    # create new process groups. Killing it also reaps those descendants. The
+    # inherited admission/head locks survive a killed handoff parent.
+    argv = ['/usr/bin/unshare', '--mount', '--pid', '--fork', '--kill-child',
+            '--mount-proc', '--', *command]
+    with subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, start_new_session=True,
+                          pass_fds=tuple(stream.fileno() for stream in locks)) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+            return subprocess.CompletedProcess(command, 124, stdout, stderr + '\nDispatch deadline exceeded')
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def dispatch_attempt(settings, requests, number, directory, control):
+    source = Path(settings['checkout']).resolve()
+    env = dict(os.environ, PATH=str(Path(settings['programs']).resolve()) + ':' + str(source / 'bin') + ':/usr/local/bin:/usr/bin:/bin')
+    repo = prepare_checkout(source, directory, env)
+    base = [str(repo / 'bin/review-pr'), '--repo', settings['repository'], '--auto', '--builder-family', 'unused']
+    env['PATH'] = str(Path(settings['programs']).resolve()) + ':' + str(repo / 'bin') + ':/usr/local/bin:/usr/bin:/bin'
+    # This attempt is a separate process, so its imports and environment are private.
     os.environ.update(env)
+    sys.path.insert(0, str(repo / 'bin'))
+    # The bootstrap config reader came from the deployment checkout. Load the
+    # formal entry's modules from its pinned, independent checkout instead.
+    sys.modules.pop('_aiwork_config', None)
     api = runpy.run_path(base[0], run_name='review_handoff_preflight')
-    token = retry(lambda: api['review_token'](repository))
-    pr = retry(lambda: api['pr_state'](token, number, repository=repository))
+    repository = settings['repository']
+    # review-pr owns its network-read retry policy; do not wrap those readers
+    # in the handoff's Git/metadata retry helper.
+    token = api['review_token'](repository)
+    pr = api['pr_state'](token, number, repository=repository)
     policy, blob = main_policy(api, token, repository)
     head, author, family, dispatch_family = builder_for(pr, requests, policy)
-    state = retry(lambda: api['read_dispatch_state'](repository, number, dispatch_family))
+    state = api['read_dispatch_state'](repository, number, dispatch_family)
     verify_dispatch_state(state, head, blob, family, policy)
-    root = api['data_path']('tasks') / 'review-auto-handoffs'
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    key = str(number) + '-' + head
-    record = root / (key + '.json')
-    with (root / '.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if record.exists() and not retryable(json.loads(record.read_text())):
+    record = control / (head + '.json')
+    with locked(control / (head + '.lock')):
+        preserve_legacy(record, directory, number, head)
+        previous = read_record(record)
+        if previous and not retryable(previous):
             print('没事可做：同一 PR 同一 head 已交接，不重复派腿。')
             return
-        directory = Path(tempfile.mkdtemp(prefix=key + '-', dir=root))
+        if record.exists():
+            # Keep corrupt/interrupted evidence as well as complete failures.
+            (directory / 'previous.json').write_bytes(record.read_bytes())
         facts = {'pr': number, 'head': head, 'builder_family': family,
                  'author': author, 'ci_g1': True, 'policy_sha': blob,
                  'aiwork_main': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
                  'started_at': datetime.now(timezone.utc).isoformat(), 'state': 'started'}
-        if record.exists():
-            os.replace(record, directory / 'previous.json')
-        if not claim(record, facts):
-            print('没事可做：同一 PR 同一 head 已交接，不重复派腿。')
-            return
+        write_record(record, facts)
         print('Verified formal review started: ' + json.dumps(facts), flush=True, file=sys.stderr)
-        result = subprocess.run(command_for(base, number, head, dispatch_family), env=env, capture_output=True, text=True)
+        result = subprocess.run(command_for(base, number, head, dispatch_family), env=env,
+                                capture_output=True, text=True)
         redact = api['redact']
         (directory / 'stdout.log').write_text(redact(result.stdout))
         (directory / 'stderr.log').write_text(redact(result.stderr))
@@ -217,12 +334,55 @@ def main():
             facts['report'] = report
         else:
             facts['error'] = redact(result.stderr[-3000:])
-        tmp = record.with_suffix('.tmp')
-        tmp.write_text(json.dumps(facts, ensure_ascii=False, indent=2))
-        os.replace(tmp, record)
+        write_record(record, facts)
+        write_record(directory / 'result.json', facts)
         print('正式评审本轮已结束；等待汇总。' if report else '正式评审未完成；失败记录已保存，等待处理。')
         print(json.dumps(facts, ensure_ascii=False, indent=2))
-        # Do not retry the entire model run automatically after a partial failure.
+
+
+def main():
+    os.umask(0o077)
+    internal = sys.argv[1] == '--attempt'
+    args = sys.argv[2:] if internal else sys.argv[1:]
+    context = json.loads(Path(args[0]).read_text())
+    settings = load_settings(args[1])
+    repository = settings['repository']
+    number, requests = requested_pr(context, repository, settings['event_source'])
+    # Coordination survives output retention. Each attempt is one independently
+    # aged tasks unit; no retained output directory contains the live lock.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _aiwork_config import data_path
+    root = data_path('review-handoffs')
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key = hashlib.sha256(repository.encode()).hexdigest() + '-' + str(number)
+    control = root / key
+    control.mkdir(mode=0o700, exist_ok=True)
+    if internal:
+        def deadline(signum, frame):
+            raise TimeoutError('handoff deadline exceeded')
+        signal.signal(signal.SIGALRM, deadline)
+        signal.alarm(settings['timeout_seconds'])
+        dispatch_attempt(settings, requests, number, Path(args[2]), control)
+        return
+    # Serialize requests for one PR before admission, so duplicates cannot
+    # consume every capacity slot while waiting for the active head.
+    with locked(control / 'request.lock') as request_lock:
+        with capacity(root, args[1]) as slot:
+            tasks = data_path('tasks')
+            tasks.mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory = Path(tempfile.mkdtemp(prefix='review-handoff-' + str(number) + '-', dir=tasks))
+            command = [sys.executable, str(Path(__file__).resolve()), '--attempt',
+                       str(Path(args[0]).resolve()), str(Path(args[1]).resolve()), str(directory)]
+            result = run_dispatch(command, dict(os.environ), settings['timeout_seconds'],
+                                  [request_lock, slot])
+            # The child only emits public facts and sanitized failures. Raw
+            # subprocess stderr is never copied into the public receipt.
+            (directory / 'worker.stdout').write_text(result.stdout)
+            (directory / 'worker.stderr').write_text(result.stderr)
+            print(result.stdout, end='')
+            if result.returncode:
+                print('评审交接未完成；本次已终止，记录保留，等待处理。')
+                raise ValueError('handoff attempt failed or exceeded its deadline')
 
 
 if __name__ == '__main__':

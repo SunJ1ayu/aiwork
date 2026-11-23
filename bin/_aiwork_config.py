@@ -89,6 +89,12 @@ def data_path(name: str = '') -> Path:
 # 每次运行的产物各占登记项下第一层的一个单位，只由创建它的那次运行写入；不共用多次运行的容器。
 DATA_ENTRIES = (
     {
+        'name': 'review-handoffs',
+        'purpose': '评审交接的容量锁、按仓库和 PR 分开的去重及恢复记录，不按天数删除。',
+        'kind': '运行目录',
+        'keep_days': None,
+    },
+    {
         'name': 'review-account',
         'purpose': '普通评审账号的私有运行区和不重复使用的运行组计数器。',
         'kind': '运行目录',

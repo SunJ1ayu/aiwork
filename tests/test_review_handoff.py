@@ -51,45 +51,182 @@ class Handoff(unittest.TestCase):
     def test_main_failed_head_can_retry_then_success_deduplicates(self):
         self.main_sequence(interrupted=False)
 
-    def main_sequence(self, interrupted):
-        import tempfile,json,sys,subprocess,os,io
+    def test_corrupt_record_recovers_full_dispatch(self):
+        self.main_sequence(interrupted=False, corrupt=True)
+
+    def main_sequence(self, interrupted, corrupt=False):
+        import tempfile,json,subprocess,os,io
         from contextlib import redirect_stdout,redirect_stderr
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            settings=root/'settings.json'
-            settings.write_text(json.dumps({'checkout':str(root),'programs':str(root),'repository':'example/repo','event_source':'trusted'}))
-            context=root/'context.json'
-            context.write_text(json.dumps({'events':[{'source':'trusted','type':'reviews.request','subject':'example/repo#1','detail':json.dumps({'repository':'example/repo','pr':1,'head':'a'*40,'builder_family':'openai'})}]}))
+            control=root/'control'
+            control.mkdir()
+            if corrupt:(control/('a'*40+'.json')).write_text('{')
+            settings={'checkout':str(root),'programs':str(root),'repository':'example/repo','event_source':'trusted'}
             policy={'builders':{'builder':'openai'}}
             pr={'head':{'sha':'a'*40},'user':{'login':'builder'}}
             state={'head':'a'*40,'policy_sha':'blob','excluded':['openai'],'gate':{'summary':'✅ G1 current CI'}}
-            from unittest.mock import Mock
-            read_pr=Mock(side_effect=[OSError('network'),pr,pr,pr])
-            api={'review_token':lambda repo:'token','pr_state':read_pr,'read_dispatch_state':lambda *args:state,'data_path':lambda name:root/'data','redact':lambda value:value}
+            api={'review_token':lambda repo:'token','pr_state':lambda *args,**kw:pr,'read_dispatch_state':lambda *args:state,'redact':lambda value:value}
             models=[]
             def command(argv,**kwargs):
-                if argv[0].endswith('review-pr'):
-                    models.append(argv)
-                    if interrupted and len(models)==1:
-                        raise OSError('dispatch start failed')
-                    return subprocess.CompletedProcess(argv,2 if len(models)==1 else 0,'{}','')
-                return subprocess.CompletedProcess(argv,0,'','')
-            previous_umask=os.umask(0o077)
-            try:
-                with patch.object(sys,'argv',['worker',str(context),str(settings)]), patch.dict(os.environ), patch.object(worker.time,'sleep'), patch.object(worker.runpy,'run_path',return_value=api), patch.object(worker,'main_policy',return_value=(policy,'blob')), patch.object(worker.subprocess,'run',side_effect=command), patch.object(worker.subprocess,'check_output',return_value='commit'), redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
-                    if interrupted:
-                        with self.assertRaises(OSError):worker.main()
-                    else:
-                        worker.main()
-                    worker.main()
-                    worker.main()
-            finally:os.umask(previous_umask)
+                models.append(argv)
+                if interrupted and len(models)==1:
+                    raise OSError('dispatch start failed')
+                return subprocess.CompletedProcess(argv,2 if len(models)==1 else 0,'{}','')
+            def attempt():
+                unit=root/('attempt-'+str(len(list(root.glob('attempt-*')))))
+                unit.mkdir()
+                worker.dispatch_attempt(settings,{'a'*40:{'openai'}},1,unit,control)
+            with patch.dict(os.environ), patch.object(worker,'prepare_checkout',return_value=root), patch.object(worker.runpy,'run_path',return_value=api), patch.object(worker,'main_policy',return_value=(policy,'blob')), patch.object(worker.subprocess,'run',side_effect=command), patch.object(worker.subprocess,'check_output',return_value='commit'), redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
+                if interrupted:
+                    with self.assertRaises(OSError):attempt()
+                else:
+                    attempt()
+                attempt()
+                attempt()
             self.assertEqual(len(models),2)
-            self.assertEqual(read_pr.call_count,4)
-            records=list((root/'data/review-auto-handoffs').glob('*.json'))
+            records=list(control.glob('*.json'))
             self.assertEqual(len(records),1)
             self.assertEqual(json.loads(records[0].read_text())['entry_exit'],0)
-            self.assertEqual(len(list((root/'data').rglob('previous.json'))),1)
+            self.assertEqual(len(list(root.rglob('previous.json'))),2 if corrupt else 1)
+
+    def test_capacity_settings_and_invalid_values(self):
+        import tempfile,json
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'settings'
+            settings={'checkout':directory,'programs':directory,'repository':'example/repo','event_source':'trusted'}
+            path.write_text(json.dumps(settings))
+            self.assertEqual(worker.load_settings(path)['concurrency'],1)
+            for value in (1,2,3,17):
+                path.write_text(json.dumps(dict(settings,concurrency=value)))
+                self.assertEqual(worker.load_settings(path)['concurrency'],value)
+            for value in (0,-1,True,'2',2.5,None):
+                path.write_text(json.dumps(dict(settings,concurrency=value)))
+                with self.assertRaises(ValueError):worker.load_settings(path)
+            path.write_text('{')
+            with self.assertRaises(ValueError):worker.load_settings(path)
+            path.unlink()
+            with self.assertRaises(OSError):worker.load_settings(path)
+
+    def test_real_process_capacity_and_queue(self):
+        import tempfile,json,multiprocessing,time
+        ctx=multiprocessing.get_context('fork')
+        for limit in (1,2,3):
+            with self.subTest(limit=limit), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                settings=root/'settings'
+                settings.write_text(json.dumps({'checkout':directory,'programs':directory,'repository':'example/repo','event_source':'trusted','concurrency':limit}))
+                active=ctx.Value('i',0)
+                peak=ctx.Value('i',0)
+                gate=ctx.Event()
+                admitted=ctx.Queue()
+                def job():
+                    with worker.capacity(root/'locks',settings):
+                        with active.get_lock():
+                            active.value+=1
+                            peak.value=max(peak.value,active.value)
+                        admitted.put(True)
+                        gate.wait(10)
+                        with active.get_lock():active.value-=1
+                processes=[ctx.Process(target=job) for _ in range(limit+2)]
+                try:
+                    for process in processes:process.start()
+                    for _ in range(limit):admitted.get(timeout=10)
+                    import queue
+                    with self.assertRaises(queue.Empty):admitted.get(timeout=0.4)
+                    self.assertEqual(peak.value,limit)
+                    gate.set()
+                    for process in processes:
+                        process.join(10)
+                        self.assertEqual(process.exitcode,0)
+                    self.assertLessEqual(peak.value,limit)
+                finally:
+                    gate.set()
+                    for process in processes:
+                        if process.is_alive():process.kill()
+                        process.join()
+
+    def test_atomic_record_and_corruption_recovery(self):
+        import tempfile,json
+        with tempfile.TemporaryDirectory() as directory:
+            record=Path(directory)/'record.json'
+            for value in ('', '{', '[]', '{}', '{"state":"finished"}'):
+                record.write_text(value)
+                self.assertIsNone(worker.read_record(record))
+            old={'state':'started'}
+            worker.write_record(record,old)
+            with patch.object(worker.json,'dump',side_effect=OSError('disk full')):
+                with self.assertRaises(OSError):worker.write_record(record,{'state':'finished','entry_exit':0})
+            self.assertEqual(worker.read_record(record),old)
+            self.assertEqual(list(Path(directory).glob('record-*')),[])
+            worker.write_record(record,{'state':'finished','entry_exit':0})
+            self.assertFalse(worker.retryable(worker.read_record(record)))
+
+    def test_independent_real_git_checkouts(self):
+        import tempfile,subprocess,os
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            upstream=root/'upstream'
+            subprocess.run(['git','init','-q','-b','main',str(upstream)],check=True)
+            subprocess.run(['git','-C',str(upstream),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','initial'],check=True)
+            source=root/'source'
+            subprocess.run(['git','clone','-q',str(upstream),str(source)],check=True)
+            first=root/'first';first.mkdir()
+            second=root/'second';second.mkdir()
+            one=worker.prepare_checkout(source,first,dict(os.environ))
+            subprocess.run(['git','-C',str(upstream),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','next'],check=True)
+            two=worker.prepare_checkout(source,second,dict(os.environ))
+            def head(path):return subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],text=True)
+            self.assertNotEqual(head(one),head(two))
+            self.assertEqual(head(source),head(one))
+            self.assertNotEqual((one/'.git').stat().st_ino,(two/'.git').stat().st_ino)
+            (one/'private-attempt').write_text('one')
+            self.assertFalse((two/'private-attempt').exists())
+
+    def test_duplicate_concurrent_attempt_dispatches_once(self):
+        import tempfile,multiprocessing,json,subprocess,os,io,time
+        from contextlib import redirect_stdout,redirect_stderr
+        ctx=multiprocessing.get_context('fork')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);control=root/'control';control.mkdir()
+            count=ctx.Value('i',0)
+            def job(index):
+                unit=root/str(index);unit.mkdir()
+                settings={'checkout':directory,'programs':directory,'repository':'example/repo'}
+                api={'review_token':lambda r:'token','pr_state':lambda *a,**k:{'head':{'sha':'a'*40},'user':{'login':'builder'}},'read_dispatch_state':lambda *a:{'head':'a'*40,'policy_sha':'blob','excluded':['openai'],'gate':{'summary':'✅ G1 CI'}},'redact':lambda s:s}
+                def run(argv,**kw):
+                    with count.get_lock():count.value+=1
+                    time.sleep(0.3)
+                    return subprocess.CompletedProcess(argv,0,'{}','')
+                with patch.dict(os.environ),patch.object(worker,'prepare_checkout',return_value=root),patch.object(worker.runpy,'run_path',return_value=api),patch.object(worker,'main_policy',return_value=({'builders':{'builder':'openai'}},'blob')),patch.object(worker.subprocess,'run',side_effect=run),patch.object(worker.subprocess,'check_output',return_value='commit'),redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
+                    worker.dispatch_attempt(settings,{'a'*40:{'openai'}},1,unit,control)
+            processes=[ctx.Process(target=job,args=(i,)) for i in range(2)]
+            try:
+                for process in processes:process.start()
+                for process in processes:
+                    process.join(10);self.assertEqual(process.exitcode,0)
+                self.assertEqual(count.value,1)
+            finally:
+                for process in processes:
+                    if process.is_alive():process.kill()
+                    process.join()
+
+    def test_deadline_kills_descendants_with_separate_sessions(self):
+        import tempfile,subprocess,sys,os,time
+        probe=subprocess.run(['/usr/bin/unshare','--mount','--pid','--fork','--mount-proc','--','true'],capture_output=True)
+        if probe.returncode:
+            if os.environ.get('CI'):self.fail('CI must support the production PID namespace')
+            self.skipTest('local environment does not permit PID/mount namespaces')
+        with tempfile.TemporaryDirectory() as directory:
+            heartbeat=Path(directory)/'heartbeat'
+            child="import time;from pathlib import Path;p=Path("+repr(str(heartbeat))+");\nwhile True:p.write_text(str(time.monotonic()));time.sleep(0.02)"
+            command=[sys.executable,'-c',"import subprocess,time,sys;subprocess.Popen([sys.executable,'-c',"+repr(child)+"],start_new_session=True);time.sleep(60)"]
+            result=worker.run_dispatch(command,dict(os.environ),1,[])
+            self.assertEqual(result.returncode,124)
+            self.assertTrue(heartbeat.exists())
+            last=heartbeat.read_text()
+            time.sleep(0.15)
+            self.assertEqual(heartbeat.read_text(),last)
 
     def test_target_policy_differs_from_tool_checkout(self):
         import base64,json,tempfile,subprocess
