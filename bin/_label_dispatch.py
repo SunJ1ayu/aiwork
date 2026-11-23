@@ -24,6 +24,44 @@ LABELS.update({
     for family in BUILDER_APP_ROLES
 })
 TERMINAL = ('done','nothing','cancelled')
+DEFAULT_MAX_ACTIVE = 1
+
+
+def capacity(config):
+    """Local label-source JSON: max_active is a positive integer; omission preserves the old limit.
+
+    Invalid or unreadable settings stop admission; they never fall back to extra capacity.
+    The limit counts the union of durable issue slots and nonterminal hub lanes.
+    Lowering it keeps existing slots and queues new issues until occupancy drops.
+    """
+    value = config.get('max_active', DEFAULT_MAX_ACTIVE)
+    if type(value) is not int or value <= 0:
+        raise ValueError('max_active must be a positive integer')
+    return value
+
+
+def upgraded(original):
+    """Copy old singleton slots/outbox into per-subject maps without losing delivery history."""
+    state = copy.deepcopy(original)
+    version = state.get('version', 1)
+    if version not in (1, 2):
+        raise ValueError('unsupported dispatch state')
+    if version == 1:
+        for field in ('active', 'pending'):
+            entry = state.get(field)
+            state[field] = {entry['subject']: entry} if entry else {}
+        state['version'] = 2
+    for field in ('active', 'pending'):
+        if not isinstance(state[field], dict):
+            raise ValueError('invalid dispatch slots')
+        for name, entry in state[field].items():
+            if entry['subject'] != name:
+                raise ValueError('invalid dispatch subject')
+    for name, entry in state['pending'].items():
+        if state['active'][name]['event_id'] != int(entry['event']['id']):
+            raise ValueError('pending delivery requires its slot')
+    state.pop('cutoffs', None)
+    return state
 
 
 SUBJECT_SEPARATOR = '#'
@@ -113,24 +151,26 @@ def relevant(row):
                    and label_kind((e.get('label') or {}).get('name', ''))),key=lambda e:int(e['id']))
 
 
-def plan(rows, original, busy, stops):
-    state=copy.deepcopy(original)
-    # Old issue-wide boundaries must not suppress another label's latest event.
-    state.pop('cutoffs',None)
+def plan(rows, original, busy, stops, max_active=DEFAULT_MAX_ACTIVE):
+    capacity({'max_active': max_active})
+    state=upgraded(original)
     decisions=[]
     active=state.get('active')
     by_subject={subject(row):row for row in rows}
-    if active:
-        name=active['subject']
-        row=by_subject[name]  # Missing observation must never mean closed or idle.
+    for name, slot in list(active.items()):
+        if name in state['pending']:
+            continue  # An ambiguous delivery cannot be released or overtaken.
+        row=by_subject.get(name)
+        if row is None:
+            continue  # Missing observation must never mean closed or idle.
         trusted=trusted_accounts(row['project'])
         events=relevant(row)
-        origin=[e for e in events if int(e['id'])==int(active['event_id'])]
+        origin=[e for e in events if int(e['id'])==int(slot['event_id'])]
         if len(origin)!=1:raise ValueError('active event missing')
         active_label=origin[0]['label']['name']
         removed=[e for e in events if e['event']=='unlabeled' and
                  e['label']['name']==active_label and actor(e) in trusted and
-                 int(e['id'])>int(active['event_id'])]
+                 int(e['id'])>int(slot['event_id'])]
         release=(Release(Reason.OWNER_STOP,True) if name in stops else
                  Release(Reason.ISSUE_CLOSED) if row['issue']['state']=='closed' else
                  Release(Reason.LABEL_REMOVED) if removed else None)
@@ -138,7 +178,7 @@ def plan(rows, original, busy, stops):
             if name in busy:
                 decisions.append({'subject':name,'reason':Reason.WAITING,'release':release.reason})
             else:
-                state['active']=None
+                del active[name]
                 if release.persist_stop and name not in state['stopped']:state['stopped'].append(name)
                 decisions.append({'subject':name,'reason':release.reason})
     candidates=[]
@@ -168,9 +208,11 @@ def plan(rows, original, busy, stops):
                 if reason:decisions.append({'subject':name,'event_id':int(e['id']),'reason':reason})
                 else:candidates.append({'subject':name,'key':key,'event':e,'project':row['project'],'issue':row['issue']})
     candidates.sort(key=lambda c:(int(c['event']['id']),c['subject']))
-    available=not state.get('active') and not busy
-    # Fixes on the active issue may continue its conversation, but only while no round is live.
-    eligible=[c for c in candidates if not busy and (available or c['subject']==state['active']['subject'])]
+    occupied=set(active) | set(busy)
+    # Continuations reuse their issue's slot, independently of other live lanes.
+    eligible=[c for c in candidates if c['subject'] not in busy
+              and c['subject'] not in state['pending']
+              and (c['subject'] in active or len(occupied) < max_active)]
     chosen=eligible[0] if eligible else None
     for c in candidates:
         decisions.append({'subject':c['subject'],'event_id':int(c['event']['id']),
@@ -200,16 +242,17 @@ def history(path, record):
 
 
 def deliver(folder, state, candidate, post, accepted):
-    state=copy.deepcopy(state)
-    state['pending']=candidate
-    state['active']={'subject':candidate['subject'],'event_id':int(candidate['event']['id'])}
+    state=upgraded(state)
+    name=candidate['subject']
+    state['pending'][name]=candidate
+    state['active'][name]={'subject':name,'event_id':int(candidate['event']['id'])}
     atomic(local_files(folder)['state'],state)
     # The outbox survives an ambiguous POST. Hub event keys make re-delivery idempotent.
     if not accepted(candidate):
         post(candidate)
         if not accepted(candidate):raise RuntimeError('event_not_routed')
     if candidate['key'] not in state['sent']:state['sent'].append(candidate['key'])
-    state.pop('pending')
+    del state['pending'][name]
     atomic(local_files(folder)['state'],state)
     return state
 
@@ -256,8 +299,7 @@ class Backend:
             for issue in self.pages(project, ISSUES_ROUTE + '?state=open'):
                 if any(label_kind(label['name']) for label in issue['labels']):
                     issues[issue['number']] = issue
-            active=state.get('active')
-            if active:
+            for active in upgraded(state)['active'].values():
                 repo,n=split_subject(active['subject'])
                 if repo==project['repo']:issues[n]=self.api(project,issue_path(n))
             for n,issue in sorted(issues.items()):
@@ -301,6 +343,7 @@ class Backend:
 
 
 def validate(config):
+    capacity(config)
     projects=config['projects']
     if not config['source']:raise ValueError('empty source')
     for name in ('hub_db','hub_config'):
@@ -331,24 +374,33 @@ def poll(config,folder,preview=False,backend=None):
         state=json.loads(state_path.read_text()) if state_path.exists() else {'sent':[],'active':None,'stopped':[]}
         stop_path=local_files(folder)['stops']
         stops=set(json.loads(stop_path.read_text())) if stop_path.exists() else set()
-        if state.get('pending'):
+        limit=capacity(config)
+        state=upgraded(state)
+        errors=[]
+        for name, candidate in list(state['pending'].items()):
             record['stage']='reconcile_delivery'
-            record['decisions'].append({'reason':Reason.PENDING,'subject':state['pending']['subject']})
-            if not preview:deliver(folder,state,state['pending'],backend.post,backend.accepted)
-        else:
-            record['stage']='observe'
-            rows=backend.observe(state)
-            record['observed']=[{'subject':subject(r),'event_id':int(e['id']),
-                'action':e['event'],'label':e['label']['name'],
-                'trusted':actor(e) in trusted_accounts(r['project'])} for r in rows for e in relevant(r)]
-            record['stage']='admission'
-            result=plan(rows,state,backend.busy(),stops)
-            record['decisions']=result['decisions']
+            record['decisions'].append({'reason':Reason.PENDING,'subject':name})
             if not preview:
-                atomic(state_path,result['state'])
-                if result['candidate']:
-                    record['stage']='delivery'
-                    deliver(folder,result['state'],result['candidate'],backend.post,backend.accepted)
+                try:
+                    state=deliver(folder,state,candidate,backend.post,backend.accepted)
+                except Exception as error:
+                    errors.append({'subject':name,'error':type(error).__name__})
+        record['stage']='observe'
+        rows=backend.observe(state)
+        record['observed']=[{'subject':subject(r),'event_id':int(e['id']),
+            'action':e['event'],'label':e['label']['name'],
+            'trusted':actor(e) in trusted_accounts(r['project'])} for r in rows for e in relevant(r)]
+        record['stage']='admission'
+        result=plan(rows,state,backend.busy(),stops,limit)
+        record['decisions'].extend(result['decisions'])
+        if not preview:
+            atomic(state_path,result['state'])
+            if result['candidate']:
+                record['stage']='delivery'
+                deliver(folder,result['state'],result['candidate'],backend.post,backend.accepted)
+        if errors:
+            record['errors']=errors
+            return record
         record['ok']=True
     except Exception as error:
         record['error']=type(error).__name__

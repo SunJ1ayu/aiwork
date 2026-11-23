@@ -39,7 +39,7 @@ class Admission(unittest.TestCase):
     def active(self):
         return dict(state(),active={'subject':d.issue_subject(PROJECT['repo'],97),'event_id':10},sent=[d.event_key(PROJECT['repo'],10)])
 
-    def test_trust_dedup_and_one_slot(self):
+    def test_trust_dedup_and_default_capacity(self):
         self.assertIsNone(self.plan([item(1,[event(1,actor='outsider')])])['candidate'])
         self.assertIsNotNone(self.plan([item(1,[event(1,actor='BUILDER')])])['candidate'])
         s=state();s['sent']=[d.event_key(PROJECT['repo'],1)]
@@ -48,7 +48,7 @@ class Admission(unittest.TestCase):
         self.assertEqual(p['candidate']['subject'],d.issue_subject(PROJECT['repo'],1))
         self.assertIsNone(self.plan([item(97,[event(10)]),item(124,[event(12)])],self.active())['candidate'])
 
-    def test_family_labels_keep_the_same_trust_and_serial_slot(self):
+    def test_family_labels_keep_the_same_trust_and_capacity(self):
         task = 'aiwork:task:deepseek'
         fix = 'aiwork:fix:deepseek'
         self.assertIsNone(self.plan([item(1, [event(1, actor='outsider', label=task)], (task,))])['candidate'])
@@ -117,13 +117,13 @@ class Admission(unittest.TestCase):
         p=self.plan([item(97,[event(10),event(11,'unlabeled')],labels=()),item(124,[event(12)])],
                     self.active(),busy=[d.issue_subject(PROJECT['repo'],97)])
         self.assertIsNone(p['candidate'])
-        self.assertIsNotNone(p['state']['active'])
+        self.assertTrue(p['state']['active'])
         self.assertIsNone(self.plan([item(124,[event(12)])],busy=['another/repo#1'])['candidate'])
 
     def test_cycles_and_unrelated_label_removal(self):
         p=self.plan([item(97,[event(10),event(11,'unlabeled',label=FIX)])],self.active())
         self.assertIsNone(p['candidate'])
-        self.assertIsNotNone(p['state']['active'])
+        self.assertTrue(p['state']['active'])
         p=self.plan([item(97,[event(10),event(11,'unlabeled'),event(12)])],self.active())
         self.assertEqual(p['candidate']['event']['id'],12)
 
@@ -133,7 +133,7 @@ class Admission(unittest.TestCase):
         # A live round must finish before the queued fix can be delivered.
         busy=self.plan(rows,self.active(),busy=[d.issue_subject(PROJECT['repo'],97)])
         self.assertIsNone(busy['candidate'])
-        self.assertEqual(busy['state']['active'],self.active()['active'])
+        self.assertEqual(busy['state']['active'],d.upgraded(self.active())['active'])
         p=self.plan(rows,busy['state'])
         self.assertIsNotNone(p['candidate'])
         self.assertEqual(p['candidate']['event']['id'],fix_id)
@@ -164,7 +164,7 @@ class Admission(unittest.TestCase):
             self.assertEqual(bool(self.plan(rows)['candidate']),expected)
             rows[0]['events'].append(event(11,'unlabeled',actor=login))
             rows[0]['issue']['labels']=[]
-            self.assertEqual(self.plan(rows,self.active())['state']['active'] is None,expected)
+            self.assertEqual(self.plan(rows,self.active())['state']['active'] == {},expected)
             class Fake:
                 def observe(self,s):return rows
                 def busy(self):return set()
@@ -177,6 +177,135 @@ class Admission(unittest.TestCase):
         p=self.plan([item(1,[event(1)],repo='a/repo'),item(2,[event(2)],repo='b/repo')])
         self.assertEqual(p['candidate']['subject'],'a/repo#1')
 
+class Capacity(unittest.TestCase):
+    def test_configured_capacity_and_dedup(self):
+        rows = [item(n, [event(n)]) for n in range(1, 5)]
+        for limit in (1, 2, 3):
+            with self.subTest(limit=limit), tempfile.TemporaryDirectory() as td:
+                saved = state()
+                for index in range(limit):
+                    result = d.plan(rows, saved, set(), set(), limit)
+                    self.assertEqual(result['candidate']['subject'], d.subject(rows[index]))
+                    saved = d.deliver(Path(td), result['state'], result['candidate'],
+                                      lambda c: None, lambda c: True)
+                self.assertIsNone(d.plan(rows, saved, set(), set(), limit)['candidate'])
+                self.assertEqual(len(saved['active']), limit)
+
+    def test_unknown_stop_and_continuation_are_per_issue(self):
+        rows = [item(1, [event(1), event(5, 'unlabeled')], labels=()),
+                item(2, [event(2), event(6, label=FIX)], labels=(TASK, FIX)),
+                item(3, [event(3)])]
+        with tempfile.TemporaryDirectory() as td:
+            saved = state()
+            for row in rows[:2]:
+                result = d.plan([item(row['issue']['number'], [row['events'][0]])], saved, set(), set(), 2)
+                saved = d.deliver(Path(td), result['state'], result['candidate'],
+                                  lambda c: None, lambda c: True)
+            result = d.plan(rows, saved, {d.subject(rows[0])}, {d.subject(rows[0])}, 2)
+            self.assertEqual(result['candidate']['event']['id'], 6)
+            continued = d.deliver(Path(td), result['state'], result['candidate'],
+                                  lambda c: None, lambda c: True)
+            self.assertEqual(len(continued['active']), 2)
+            self.assertIn(d.subject(rows[0]), continued['active'])
+            self.assertIsNone(d.plan(rows, continued, {d.subject(rows[0])}, set(), 2)['candidate'])
+            released = d.plan(rows, continued, set(), {d.subject(rows[0])}, 2)
+            self.assertEqual(released['candidate']['subject'], d.subject(rows[2]))
+            self.assertIn(d.subject(rows[0]), released['state']['stopped'])
+
+    def test_legacy_slot_and_pending_upgrade_without_duplicate(self):
+        legacy = Admission().active()
+        rows = [item(97, [event(10)]), item(124, [event(12)])]
+        result = d.plan(rows, legacy, set(), set(), 2)
+        self.assertEqual(result['candidate']['event']['id'], 12)
+        self.assertEqual(result['state']['active'][d.subject(rows[0])]['event_id'], 10)
+        self.assertEqual(result['state']['sent'], legacy['sent'])
+        self.assertEqual(legacy['active']['event_id'], 10)
+
+    def test_pending_failure_keeps_its_slot_but_other_work_proceeds(self):
+        rows = [item(n, [event(n)]) for n in (1, 2, 3)]
+        class Fake:
+            posted = []
+            def observe(self, s): return rows
+            def busy(self): return set()
+            def accepted(self, c): return c['subject'] == d.subject(rows[1])
+            def post(self, c):
+                self.posted.append(c['subject'])
+                raise TimeoutError('private diagnostic')
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            candidate = d.plan(rows, state(), set(), set())['candidate']
+            with self.assertRaises(TimeoutError):
+                d.deliver(folder, state(), candidate, Fake().post, lambda c: False)
+            backend = Fake()
+            first = d.poll({'max_active': 2}, folder, backend=backend)
+            self.assertFalse(first['ok'])
+            saved = json.loads((folder/d.FILES['state']).read_text())
+            self.assertIn(d.subject(rows[0]), saved['pending'])
+            self.assertIn(d.event_key(PROJECT['repo'], 2), saved['sent'])
+            self.assertEqual(len(saved['active']), 2)
+            d.poll({'max_active': 2}, folder, backend=backend)
+            saved = json.loads((folder/d.FILES['state']).read_text())
+            self.assertNotIn(d.event_key(PROJECT['repo'], 3), saved['sent'])
+
+    def test_busy_union_lowering_and_independent_release(self):
+        rows = [item(n, [event(n)]) for n in (1, 2, 3)]
+        with tempfile.TemporaryDirectory() as td:
+            saved = state()
+            for row in rows[:2]:
+                result = d.plan([row], saved, set(), set(), 3)
+                saved = d.deliver(Path(td), result['state'], result['candidate'],
+                                  lambda c: None, lambda c: True)
+            # An active lane also in the hub counts once; an unrelated hub lane counts too.
+            self.assertIsNotNone(d.plan(rows, saved, {d.subject(rows[0])}, set(), 3)['candidate'])
+            self.assertIsNone(d.plan(rows, saved, {'other/repo#1'}, set(), 3)['candidate'])
+            self.assertIsNone(d.plan(rows, saved, set(), set(), 1)['candidate'])
+            self.assertEqual(len(saved['active']), 2)
+            rows[1]['issue']['state'] = 'closed'
+            released = d.plan(rows, saved, {d.subject(rows[0])}, set(), 2)
+            self.assertEqual(released['candidate']['subject'], d.subject(rows[2]))
+            self.assertEqual(set(released['state']['active']), {d.subject(rows[0])})
+
+    def test_old_pending_is_preserved_on_preview_and_reconciled_once(self):
+        c = self_candidate()
+        old = dict(state(), active={'subject': c['subject'], 'event_id': 1}, pending=c)
+        class Fake:
+            def observe(self, s): return [item(1, [event(1)])]
+            def busy(self): return set()
+            def accepted(self, c): return True
+            def post(self, c): raise AssertionError('already routed')
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            path = folder/d.FILES['state']
+            d.atomic(path, old)
+            before = path.read_bytes()
+            self.assertTrue(d.poll({}, folder, True, Fake())['ok'])
+            self.assertEqual(path.read_bytes(), before)
+            self.assertTrue(d.poll({}, folder, backend=Fake())['ok'])
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved['pending'], {})
+            self.assertEqual(saved['sent'], [c['key']])
+            self.assertEqual(set(saved['active']), {c['subject']})
+            self.assertTrue(d.poll({}, folder, backend=Fake())['ok'])
+            self.assertEqual(json.loads(path.read_text()), saved)
+
+    def test_invalid_capacity_never_changes_slots_or_delivers(self):
+        class Fake:
+            def observe(self, s): raise AssertionError('settings must fail before querying')
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            path = folder/d.FILES['state']
+            d.atomic(path, Admission().active())
+            before = path.read_bytes()
+            self.assertFalse(d.poll({'max_active': False}, folder, backend=Fake())['ok'])
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_capacity_settings_fail_closed(self):
+        self.assertEqual(d.capacity({}), d.DEFAULT_MAX_ACTIVE)
+        for value in (0, -1, True, '3', 2.5, None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                d.capacity({'max_active': value})
+        self.assertEqual(d.capacity({'max_active': 3}), 3)
+
 class Delivery(unittest.TestCase):
     def test_pending_survives_lost_response_and_reconciles(self):
         with tempfile.TemporaryDirectory() as td:
@@ -188,9 +317,9 @@ class Delivery(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 d.deliver(folder,state(),self_candidate(),post,lambda c:False)
             saved=json.loads((folder/d.FILES['state']).read_text())
-            self.assertEqual(saved['pending']['key'],d.event_key(PROJECT['repo'],1))
-            done=d.deliver(folder,saved,saved['pending'],post,lambda c:True)
-            self.assertNotIn('pending',done)
+            self.assertEqual(saved['pending'][d.issue_subject(PROJECT['repo'],1)]['key'],d.event_key(PROJECT['repo'],1))
+            done=d.deliver(folder,saved,saved['pending'][d.issue_subject(PROJECT['repo'],1)],post,lambda c:True)
+            self.assertEqual(done['pending'], {})
             self.assertIn(d.event_key(PROJECT['repo'],1),done['sent'])
             self.assertEqual(len(calls),1)
 
@@ -351,7 +480,24 @@ class Orchestration(unittest.TestCase):
                 self.assertEqual(len(rows),1)
                 self.assertIn(d.issue_path(97),calls)
                 result=d.plan(rows,Admission().active(),set(),set())
-                self.assertIsNone(result['state']['active'])
+                self.assertEqual(result['state']['active'], {})
+
+    def test_observe_backfills_every_active_issue(self):
+        backend = d.Backend({'projects': [PROJECT]})
+        numbers = (7, 8, 9)
+        saved = d.upgraded(state())
+        saved['active'] = {d.issue_subject(PROJECT['repo'], n):
+                           {'subject': d.issue_subject(PROJECT['repo'], n), 'event_id': n}
+                           for n in numbers}
+        def api(project, path):
+            if path.startswith(d.ISSUES_ROUTE + '?'): return []
+            n = int(path.split('/')[1].split('?')[0])
+            if '/events?' in path: return [event(n)]
+            return item(n, [], state='closed')['issue']
+        backend.api = api
+        rows = backend.observe(saved)
+        self.assertEqual({r['issue']['number'] for r in rows}, set(numbers))
+        self.assertEqual(d.plan(rows, saved, set(), set(), 3)['state']['active'], {})
 
     def test_pagination_and_pr_fix_observation(self):
         backend=d.Backend({'projects':[PROJECT]})
