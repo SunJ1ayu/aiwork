@@ -43,7 +43,7 @@ permissions:
 jobs:
   # 保存原始授权不排关卡队列；每次 labeled 都有自己的保存任务。
   binding:
-    # 不按事件过滤(比如只认某个标签):排队时被顶掉的运行要靠顶掉它的那次来算,那次不能被跳过
+    # 只有 labeled 原始通知能保存授权；其他门铃仍由 gate 全量重算。
     if: github.event_name == 'pull_request_target' && github.event.action == 'labeled'
     env:
       AIWORK_GATE_PHASE: binding
@@ -70,7 +70,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: 判
+      - name: 保存授权
         working-directory: aiwork
         env:
           GITHUB_TOKEN: ${{ github.token }}

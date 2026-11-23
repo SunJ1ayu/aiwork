@@ -86,7 +86,6 @@ export async function collectPrEvents(api, repo, prNumber, mergeLabel) {
     .at(-1);
   const mergeLabelBy = lastMergeLabel?.event === "labeled" ? lastMergeLabel.actor?.login ?? null : null;
   return { base_changed_at: times.at(-1) ?? null, dismissedAt, mergeLabelBy };
-
 }
 
 // 每条评审发出之后有没有被改写过、何时改写(REST 不给,只有 GraphQL 的 lastEditedAt 有)。
@@ -179,7 +178,6 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
   const sync = sameRepo ? await proveSynchronizations(api, bindingApi, repo, pr, policy, pushes.activities) : {proven:new Map(),current:null};
   if (sameRepo) {
     pushes.actors = pushes.activities.filter(a => !sync.proven.has(a.id)).map(a => a.actor?.login ?? "(已注销账号)");
-
   }
   let synchronization = sync.reason ? {review_heads:[],note:sync.reason} : null;
   if (sync.current) {
@@ -213,7 +211,6 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
         : '合并标签不对应当前提交：没有可信授权记录，要摘掉重贴。';
     }
     mergeRequest = { by: mergeLabelBy, bound, key, reason };
-
   }
 
   delete pushes.activities;
