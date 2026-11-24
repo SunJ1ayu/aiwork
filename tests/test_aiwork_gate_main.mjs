@@ -686,7 +686,7 @@ test('真实接线：合并被规则拒绝，原因写回检查摘要而非只�
  try {
   const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
   const final=checkWrites(gh.log).filter(r=>r.method==='PATCH').at(-1);
-  assert.equal(final.body.conclusion,'failure');
+  assert.equal(final.body.conclusion,'success');
   assert.match(final.body.output.summary,/合并被拒.*405.*Required status check/);
  }finally{gh.server.close();}
 });

@@ -207,7 +207,9 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       }
     }
     // 4. 合并:只在这个提交上的 App 放行结论写上了的时候;
-    //    合并出错时把原因写回检查摘要，请求留着
+    //    合并拒绝是逐 PR 的执行结果，不改变共享 head 的放行判定。
+    const mergeResult = result;
+    const mergeNotes = [];
     for (const v of verdicts) {
       if (v.request && !v.mergeBy) {
         log(`PR #${v.number}:${v.request.reason}`);
@@ -222,12 +224,17 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
           retry = true;
           result = pendingState(e);
         } else {
-          result={...result,status:'completed',conclusion:'failure',title:'合并未完成',
-            summary:`PR #${v.number} 合并被拒，合并请求保留：${e.message}\n\n${result.summary}`};
+          mergeNotes.push(`PR #${v.number} 合并被拒，合并请求保留：${e.message}`);
         }
-        await poster.finish(sha, result, ids.get(sha));
         log(`PR #${v.number}:按 ${v.mergeBy} 的请求合并 ${sha.slice(0, 7)} 没成:${e.message}`);
       }
+    }
+    // 先尝试完该 head 上的合并，再补拒绝摘要，不能提前写坏共享必需检查。
+    if (mergeNotes.length || result !== mergeResult) {
+      if (mergeNotes.length) result={...result,
+        title:`${result.title}；合并未完成`,summary:mergeNotes.join('\n')+'\n\n'+result.summary};
+      try { await poster.finish(sha, result, ids.get(sha)); }
+      catch (e) { errors.push(e); }
     }
     results.push({ sha, title: result.title, summary: result.summary });
   }
