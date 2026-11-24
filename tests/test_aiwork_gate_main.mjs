@@ -186,10 +186,8 @@ test("整机:不追加 status，合并时只读申请检查，每轮新建放行
   const budget = readFileSync(new URL("../gate/README.md", import.meta.url), "utf8")
     .match(/即约 `(\d+) \+ (\d+)P` 次 REST 请求/);
   assert.ok(budget, "README 要给出 GITHUB_TOKEN 的单轮 REST 公式");
-  // 每条路径都钉住实际 GITHUB_TOKEN REST 读数（P=1，基础公式 2+6P=8）：
-  // 合并不需要同步：+6 次同步准备（PR/仓库/ref/compare 两次/ref）+2 次合并前核对；
-  // 同步一个 main 新提交：+9 次准备（多一次逐提交文件、读新 PR、最后 ref）+2 次 apply；
-  // 合并被拒：在正常合并路径上再多 2 次（重读 PR 和目标分支 ref）。
+  // 每条路径都钉住实际 GITHUB_TOKEN REST 读数（P=1，基础公式 2+6P 从 README 读出）；
+  // 各路径的加数不在这里复述，见 README「代价」。
   for (const { name, options, readCount: expected, merged } of [
     { name: "不合并", options: {}, readCount: 8, merged: 0 },
     { name: "放行并合并", options: { mergeReady: true }, readCount: 16, merged: 1 },
