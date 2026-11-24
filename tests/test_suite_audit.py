@@ -54,12 +54,67 @@ class SuiteAudit(unittest.TestCase):
             "if __name__ == '__main__': unittest.main(defaultTest='First')\n")
         self.assert_rejected(result, "Hidden.test_hidden")
 
-    def test_inherited_instances_and_explicit_skip_are_accounted_for(self):
+    def test_inherited_instances_and_method_skip_are_accounted_for(self):
         result = self.run_suite(ONE +
             "class Child(First): pass\n"
             "class Skipped(unittest.TestCase):\n"
             "    @unittest.skip('fixture')\n    def test_skip(self): pass\n" + MAIN)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_class_fixture_skip_is_accounted_for(self):
+        result = self.run_suite(ONE +
+            "class NeedsFixture(unittest.TestCase):\n"
+            "    @classmethod\n    def setUpClass(cls): raise unittest.SkipTest('fixture')\n"
+            "    def test_skipped(self): raise AssertionError('MUST_NOT_RUN_SKIPPED')\n" + MAIN)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def module_skip_source(self):
+        # A separate module must run a real case to retain the nonempty-run rule.
+        return (
+            "import types, sys\n"
+            "support = types.ModuleType('support')\nsys.modules['support'] = support\n"
+            "exec(\"import unittest\\nclass First(unittest.TestCase):\\n"
+            "    def test_first(self): pass\\n\", support.__dict__)\n"
+            "First = support.First\n"
+            "def setUpModule(): raise unittest.SkipTest('fixture')\n"
+            "class NeedsFixture(unittest.TestCase):\n"
+            "    def test_skipped(self): raise AssertionError('MUST_NOT_RUN_SKIPPED')\n"
+            "    def test_missing(self): raise AssertionError('MUST_NOT_RUN_SKIPPED')\n")
+
+    def test_module_fixture_skip_is_accounted_for(self):
+        result = self.run_suite(self.module_skip_source() + MAIN)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_class_skip_does_not_cover_unselected_or_late_tests(self):
+        skipped = ("class NeedsFixture(unittest.TestCase):\n"
+                   "    @classmethod\n    def setUpClass(cls): raise unittest.SkipTest('fixture')\n"
+                   "    def test_selected(self): pass\n"
+                   "    def test_missing(self): pass\n")
+        result = self.run_suite(ONE + skipped +
+            "if __name__ == '__main__': unittest.main(defaultTest=['First', 'NeedsFixture.test_selected'])\n")
+        self.assert_rejected(result, "NeedsFixture.test_missing")
+        result = self.run_suite(ONE + skipped + MAIN +
+            "class Late(unittest.TestCase):\n    def test_missing(self): pass\n")
+        self.assert_rejected(result, "Late.test_missing")
+
+    def test_module_skip_does_not_cover_unselected_or_late_tests(self):
+        result = self.run_suite(self.module_skip_source() +
+            "if __name__ == '__main__': unittest.main(defaultTest=['First', 'NeedsFixture.test_skipped'])\n")
+        self.assert_rejected(result, "NeedsFixture.test_missing")
+        result = self.run_suite(self.module_skip_source() + MAIN +
+            "class Late(unittest.TestCase):\n    def test_missing(self): pass\n")
+        self.assert_rejected(result, "Late.test_missing")
+
+    def test_teardown_skip_does_not_cover_unselected_tests(self):
+        for fixture in ("    @classmethod\n    def tearDownClass(cls): raise unittest.SkipTest('fixture')\n",
+                        ""):
+            with self.subTest(fixture=fixture):
+                setup = "" if fixture else "def tearDownModule(): raise unittest.SkipTest('fixture')\n"
+                result = self.run_suite(setup + ONE +
+                    "class NeedsFixture(unittest.TestCase):\n" + fixture +
+                    "    def test_selected(self): pass\n    def test_missing(self): pass\n"
+                    "if __name__ == '__main__': unittest.main(defaultTest=['First', 'NeedsFixture.test_selected'])\n")
+                self.assert_rejected(result, "NeedsFixture.test_missing")
 
     def test_custom_collection_is_ambiguous_instead_of_silently_accepted(self):
         result = self.run_suite(ONE +

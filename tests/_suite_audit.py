@@ -29,6 +29,12 @@ def observe(target, receipt, pythonpath):
         with open(receipt, "a", encoding="utf-8") as stream:
             stream.write(json.dumps(event) + "\n")
 
+    install_case_observer(record)
+    atexit.register(record, {"complete": True})
+
+
+def install_case_observer(record):
+    """Observe unittest dispositions; callers enforce isolation before loading suites."""
     original = unittest.TestResult.startTest
 
     def start(result, test):
@@ -36,7 +42,42 @@ def observe(target, receipt, pythonpath):
         return original(result, test)
 
     unittest.TestResult.startTest = start
-    atexit.register(record, {"complete": True})
+    fixture_skips = {}
+    exception = unittest.TestSuite._createClassOrModuleLevelException
+    module_setup = unittest.TestSuite._handleModuleFixture
+    class_setup = unittest.TestSuite._handleClassSetUp
+
+    def fixture_exception(suite, result, exc, method_name, parent, info=None):
+        if isinstance(exc, unittest.SkipTest) and method_name in ("setUpClass", "setUpModule"):
+            fixture_skips.setdefault(result, set()).add((method_name, parent))
+        return exception(suite, result, exc, method_name, parent, info)
+
+    def handle_module(suite, test, result):
+        previous = getattr(result, '_previousTestClass', None)
+        if test.__class__.__module__ != getattr(previous, '__module__', None):
+            scopes = fixture_skips.setdefault(result, set())
+            scopes.difference_update(scope for scope in tuple(scopes) if scope[0] == "setUpModule")
+        return module_setup(suite, test, result)
+
+    def handle_class(suite, test, result):
+        scopes = fixture_skips.setdefault(result, set())
+        if test.__class__ != getattr(result, '_previousTestClass', None):
+            scopes.difference_update(scope for scope in tuple(scopes) if scope[0] == "setUpClass")
+        value = class_setup(suite, test, result)
+        module_skipped = (getattr(result, '_moduleSetUpFailed', False) and
+                          ("setUpModule", test.__class__.__module__) in scopes)
+        class_skipped = (getattr(test.__class__, '_classSetupFailed', False) and
+                         ("setUpClass", unittest.util.strclass(test.__class__)) in scopes)
+        # This hook is called for each selected leaf, including leaves bypassed
+        # by failed fixtures. Record those leaves only, never exempt a name prefix:
+        # unselected methods and definitions after main must remain missing.
+        if module_skipped or class_skipped:
+            record({"test": test.id(), "fixture_skip": True})
+        return value
+
+    unittest.TestSuite._createClassOrModuleLevelException = fixture_exception
+    unittest.TestSuite._handleModuleFixture = handle_module
+    unittest.TestSuite._handleClassSetUp = handle_class
 
 
 def inventory(target, destination):
