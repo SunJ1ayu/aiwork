@@ -162,6 +162,7 @@ class CommentNetworkTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.posts, self.comments = [], []
         self.failure = None
+        self.login = 'project-review[bot]'
         self.accepted = False
         self.pending = {}
         self.reads = 0
@@ -185,7 +186,7 @@ class CommentNetworkTests(unittest.TestCase):
             return self.comments[-1]
         self.posts.append((endpoint, payload, kwargs))
         item = {'id': 123, 'body': payload['body'],
-                'user': {'login': 'project-review[bot]', 'type': 'Bot'}}
+                'user': {'login': self.login, 'type': 'Bot'}}
         if self.accepted or self.failure is None:
             self.comments[:] = [item]
         if self.failure:
@@ -231,9 +232,8 @@ class CommentNetworkTests(unittest.TestCase):
         self.assertEqual(self.posts[-1][2], {'method': 'PATCH'})
 
     def test_other_bot_cannot_confirm_comment_receipt(self):
-        self.failure = OSError('response EOF')
-        self.comments = [{'id': 321, 'body': 'unrelated',
-                          'user': {'type': 'Bot', 'login': 'other-review[bot]'}}]
+        self.failure, self.accepted = OSError('response EOF'), True
+        self.login = 'other-review[bot]'
         with self.assertRaises(OSError):
             self.publish()
         self.assertEqual(len(self.posts), 1)

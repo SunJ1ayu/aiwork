@@ -565,27 +565,35 @@ def project_reviewer_bot(token: str, repository: str) -> str:
     return bot
 
 
-def find_published_review(token: str, *, repository: str, number: int,
-                          head: str, body: str, reviewer_bot: str) -> str | None:
+def github_items(token: str, endpoint: str):
     page = 1
     while True:
-        raw = github(token, f'repos/{repository}/pulls/{number}/reviews?per_page=100&page={page}', raw=True,
-                     timeout=30, retry_reads=False)
-        reviews = json.loads(raw)
-        if not isinstance(reviews, list) or any(not isinstance(item, dict) for item in reviews):
-            raise ReviewError('cannot check existing reviews; refusing publication')
-        for item in reviews:
-            user = item.get('user')
-            if (item.get('commit_id') == head and item.get('state') != 'PENDING'
-                    and isinstance(user, dict) and user.get('type') == 'Bot'
-                    and user.get('login') == reviewer_bot and item.get('body') == body):
-                link = item.get('html_url')
-                if not isinstance(link, str) or not link.startswith('https://github.com/'):
-                    raise ReviewError('saved review already published but has no valid link; refusing duplicate publication')
-                return link
-        if len(reviews) < 100:
-            return None
+        items = json.loads(github(token, f'{endpoint}?per_page=100&page={page}',
+                                  raw=True, timeout=30, retry_reads=False))
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise ReviewError('cannot check existing publication receipts; refusing publication')
+        yield from items
+        if len(items) < 100:
+            return
         page += 1
+
+
+def publication_matches(item: dict, *, body: str, reviewer_bot: str) -> bool:
+    user = item.get('user')
+    return (isinstance(user, dict) and user.get('type') == 'Bot'
+            and user.get('login') == reviewer_bot and item.get('body') == body)
+
+
+def find_published_review(token: str, *, repository: str, number: int,
+                          head: str, body: str, reviewer_bot: str) -> str | None:
+    for item in github_items(token, f'repos/{repository}/pulls/{number}/reviews'):
+        if (item.get('commit_id') == head and item.get('state') != 'PENDING'
+                and publication_matches(item, body=body, reviewer_bot=reviewer_bot)):
+            link = item.get('html_url')
+            if not isinstance(link, str) or not link.startswith('https://github.com/'):
+                raise ReviewError('saved review already published but has no valid link; refusing duplicate publication')
+            return link
+    return None
 
 
 def publish_saved(directory: Path, *, repository: str, number: int, leg: str,
@@ -700,23 +708,12 @@ def public_dispatch_report(report):
 
 def find_dispatch_comment(token, repository, number, body):
     bot = project_reviewer_bot(token, repository)
-    page = 1
-    while True:
-        comments = json.loads(github(token,
-            f'repos/{repository}/issues/{number}/comments?per_page=100&page={page}',
-            raw=True, timeout=30, retry_reads=False))
-        if not isinstance(comments, list) or any(not isinstance(item, dict) for item in comments):
-            raise ReviewError('cannot check existing dispatch comments')
-        for item in comments:
-            user = item.get('user')
-            identifier = item.get('id')
-            if (isinstance(user, dict) and user.get('type') == 'Bot'
-                    and user.get('login') == bot and item.get('body') == body
-                    and type(identifier) is int and identifier > 0):
-                return identifier
-        if len(comments) < 100:
-            return None
-        page += 1
+    for item in github_items(token, f'repos/{repository}/issues/{number}/comments'):
+        identifier = item.get('id')
+        if (publication_matches(item, body=body, reviewer_bot=bot)
+                and type(identifier) is int and identifier > 0):
+            return identifier
+    return None
 
 
 def publish_dispatch_comment(repository, number, body, comment_id=None, *, pending=None):
@@ -754,9 +751,8 @@ def publish_dispatch_comment(repository, number, body, comment_id=None, *, pendi
             return find_dispatch_comment(token, repository, number, body)
         result = github(token, endpoint, timeout=30, retry_reads=False)
         bot = project_reviewer_bot(token, repository)
-        user = result.get('user')
-        if (result.get('id') == comment_id and result.get('body') == body
-                and isinstance(user, dict) and user.get('login') == bot and user.get('type') == 'Bot'):
+        if (result.get('id') == comment_id
+                and publication_matches(result, body=body, reviewer_bot=bot)):
             return comment_id
         return None
 
