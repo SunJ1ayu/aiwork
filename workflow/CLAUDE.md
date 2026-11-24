@@ -53,7 +53,7 @@ review-pr PR --repo owner/name --leg LEG --retry-publish RUN_ID
 只发布保存的正文，不重新调用模型。它会核对发布记录绑定的正文摘要、腿、head 和目标，
 照常检查隐私和 PR 当前 head；不满足就拒绝并说明原因。去重只认项目 main 策略登记的评审机器人
 已经发出的同一份正文，只用于恢复保存正文的发布。新一次模型评审照常发布，即使同腿、同 head
-的新结论文本恰好相同。重发查到保存正文已发布时直接返回原链接、退出 0，拒绝再次 POST。
+的新结论文本恰好相同。重发和结果不明时的处理见 [review-pr 的 publish_saved](https://github.com/SunJ1ayu/aiwork/blob/main/bin/review-pr)；依据见[业主决定](https://github.com/SunJ1ayu/aiwork/issues/213#issuecomment-7125277660)。
 缺少发布记录的旧档案不能重发。执行方不许拿评审机器人的令牌或私钥手工补发，取令牌由 `review-pr` 自己完成。
 这些记录防止发错文件、发错 head 和正文意外损坏；同账号故意篡改的隔离边界见 #127。
 
