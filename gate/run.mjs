@@ -207,7 +207,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       }
     }
     // 4. 合并:只在这个提交上的 App 放行结论写上了的时候;
-    //    合并出错(判完又推了新提交、有冲突)只记下,请求留着
+    //    合并出错时把原因写回检查摘要，请求留着
     for (const v of verdicts) {
       if (v.request && !v.mergeBy) {
         log(`PR #${v.number}:${v.request.reason}`);
@@ -221,8 +221,11 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
         if (e instanceof TransientPrState) {
           retry = true;
           result = pendingState(e);
-          await poster.finish(sha, result, ids.get(sha));
+        } else {
+          result={...result,status:'completed',conclusion:'failure',title:'合并未完成',
+            summary:`PR #${v.number} 合并被拒，合并请求保留：${e.message}\n\n${result.summary}`};
         }
+        await poster.finish(sha, result, ids.get(sha));
         log(`PR #${v.number}:按 ${v.mergeBy} 的请求合并 ${sha.slice(0, 7)} 没成:${e.message}`);
       }
     }

@@ -17,7 +17,7 @@ function recorder() {
   let n = 0;
   const poster = {
     async start(sha) { calls.push(["start", sha]); return ++n; },
-    async finish(sha, result, id) { calls.push(["finish", sha, result.status, result.conclusion, result.title, id]); },
+    async finish(sha, result, id) { calls.push(["finish", sha, result.status, result.conclusion, result.title, id, result.summary]); },
   };
   return { calls, poster };
 }
@@ -323,7 +323,8 @@ test("M6 合并接口出错(比如判完之后又推了新提交)→ 记下原�
   });
   await run(r, api, { merger: mergeRecorder(r, { fail: (n) => n === 10 }), log: (l) => logs.push(l) });
   assert.deepEqual(merges(r.calls), [[10, HEAD]]);
-  assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[HEAD, "success"], [OTHER, "success"]]);
+  assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[HEAD, "success"], [HEAD, "failure"], [OTHER, "success"]]);
+  assert.match(r.calls.filter(c=>c[0]==="finish")[1][6], /合并被拒.*409/);
   assert.ok(logs.some((l) => /PR #10/.test(l) && /409/.test(l)), logs.join("\n"));
 });
 
@@ -384,7 +385,7 @@ test("轮数显示复用既有读取和分页，不增接口；同 head 每个 P
       11: { head: HEAD, files: [], verdict: "PASS", summaries: [] },
     };
     const oldCalls = [], newCalls = [], merged = [];
-    const before = await run(recorder(), prsApi(oldCalls, prs));
+    const before = await run(recorder(), prsApi(oldCalls, prs), {merger:{async merge(){}}});
     const after = await run(recorder(), prsApi(newCalls, prs), { policy: roundPolicy, merger: { async merge(n) { merged.push(n); } } });
     assert.deepEqual(newCalls, oldCalls, "包括请求数量、路径、顺序都和旧策略相同");
     assert.equal(after[0].title, before[0].title);

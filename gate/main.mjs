@@ -3,7 +3,7 @@
 // 读数据用 GITHUB_TOKEN(权限见 templates/aiwork-gate.yml 的 permissions);发检查结果用 aiwork-gate App 的临时令牌 ——
 // 分支规则只认这个 App 发的结果,PR 自己加的 workflow 用 GITHUB_TOKEN 发一个同名检查也冒充不了。
 // 合并(run.mjs 第 4 步)另换一张 App 令牌,只在真要合并或同步时才换:发检查的那张始终只有 checks: write。
-import { prepareSynchronization, syncCheck, TransientPrState, assertPrSnapshot } from "./synchronize.mjs";
+import { prepareSynchronization, syncCheck, TransientPrState, assertPrSnapshot, baseTip, assertBaseTip } from "./synchronize.mjs";
 import { createSign } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { bindingFromEvent } from "./merge-request.mjs";
@@ -76,11 +76,14 @@ const poster = {
 async function recheckWrite(error, number, expected) {
   const pr = await api.get(`/repos/${repo}/pulls/${number}`);
   assertPrSnapshot(pr, expected);
+  await assertBaseTip(api,repo,expected.base_ref,expected.main_sha);
   if (pr.mergeable === null) throw new TransientPrState('GitHub 还在计算能否干净合并');
   throw error;
 }
 const merger = {
   async merge(number, sha, expected) {
+    expected={...expected,main_sha:await baseTip(api,repo,expected.base_ref)};
+    assertPrSnapshot(await api.get(`/repos/${repo}/pulls/${number}`),expected);
     try {
       await request("PUT", `/repos/${repo}/pulls/${number}/merge`, await appToken(MERGE), { sha, merge_method: "merge" });
     } catch (e) { await recheckWrite(e, number, expected); }
@@ -100,11 +103,13 @@ const synchronizer = {
   async apply(intent) {
     // 先落可核实的意向，再请求同步。异步结果不能靠本进程自述当成成功。
     await request('POST',`/repos/${repo}/check-runs`,await appToken(CHECKS),syncCheck(intent));
+    assertPrSnapshot(await api.get(`/repos/${repo}/pulls/${intent.number}`),{head_sha:intent.head,base_ref:intent.ref});
+    await assertBaseTip(api,repo,intent.ref,intent.base);
     try {
       await request('PUT',`/repos/${repo}/pulls/${intent.number}/update-branch`,await appToken(MERGE),
         {expected_head_sha:intent.head});
     } catch (e) {
-      await recheckWrite(e, intent.number, {head_sha:intent.head,base_sha:intent.base,base_ref:intent.ref});
+      await recheckWrite(e, intent.number, {head_sha:intent.head,main_sha:intent.base,base_ref:intent.ref});
     }
   },
 };

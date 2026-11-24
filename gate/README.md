@@ -162,6 +162,8 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 
 ## 合并:贴 `aiwork:merge`
 
+当前目标分支提交统一从 Git ref 读取（`synchronize.mjs` 的 `baseTip`），不把 PR 的 `base.sha` 当作当前 main。同步比较、文件交集和意向使用同一固定提交；读取或写入期间 main 前进会重读，合并被拒的原因写回检查摘要。
+
 - **谁贴的算数**:业主(`policy.json` 的 `owner`)和 `merge_requesters` 里的账号(以后放 OpenClaw 的身份)。
   Builder 贴的不算,也写不进名单(策略校验会拒)—— 不然 Builder 能把自己的 PR 合进去。
   认的是 PR 事件里最后一次贴这个标签的人:撤掉再贴,按最后一次算。
