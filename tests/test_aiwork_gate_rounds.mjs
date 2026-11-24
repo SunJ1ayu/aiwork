@@ -1,3 +1,4 @@
+import { builderFamilies as registeredBuilders } from "../gate/builders.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -243,7 +244,7 @@ test("真实策略的 UNKNOWN 作者排除已登记及使用共享账号的执�
     submitted_at: "2026-10-30T04:00:00Z", body: "" };
   const reviewed = (family, id) => ({ ...pass, id, body: pass.body.replace('"openai"', JSON.stringify(family)) });
   const unknown = { covers_head: true, actors: ["aiwork-build[bot]"] };
-  const builderFamilies = [...new Set([...Object.values(current.builders), "anthropic"])];
+  const builderFamilies = [...new Set([...Object.values(registeredBuilders(current)), "anthropic"])];
   const independent = "moonshot";
   const reviews = [...builderFamilies.map((f, i) => reviewed(f, i + 1)), reviewed(independent, 10), approval];
   const high = decide(facts([], { pushes: unknown, files: ["bin/gh-app-token"], reviews }), current);

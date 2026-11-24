@@ -15,13 +15,13 @@ from typing import NamedTuple
 import urllib.parse
 import urllib.request
 
-from _aiwork_config import BUILDER_APP_ROLES, data_path
+from _aiwork_config import builder_roles, data_path
 
 LABELS = {'aiwork:task': 'issues.task', 'aiwork:fix': 'issues.fix'}
 LABELS.update({
     f'{label}:{family}': f'{event_type}.{family}'
     for label, event_type in LABELS.items()
-    for family in BUILDER_APP_ROLES
+    for family in builder_roles()
 })
 TERMINAL = ('done','nothing','cancelled')
 DEFAULT_MAX_ACTIVE = 1
@@ -358,7 +358,7 @@ def validate(config):
             if not isinstance(p[name],list) or not p[name] or not all(isinstance(v,str) and v for v in p[name]):
                 raise ValueError('invalid adapter command')
         rules = p.get('builder_rules', {})
-        if not isinstance(rules, dict) or not rules.keys() <= BUILDER_APP_ROLES.keys():
+        if not isinstance(rules, dict) or not rules.keys() <= builder_roles().keys():
             raise ValueError('invalid builder rules')
         routes = [p['rule'], *rules.values()]
         if (not all(isinstance(rule, str) and rule.strip() for rule in routes)

@@ -32,6 +32,118 @@ def load_script(name):
     return module
 
 
+class BuilderRegistryTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        for name in ('_aiwork_config.py', '_label_dispatch.py', '_programs.sh'):
+            shutil.copy2(ROOT / 'bin' / name, self.bin / name)
+        self.policy = self.root / '.aiwork/policy.json'
+        self.policy.parent.mkdir()
+        shutil.copy2(ROOT / '.aiwork/builder-schema.json', self.policy.parent / 'builder-schema.json')
+        self.settings = self.root / 'settings'
+        (self.settings / 'apps').mkdir(parents=True)
+        (self.settings / 'review.env').write_text('location=external\n')
+        self.env = dict(os.environ, AIWORK_CONFIG_DIR=str(self.settings))
+        self.env.pop('AIWORK_BUILDER_FAMILY', None)
+        self.env.pop('AIWORK_APPS_DIR', None)
+
+    def probe(self, program, family=None):
+        env = dict(self.env)
+        if family is not None:
+            env['AIWORK_BUILDER_FAMILY'] = family
+        return subprocess.run([sys.executable, '-c',
+            'import sys,json; sys.path.insert(0, sys.argv[1]); ' + program,
+            str(self.bin)], env=env, capture_output=True, text=True, timeout=10)
+
+    def test_one_policy_addition_drives_labels_role_and_isolation(self):
+        policy = json.loads((ROOT / '.aiwork/policy.json').read_text())
+        # Add a new family only in a deployed policy, without editing programs.
+        policy['builders']['fixture-builder[bot]'] = {'family': 'fixture', 'role': 'build-fixture'}
+        self.policy.write_text(json.dumps(policy))
+        result = self.probe('import _aiwork_config as c, _label_dispatch as d; '
+            'print(json.dumps([c.check_app_role("build"), d.LABELS["aiwork:task:fixture"], '
+            'd.LABELS["aiwork:fix:fixture"]]))', 'fixture')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ['build-fixture', 'issues.task.fixture', 'issues.fix.fixture'])
+        program = """
+import _label_dispatch as d
+project = {'repo':'example/project', 'owner':'owner', 'bot':'summary', 'rule':'legacy',
+           'builder_rules':{'fixture':'new-rule'}, 'reference_root':'/references',
+           'token_command':['token-fixture'], 'reference_command':['reference-fixture']}
+d.validate({'source':'fixture', 'hub_db':'/db', 'hub_config':'/hub', 'projects':[project]})
+row = {'project':project, 'issue':{'number':1, 'state':'open', 'labels':[{'name':'aiwork:task:fixture'}]},
+       'events':[{'id':1, 'event':'labeled', 'actor':{'login':'owner'}, 'label':{'name':'aiwork:task:fixture'}}]}
+state = {'sent':[], 'active':None, 'stopped':[]}
+result = d.plan([row], state, set(), set())
+assert result['candidate']['event']['label']['name'] == 'aiwork:task:fixture'
+assert d.label_route(project, 'aiwork:task:fixture') == 'new-rule'
+project['builder_rules'] = {'unregistered':'bad-route'}
+try:
+    d.validate({'source':'fixture', 'hub_db':'/db', 'hub_config':'/hub', 'projects':[project]})
+except ValueError:
+    pass
+else:
+    raise AssertionError('unknown family admitted')
+"""
+        routed = self.probe(program)
+        self.assertEqual(routed.returncode, 0, routed.stderr)
+        # Every registered role follows the same mismatch and missing-family guard.
+        for family, role in self.registry_roles(policy).items():
+            with self.subTest(family=family):
+                good = self.probe('import _aiwork_config as c; print(c.check_app_role("build"))', family)
+                self.assertEqual(good.returncode, 0, good.stderr)
+                self.assertEqual(good.stdout.strip(), role)
+                missing = self.probe('import _aiwork_config as c; c.check_app_role(' + repr(role) + ')')
+                self.assertNotEqual(missing.returncode, 0)
+                wrong = self.probe('import _aiwork_config as c; c.check_app_role(' + repr(role) + ')', 'absent')
+                self.assertNotEqual(wrong.returncode, 0)
+        (self.settings / 'apps/review.env').write_text('not a key')
+        denied = self.probe('import _aiwork_config as c; c.check_app_role("build")', 'fixture')
+        self.assertNotEqual(denied.returncode, 0)
+
+    @staticmethod
+    def registry_roles(policy):
+        return {entry['family']: entry['role'] for entry in policy['builders'].values()}
+
+    def test_shared_registry_schema_cases(self):
+        import _aiwork_config as config
+        cases = json.loads((ROOT / 'tests/fixtures/builder-registry.json').read_text())
+        for case in cases:
+            with self.subTest(case=case['name']):
+                if 'families' in case:
+                    self.assertEqual(config.builder_families(case['policy']), case['families'])
+                else:
+                    with self.assertRaises(config.ConfigError):
+                        config.builder_families(case['policy'])
+
+    def test_missing_malformed_and_legacy_policy_never_enable_dispatch_or_keys(self):
+        self.policy.write_text((ROOT / '.aiwork/policy.json').read_text())
+        (self.settings / 'review.env').write_text('location=local\n')
+        allowed = self.probe('import _aiwork_config as c; c.check_app_role("review")')
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        for contents in (None, '{', '{}', '{"builders":{"bot":"openai"}}',
+                         '{"builders":{"bot[bot]":{"family":"fixture","role":"review"}}}',
+                         '{"builders":{"bot[bot]":{"family":"fixture","family":"other","role":"build-fixture"}}}'):
+            with self.subTest(contents=contents):
+                if contents is None:
+                    if self.policy.exists():
+                        self.policy.unlink()
+                else:
+                    self.policy.write_text(contents)
+                for location, probe in (
+                        ('external', 'import _label_dispatch'),
+                        ('external', 'import _aiwork_config as c; c.check_app_role("build")'),
+                        ('local', 'import _aiwork_config as c; c.check_app_role("review")')):
+                    (self.settings / 'review.env').write_text('location=' + location + '\n')
+                    result = self.probe(probe, 'fixture')
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, '')
+
+
 class SettingsTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -84,17 +196,19 @@ class SettingsTest(unittest.TestCase):
         config.check_app_role('review')
 
     def test_builder_role_families_match_project_policy(self):
-        from _aiwork_config import BUILDER_APP_ROLES
+        from _aiwork_config import builder_roles, builder_families
         policy = json.loads((ROOT / '.aiwork/policy.json').read_text())
-        self.assertEqual(set(BUILDER_APP_ROLES), set(policy['builders'].values()))
+        self.assertEqual(set(builder_roles()), set(builder_families(policy).values()))
 
     def test_explicit_builder_role_must_match_dispatch_family(self):
         import _aiwork_config as config
-        with unittest.mock.patch.dict(os.environ, {'AIWORK_BUILDER_FAMILY': 'openai'}):
-            self.assertEqual(config.check_app_role('build-codex'), 'build-codex')
-            for role in ('build-deepseek', 'build-mimo'):
-                with self.assertRaises(config.ConfigError):
-                    config.check_app_role(role)
+        roles = config.builder_roles()
+        for family, selected in roles.items():
+            with unittest.mock.patch.dict(os.environ, {'AIWORK_BUILDER_FAMILY': family}):
+                self.assertEqual(config.check_app_role(selected), selected)
+                for role in set(roles.values()) - {selected}:
+                    with self.assertRaises(config.ConfigError):
+                        config.check_app_role(role)
 
     def test_external_review_rejected_before_any_github_access(self):
         (self.config / 'review.env').write_text('location=external\n')

@@ -19,6 +19,9 @@ import time
 from datetime import datetime, timezone
 
 
+from _aiwork_config import builder_families
+
+
 FAMILY_PATTERN = r'[a-z][a-z0-9-]*'
 
 def retry(operation):
@@ -72,11 +75,14 @@ def main_policy(api, token, repository):
     if not isinstance(blob, str) or not re.fullmatch(r'[0-9a-f]{40}', blob):
         raise ValueError('target policy blob is missing')
     policy = json.loads(base64.b64decode(''.join(response['content'].split()), validate=True))
-    builders = policy.get('builders')
+    builders = builder_families(policy)
+    # Preserve the old handoff guard without revalidating the shared structured schema.
+    legacy = all(isinstance(value, str) for value in policy['builders'].values())
+    policy = dict(policy, builders=builders)
     extra = policy.get('unknown_author_extra_families', [])
-    if (not isinstance(builders, dict) or not builders or not isinstance(extra, list)
+    if (not isinstance(extra, list)
             or not all(isinstance(family, str) and re.fullmatch(FAMILY_PATTERN, family)
-                       for family in [*builders.values(), *extra])):
+                       for family in [*extra, *(builders.values() if legacy else [])])):
         raise ValueError('invalid builder registration in main policy')
     return policy, blob
 

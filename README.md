@@ -117,6 +117,7 @@ MiMo 不需要 mimocode，也不读取它的登录信息、项目配置或运行
 - `mimo.env`：两行 `MIMO_BASE_URL=…`、`MIMO_API_KEY=…`，文件权限 600。地址使用小米控制台给出的 Anthropic 兼容 Base URL：按量付费和 Token Plan 的地址、凭证不同，不能混用；地址须为 HTTPS、以 `/anthropic` 结尾，不带用户名、密码、查询串或片段。MiMo 不从环境变量补地址或密钥。
 - `models.env`、`runtime.env`、`deepseek.env`、`mimo.env` 按同一规矩逐行读：空行和以 `#` 开头的行跳过，其余每一行必须是可选的 `export` 加 `名字=值`；值要么是一整段不含空白、引号和 `#` 的文字，要么被一对相同的引号整个包住且引号里同样不含空白、引号和 `#`；不符合的行、同一个名字出现两次、空值，或文件不是 UTF-8，都报错并带上文件路径和行号。
 - 标签派活设置：同时在办容量及其缺省、错误行为见 [标签来源的 `capacity`](bin/_label_dispatch.py)，配置入口与宿主操作见 [Mac 手册](docs/mac-host.md#安装与本机设置)。
+- 执行方身份登记与部署范围见 [关卡的执行方登记](gate/README.md#执行方登记)；本机仍只保存下面的角色文件和钥匙。
 - `apps/*.env`：GitHub App 各角色的 App ID、安装 ID、目标仓库和权限配置。评审及自动派发的读取权限见 [gh-app-token](bin/gh-app-token) 文件头；私有仓库读 PR 事件的要求也在那里，是否增权由业主决定。
   `KEY` 推荐只写文件名（如 `KEY=aiwork-sync.pem`）；相对路径在所选 `apps/` 下查找，绝对路径照原样使用。
 - `apps/*.pem`：GitHub App 私钥，文件权限 600。
