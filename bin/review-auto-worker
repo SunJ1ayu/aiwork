@@ -231,7 +231,8 @@ def read_record(path):
 
 def finished_record(path, head, number):
     record = read_record(path)
-    if (record and record.get('pr') == number and record.get('head') == head
+    if (record and type(record.get('pr')) is int and record['pr'] == number
+            and record.get('head') == head
             and record['state'] == 'finished'):
         return record
     return None

@@ -76,7 +76,7 @@ class Handoff(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); head='a'*40
             facts={'pr':1,'head':head,'state':'finished','entry_exit':0}
-            for changes in ({'pr':2},{'head':'b'*40},{'entry_exit':True},{'entry_exit':1},{'state':'started'}):
+            for changes in ({'pr':2},{'pr':True},{'head':'b'*40},{'entry_exit':True},{'entry_exit':1},{'state':'started'}):
                 worker.write_record(root/(head+'.json'),dict(facts,**changes))
                 self.assertFalse(worker.completed_requests(root,{head:{'openai'}},1))
             worker.write_record(root/(head+'.json'),facts)
