@@ -94,11 +94,6 @@ class Handoff(unittest.TestCase):
             worker.write_record(control/('a'*40+'.json'),facts)
             self.assertIsNone(worker.committed_attempt(control,unit,{'a'*40:{'openai'}},1))
 
-    def test_failed_finished_retries_success_does_not(self):
-        self.assertTrue(worker.retryable({'state':'finished','entry_exit':2}))
-        self.assertFalse(worker.retryable({'state':'finished','entry_exit':0}))
-        self.assertTrue(worker.retryable({'state':'started'}))
-
     def test_preflight_recovers_and_has_limit(self):
         with patch.object(worker.time,'sleep'), patch.object(worker.subprocess,'run',side_effect=[OSError('network'),'ok']) as run:
             self.assertEqual(worker.retry(run),'ok')
@@ -244,7 +239,7 @@ class Handoff(unittest.TestCase):
             self.assertEqual(worker.read_record(record),old)
             self.assertEqual(list(Path(directory).glob('record-*')),[])
             worker.write_record(record,{'state':'finished','entry_exit':0})
-            self.assertFalse(worker.retryable(worker.read_record(record)))
+            self.assertEqual(worker.read_record(record),{'state':'finished','entry_exit':0})
 
     def test_independent_real_git_checkouts(self):
         import tempfile,subprocess,os

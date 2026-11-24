@@ -31,13 +31,6 @@ def retry(operation):
             time.sleep(attempt + 1)
 
 
-def retryable(record):
-    # Called only while holding this PR/head lock.
-    return (record.get('state') == 'started' or
-            (record.get('state') == 'finished' and type(record.get('entry_exit')) is int
-             and record['entry_exit'] != 0))
-
-
 def requested_pr(context, repository, source):
     events = context.get('events', [])
     if not events:
