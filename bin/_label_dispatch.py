@@ -400,6 +400,7 @@ def poll(config,folder,preview=False,backend=None):
         limit=capacity(config)
         state=upgraded(state)
         errors=[]
+        had_pending=bool(state['pending'])
         for name, candidate in list(state['pending'].items()):
             record['stage']='reconcile_delivery'
             record['decisions'].append({'reason':Reason.PENDING,'subject':name})
@@ -408,10 +409,6 @@ def poll(config,folder,preview=False,backend=None):
                     state=deliver(folder,state,candidate,backend.post,backend.accepted)
                 except Exception as error:
                     errors.append({'subject':name,'error':type(error).__name__})
-        if state['pending'] or any(x['reason'] == Reason.PENDING for x in record['decisions']):
-            if errors: record['errors']=errors
-            record['ok']=not errors
-            return record
         record['stage']='observe'
         rows=backend.observe(state)
         record['observed']=[{'subject':subject(r),'event_id':int(e['id']),
@@ -419,6 +416,10 @@ def poll(config,folder,preview=False,backend=None):
             'trusted':actor(e) in trusted_accounts(r['project'])} for r in rows for e in relevant(r)]
         record['stage']='admission'
         result=plan(rows,state,backend.busy(),stops,limit)
+        if had_pending:
+            result['candidate']=None
+            for decision in result['decisions']:
+                if decision['reason'] == Reason.ELIGIBLE: decision['reason']=Reason.QUEUED
         record['decisions'].extend(result['decisions'])
         if not preview:
             atomic(state_path,result['state'])

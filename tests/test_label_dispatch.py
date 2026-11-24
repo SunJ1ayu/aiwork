@@ -259,7 +259,7 @@ class Capacity(unittest.TestCase):
             self.assertIsNotNone(d.plan(rows, saved, {d.subject(rows[0])}, set(), 3)['candidate'])
             self.assertIsNone(d.plan(rows, saved, {'other/repo#1'}, set(), 3)['candidate'])
             self.assertIsNone(d.plan(rows, saved, set(), set(), 1)['candidate'])
-            self.assertEqual(len(saved['active']), 1)
+            self.assertEqual(len(saved['active']), 2)
             rows[1]['issue']['state'] = 'closed'
             released = d.plan(rows, saved, {d.subject(rows[0])}, set(), 2)
             self.assertEqual(released['candidate']['subject'], d.subject(rows[2]))
