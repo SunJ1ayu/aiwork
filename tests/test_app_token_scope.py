@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "bin"))
 
 
 class AppTokenScopeTest(unittest.TestCase):
@@ -101,17 +102,18 @@ print(os.environ['FAKE_GRANT'])"""))
         contents = (apps / 'review.env').read_text()
         (apps / 'review.env').unlink()
         (apps / 'build.env').write_text('exit 99\n')
-        roles = {'openai': 'codex', 'deepseek': 'deepseek', 'xiaomi': 'mimo'}
+        from _aiwork_config import builder_roles
+        roles = builder_roles()
         selected_role = self.root / 'selected-role'
         for role in roles.values():
-            (apps / f'build-{role}.env').write_text(contents + f"printf '%s' {role} > '{selected_role}'\n")
+            (apps / f'{role}.env').write_text(contents + f"printf '%s' {role} > '{selected_role}'\n")
         for family in roles:
             with self.subTest(family=family):
                 self.env['AIWORK_BUILDER_FAMILY'] = family
                 result = self.invoke(['--repo', 'SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'], role='build')
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(selected_role.read_text(), roles[family])
-        (apps / 'build-mimo.env').unlink()
+        (apps / (roles[family] + '.env')).unlink()
         result = self.invoke(['--repo', 'SunJ1ayu/aiwork'], ['SunJ1ayu/aiwork'], role='build')
         self.assertNotEqual(result.returncode, 0)
         self.assertNotEqual(result.returncode, 99)

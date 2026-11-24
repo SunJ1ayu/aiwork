@@ -9,11 +9,22 @@
   "gate_app_id": 5121026,
   "owner": "SunJ1ayu",
   "builders": {
-    "aiwork-build-codex[bot]": "openai",
-    "aiwork-build-deepseek[bot]": "deepseek",
-    "aiwork-build-mimo[bot]": "xiaomi"
+    "aiwork-build-codex[bot]": {
+      "family": "openai",
+      "role": "build-codex"
+    },
+    "aiwork-build-deepseek[bot]": {
+      "family": "deepseek",
+      "role": "build-deepseek"
+    },
+    "aiwork-build-mimo[bot]": {
+      "family": "xiaomi",
+      "role": "build-mimo"
+    }
   },
-  "unknown_author_extra_families": ["anthropic"],
+  "unknown_author_extra_families": [
+    "anthropic"
+  ],
   "reviewer_bot": "aiwork-review[bot]",
   "merge_label": "aiwork:merge",
   "merge_requesters": [],

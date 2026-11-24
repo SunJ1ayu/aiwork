@@ -1,0 +1,299 @@
+[
+  {
+    "name": "short structured boundaries",
+    "policy": {
+      "builders": {
+        "x[bot]": {
+          "family": "x",
+          "role": "build-x"
+        }
+      }
+    },
+    "families": {
+      "x[bot]": "x"
+    }
+  },
+  {
+    "name": "legacy",
+    "policy": {
+      "builders": {
+        "old-builder": "old-family"
+      }
+    },
+    "families": {
+      "old-builder": "old-family"
+    }
+  },
+  {
+    "name": "structured",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-example"
+        }
+      }
+    },
+    "families": {
+      "sample[bot]": "sample"
+    }
+  },
+  {
+    "name": "empty",
+    "policy": {
+      "builders": {}
+    }
+  },
+  {
+    "name": "list",
+    "policy": {
+      "builders": []
+    }
+  },
+  {
+    "name": "bad family",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "Wrong",
+          "role": "build-example"
+        }
+      }
+    }
+  },
+  {
+    "name": "reserved role",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "review"
+        }
+      }
+    }
+  },
+  {
+    "name": "path role",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-../../review"
+        }
+      }
+    }
+  },
+  {
+    "name": "missing role",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample"
+        }
+      }
+    }
+  },
+  {
+    "name": "unknown field",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-example",
+          "extra": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "non bot",
+    "policy": {
+      "builders": {
+        "sample": {
+          "family": "sample",
+          "role": "build-example"
+        }
+      }
+    }
+  },
+  {
+    "name": "duplicate family",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-one"
+        },
+        "other[bot]": {
+          "family": "sample",
+          "role": "build-two"
+        }
+      }
+    }
+  },
+  {
+    "name": "duplicate role",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-one"
+        },
+        "other[bot]": {
+          "family": "other",
+          "role": "build-one"
+        }
+      }
+    }
+  },
+  {
+    "name": "case collision",
+    "policy": {
+      "builders": {
+        "Sample[bot]": {
+          "family": "sample",
+          "role": "build-one"
+        },
+        "sample[bot]": {
+          "family": "other",
+          "role": "build-two"
+        }
+      }
+    }
+  },
+  {
+    "name": "mixed",
+    "policy": {
+      "builders": {
+        "old": "old",
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-example"
+        }
+      }
+    }
+  },
+  {
+    "name": "empty legacy family",
+    "policy": {
+      "builders": {
+        "old": ""
+      }
+    },
+    "families": {
+      "old": ""
+    }
+  },
+  {
+    "name": "null value",
+    "policy": {
+      "builders": {
+        "old": null
+      }
+    }
+  },
+  {
+    "name": "legacy opaque strings",
+    "policy": {
+      "builders": {
+        "Display_Name": "FAMILY.V1",
+        "display_name": "MixedCase"
+      }
+    },
+    "families": {
+      "Display_Name": "FAMILY.V1",
+      "display_name": "MixedCase"
+    }
+  },
+  {
+    "name": "legacy empty login",
+    "policy": {
+      "builders": {
+        "": "old-family"
+      }
+    },
+    "families": {
+      "": "old-family"
+    }
+  },
+  {
+    "name": "role suffix empty",
+    "policy": {
+      "builders": {
+        "x[bot]": {
+          "family": "x",
+          "role": "build-"
+        }
+      }
+    }
+  },
+  {
+    "name": "family digit first",
+    "policy": {
+      "builders": {
+        "x[bot]": {
+          "family": "1",
+          "role": "build-x"
+        }
+      }
+    }
+  },
+  {
+    "name": "role digit boundary",
+    "policy": {
+      "builders": {
+        "x[bot]": {
+          "family": "x",
+          "role": "build-0"
+        }
+      }
+    },
+    "families": {
+      "x[bot]": "x"
+    }
+  },
+  {
+    "name": "role trailing newline",
+    "policy": {
+      "builders": {
+        "x[bot]": {
+          "family": "x",
+          "role": "build-x\n"
+        }
+      }
+    }
+  },
+  {
+    "name": "login trailing newline",
+    "policy": {
+      "builders": {
+        "x[bot]\n": {
+          "family": "x",
+          "role": "build-x"
+        }
+      }
+    }
+  },
+  {
+    "name": "family trailing newline",
+    "policy": {
+      "builders": {
+        "x[bot]": {
+          "family": "x\n",
+          "role": "build-x"
+        }
+      }
+    }
+  },
+  {
+    "name": "role uppercase",
+    "policy": {
+      "builders": {
+        "x[bot]": {
+          "family": "x",
+          "role": "build-X"
+        }
+      }
+    }
+  }
+]

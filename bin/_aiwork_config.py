@@ -554,29 +554,97 @@ def review_location() -> str:
     return rows[0][2]
 
 
-BUILDER_APP_ROLES = {
-    'openai': 'build-codex',
-    'deepseek': 'build-deepseek',
-    'xiaomi': 'build-mimo',
-}
+def _validate_builder_schema(value, schema):
+    """Interpret the shared schema subset, rejecting unsupported constraints."""
+    keywords = {'type', 'pattern', 'properties', 'required',
+                'additionalProperties', 'propertyNames', 'x-caseInsensitiveKeys', 'x-uniqueValues'}
+    def fail():
+        raise ConfigError('policy builders: invalid or ambiguous registration')
+    if not isinstance(schema, dict) or set(schema) - keywords:
+        fail()
+    if schema.get('type') == 'string':
+        if not isinstance(value, str) or ('pattern' in schema and re.fullmatch(schema['pattern'], value) is None):
+            fail()
+        return
+    if schema.get('type') != 'object' or not isinstance(value, dict):
+        fail()
+    if not set(schema.get('required', [])) <= value.keys():
+        fail()
+    properties = schema.get('properties', {})
+    for key, item in value.items():
+        if 'propertyNames' in schema:
+            _validate_builder_schema(key, schema['propertyNames'])
+        rule = properties.get(key, schema.get('additionalProperties', True))
+        if rule is False:
+            fail()
+        if isinstance(rule, dict):
+            _validate_builder_schema(item, rule)
+    if schema.get('x-caseInsensitiveKeys') and len({key.lower() for key in value}) != len(value):
+        fail()
+    for field in schema.get('x-uniqueValues', []):
+        if len({item[field] for item in value.values()}) != len(value):
+            fail()
+
+
+def _builder_entries(policy, *, require_roles=False):
+    builders = policy.get('builders') if isinstance(policy, dict) else None
+    if not isinstance(builders, dict) or not builders:
+        raise ConfigError('policy builders: nonempty object required')
+    # Existing projects' string registrations keep their pre-migration values.
+    if all(isinstance(value, str) for value in builders.values()):
+        if require_roles:
+            raise ConfigError('policy builders: local registration requires roles')
+        return {login: {'family': family} for login, family in builders.items()}
+    try:
+        import json
+        schema_path = Path(__file__).resolve().parents[1] / '.aiwork/builder-schema.json'
+        schema = json.loads(schema_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise ConfigError('policy builders: cannot read registration schema') from exc
+    _validate_builder_schema(builders, schema)
+    return builders
+
+
+def builder_families(policy):
+    return {login: entry['family'] for login, entry in _builder_entries(policy).items()}
+
+
+def builder_roles():
+    # Deployed aiwork main is the source, never the caller's cwd or an env override.
+    path = Path(__file__).resolve().parents[1] / '.aiwork/policy.json'
+    try:
+        import json
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ConfigError('policy builders: duplicate JSON key')
+                result[key] = value
+            return result
+        policy = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
+    except (OSError, ValueError) as exc:
+        raise ConfigError('cannot read deployed aiwork .aiwork/policy.json builder registration') from exc
+    return {entry['family']: entry['role']
+            for entry in _builder_entries(policy, require_roles=True).values()}
 
 
 def check_app_role(role: str) -> str:
+    roles = builder_roles()
     family = os.environ.get('AIWORK_BUILDER_FAMILY')
-    if (role == 'build' or role in BUILDER_APP_ROLES.values()) and family is not None:
-        if family not in BUILDER_APP_ROLES:
+    if (role == 'build' or role in roles.values()) and family is not None:
+        if family not in roles:
             raise ConfigError('AIWORK_BUILDER_FAMILY: unknown builder family')
-        selected = BUILDER_APP_ROLES[family]
+        selected = roles[family]
         if role != 'build' and role != selected:
             raise ConfigError('构建角色与派活执行家族不一致')
         role = selected
 
-    if role in BUILDER_APP_ROLES.values() and family is None:
+    if role in roles.values() and family is None:
         raise ConfigError('独立构建角色需要派活执行家族')
     location = review_location()
     if location == 'unisolated':
         return role
-    allowed = {'review'} if location == 'local' else {'build', *BUILDER_APP_ROLES.values()}
+    allowed = {'review'} if location == 'local' else {'build', *roles.values()}
     if role not in allowed:
         raise ConfigError('本机角色不允许使用这把机器人钥匙；评审由派活方交给评审机器')
     try:

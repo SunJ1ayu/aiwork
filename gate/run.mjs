@@ -1,3 +1,4 @@
+import { builderFamilies } from "./builders.mjs";
 import { TransientPrState } from './synchronize.mjs';
 // aiwork 放行关卡的流程。网络与 App 令牌由 main.mjs 注入;判定在 decide.mjs,读数据在 collect.mjs。
 //
@@ -33,8 +34,7 @@ export function validatePolicy(p) {
   if (typeof p?.check_name !== "string" || !p.check_name) bad.push("check_name");
   if (!Number.isInteger(p?.gate_app_id) || p.gate_app_id <= 0) bad.push("gate_app_id");
   if (typeof p?.owner !== "string" || !p.owner) bad.push("owner");
-  if (!p?.builders || typeof p.builders !== "object" ||
-      Array.isArray(p.builders) || !Object.keys(p.builders).length) bad.push("builders");
+  try { builderFamilies(p); } catch { bad.push("builders"); }
   const extraFamilies = p?.unknown_author_extra_families;
   if (p && Object.hasOwn(p, "unknown_author_extra_families") &&
       (!Array.isArray(extraFamilies) || !extraFamilies.every((family) =>
