@@ -221,7 +221,7 @@ class Capacity(unittest.TestCase):
         self.assertEqual(result['state']['sent'], legacy['sent'])
         self.assertEqual(legacy['active']['event_id'], 10)
 
-    def test_pending_failure_keeps_its_slot_but_other_work_proceeds(self):
+    def test_pending_failure_keeps_slots_and_defers_admission(self):
         rows = [item(n, [event(n)]) for n in (1, 2, 3)]
         class Fake:
             posted = []
@@ -241,8 +241,8 @@ class Capacity(unittest.TestCase):
             self.assertFalse(first['ok'])
             saved = json.loads((folder/d.FILES['state']).read_text())
             self.assertIn(d.subject(rows[0]), saved['pending'])
-            self.assertIn(d.event_key(PROJECT['repo'], 2), saved['sent'])
-            self.assertEqual(len(saved['active']), 2)
+            self.assertNotIn(d.event_key(PROJECT['repo'], 2), saved['sent'])
+            self.assertEqual(len(saved['active']), 1)
             d.poll({'max_active': 2}, folder, backend=backend)
             saved = json.loads((folder/d.FILES['state']).read_text())
             self.assertNotIn(d.event_key(PROJECT['repo'], 3), saved['sent'])
@@ -305,6 +305,37 @@ class Capacity(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 d.capacity({'max_active': value})
         self.assertEqual(d.capacity({'max_active': 3}), 3)
+
+class SlotFaults(unittest.TestCase):
+    def test_missing_origin_is_isolated(self):
+        original = Admission().active()
+        result = d.plan([item(97, []), item(2, [event(20)])], original, set(), set(), 2)
+        self.assertEqual(result['candidate']['subject'], 'example/project#2')
+        self.assertTrue(any(x['reason'] == d.Reason.ACTIVE_EVENT_MISSING for x in result['decisions']))
+        self.assertIn('example/project#97', result['state']['active'])
+
+    def test_missing_project_is_reported_and_retained(self):
+        result = d.plan([item(2, [event(20)])], Admission().active(), set(), set(), 2)
+        self.assertTrue(any(x['reason'] == d.Reason.ACTIVE_OBSERVATION_MISSING for x in result['decisions']))
+        self.assertIn('example/project#97', result['state']['active'])
+
+    def test_pending_query_does_not_admit_in_either_mode(self):
+        candidate = self_candidate()
+        class Fake:
+            def observe(self, s): return [item(1, [event(1)], state='closed'), item(2, [event(2)])]
+            def busy(self): return set()
+            def accepted(self, c): return True
+            def post(self, c): raise AssertionError('must not post')
+        for preview in (True, False):
+            with self.subTest(preview=preview), tempfile.TemporaryDirectory() as td:
+                folder = Path(td)
+                original = d.upgraded(state())
+                original['active'][candidate['subject']] = {'subject':candidate['subject'], 'event_id':1}
+                original['pending'][candidate['subject']] = candidate
+                d.atomic(folder/d.FILES['state'], original)
+                result = d.poll({}, folder, preview, Fake())
+                self.assertTrue(result['ok'])
+                self.assertFalse(any(x['reason'] == d.Reason.ELIGIBLE for x in result['decisions']))
 
 class Delivery(unittest.TestCase):
     def test_pending_survives_lost_response_and_reconciles(self):
@@ -521,10 +552,36 @@ class Orchestration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p=Path(td)/'hub.db'
             with sqlite3.connect(p) as db:
-                db.execute('create table runs(lane text,state text)')
-                db.executemany('insert into runs values(?,?)',[
+                db.execute("create table runs(lane text,state text,rule text default 'legacy')")
+                db.executemany('insert into runs(lane,state) values(?,?)',[
                     ('a/repo#1','done'),('a/repo#2','unknown'),('b/repo#1','queued')])
-            self.assertEqual(d.Backend({'hub_db':str(p)}).busy(),{'a/repo#2','b/repo#1'})
+            self.assertEqual(d.Backend({'hub_db':str(p),'projects':[PROJECT]}).busy(),{'a/repo#2','b/repo#1'})
+
+    def test_family_busy_lane_blocks_repeat_dispatch(self):
+        project=dict(PROJECT,builder_rules={'openai':'codex-builder'})
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'hub.db'
+            with sqlite3.connect(path) as db:
+                db.execute('create table runs(rule text,lane text,state text)')
+                db.execute("insert into runs values('codex-builder','example/project#1','queued')")
+            busy=d.Backend({'hub_db':str(path),'projects':[project]}).busy()
+            self.assertEqual(busy,{'example/project#1'})
+            row=item(1,[event(1)])
+            self.assertIsNone(d.plan([row],state(),busy,set(),3)['candidate'])
+
+    def test_other_rule_is_separate_and_empty_lane_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td)/'hub.db'
+            with sqlite3.connect(p) as db:
+                db.execute('create table runs(rule text,lane text,state text)')
+                db.executemany('insert into runs values(?,?,?)', [
+                    ('legacy','example/project#1','queued'),
+                    ('another','example/project#1','unknown')])
+            backend=d.Backend({'hub_db':str(p),'projects':[PROJECT]})
+            self.assertEqual(backend.busy(), {'example/project#1', ('other_rule','another','example/project#1')})
+            with sqlite3.connect(p) as db:
+                db.execute("insert into runs values('serial','','queued')")
+            with self.assertRaisesRegex(ValueError, d.Reason.HUB_LANE_UNMAPPED): backend.busy()
 
     def test_family_delivery_is_acknowledged_only_by_its_configured_rule(self):
         with tempfile.TemporaryDirectory() as td:
@@ -565,5 +622,47 @@ class Orchestration(unittest.TestCase):
             with patch.object(d,'command',side_effect=lambda argv,payload:actions.append(payload['path'])):
                 backend.post(c)
             self.assertEqual(actions,['/reference/'+d.issue_path(1)+'/'+d.REFERENCE_LABEL_PREFIX+'1'+d.REFERENCE_SUFFIX,d.event_key(PROJECT['repo'],1)])
+
+
+class PollFaultReporting(unittest.TestCase):
+    def test_candidate_read_failure_reports_subject_and_keeps_other_delivery(self):
+        backend=d.Backend({'projects':[PROJECT]})
+        backend.pages=lambda p,path: ([item(1,[])['issue'],item(2,[])['issue']]
+            if path.startswith('issues?') else [event(2)] if path.startswith('issues/2/')
+            else (_ for _ in ()).throw(TimeoutError('private diagnostic')))
+        backend.busy=lambda:set()
+        backend.post=lambda c:None
+        backend.accepted=lambda c:True
+        with tempfile.TemporaryDirectory() as td:
+            result=d.poll({'max_active':2},Path(td),backend=backend)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['errors'][0]['subject'],'example/project#1')
+            self.assertEqual(result['errors'][0]['error'],'TimeoutError')
+            self.assertNotIn('private diagnostic',json.dumps(result))
+            self.assertIn('example/project:2',json.loads((Path(td)/d.FILES['state']).read_text())['sent'])
+
+    def test_active_faults_fail_poll_and_keep_slot(self):
+        for rows,reason in (([], d.Reason.ACTIVE_OBSERVATION_MISSING),([item(97,[])], d.Reason.ACTIVE_EVENT_MISSING)):
+            class Fake:
+                def observe(self,s):return rows
+                def busy(self):return set()
+            with self.subTest(reason=reason),tempfile.TemporaryDirectory() as td:
+                folder=Path(td);d.atomic(folder/d.FILES['state'],Admission().active())
+                result=d.poll({},folder,backend=Fake())
+                self.assertFalse(result['ok'])
+                self.assertIn(reason,[x['reason'] for x in result['decisions']])
+                self.assertIn('example/project#97',json.loads((folder/d.FILES['state']).read_text())['active'])
+
+    def test_empty_lane_reason_survives_poll(self):
+        backend=d.Backend({'projects':[PROJECT]})
+        backend.observe=lambda s:[]
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'hub.db';backend.config['hub_db']=str(path)
+            with sqlite3.connect(path) as db:
+                db.execute('create table runs(rule text,lane text,state text)')
+                db.execute("insert into runs values('serial','','queued')")
+            result=d.poll({},Path(td),backend=backend)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['reason'],d.Reason.HUB_LANE_UNMAPPED)
 
 if __name__=='__main__': unittest.main()
