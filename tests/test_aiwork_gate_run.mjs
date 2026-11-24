@@ -174,16 +174,16 @@ test("R5d App 发不出占位(私钥坏了)→ 不读该提交的数据、不合
   assert.deepEqual(finishes(r.calls).map((f) => f[0]), [OTHER]);
 });
 
-test("R5e PR 已关闭不再处理；head 变化在本次运行重读而不写失败", async () => {
+test("R5e PR 已关闭不再处理；head 变化在本次运行重读，未写结论的旧占位收尾为 moved", async () => {
   const closed = recorder();
   await run(closed, prsApi(closed.calls, one({readState:"closed"})));
   assert.deepEqual(finishes(closed.calls)[0].slice(0,3),[HEAD,"completed","failure"]);
   const r=recorder(), prs=one({verdict:"PASS",readHead:OTHER});
   await run(r,prsApi(r.calls,prs),{waitForState:async()=>{prs[10].head=OTHER;}});
   const f=finishes(r.calls);
-  assert.deepEqual(f[0].slice(0,3),[HEAD,"in_progress",null]);
-  assert.equal(f.at(-1)[0],OTHER);
-  assert.equal(f.at(-1)[2],"success");
+  assert.deepEqual(f.slice(0,3).map(x=>[x[0],x[1],x[2]]),
+    [[HEAD,"in_progress",null],[HEAD,"completed","failure"],[OTHER,"completed","success"]]);
+  assert.match(f[1][3],/已不是开着的 PR 的 head/,"旧 head 没有写过最终结论，收尾为 moved");
 });
 
 test("R14c App 写不回结论(PATCH 失败)→ 运行失败", async () => {
