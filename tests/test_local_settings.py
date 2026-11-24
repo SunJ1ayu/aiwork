@@ -121,6 +121,10 @@ else:
                         config.builder_families(case['policy'])
 
     def test_missing_malformed_and_legacy_policy_never_enable_dispatch_or_keys(self):
+        self.policy.write_text((ROOT / '.aiwork/policy.json').read_text())
+        (self.settings / 'review.env').write_text('location=local\n')
+        allowed = self.probe('import _aiwork_config as c; c.check_app_role("review")')
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
         for contents in (None, '{', '{}', '{"builders":{"bot":"openai"}}',
                          '{"builders":{"bot[bot]":{"family":"fixture","role":"review"}}}',
                          '{"builders":{"bot[bot]":{"family":"fixture","family":"other","role":"build-fixture"}}}'):
@@ -130,9 +134,11 @@ else:
                         self.policy.unlink()
                 else:
                     self.policy.write_text(contents)
-                for probe in ('import _label_dispatch',
-                              'import _aiwork_config as c; c.check_app_role("build")',
-                              'import _aiwork_config as c; c.check_app_role("review")'):
+                for location, probe in (
+                        ('external', 'import _label_dispatch'),
+                        ('external', 'import _aiwork_config as c; c.check_app_role("build")'),
+                        ('local', 'import _aiwork_config as c; c.check_app_role("review")')):
+                    (self.settings / 'review.env').write_text('location=' + location + '\n')
                     result = self.probe(probe, 'fixture')
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, '')
