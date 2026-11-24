@@ -24,6 +24,8 @@ class LocalDataTests(unittest.TestCase):
         self.home.mkdir()
         self.tool = self.d / 'relocated tools'
         shutil.copytree(ROOT / 'bin', self.tool / 'bin', ignore=shutil.ignore_patterns('__pycache__'))
+        (self.tool / '.aiwork').mkdir()
+        shutil.copy2(ROOT / '.aiwork/policy.json', self.tool / '.aiwork/policy.json')
         self.data = self.d / 'machine data'
         self.data.mkdir()
         self.env = dict(os.environ, HOME=str(self.home), AIWORK_DATA_DIR=str(self.data))

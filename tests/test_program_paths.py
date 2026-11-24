@@ -191,6 +191,8 @@ class ProgramPaths(unittest.TestCase):
         for source in (ROOT / 'bin').iterdir():
             if source.is_file():
                 shutil.copy2(source, fixture.bin / source.name)
+        (fixture.root / '.aiwork').mkdir()
+        shutil.copy2(ROOT / '.aiwork/policy.json', fixture.root / '.aiwork/policy.json')
         from _test_settings import write_platform_probe
         write_platform_probe(fixture.bin)
         fixture._write('ro-repo-exec', '#!/bin/sh\nshift 2\nexec "$@"\n')
