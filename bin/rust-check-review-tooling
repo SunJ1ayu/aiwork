@@ -127,6 +127,6 @@ echo "❌ 工具链防锈失败(外部漂移/环境升级?先跑本地判据复�
 for i in "${!names[@]}"; do
   [[ "${rcs[$i]}" -eq 0 ]] && continue
   echo "--- ${names[$i]} (rc=${rcs[$i]}) ---"
-  printf '%s\n' "${outs[$i]}" | grep -E 'FAIL|total' | tail -20
+  printf '%s\n' "${outs[$i]}"
 done
 exit 1

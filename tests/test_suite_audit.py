@@ -94,9 +94,11 @@ class SuiteAudit(unittest.TestCase):
                 self.assert_rejected(self.run_suite(source, limit="0.5"), "rc=124")
 
     def test_child_python_does_not_inherit_the_observer(self):
+        child = ("import unittest\nclass Child(unittest.TestCase):\n"
+                 "    def test_child(self): pass\nunittest.main()\n")
         result = self.run_suite(ONE.replace("pass",
             "__import__('subprocess').run([__import__('sys').executable, '-c', "
-            "\"import unittest; unittest.main()\"], check=True)") + MAIN)
+            f"{child!r}], check=True)") + MAIN)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

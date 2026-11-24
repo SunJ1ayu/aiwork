@@ -124,7 +124,12 @@ def audit(target):
 
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--inventory":
-        inventory(sys.argv[2], sys.argv[3])
+        test_file, destination = sys.argv[2:]
+        try:
+            inventory(test_file, destination)
+        except Exception as exc:
+            print(f"FAIL Python suite audit {test_file}: cannot determine complete inventory: {exc}")
+            raise SystemExit(1)
     elif len(sys.argv) == 2:
         raise SystemExit(audit(sys.argv[1]))
     else:
