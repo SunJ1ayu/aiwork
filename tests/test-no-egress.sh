@@ -291,6 +291,37 @@ n9_platform_checks_stay_in_the_designated_files() {
   check "N9: 别的文件里没有平台判断(出现在:${hits:-无})" $?
 }
 
+n10_suite_audit_survives_guard_reexec() {
+  echo "[N10] 完整加载和脚本审计都必须经守卫重执行，漏跑只报不补"
+  local suite="$D/audited.py" trace="$D/audited.trace" out rc
+  cat > "$suite" <<PY
+import os, sys, unittest
+sys.path.insert(0, "$TESTS")
+import _no_egress
+assert os.readlink('/proc/self/ns/net') != os.readlink('/proc/1/ns/net')
+with open("$trace", 'a') as stream:
+    stream.write('isolated\\n')
+class Before(unittest.TestCase):
+    def test_before(self):
+        with open("$trace", 'a') as stream:
+            stream.write('test\\n')
+if __name__ == '__main__': unittest.main()
+class Late(unittest.TestCase):
+    def test_missing(self):
+        raise AssertionError('AUDIT_MUST_NOT_RUN_LATE')
+PY
+  out="$(in_host "$TESTS/../bin/aiwork-timeout" 30 python3 "$TESTS/_suite_audit.py" "$suite" 2>&1)"; rc=$?
+  [[ $rc -eq 1 ]] && grep -q 'Late.test_missing' <<<"$out"
+  check "N10: 重执行之后仍能报出漏跑测试" $?
+  [[ $(grep -c '^isolated$' "$trace" 2>/dev/null) -eq 2 ]]
+  check "N10: 完整加载和正式执行都在独立命名空间" $?
+  [[ $(grep -c '^test$' "$trace" 2>/dev/null) -eq 1 ]] && ! grep -q 'AUDIT_MUST_NOT_RUN_LATE' <<<"$out"
+  check "N10: 正式测试只跑一次，漏跑测试没有补跑" $?
+  out="$(in_host env PATH="$D/fakebin:$PATH" python3 "$TESTS/_suite_audit.py" "$suite" 2>&1)"; rc=$?
+  [[ $rc -eq 78 ]] && grep -q '无出口守卫:' <<<"$out"
+  check "N10: 无法隔离时完整加载也拒跑" $?
+}
+
 echo "=== no-egress oracle ==="
 c0_this_machine_has_egress_at_all
 n1_no_egress_under_guard
@@ -301,5 +332,6 @@ n5_env_is_not_a_backdoor
 n6_idempotent_no_exec_loop
 n7_transparent
 n9_platform_checks_stay_in_the_designated_files
+n10_suite_audit_survives_guard_reexec
 echo "=== total: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]
