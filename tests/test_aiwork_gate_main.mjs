@@ -39,6 +39,7 @@ function fakeGitHub(opts = {}) {
       log.push(record);
       const send = (code, data, headers = {}) => { res.writeHead(code, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(data)); };
       const u = req.url;
+      if (u === '/repos/o/r/git/ref/heads/main') return send(200,{object:{sha:baseSha}});
       if (u === '/repos/o/r') return send(200, {default_branch: opts.defaultBranch ?? 'main'});
       if (u.startsWith('/repos/o/r/contents/.aiwork/policy.json?ref=')) {
         return send(200, {type:'file', encoding:'base64', sha:'b'.repeat(40),
@@ -48,7 +49,7 @@ function fakeGitHub(opts = {}) {
         opts.onPause(); return;
       }
       if (u === '/app') return send(200,{id:policy.gate_app_id,slug:'aiwork-gate'});
-      if (u.startsWith('/repos/o/r/compare/')) return send(200,{total_commits:opts.sync?1:0,commits:opts.sync?[{sha:baseSha}]:[],merge_base_commit:{sha:'c'.repeat(40)}});
+      if (u.startsWith('/repos/o/r/compare/')) return send(200,{total_commits:opts.sync && u.includes('...'+baseSha)?1:0,commits:opts.sync && u.includes('...'+baseSha)?[{sha:baseSha}]:[],merge_base_commit:{sha:'c'.repeat(40)}});
       if (u.startsWith(`/repos/o/r/commits/${baseSha}?`)) return send(200,{files:[{filename:opts.overlap?'web/a.ts':'main-only.ts'}]});
       if (u === '/repos/o/r/pulls/10/update-branch' && req.method === 'PUT') {
         if(opts.moveOnUpdate){opts.moveOnUpdate=false;baseSha='d'.repeat(40);return send(422,{message:'branch changed'});}
@@ -59,7 +60,7 @@ function fakeGitHub(opts = {}) {
       if (u === "/app/installations/777/access_tokens") return send(201, { token: JSON.parse(body).permissions.checks ? "app-check-token" : "app-merge-token" });
       if (u === "/repos/o/r/pulls/10/merge" && req.method === "PUT") {
         if(opts.moveOnMerge){opts.moveOnMerge=false;opts.sync=true;baseSha='d'.repeat(40);return send(409,{message:'base changed'});}
-        return send(200, { merged: true });
+        return opts.mergeFails?send(405,{message:"Required status check aiwork-gate is expected"}):send(200, { merged: true });
       }
       if (u === "/repos/o/r/check-runs" && req.method === "POST") {
         if (opts.bindingFails && record.body.name === "aiwork-merge-request") return send(502, { message: "binding failed" });
@@ -87,7 +88,7 @@ function fakeGitHub(opts = {}) {
       if (opts.prFails && u === "/repos/o/r/pulls/10") return send(502, { message: "bad gateway" });
       // mergeReady:有合格 PASS、业主贴了合并标签 → 放行并合并
       const labels = opts.mergeReady ? [{ name: policy.merge_label }] : [];
-      const pr10 = { number: 10, state: "open", changed_files: opts.files?.length ?? 1, labels, mergeable:opts.conflict?false:true, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main", sha:baseSha } };
+      const pr10 = { number: 10, state: "open", changed_files: opts.files?.length ?? 1, labels, mergeable:opts.conflict?false:true, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main", sha:opts.staleBase ?? baseSha } };
       if (u === "/repos/o/r/pulls?state=open&per_page=100") return send(200, [pr10]);
       if (u === "/repos/o/r/pulls/10") {
         // collect 和 prepare 都读取 PR；在 prepare 读取时才推进状态样本。
@@ -608,7 +609,7 @@ test('整机:其他事件、仓库、申请人、标签或坏载荷不能保存�
 });
 
 test('整机：仅其他条件齐全时同步，先存意向，写权限只用于 update-branch，head 被锁定',async()=>{
- for(const opts of [{sync:true,mergeReady:true},{sync:true,mergeReady:false},{sync:true,mergeReady:true,conflict:true},
+ for(const opts of [{sync:true,mergeReady:true,staleBase:'c'.repeat(40)},{sync:true,mergeReady:true},{sync:true,mergeReady:false},{sync:true,mergeReady:true,conflict:true},
   {sync:true,mergeReady:true,syncRecordFails:true},{sync:true,mergeReady:true,updateFails:true}]){
   const gh=await fakeGitHub(opts);
   try {
@@ -678,4 +679,14 @@ test('独立保存任务只写通知授权；排队重算不重新保存且能�
   assert.equal(gh.log.slice(start).filter(r=>r.body?.name==='aiwork-merge-request').length,0);
   assert.equal(gh.log.slice(start).filter(r=>r.url.endsWith('/merge')).length,1,'保存独立于被取消的重算，之后的门铃可消费');
  } finally {gh.server.close();}
+});
+
+test('真实接线：合并被规则拒绝，原因写回检查摘要而非只留日志',async()=>{
+ const gh=await fakeGitHub({mergeReady:true,mergeFails:true});
+ try {
+  const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+  const final=checkWrites(gh.log).filter(r=>r.method==='PATCH').at(-1);
+  assert.equal(final.body.conclusion,'success');
+  assert.match(final.body.output.summary,/合并被拒.*405.*Required status check/);
+ }finally{gh.server.close();}
 });

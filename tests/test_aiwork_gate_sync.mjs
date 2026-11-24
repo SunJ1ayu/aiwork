@@ -32,7 +32,7 @@ function environment(over={}) {
  const key=mergeBindingKey(1,p.merge_label,old,p.owner);
  const intent=syncIntent(1,old,base,'main','builder/one',actor,key,[],over.overlap?['web/a.ts']:[],common);
  const pr={number:1,state:'open',changed_files:1,labels:[{name:p.merge_label}],mergeable:true,
-  head:{sha:head,ref:'builder/one',repo:{full_name:'o/r'}},base:{sha:base,ref:'main'}};
+  head:{sha:head,ref:'builder/one',repo:{full_name:'o/r'}},base:{sha:common,ref:'main'}};
  const activity=[{id:2,before:old,after:head,actor:{login:actor,type:'Bot'},activity_type:'push',timestamp:'2026-11-23'},
   {id:1,before:'0'.repeat(40),after:old,actor:{login:'SunJ1ayuBoT',type:'User'},activity_type:'branch_creation',timestamp:'2026-11-22'}];
  if(over.laterPush) {pr.head.sha=newer; activity.unshift({id:3,before:head,after:newer,actor:{login:'SunJ1ayuBoT',type:'User'},activity_type:'push',timestamp:'2026-11-24'});}
@@ -47,6 +47,7 @@ function environment(over={}) {
  const requests=[];
  const api={async get(path){requests.push(path);
   if(path==='/repos/o/r') return {default_branch:'main'};
+  if(path==='/repos/o/r/git/ref/heads/main') return {object:{sha:base}};
   if(path==='/repos/o/r/pulls/1') return structuredClone(pr);
   if(path.startsWith('/repos/o/r/git/commits/')) {const id=path.split('/').at(-1);return {sha:id,tree:{sha:id},parents:id===head?[{sha:over.wrongParent?common:old},{sha:base}]:[]};}
   if(path.includes('/git/trees/')) {const id=path.split('/').at(-1).split('?')[0];return {truncated:!!over.truncated,tree:files[id]};}
@@ -99,18 +100,18 @@ function planning(over={}) {
  if(over.conflict)e.pr.mergeable=false;
  const original=e.api.get.bind(e.api);
  e.api.get=async path=>{
-  if(path.includes('/compare/'))return {total_commits:1,merge_base_commit:{sha:common}};
+  if(path.includes('/compare/'))return {total_commits:path.includes('...'+common)?0:over.upToDate?0:1,merge_base_commit:{sha:common}};
   return original(path);
  };
  const page=e.api.getPage.bind(e.api);
  e.api.getPage=async path=>{
-  if(path.includes('/compare/'))return {data:{commits:over.incomplete?[]:[{sha:base}]}};
+  if(path.includes('/compare/'))return {data:{commits:over.incomplete || over.upToDate || path.includes('...'+common)?[]:[{sha:base}]}};
   if(path.includes(`/commits/${base}?`))return {data:{files:[{filename:over.overlap?'web/a.ts':'other.ts',previous_filename:over.rename?'web/a.ts':undefined}]}};
   return page(path);
  };
  return e;
 }
-const planningFacts=()=>({pr:{head_sha:old,base_sha:base,base_ref:'main'},files:['web/a.ts'],merge_request:{key:'frozen-label'}});
+const planningFacts=()=>({pr:{head_sha:old,base_ref:'main'},files:['web/a.ts'],merge_request:{key:'frozen-label'}});
 test('同步计划：冲突不同步；逐提交含重命名旧路径的交集决定是否沿用',async()=>{
  const a=await prepareSynchronization(planning().api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
  assert.deepEqual(a.intent.review_heads,[old]);
@@ -252,4 +253,30 @@ test('P2：叉库的可信合并申请说明不支持自动合并，不要求无
  const f=await collect(e.api,'o/r',1,p);
  assert.equal(f.merge_request.bound,false);assert.match(f.merge_request.reason,/叉库.*不支持/);
  assert.doesNotMatch(f.merge_request.reason,/重贴/);
+});
+
+test('过时 PR base 不遮住真实 main；意向记真实双亲；main 未前进不发同步',async()=>{
+ const e=planning();
+ const plan=await prepareSynchronization(e.api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
+ assert.equal(plan?.intent.base,base);
+ assert.deepEqual(plan.intent.review_heads,[old]);
+ assert.ok(e.requests.includes('/repos/o/r/git/ref/heads/main'));
+ assert.equal(await prepareSynchronization(planning({upToDate:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),null);
+});
+test('读取期间真实 main 前进属于瞬时状态，不误报数据损坏',async()=>{
+ const e=planning(),get=e.api.get.bind(e.api);let reads=0;
+ e.api.get=async path=>path==='/repos/o/r/git/ref/heads/main'
+  ? {object:{sha:++reads===1?base:newer}} : get(path);
+ await assert.rejects(prepareSynchronization(e.api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),
+  error=>error.constructor.name==='TransientPrState' && /main/.test(error.message));
+});
+
+test('PR 的历史 base 记录刷新不代表当前目标分支改变',async()=>{
+ const e=planning(),get=e.api.get.bind(e.api);let reads=0;
+ e.api.get=async path=>{
+  const value=await get(path);
+  if(path==='/repos/o/r/pulls/1' && ++reads>1)value.base.sha=newer;
+  return value;
+ };
+ assert.equal((await prepareSynchronization(e.api,'o/r',1,planningFacts(),'aiwork-gate[bot]')).intent.base,base);
 });

@@ -17,7 +17,7 @@ function recorder() {
   let n = 0;
   const poster = {
     async start(sha) { calls.push(["start", sha]); return ++n; },
-    async finish(sha, result, id) { calls.push(["finish", sha, result.status, result.conclusion, result.title, id]); },
+    async finish(sha, result, id) { calls.push(["finish", sha, result.status, result.conclusion, result.title, id, result.summary]); },
   };
   return { calls, poster };
 }
@@ -323,7 +323,8 @@ test("M6 合并接口出错(比如判完之后又推了新提交)→ 记下原�
   });
   await run(r, api, { merger: mergeRecorder(r, { fail: (n) => n === 10 }), log: (l) => logs.push(l) });
   assert.deepEqual(merges(r.calls), [[10, HEAD]]);
-  assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[HEAD, "success"], [OTHER, "success"]]);
+  assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[HEAD, "success"], [HEAD, "success"], [OTHER, "success"]]);
+  assert.match(r.calls.filter(c=>c[0]==="finish")[1][6], /合并被拒.*409/);
   assert.ok(logs.some((l) => /PR #10/.test(l) && /409/.test(l)), logs.join("\n"));
 });
 
@@ -384,7 +385,7 @@ test("轮数显示复用既有读取和分页，不增接口；同 head 每个 P
       11: { head: HEAD, files: [], verdict: "PASS", summaries: [] },
     };
     const oldCalls = [], newCalls = [], merged = [];
-    const before = await run(recorder(), prsApi(oldCalls, prs));
+    const before = await run(recorder(), prsApi(oldCalls, prs), {merger:{async merge(){}}});
     const after = await run(recorder(), prsApi(newCalls, prs), { policy: roundPolicy, merger: { async merge(n) { merged.push(n); } } });
     assert.deepEqual(newCalls, oldCalls, "包括请求数量、路径、顺序都和旧策略相同");
     assert.equal(after[0].title, before[0].title);
@@ -471,4 +472,28 @@ test('同次重读不重复发送另一个 PR 已接受的同步请求',async()=
   async apply(i){applied.push(i.number);}
  }});
  assert.deepEqual(applied,[10,11]);
+});
+
+test('P1-1：同 head 的合并拒绝逐 PR 记录，不挡其余合并或改写放行',async()=>{
+ for(const reject of [[10],[10,11],[11]]){
+  const r=recorder();
+  const prs=Object.fromEntries([10,11].map(number=>[number,{
+   head:HEAD,files:['web/a.ts'],labels:[MERGE],events:[labeled(policy.owner)]
+  }]));
+  const outcomes=await run(r,prsApi(r.calls,prs),{merger:{async merge(number,sha){
+   r.calls.push(['merge',number,sha]);
+   const current=r.calls.filter(c=>c[0]==='finish').at(-1);
+   assert.equal(current[3],'success','合并接口看到的共享必需检查仍为 success');
+   if(reject.includes(number))throw new Error(`HTTP 405 rule rejects PR ${number}`);
+  }}});
+  assert.deepEqual(merges(r.calls),[[10,HEAD],[11,HEAD]]);
+  const writes=r.calls.filter(c=>c[0]==='finish');
+  assert.equal(writes.length,2,'先放行，全部尝试完再补一次摘要');
+  assert.ok(writes.every(c=>c[3]==='success'),'拒绝不改变 G1–G8 放行结论');
+  assert.ok(r.calls.indexOf(writes.at(-1))>r.calls.findLastIndex(c=>c[0]==='merge'));
+  for(const number of reject){
+   assert.match(writes.at(-1)[6],new RegExp(`PR #${number} 合并被拒.*405`));
+   assert.match(outcomes[0].summary,new RegExp(`PR #${number} 合并被拒`));
+  }
+ }
 });
