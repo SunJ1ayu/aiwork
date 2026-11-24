@@ -39,5 +39,5 @@ export function retainsAuthorization(history, current, source, synchronizations)
   if (all.filter(a => a.after === current).length !== 1 ||
       all.filter(a => a.after === source).length !== 1) return false;
   const arrival = life.findIndex(a => a.after === source);
-  return arrival >= 0 && life.slice(0, arrival).every(a => synchronizations.get(a.id)?.unchanged === true);
+  return arrival >= 0 && life.slice(0, arrival).every(a => synchronizations.get(a.id)?.retains === true);
 }

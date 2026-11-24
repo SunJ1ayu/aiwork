@@ -13,10 +13,13 @@ import { reviewPlan } from "./review-plan.mjs";
 //   G4 作者:扣除已核实关卡同步后，这个分支上的每次推送都来自已知 Builder 账号,否则 UNKNOWN → 要业主批准
 //   G5 当前 head 及沿用来源上任何一条 BLOCK → 要业主在最后一条 BLOCK 之后批准。BLOCK = aiwork-review 在当前 head 上发的、
 //      除"格式完整且结论不是 BLOCK"以外的一切(BLOCK 结论、Request changes、正文结论行写 BLOCK、结论块看不懂),
-//      或任何其他评审人在当前 head 上最后一次表态是 Request changes / 被撤销(撤销只要写权限,Builder 就有,
-//      撤销抹不掉反对;被撤销的评审看不出原来是什么,一律按反对算,反对的时刻是撤销那一刻)
+//      或任何其他评审人最后一次表态是 Request changes / 被撤销(撤销只要写权限,Builder 就有,
+//      撤销抹不掉反对;被撤销的评审看不出原来是什么,一律按反对算,反对的时刻是撤销那一刻)。
+//      同一个人取最后一次表态(含沿用来源);但如果最后一次是旧提交上的 Approve,它不能盖掉
+//      这个人在当前 head 上的反对 —— 对旧提交补一个批准不能绕过当前内容上的反对。
 //   G6 high 路径:至少 high_min_families 个不同的非作者家族 PASS(豁免不了)+ 业主批准
-//   G7 业主批准 = 业主在当前 head 上最后一次表态是 Approve;最后一次是 Request changes 或被撤销则一律不放行
+//   G7 业主批准 = 业主在当前 head 上最后一次表态是 Approve;最后一次是 Request changes 或被撤销则一律不放行。
+//      批准不从沿用的旧提交搬移;但业主在沿用来源上更新的反对/撤销会挡住放行,须在当前 head 上重新批准。
 //   G8 数据不全 → 由 collect.mjs 抛错,run.mjs 判 failure
 //
 // 放不放行只由 decide() 说了算;合不合并 = 放行 且 合并请求算数(mergeRequester;run.mjs 第 4 步)。
@@ -127,17 +130,31 @@ function effectiveAt(r, policy) {
   return r.submitted_at;
 }
 
-// 除评审机器人以外,每个评审人在当前 head 上最后一次表态(COMMENTED 不算表态)。
-function stancesOnHead(reviews, policy, head) {
-  const last = new Map();
-  for (const r of reviews) {
-    if (!(head instanceof Set ? head.has(r.commit_id) : r.commit_id === head) || isReviewerBot(r, policy)) continue;
-    if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) continue;
-    const prev = last.get(r.login);
+// 除评审机器人以外,每个评审人的表态。总体仍取最后一次(含沿用来源);
+// 唯一的例外:最后一次是旧提交上的 Approve 时,不能抹掉这个人当前 head 上的反对。
+// 返回 all(用于 G5/G7)和 current(只含当前 head,用来认定业主批准)。
+function stancesOnHeads(reviews, policy, head, heads) {
+  const current = new Map();
+  const latest = new Map();
+  const remember = (map, r) => {
+    const prev = map.get(r.login);
     const later = !prev || effectiveAt(r, policy) > effectiveAt(prev, policy) || (effectiveAt(r, policy) === effectiveAt(prev, policy) && r.id > prev.id);
-    if (later) last.set(r.login, r);
+    if (later) map.set(r.login, r);
+  };
+  for (const r of reviews) {
+    if (!heads.has(r.commit_id) || isReviewerBot(r, policy)) continue;
+    if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) continue;
+    remember(latest, r);
+    if (r.commit_id === head) remember(current, r);
   }
-  return last;
+  const all = new Map(latest);
+  for (const [login, r] of latest) {
+    const onHead = current.get(login);
+    if (r.commit_id !== head && r.state === "APPROVED" && onHead && onHead.state !== "APPROVED") {
+      all.set(login, onHead);
+    }
+  }
+  return { all, current };
 }
 
 // 合并授权同时要求版本绑定和可信申请人；Builder 的同名记录或标签不算。
@@ -276,8 +293,9 @@ export function decide(facts, policy) {
   const stale = botReviews.length - onHead.length;
 
   // 人的表态:业主单独看(G7);其他人最后一次表态不是 Approve 的,都算 BLOCK(G5)
-  const stances = stancesOnHead(facts.reviews.filter(r => r.login !== policy.owner || r.commit_id === head), policy, reviewHeads);
+  const { all: stances, current: currentStances } = stancesOnHeads(facts.reviews, policy, head, reviewHeads);
   const ownerLast = [...stances.values()].find((r) => r.login === policy.owner && r.type === "User") ?? null;
+  const ownerCurrent = [...currentStances.values()].find((r) => r.login === policy.owner && r.type === "User") ?? null;
   for (const [login, r] of stances) {
     if (login === policy.owner || r.state === "APPROVED") continue;
     blocks.push({ id: r.id, at: effectiveAt(r, policy), family: "评审人", model: `${login}${r.state === "DISMISSED" ? "(被撤销的评审)" : " 要求修改"}` });
@@ -312,11 +330,12 @@ export function decide(facts, policy) {
   }
 
   // G7
-  const approved = ownerLast?.state === "APPROVED";
-  const ownerObjection = ownerLast === null || approved ? null : ownerLast.state === "DISMISSED" ? "业主的评审被撤销了,要业主重新表态" : "业主要求修改(Request changes)";
+  // 批准只认当前 head 上的表态;ownerLast 可能是更晚的旧提交反对/撤销,照样挡住。
+  const approved = ownerCurrent?.state === "APPROVED";
+  const ownerObjection = ownerLast === null || ownerLast.state === "APPROVED" ? null : ownerLast.state === "DISMISSED" ? "业主的评审被撤销了,要业主重新表态" : "业主要求修改(Request changes)";
   const lastBlockAt = blocks.map((b) => b.at).sort().at(-1) ?? "";
   // 批准要晚于最后一条 BLOCK:业主批准时还没看到的 BLOCK,不能被那次批准豁免
-  const blockWaived = approved && effectiveAt(ownerLast, policy) > lastBlockAt;
+  const blockWaived = approved && effectiveAt(ownerCurrent, policy) > lastBlockAt;
   const needOwner = [];
   if (!author.known) needOwner.push("作者 UNKNOWN");
   if (judging.length) needOwner.push("改了判卷面");

@@ -77,7 +77,10 @@ async function recheckWrite(error, number, expected) {
   const pr = await api.get(`/repos/${repo}/pulls/${number}`);
   assertPrSnapshot(pr, expected);
   await assertBaseTip(api,repo,expected.base_ref,expected.main_sha);
-  if (pr.mergeable === null) throw new TransientPrState('GitHub 还在计算能否干净合并');
+  // 同一提交上的前一个 PR 刚合入会推进 main，后一个可能在规则上被要求先跟上 main。
+  // 这不是最终拒绝：当次重读后会走自动同步，不能让这一轮当成普通失败。
+  if (pr.mergeable === null || pr.mergeable_state === 'behind')
+    throw new TransientPrState(pr.mergeable_state === 'behind' ? '分支落后于 main，重读后自动同步' : 'GitHub 还在计算能否干净合并');
   throw error;
 }
 const merger = {
