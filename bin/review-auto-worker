@@ -85,9 +85,9 @@ def main_policy(api, token, repository):
     builders = builder_families(policy)
     policy = dict(policy, builders=builders)
     extra = policy.get('unknown_author_extra_families', [])
-    if (not isinstance(builders, dict) or not builders or not isinstance(extra, list)
+    if (not isinstance(extra, list)
             or not all(isinstance(family, str) and re.fullmatch(FAMILY_PATTERN, family)
-                       for family in [*builders.values(), *extra])):
+                       for family in extra)):
         raise ValueError('invalid builder registration in main policy')
     return policy, blob
 
