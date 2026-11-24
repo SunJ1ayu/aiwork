@@ -6,16 +6,93 @@ import unittest
 import sys
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
+import _leg_session
 loader=importlib.machinery.SourceFileLoader('handoff',str(Path(__file__).resolve().parents[1]/'bin/review-auto-worker'))
 spec=importlib.util.spec_from_loader(loader.name,loader)
 worker=importlib.util.module_from_spec(spec)
 loader.exec_module(worker)
 
 class Handoff(unittest.TestCase):
-    def test_failed_finished_retries_success_does_not(self):
-        self.assertTrue(worker.retryable({'state':'finished','entry_exit':2}))
-        self.assertFalse(worker.retryable({'state':'finished','entry_exit':0}))
-        self.assertTrue(worker.retryable({'state':'started'}))
+    def test_preflight_reads_use_formal_network_retry(self):
+        import tempfile, subprocess, io
+        from contextlib import redirect_stdout, redirect_stderr
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); control=root/'control'; control.mkdir()
+            token_calls=[]; state_calls=[]
+            def token(repository):
+                token_calls.append(repository)
+                if len(token_calls)==1: raise OSError('temporary token failure')
+                return 'fixture'
+            def state(*args):
+                state_calls.append(args)
+                if len(state_calls)==1: raise OSError('temporary state failure')
+                return {'head':'a'*40,'policy_sha':'blob','excluded':['openai'],'gate':{'summary':'✅ G1 CI'}}
+            # Use the actual formal retry implementation, with its waits stubbed.
+            import _leg_session
+            api={'_leg_session':_leg_session,'review_token':token,'read_dispatch_state':state,
+                 'pr_state':lambda *a,**k:{'head':{'sha':'a'*40},'user':{'login':'builder'}},'redact':lambda s:s}
+            settings={'checkout':directory,'programs':directory,'repository':'example/repo'}
+            with patch.object(worker,'prepare_checkout',return_value=root), patch.object(worker.runpy,'run_path',return_value=api), patch.object(worker,'main_policy',return_value=({'builders':{'builder':'openai'}},'blob')), patch.object(worker.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'{}','')) as dispatch, patch.object(worker.subprocess,'check_output',return_value='commit'), patch.object(_leg_session.time,'sleep'), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), patch.dict(worker.os.environ):
+                worker.dispatch_attempt(settings,{'a'*40:{'openai'}},1,root,control)
+            self.assertEqual(len(token_calls),2)
+            self.assertEqual(len(state_calls),2)
+            dispatch.assert_called_once()
+
+    def test_completed_request_skips_capacity_clone_and_network(self):
+        self.receipt_sequence(late=False)
+
+    def test_parent_reports_committed_result_after_deadline(self):
+        self.receipt_sequence(late=True)
+
+    def receipt_sequence(self, late):
+        import tempfile,json,io
+        import _aiwork_config
+        from contextlib import redirect_stdout
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            repository='example/repo'; head='a'*40
+            control=root/'review-handoffs'/(worker.hashlib.sha256(repository.encode()).hexdigest()+'-1')
+            control.mkdir(parents=True)
+            if not late:
+                worker.write_record(control/(head+'.json'),{'pr':1,'head':head,'state':'finished','entry_exit':0})
+            context=root/'context'; settings=root/'settings'
+            context.write_text(json.dumps({'events':[{'source':'trusted','type':'reviews.request','subject':repository+'#1','detail':json.dumps({'repository':repository,'pr':1,'head':head,'builder_family':'openai'})}]}))
+            settings.write_text(json.dumps({'checkout':directory,'programs':directory,'repository':repository,'event_source':'trusted'}))
+            def dispatch(command,env,timeout,locks):
+                import subprocess
+                unit=Path(command[-1])
+                facts={'pr':1,'head':head,'state':'finished','entry_exit':0,'attempt':unit.name}
+                worker.write_record(control/(head+'.json'),facts)
+                return subprocess.CompletedProcess(command,124,'','late timeout')
+            from contextlib import nullcontext
+            capacity = (lambda *a:nullcontext(None)) if late else (lambda *a: self.fail('must not acquire capacity'))
+            with patch.object(worker.sys,'argv',['worker',str(context),str(settings)]), patch.object(_aiwork_config,'data_path',side_effect=lambda key:root/key), patch.object(worker,'capacity',side_effect=capacity), patch.object(worker,'prepare_checkout',side_effect=AssertionError('must not clone')), patch.object(worker,'run_dispatch',side_effect=dispatch if late else AssertionError('must not access GitHub')), redirect_stdout(io.StringIO()) as output:
+                worker.main()
+            self.assertIn('本轮已结束' if late else '已交接',output.getvalue())
+            self.assertNotIn('未完成',output.getvalue())
+
+    def test_early_dedup_requires_valid_success_for_every_requested_head(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); head='a'*40
+            facts={'pr':1,'head':head,'state':'finished','entry_exit':0}
+            for changes in ({'pr':2},{'pr':True},{'head':'b'*40},{'entry_exit':True},{'entry_exit':1},{'state':'started'}):
+                worker.write_record(root/(head+'.json'),dict(facts,**changes))
+                self.assertFalse(worker.completed_requests(root,{head:{'openai'}},1))
+            worker.write_record(root/(head+'.json'),facts)
+            self.assertTrue(worker.completed_requests(root,{head:{'openai'}},1))
+            self.assertFalse(worker.completed_requests(root,{head:{'openai'},'b'*40:{'openai'}},1))
+
+    def test_committed_attempt_overrides_late_deadline_only_for_same_attempt(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); unit=root/'attempt';unit.mkdir();control=root/'control';control.mkdir()
+            facts={'pr':1,'head':'a'*40,'state':'finished','entry_exit':0,'attempt':unit.name}
+            worker.write_record(control/('a'*40+'.json'),facts)
+            self.assertEqual(worker.committed_attempt(control,unit,{'a'*40:{'openai'}},1),facts)
+            facts['attempt']='previous-attempt'
+            worker.write_record(control/('a'*40+'.json'),facts)
+            self.assertIsNone(worker.committed_attempt(control,unit,{'a'*40:{'openai'}},1))
 
     def test_preflight_recovers_and_has_limit(self):
         with patch.object(worker.time,'sleep'), patch.object(worker.subprocess,'run',side_effect=[OSError('network'),'ok']) as run:
@@ -68,7 +145,7 @@ class Handoff(unittest.TestCase):
             policy={'builders':{'builder':'openai'}}
             pr={'head':{'sha':'a'*40},'user':{'login':'builder'}}
             state={'head':'a'*40,'policy_sha':'blob','excluded':['openai'],'gate':{'summary':'✅ G1 current CI'}}
-            api={'review_token':lambda repo:'token','pr_state':lambda *args,**kw:pr,'read_dispatch_state':lambda *args:state,'redact':lambda value:value}
+            api={'_leg_session':_leg_session,'review_token':lambda repo:'token','pr_state':lambda *args,**kw:pr,'read_dispatch_state':lambda *args:state,'redact':lambda value:value}
             models=[]
             def command(argv,**kwargs):
                 models.append(argv)
@@ -162,7 +239,7 @@ class Handoff(unittest.TestCase):
             self.assertEqual(worker.read_record(record),old)
             self.assertEqual(list(Path(directory).glob('record-*')),[])
             worker.write_record(record,{'state':'finished','entry_exit':0})
-            self.assertFalse(worker.retryable(worker.read_record(record)))
+            self.assertEqual(worker.read_record(record),{'state':'finished','entry_exit':0})
 
     def test_independent_real_git_checkouts(self):
         import tempfile,subprocess,os
@@ -195,7 +272,7 @@ class Handoff(unittest.TestCase):
             def job(index):
                 unit=root/str(index);unit.mkdir()
                 settings={'checkout':directory,'programs':directory,'repository':'example/repo'}
-                api={'review_token':lambda r:'token','pr_state':lambda *a,**k:{'head':{'sha':'a'*40},'user':{'login':'builder'}},'read_dispatch_state':lambda *a:{'head':'a'*40,'policy_sha':'blob','excluded':['openai'],'gate':{'summary':'✅ G1 CI'}},'redact':lambda s:s}
+                api={'_leg_session':_leg_session,'review_token':lambda r:'token','pr_state':lambda *a,**k:{'head':{'sha':'a'*40},'user':{'login':'builder'}},'read_dispatch_state':lambda *a:{'head':'a'*40,'policy_sha':'blob','excluded':['openai'],'gate':{'summary':'✅ G1 CI'}},'redact':lambda s:s}
                 def run(argv,**kw):
                     with count.get_lock():count.value+=1
                     time.sleep(0.3)
@@ -257,6 +334,8 @@ class Handoff(unittest.TestCase):
             fake=source/'bin/review-pr'
             fake.write_text("""#!/usr/bin/python3
 import base64,json,sys,time,os
+from types import SimpleNamespace
+_leg_session=SimpleNamespace(network_read=lambda operation:operation())
 from pathlib import Path
 policy={'builders':{'builder':'openai'}}
 def review_token(repository):return 'fixture'
@@ -299,8 +378,8 @@ if __name__=='__main__':
                 self.assertEqual(duplicate.returncode,0,duplicate.stdout+duplicate.stderr)
                 self.assertEqual((markers/'1').read_text(),before)
                 units=list((data/'tasks').glob('review-handoff-*'))
-                self.assertEqual(len(units),3)
-                self.assertEqual(len({str(unit/'checkout') for unit in units}),3)
+                self.assertEqual(len(units),2)
+                self.assertEqual(len({str(unit/'checkout') for unit in units}),2)
                 self.assertEqual(len(list((data/'review-handoffs').rglob('*.json'))),2)
                 values['timeout_seconds']=3
                 settings.write_text(json.dumps(values))

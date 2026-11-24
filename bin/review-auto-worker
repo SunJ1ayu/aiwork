@@ -31,13 +31,6 @@ def retry(operation):
             time.sleep(attempt + 1)
 
 
-def retryable(record):
-    # Called only while holding this PR/head lock.
-    return (record.get('state') == 'started' or
-            (record.get('state') == 'finished' and type(record.get('entry_exit')) is int
-             and record['entry_exit'] != 0))
-
-
 def requested_pr(context, repository, source):
     events = context.get('events', [])
     if not events:
@@ -236,6 +229,41 @@ def read_record(path):
     return record
 
 
+def finished_record(path, head, number):
+    record = read_record(path)
+    if (record and type(record.get('pr')) is int and record['pr'] == number
+            and record.get('head') == head
+            and record['state'] == 'finished'):
+        return record
+    return None
+
+
+def completed_requests(control, requests, number):
+    # Do not let one old success swallow a coalesced request for an unseen head.
+    for head in requests:
+        preserve_legacy(control / (head + '.json'), None, number, head)
+        record = finished_record(control / (head + '.json'), head, number)
+        if record is None or record['entry_exit'] != 0:
+            return False
+    return True
+
+
+def committed_attempt(control, directory, requests, number):
+    # The persistent head record is the commit point. A timeout or output error
+    # after that point must report that result, not invent a second outcome.
+    for head in requests:
+        record = finished_record(control / (head + '.json'), head, number)
+        if record and record.get('attempt') == directory.name:
+            return record
+    return None
+
+
+def print_result(facts):
+    print('正式评审本轮已结束；等待汇总。' if facts['entry_exit'] == 0 else
+          '正式评审未完成；失败记录已保存，等待处理。')
+    print(json.dumps(facts, ensure_ascii=False, indent=2))
+
+
 def preserve_legacy(record, directory, number, head):
     # The old adapter had one configured repository and no repository field in
     # its record. During the upgrade retain its same-number/head success; do
@@ -246,10 +274,10 @@ def preserve_legacy(record, directory, number, head):
         return
     with locked(legacy / '.lock'):
         old = legacy / (str(number) + '-' + head + '.json')
-        facts = read_record(old)
-        if facts and not retryable(facts):
+        facts = finished_record(old, head, number)
+        if facts and facts['entry_exit'] == 0:
             write_record(record, facts)
-        elif old.exists():
+        elif directory is not None and old.exists():
             (directory / 'legacy-previous.json').write_bytes(old.read_bytes())
 
 
@@ -297,17 +325,18 @@ def dispatch_attempt(settings, requests, number, directory, control):
     repository = settings['repository']
     # review-pr owns its network-read retry policy; do not wrap those readers
     # in the handoff's Git/metadata retry helper.
-    token = api['review_token'](repository)
+    token = api['_leg_session'].network_read(lambda: api['review_token'](repository))
     pr = api['pr_state'](token, number, repository=repository)
     policy, blob = main_policy(api, token, repository)
     head, author, family, dispatch_family = builder_for(pr, requests, policy)
-    state = api['read_dispatch_state'](repository, number, dispatch_family)
+    state = api['_leg_session'].network_read(
+        lambda: api['read_dispatch_state'](repository, number, dispatch_family))
     verify_dispatch_state(state, head, blob, family, policy)
     record = control / (head + '.json')
     with locked(control / (head + '.lock')):
         preserve_legacy(record, directory, number, head)
         previous = read_record(record)
-        if previous and not retryable(previous):
+        if (completed := finished_record(record, head, number)) and completed['entry_exit'] == 0:
             print('没事可做：同一 PR 同一 head 已交接，不重复派腿。')
             return
         if record.exists():
@@ -316,6 +345,7 @@ def dispatch_attempt(settings, requests, number, directory, control):
         facts = {'pr': number, 'head': head, 'builder_family': family,
                  'author': author, 'ci_g1': True, 'policy_sha': blob,
                  'aiwork_main': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
+                 'attempt': directory.name,
                  'started_at': datetime.now(timezone.utc).isoformat(), 'state': 'started'}
         write_record(record, facts)
         print('Verified formal review started: ' + json.dumps(facts), flush=True, file=sys.stderr)
@@ -336,8 +366,8 @@ def dispatch_attempt(settings, requests, number, directory, control):
             facts['error'] = redact(result.stderr[-3000:])
         write_record(record, facts)
         write_record(directory / 'result.json', facts)
-        print('正式评审本轮已结束；等待汇总。' if report else '正式评审未完成；失败记录已保存，等待处理。')
-        print(json.dumps(facts, ensure_ascii=False, indent=2))
+        signal.alarm(0)
+        print_result(facts)
 
 
 def main():
@@ -369,6 +399,9 @@ def main():
     # Serialize requests for one PR before admission, so duplicates cannot
     # consume every capacity slot while waiting for the active head.
     with locked(control / 'request.lock') as request_lock:
+        if completed_requests(control, requests, number):
+            print('没事可做：同一 PR 同一 head 已交接，不重复派腿。')
+            return
         with capacity(root, args[1]) as slot:
             tasks = data_path('tasks')
             tasks.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -379,8 +412,16 @@ def main():
                                   [request_lock, slot])
             # The child only emits public facts and sanitized failures. Raw
             # subprocess stderr is never copied into the public receipt.
-            (directory / 'worker.stdout').write_text(result.stdout)
-            (directory / 'worker.stderr').write_text(result.stderr)
+            committed = committed_attempt(control, directory, requests, number)
+            try:
+                (directory / 'worker.stdout').write_text(result.stdout)
+                (directory / 'worker.stderr').write_text(result.stderr)
+            except OSError:
+                if committed is None:
+                    raise
+            if committed is not None:
+                print_result(committed)
+                return
             print(result.stdout, end='')
             if result.returncode:
                 print('评审交接未完成；本次已终止，记录保留，等待处理。')
