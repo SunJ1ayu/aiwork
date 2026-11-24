@@ -104,12 +104,13 @@ async function openPrs(api, repo) {
 
 // 同一运行重读整份事实，不能只重试最后一次写操作或沿用旧授权。
 export const MAX_STATE_READS = 8;
-// 单次 1 秒等 8 次常常赶不上 GitHub 后台计算；指数退避，总等待约两分钟。
+// 单次 1 秒等 8 次常常赶不上 GitHub 后台计算；指数退避，总等待约一分半。
 export const retryDelay = (attempt) => Math.min(30000, 1000 * 2 ** attempt);
 export async function gate(options) {
   const wait = options.waitForState ?? ((attempt) => new Promise(resolve => setTimeout(resolve, retryDelay(attempt))));
   const syncing = new Set();
-  // 占位检查在整次运行内复用：重读不重复新建，消失的 head 在下一轮收集前收尾。
+  // 占位检查在整次运行内复用：重读不重复新建，还没有最终结论的占位在下一轮收集前收尾。
+  // done 表示这条检查已经写出 completed 结论；同一次运行后面的重读轮不再改写它。
   const placeholders = new Map();
   for (let attempt = 0; attempt < MAX_STATE_READS; attempt++) {
     const {results, retry} = await gateAttempt(options, syncing, placeholders);
@@ -117,11 +118,12 @@ export async function gate(options) {
     await wait(attempt);
   }
 }
-// 只在运行内已知的占位还在；对已经不在开放列表里的 head 给出明确结论，不留 in_progress。
+// 只收尾还没有最终结论、又已经不在开放列表里的占位，不留 in_progress。
+// 已经写成 completed 的检查（例如本轮已放行并合并的提交）保持原结论，不能被收尾改写成失败。
 async function finishLeftovers(poster, placeholders, keep = new Set()) {
-  for (const [sha, id] of [...placeholders]) {
-    if (keep.has(sha)) continue;
-    try { await poster.finish(sha, moved, id); placeholders.delete(sha); } catch {}
+  for (const [sha, holder] of [...placeholders]) {
+    if (keep.has(sha) || holder.done) continue;
+    try { await poster.finish(sha, moved, holder.id); placeholders.delete(sha); } catch {}
   }
 }
 const pendingState = e => ({status:'in_progress',conclusion:null,title:'状态正在变化，重读后继续',
@@ -143,8 +145,8 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
   const ids = new Map();
   for (const sha of heads.keys()) {
     try {
-      if (!placeholders.has(sha)) placeholders.set(sha, await poster.start(sha));
-      ids.set(sha, placeholders.get(sha));
+      if (!placeholders.has(sha)) placeholders.set(sha, { id: await poster.start(sha), done: false });
+      ids.set(sha, placeholders.get(sha).id);
     } catch (e) {
       errors.push(e);
     }
@@ -155,7 +157,8 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
   // 3. 每个 head:以它为 head 的 PR 全判一遍,合成一个结论写一次
   const results = [];
   for (const [sha, numbers] of heads) {
-    if (!ids.has(sha)) continue;
+    const holder = placeholders.get(sha);
+    if (!ids.has(sha) || holder?.done) continue;
     let result;
     let syncReady = false;
     const verdicts = [];
@@ -200,6 +203,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
     }
     try {
       await poster.finish(sha, result, ids.get(sha));
+      holder.done = result.status === 'completed';
     } catch (e) {
       errors.push(e);
       continue;
@@ -255,8 +259,10 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
     if (syncNotes.length || mergeNotes.length || result !== mergeResult) {
       if (mergeNotes.length) result={...result,
         title:`${result.title}；合并未完成`,summary:mergeNotes.join('\n')+'\n\n'+result.summary};
-      try { await poster.finish(sha, result, ids.get(sha)); }
-      catch (e) { errors.push(e); }
+      try {
+        await poster.finish(sha, result, ids.get(sha));
+        holder.done = result.status === 'completed';
+      } catch (e) { errors.push(e); }
     }
     results.push({ sha, title: result.title, summary: result.summary });
   }

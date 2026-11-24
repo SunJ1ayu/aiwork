@@ -69,14 +69,16 @@ async function delta(api,repo,base,head) {
     .map(k=>[k,a.get(k) ?? null,b.get(k) ?? null]));
 }
 // 列表接口可能不带完整 output.text；正文缺失或解析失败时按检查 id 重取一次，
-// 还读不出就是数据不全（G8），不能当成「没有意向」。
-async function intentOf(api,repo,r) {
+// 还读不出就是数据不全（G8），不能当成「没有意向」。重取读的是检查，优先用有 checks 权限的读取器；
+// workflow 的 GITHUB_TOKEN 没有 checks 权限，不能拿它做这次回退。
+async function intentOf(api, lookupApi, repo, r) {
   const read = async () => {
     if (typeof r.output?.text === 'string') {
       try { return JSON.parse(r.output.text); } catch {}
     }
     if (!Number.isSafeInteger(r.id)) throw new Error(`同步意向检查缺少可重取的 id（提交 ${r.head_sha}）`);
-    const full=await api.get(`/repos/${repo}/check-runs/${r.id}`);
+    const getCheckRun = lookupApi?.get ? lookupApi.get.bind(lookupApi) : api.get.bind(api);
+    const full=await getCheckRun(`/repos/${repo}/check-runs/${r.id}`);
     if (typeof full?.output?.text !== 'string') throw new Error(`同步意向检查 #${r.id} 读不到正文`);
     try { return JSON.parse(full.output.text); } catch {
       throw new Error(`同步意向检查 #${r.id} 的正文不是合法 JSON`);
@@ -101,7 +103,7 @@ export async function proveSynchronizations(api, bindingApi, repo, pr, policy, a
     for (const r of records) {
       if (r.name !== SYNC_CHECK || r.app?.id !== policy.gate_app_id || r.head_sha !== a.before ||
           r.status !== 'completed' || r.conclusion !== 'neutral') continue;
-      const v=await intentOf(api,repo,r);
+      const v=await intentOf(api,bindingApi,repo,r);
       if (v.version !== 1 || v.number !== pr.number || v.head !== a.before || !sha(v.base) ||
           v.ref !== pr.base.ref || v.head_ref !== pr.head.ref || v.actor !== a.actor.login ||
           !sha(v.merge_base) || !Array.isArray(v.review_heads) || !v.review_heads.every(sha) ||
@@ -141,10 +143,10 @@ async function commitsBetween(api,repo,base,head) {
   const first=await api.get(path);
   if (!Number.isInteger(first.total_commits)) throw new Error('main 新提交列表不完整');
   const commits=await paginate(api,path,'commits');
-  // 两次读的是固定提交，列表却对不上：多半是一次读取期间 main 又前进/分页被截断，
-  // 按其他「读取期间 main 前进」处理成瞬时状态，重读全部事实后再判。
+  // 比较范围是固定提交，main 前进不会改变结果；条数对不上是这次读取不完整（如分页缺失），
+  // 重读同样的固定范围也不会自己变好，按数据不全（G8）拒绝，不能当成瞬时状态等下去。
   if (commits.length !== first.total_commits)
-    throw new TransientPrState('读取 main 新提交时条数对不上，main 可能在此期间前进，重读后再判定');
+    throw new Error('读取 main 新提交时条数对不上，无法确认是否碰了本单文件');
   return {first,commits};
 }
 // GitHub 的单个提交文件列表最多 300 个，且没有可靠的截断标记；正好 300 个就不能声称已经看全。

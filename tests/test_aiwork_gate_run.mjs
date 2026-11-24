@@ -474,6 +474,44 @@ test('同次重读不重复发送另一个 PR 已接受的同步请求',async()=
  assert.deepEqual(applied,[10,11]);
 });
 
+test('P1-1：重读轮只收尾没有最终结论的占位，不把已放行并合并的提交改写成失败',async()=>{
+ const NEW='d'.repeat(40);
+ const r=recorder();
+ const prs={
+  10:{head:HEAD,files:['web/a.ts'],labels:[MERGE],events:[labeled(policy.owner)]},
+  11:{head:OTHER,files:['web/b.ts'],verdict:'PASS',readHead:NEW},
+ };
+ await run(r,prsApi(r.calls,prs,{lists:[[10,11],[10,11],[11]]}),{
+  merger:mergeRecorder(r),
+  waitForState:async()=>{prs[11].head=NEW;},
+ });
+ const onMerged=finishes(r.calls).filter(f=>f[0]===HEAD);
+ assert.deepEqual(onMerged.map(f=>[f[1],f[2]]),[['completed','success']],'已合并提交的检查保持放行');
+ assert.ok(!onMerged.some(f=>/已不是开着的 PR 的 head/.test(f[3])),'不能被收尾改写成「已不是 head」');
+ assert.deepEqual(merges(r.calls),[[10,HEAD]]);
+ assert.deepEqual(finishes(r.calls).filter(f=>f[0]===NEW).map(f=>[f[1],f[2]]),
+  [['completed','success']],'新 head 由重读轮算出');
+ assert.ok(!r.calls.some(c=>c[0]==='finish'&&c[1]===HEAD&&/已不是开着的 PR 的 head/.test(c[4])),
+  '没有对已合并提交发 moved 结论');
+});
+
+test('P1-1：同一次运行重读时，已写出最终结论的 head 不再改写',async()=>{
+ const NEW='d'.repeat(40);
+ const r=recorder();
+ const prs={
+  10:{head:HEAD,files:['web/a.ts'],verdict:'PASS'},
+  11:{head:OTHER,files:['web/b.ts'],verdict:'PASS',readHead:NEW},
+ };
+ await run(r,prsApi(r.calls,prs,{lists:[[10,11],[10,11]]}),{
+  waitForState:async()=>{prs[11].head=NEW;},
+ });
+ assert.equal(finishes(r.calls).filter(f=>f[0]===HEAD).length,1,'已写出结论的 head 不重写');
+ assert.deepEqual(finishes(r.calls).filter(f=>f[0]===HEAD).map(f=>[f[1],f[2]]),
+  [['completed','success']]);
+ assert.deepEqual(finishes(r.calls).filter(f=>f[0]===NEW).map(f=>[f[1],f[2]]),
+  [['completed','success']],'重读轮仍处理还没写结论的新 head');
+});
+
 test('P1-1：同 head 的合并拒绝逐 PR 记录，不挡其余合并或改写放行',async()=>{
  for(const reject of [[10],[10,11],[11]]){
   const r=recorder();

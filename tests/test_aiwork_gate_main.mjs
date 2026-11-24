@@ -36,8 +36,8 @@ function fakeGitHub(opts = {}) {
     number, state: "open", changed_files: opts.files?.length ?? 1,
     labels: opts.mergeReady ? [{ name: policy.merge_label }] : [],
     mergeable: opts.conflict ? false : true,
-    ...(opts.twoPrs && merged10 && number === 11 ? { mergeable_state: 'behind' } : {}),
-    head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } },
+    ...(opts.behindAlways || (opts.twoPrs && merged10 && number === 11) ? { mergeable_state: 'behind' } : {}),
+    head: { sha: HEAD, ref: "claude/x", repo: { full_name: (opts.forkHead || (opts.forkAfterMerge && merged10)) && number === 11 ? "fork/r" : "o/r" } },
     base: { ref: "main", sha: opts.staleBase ?? baseSha },
   });
 
@@ -719,6 +719,43 @@ test('同 head 前一个 PR 合并推进 main 后，后一个「要跟上 main�
   // 同一次运行内重读复用同一个占位检查，不再为同一个 head 新建第二条。
   const starts=gh.log.filter(r=>r.method==='POST'&&r.body?.name===policy.check_name);
   assert.equal(starts.length,1,out);
+ }finally{gh.server.close();}
+});
+
+test('P1-2 合并被拒且分支落后、关卡不会自动同步时，写明真实原因且不重读重试',async()=>{
+ for(const variant of [{defaultBranch:'develop'},{forkAfterMerge:true}]){
+  const gh=await fakeGitHub({twoPrs:true,mergeReady:true,...variant});
+  try{
+   const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+   const patches=checkWrites(gh.log).filter(r=>r.method==='PATCH'&&r.body?.output);
+   assert.equal(patches.length,2,out);
+   const final=patches.at(-1).body;
+   assert.equal(final.conclusion,'success',out);
+   assert.match(final.output.summary,/PR #11 合并被拒/);
+   assert.match(final.output.summary,/分支落后于 main，但关卡不会自动同步/);
+   assert.match(final.output.summary,JSON.stringify(variant).includes('forkAfterMerge')?/叉库/:/不是默认分支/);
+   assert.match(final.output.summary,/405|Head branch is not up to date/);
+   assert.equal(gh.log.filter(r=>r.url.endsWith('/pulls/11/update-branch')).length,0,out);
+   assert.equal(gh.log.filter(r=>r.url==='/repos/o/r/pulls/11/merge').length,1,'只尝试合并一次');
+   assert.equal(gh.log.filter(r=>r.method==='POST'&&r.body?.name===policy.check_name).length,1,'不新建占位重试');
+  }finally{gh.server.close();}
+ }
+});
+
+test('P1-2 同步写入被拒且 PR 仍落后时，保留原始拒绝原因，不改成「重读后自动同步」',async()=>{
+ const gh=await fakeGitHub({sync:true,mergeReady:true,updateFails:true,behindAlways:true});
+ try{
+  const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+  const patches=checkWrites(gh.log).filter(r=>r.method==='PATCH'&&r.body?.output);
+  assert.equal(patches.length,2,out);
+  const final=patches.at(-1).body;
+  assert.equal(final.status,'in_progress');
+  assert.match(final.output.title,/自动同步未完成/);
+  assert.match(final.output.summary,/PR #10 自动同步未完成，这一轮不合并它/);
+  assert.match(final.output.summary,/422|branch moved/);
+  assert.doesNotMatch(final.output.summary,/重读后自动同步/);
+  assert.equal(gh.log.filter(r=>r.url.endsWith('/update-branch')).length,1,out);
+  assert.equal(gh.log.filter(r=>r.url.endsWith('/merge')).length,0);
  }finally{gh.server.close();}
 });
 

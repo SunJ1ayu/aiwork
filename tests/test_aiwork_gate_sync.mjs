@@ -149,7 +149,14 @@ test('列表不带意向正文时按检查 id 重取；重取仍读不出才是�
  const ok=environment();
  ok.over.lookupText=JSON.stringify(ok.intent);
  delete ok.record.output.text;
- assert.equal(decide(await collect(ok.api,'o/r',1,p),p).conclusion,'success');
+ // 重取检查正文要有 checks 权限：workflow 的 GITHUB_TOKEN 既读不到，也不能拿它做回退。
+ const lookup={get:ok.api.get.bind(ok.api),getPage:ok.api.getPage.bind(ok.api)};
+ const read=lookup.get;
+ ok.api.get=async path=>{
+  if(path.startsWith('/repos/o/r/check-runs/'))throw new Error('workflow GITHUB_TOKEN 没有 checks 权限');
+  return read(path);
+ };
+ assert.equal(decide(await collect(ok.api,'o/r',1,p,lookup),p).conclusion,'success');
  const brokenList=environment();
  brokenList.over.lookupText=JSON.stringify(brokenList.intent);
  brokenList.record.output.text='{不是 JSON';
@@ -211,8 +218,9 @@ test('同步计划：冲突不同步；逐提交含重命名旧路径的交集�
  assert.match(capped.note,/可能被接口截断.*重新评审并重贴合并标签/);
  const conflict=await prepareSynchronization(planning({conflict:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
  assert.equal(conflict.conflict,true);assert.equal(conflict.intent,undefined);
+ // 比较范围是固定提交，main 前进不会让条数自己变对；读取不全按 G8 拒绝，不能当成瞬时状态重读。
  await assert.rejects(prepareSynchronization(planning({incomplete:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),
-  error=>error.constructor.name==='TransientPrState' && /main/.test(error.message));
+  error=>error.constructor.name==='Error' && /条数对不上/.test(error.message));
 });
 
 test('同步证明不足或后续有普通推送时，摘要写明为什么不能沿用',async()=>{
