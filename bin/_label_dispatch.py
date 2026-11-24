@@ -32,6 +32,10 @@ def capacity(config):
 
     Invalid or unreadable settings stop admission; they never fall back to extra capacity.
     The limit counts the union of durable issue slots and nonterminal hub lanes.
+    Configured dispatch rules use issue subjects as parallel lanes; other rules
+    count separately by (rule, lane), even when their lane equals an issue.
+    Empty lanes (serial rules) stop admission and release: their subject is unknown.
+    Protocol source: agent-autoloop v1.6.1 kernel/decide.ts enqueue and route.
     Lowering it keeps existing slots and queues new issues until occupancy drops.
     """
     value = config.get('max_active', DEFAULT_MAX_ACTIVE)
@@ -91,8 +95,18 @@ class Reason:
     ELIGIBLE = 'eligible'
     QUEUED = 'occupied_or_queued'
     PENDING = 'pending_delivery'
+    ACTIVE_OBSERVATION_MISSING = 'active_observation_missing'
+    ACTIVE_EVENT_MISSING = 'active_event_missing'
+    HUB_LANE_UNMAPPED = 'hub_lane_unmapped'
+    OBSERVATION_FAILED = 'observation_failed'
     LOCKED = 'poll_already_running'
     IMPORTED = 'legacy_import'
+
+
+class DispatchError(ValueError):
+    def __init__(self, reason):
+        self.reason=reason
+        super().__init__(reason)
 
 
 class Release(NamedTuple):
@@ -133,11 +147,17 @@ def trusted_accounts(project):
     return {project[k].lower() for k in ('owner','bot')}
 
 
+def project_rules(project):
+    """Map legacy/family routes from the deployed project settings in one place."""
+    families = project.get('builder_rules', {})
+    if not isinstance(families, dict) or not families.keys() <= builder_roles().keys():
+        raise ValueError('invalid builder rules')
+    return {None: project['rule'], **families}
+
+
 def label_route(project, label):
     parts = label.split(':', 2)
-    if len(parts) == 2:
-        return project['rule']
-    return project.get('builder_rules', {}).get(parts[2])
+    return project_rules(project).get(parts[2] if len(parts) == 3 else None)
 
 
 def label_kind(label):
@@ -155,6 +175,7 @@ def plan(rows, original, busy, stops, max_active=DEFAULT_MAX_ACTIVE):
     capacity({'max_active': max_active})
     state=upgraded(original)
     decisions=[]
+    blocked=set()
     active=state.get('active')
     by_subject={subject(row):row for row in rows}
     for name, slot in list(active.items()):
@@ -162,11 +183,16 @@ def plan(rows, original, busy, stops, max_active=DEFAULT_MAX_ACTIVE):
             continue  # An ambiguous delivery cannot be released or overtaken.
         row=by_subject.get(name)
         if row is None:
+            blocked.add(name)
+            decisions.append({'subject':name,'reason':Reason.ACTIVE_OBSERVATION_MISSING})
             continue  # Missing observation must never mean closed or idle.
         trusted=trusted_accounts(row['project'])
         events=relevant(row)
         origin=[e for e in events if int(e['id'])==int(slot['event_id'])]
-        if len(origin)!=1:raise ValueError('active event missing')
+        if len(origin)!=1:
+            blocked.add(name)
+            decisions.append({'subject':name,'reason':Reason.ACTIVE_EVENT_MISSING})
+            continue
         active_label=origin[0]['label']['name']
         removed=[e for e in events if e['event']=='unlabeled' and
                  e['label']['name']==active_label and actor(e) in trusted and
@@ -210,7 +236,7 @@ def plan(rows, original, busy, stops, max_active=DEFAULT_MAX_ACTIVE):
     candidates.sort(key=lambda c:(int(c['event']['id']),c['subject']))
     occupied=set(active) | set(busy)
     # Continuations reuse their issue's slot, independently of other live lanes.
-    eligible=[c for c in candidates if c['subject'] not in busy
+    eligible=[c for c in candidates if c['subject'] not in busy and c['subject'] not in blocked
               and c['subject'] not in state['pending']
               and (c['subject'] in active or len(occupied) < max_active)]
     chosen=eligible[0] if eligible else None
@@ -293,6 +319,7 @@ class Backend:
 
     def observe(self,state):
         rows=[]
+        self.observation_errors=[]
         for project in self.config['projects']:
             issues={}
             # Discover labels independently of configured routes, including misspelled families.
@@ -301,9 +328,18 @@ class Backend:
                     issues[issue['number']] = issue
             for active in upgraded(state)['active'].values():
                 repo,n=split_subject(active['subject'])
-                if repo==project['repo']:issues[n]=self.api(project,issue_path(n))
+                if repo==project['repo']:
+                    try: issues[n]=self.api(project,issue_path(n))
+                    except Exception as error:
+                        self.observation_errors.append({'subject':active['subject'],'reason':Reason.OBSERVATION_FAILED,'error':type(error).__name__})
+                        issues.pop(n,None)
+                        continue
             for n,issue in sorted(issues.items()):
-                rows.append({'project':project,'issue':issue,'events':self.pages(project,issue_path(n,EVENTS_SUFFIX))})
+                try: events=self.pages(project,issue_path(n,EVENTS_SUFFIX))
+                except Exception as error:
+                    self.observation_errors.append({'subject':issue_subject(project['repo'],n),'reason':Reason.OBSERVATION_FAILED,'error':type(error).__name__})
+                    continue
+                rows.append({'project':project,'issue':issue,'events':events})
         return rows
 
     def db(self):
@@ -311,8 +347,17 @@ class Backend:
 
     def busy(self):
         # Include retries and unknown results, across every rule: a finished process is not enough.
+        # v1.6.1 kernel/decide.ts enqueue uses subject only for parallel rules;
+        # serial rules have an empty lane. Never interpret that as idle.
+        routes = {route for project in self.config.get('projects', [])
+                  for route in project_rules(project).values()}
         with self.db() as db:
-            return {lane for lane,state in db.execute('select lane,state from runs') if state not in TERMINAL}
+            running = [(rule, lane) for rule, lane, state in
+                       db.execute('select rule,lane,state from runs') if state not in TERMINAL]
+        if any(not lane for rule, lane in running):
+            raise DispatchError(Reason.HUB_LANE_UNMAPPED)
+        return {lane if rule in routes else ('other_rule', rule, lane)
+                for rule, lane in running}
 
     def accepted(self,c):
         with self.db() as db:
@@ -357,10 +402,7 @@ def validate(config):
         for name in ('token_command','reference_command'):
             if not isinstance(p[name],list) or not p[name] or not all(isinstance(v,str) and v for v in p[name]):
                 raise ValueError('invalid adapter command')
-        rules = p.get('builder_rules', {})
-        if not isinstance(rules, dict) or not rules.keys() <= builder_roles().keys():
-            raise ValueError('invalid builder rules')
-        routes = [p['rule'], *rules.values()]
+        routes = list(project_rules(p).values())
         if (not all(isinstance(rule, str) and rule.strip() for rule in routes)
                 or len(set(routes)) != len(routes) or not p['reference_root'].startswith('/')):
             raise ValueError('invalid project settings')
@@ -376,7 +418,8 @@ def poll(config,folder,preview=False,backend=None):
         stops=set(json.loads(stop_path.read_text())) if stop_path.exists() else set()
         limit=capacity(config)
         state=upgraded(state)
-        errors=[]
+        errors=record['errors']=[]
+        had_pending=bool(state['pending'])
         for name, candidate in list(state['pending'].items()):
             record['stage']='reconcile_delivery'
             record['decisions'].append({'reason':Reason.PENDING,'subject':name})
@@ -387,11 +430,16 @@ def poll(config,folder,preview=False,backend=None):
                     errors.append({'subject':name,'error':type(error).__name__})
         record['stage']='observe'
         rows=backend.observe(state)
+        errors.extend(getattr(backend,'observation_errors',[]))
         record['observed']=[{'subject':subject(r),'event_id':int(e['id']),
             'action':e['event'],'label':e['label']['name'],
             'trusted':actor(e) in trusted_accounts(r['project'])} for r in rows for e in relevant(r)]
         record['stage']='admission'
         result=plan(rows,state,backend.busy(),stops,limit)
+        if had_pending:
+            result['candidate']=None
+            for decision in result['decisions']:
+                if decision['reason'] == Reason.ELIGIBLE: decision['reason']=Reason.QUEUED
         record['decisions'].extend(result['decisions'])
         if not preview:
             atomic(state_path,result['state'])
@@ -401,8 +449,10 @@ def poll(config,folder,preview=False,backend=None):
         if errors:
             record['errors']=errors
             return record
-        record['ok']=True
+        record['ok']=not any(x['reason'] in (Reason.ACTIVE_EVENT_MISSING, Reason.ACTIVE_OBSERVATION_MISSING)
+                             for x in record['decisions'])
     except Exception as error:
+        if isinstance(error,DispatchError): record['reason']=error.reason
         record['error']=type(error).__name__
         if getattr(backend,'operation',None):record['operation']=backend.operation
         # External diagnostics may contain credentials or private content.
