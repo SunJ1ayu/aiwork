@@ -189,7 +189,7 @@ test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwor
   assert.match(text, /^ {8}run: node gate\/main\.mjs$/m);
   assert.doesNotMatch(text, /github\.event\.pull_request\.head/);
   assert.doesNotMatch(text, /github\.sha/);
-  const run = text.split(/^ {8}run: /m).slice(1).join("\n");
+  const run = text.split(/^  [A-Za-z][\w-]*:/m).flatMap(job => job.split(/^ {8}run: /m).slice(1)).join("\n");
   assert.doesNotMatch(run, /\$\{\{/);
 });
 
@@ -233,7 +233,7 @@ test("关卡代码更新有定时门铃，间隔与文档一致，定时事件�
     "频率、用量和额度阈值都必须从模板 cron 推出，不能只改门铃间隔");
   assert.match(row, /延迟|丢弃/);
   assert.match(read("gate/README.md"), /60 天/);
-  assert.doesNotMatch(text.split(/^jobs:/m)[1], /^\s+if:/m, "定时触发必须走完整关卡，不能依赖 PR 事件字段过滤");
+  assert.match(text.split(/^  gate:/m)[1], /if: always\(\)/, "定时触发和保存失败均走完整关卡");
 });
 
 test("aiwork 自己的策略：真拦截，不登记共用的 build 账号，罩住密钥、发布和判卷面", () => {
@@ -425,4 +425,24 @@ test("共享解释器的脚本操作数是依赖，业务文案不是", () => {
   assert.deepEqual(sameDirectoryCalls("bin/entry", 'exec "$BIN_DIR/_python" "$BIN_DIR/renamed.py" "$@"'),
                    ["bin/_python", "bin/renamed.py"]);
   assert.deepEqual(sameDirectoryCalls("bin/entry", 'echo "diagnostic text"'), []);
+});
+
+test('合并授权独立任务没有并发队列；重算等待保存完成，仍全量串行',()=>{
+ const text=read('templates/aiwork-gate.yml');
+ assert.doesNotMatch(text.split(/^jobs:/m)[0],/^concurrency:/m);
+ const binding=text.split(/^  binding:/m)[1]?.split(/^  gate:/m)[0];
+ assert.ok(binding,'必须有独立保存任务');
+ assert.doesNotMatch(binding,/concurrency:/);
+ assert.match(binding,/AIWORK_GATE_PHASE: binding/);
+ const gate=text.split(/^  gate:/m)[1];
+ assert.match(gate,/needs: binding/);assert.match(gate,/if:.*always\(\)/);
+ assert.match(gate,/concurrency:/);assert.match(gate,/AIWORK_GATE_PHASE: recompute/);
+});
+
+test('保存与重算共用一个步骤定义，检出和令牌接线不会单边漂移',()=>{
+ const text=read('templates/aiwork-gate.yml');
+ const binding=text.split(/^  binding:/m)[1]?.split(/^  gate:/m)[0];
+ const anchor=binding?.match(/^    steps: &([\w-]+)$/m)?.[1];
+ assert.ok(anchor,'共享步骤需要唯一锚点');
+ assert.match(text.split(/^  gate:/m)[1],new RegExp(`^    steps: \\*${anchor}$`,'m'));
 });

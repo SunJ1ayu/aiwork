@@ -16,14 +16,30 @@ aiwork 的共用关卡（gate/）验收记录，包含只报不拦与真拦截�
 | S9 | 符合 | 连着触发时排队的被取消、下一次等上一次跑完才开始：[运行 1](https://github.com/SunJ1ayu/aiwork/actions/runs/38073647235)、[运行 2（取消）](https://github.com/SunJ1ayu/aiwork/actions/runs/38073650274)、[运行 3](https://github.com/SunJ1ayu/aiwork/actions/runs/38073653349) |
 | S10 | 符合 | 业主贴 `aiwork:merge` 后 18 秒，关卡判「放行」，由 aiwork-gate[bot] 合并 PR #30 的 head `124883d`（合并提交 `039b6bb`）：[检查](https://github.com/SunJ1ayu/aiwork/runs/114698304807) |
 | S11 | 符合 | aiwork-build[bot] 给已放行的 PR #31 贴 `aiwork:merge` 后，关卡两次判「放行」，但没有合并：[检查](https://github.com/SunJ1ayu/aiwork/runs/114707088119)、[运行](https://github.com/SunJ1ayu/aiwork/actions/runs/38217939200)。贴标签的 aiwork-build[bot] 不是登记的 Builder，这条证明的是「业主和 merge_requesters 以外的人贴的不算」；登记的 Builder（SunJ1ayuBoT）在这个环境里没有贴标签的权限，没有在线上测 |
-| S12 | 符合 | PR #31 挂着业主的 `aiwork:merge`，合并 main 后的新提交 `33eae5b` 上缺评审时「不放行:缺合格评审」，没有合并：[检查](https://github.com/SunJ1ayu/aiwork/runs/114712141613)；补上 PASS 后「放行」，由 aiwork-gate[bot] 合并：[检查](https://github.com/SunJ1ayu/aiwork/runs/114713596225)。业主没有在新提交上重新批准：GitHub 把合并 main 之前的批准挪到了新提交上，见下面「发现」 |
-| S13 | 符合 | 业主给 PR #31、#32 都贴 `aiwork:merge`，关卡合并了 #32；#31 落后于 main，没有合并，标签留着：[运行](https://github.com/SunJ1ayu/aiwork/actions/runs/38218861885) |
+| S12 | 历史符合（旧版） | PR #31 挂着业主的 `aiwork:merge`，合并 main 后的新提交 `33eae5b` 上缺评审时「不放行:缺合格评审」，没有合并：[检查](https://github.com/SunJ1ayu/aiwork/runs/114712141613)；补上 PASS 后「放行」，由 aiwork-gate[bot] 合并：[检查](https://github.com/SunJ1ayu/aiwork/runs/114713596225)。业主没有在新提交上重新批准：GitHub 把合并 main 之前的批准挪到了新提交上，见下面「发现」 |
+| S13 | 历史符合（旧版） | 业主给 PR #31、#32 都贴 `aiwork:merge`，关卡合并了 #32；#31 落后于 main，没有合并，标签留着：[运行](https://github.com/SunJ1ayu/aiwork/actions/runs/38218861885) |
 
 ## 管理员网页合并验收
 
 | # | 结果 | 看到的结果和链接 |
 |---|---|---|
 | S15 | 待验收 | [#111 的规则补记](https://github.com/SunJ1ayu/aiwork/issues/111#issuecomment-6552923695)记录了规则已保存，尚无管理员网页合并被拒的实测链接；不能把配置记录当成此项验收通过。操作与预期见 README 的 S15。 |
+
+## D 方案上线后待验收
+
+判据与步骤见 README 的 S9、S10–S12d；以下均未在新版 main 的真实运行中验收，不把离线桩测试或旧记录当成通过。执行时记录 PR、完整 head、授权检查链接和任务运行链接。
+
+| # | 结果 | 范围与证据 |
+|---|---|---|
+| S9 / S12d | 待验收 | binding 不排并发组、gate 仍串行；需观察重算被顶掉而授权保存保留的真实运行 |
+| S10 / S12 | 待验收 | 单次贴标签保存通知 head、条件补齐后由关卡合并该 head；上表是旧版本历史样本 |
+| S11 | 待验收 | 先查现登记 Builder 的贴标签权限，无权限就保持未验收，不临时加权限；旧样本仅证明当时非授权账号不合并，未证明新版摘要 |
+| S12a | 待验收 | 旧提交标签不授权后来普通推送的新提交 |
+| S12b | 待验收 | A → B → A 不复用 A 的旧授权，摘要说明连续性原因 |
+| S12c | 待验收 | 同一提交摘掉重贴可沿用旧授权；字段时间不同也不影响。须在真实样本中记载时间，不能主动改 GitHub 时间 |
+
+上表历史 S12 的“手工合并 main 后仍沿用”不是新版普通推送的通过证据；只有 README「合并」的自动干净同步例外适用。
+历史 S13 只测到旧版落后停止，不是现行 S13 自动同步已经通过的证据；现行 S13–S13c 仍须按 README 验收。
 
 ## 发现
 

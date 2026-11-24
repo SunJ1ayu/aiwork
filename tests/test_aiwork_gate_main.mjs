@@ -3,6 +3,7 @@
 // 先发 in_progress 占位,再把同一条检查 PATCH 成结论;读 PR 出错时占位被改成 failure;
 // 合并用另换的一张令牌(只在要合并时才换),带上判过的 head。
 // 跑法:node --test tests/test_aiwork_gate_main.mjs
+import { mergeBindingKey } from "../gate/merge-request.mjs";
 import { test } from "node:test";
 import { collect } from "../gate/collect.mjs";
 import { decide } from "../gate/decide.mjs";
@@ -107,12 +108,12 @@ function fakeGitHub(opts = {}) {
       const reviews = opts.reviews ?? (opts.mergeReady ? [{ id: 1, user: { login: policy.reviewer_bot, type: "Bot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-09-29T09:00:00Z", body: pass }] : []);
       if (u.startsWith("/repos/o/r/pulls/10/reviews")) return send(200, reviews);
       if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: [{ id: 1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", pull_requests: [{ number: 10 }] }] });
-      if (u.startsWith("/repos/o/r/activity")) return send(200, [{ id: 1, timestamp: "t", activity_type: "push", after: HEAD, actor: { login: opts.actorLogin ?? "SunJ1ayuBoT" } }]);
+      if (u.startsWith("/repos/o/r/activity")) return send(200, [{ id: 1, timestamp: "t", activity_type: "branch_creation", before: "0".repeat(40), after: HEAD, actor: { login: opts.actorLogin ?? "SunJ1ayuBoT" } }]);
       if (u.includes('/check-runs?')) {
         const saved = [...checks.values()].filter(c => c.head_sha === HEAD && c.name === 'aiwork-merge-request');
         const records = opts.bindingRecords ?? (opts.mergeReady ? [{ name: 'aiwork-merge-request',
           head_sha: HEAD, app: { id: policy.gate_app_id }, status: 'completed', conclusion: 'neutral',
-          external_id: JSON.stringify([10, policy.merge_label, '2026-09-29T10:00:00Z', policy.owner]) }] : []);
+          external_id: mergeBindingKey(10, policy.merge_label, HEAD, policy.owner) }] : []);
         return send(200, { total_count: records.length + saved.length, check_runs: [...records, ...saved] });
       }
       const events = opts.events ?? (opts.mergeReady ? [{ id: 1, event: "labeled", label: { name: policy.merge_label }, actor: { login: policy.owner }, created_at: "2026-09-29T10:00:00Z" }] : []);
@@ -554,7 +555,7 @@ test('整机:绑定保存失败安全拒绝，仍完成 PR 重算', async () => 
   } finally { gh.server.close(); }
 });
 
-test('整机:从 GitHub 读持久绑定；摘掉重贴必须新记录，同秒歧义拒绝', async () => {
+test('整机:从 GitHub 读持久绑定；同提交摘掉重贴及同秒操作沿用可信授权', async () => {
   const opts = { mergeReady: true, bindingRecords: [] };
   const gh = await fakeGitHub(opts);
   const event = (id, type, at) => ({ id, event: type, created_at: at,
@@ -570,7 +571,7 @@ test('整机:从 GitHub 读持久绑定；摘掉重贴必须新记录，同秒�
     start = gh.log.length;
     result = await runMain(gh.url, { GITHUB_EVENT_NAME: 'schedule' });
     assert.equal(result.code, 0, result.out);
-    assert.equal(gh.log.slice(start).filter(r => r.url.endsWith('/merge')).length, 0, '旧记录不授权重贴');
+    assert.equal(gh.log.slice(start).filter(r => r.url.endsWith('/merge')).length, 1, '同提交可沿用旧授权');
     const payload = labelPayload(); payload.pull_request.updated_at = '2026-09-29T10:02:00Z';
     start = gh.log.length;
     result = await runMain(gh.url, {}, MAIN, payload);
@@ -580,8 +581,7 @@ test('整机:从 GitHub 读持久绑定；摘掉重贴必须新记录，同秒�
     start = gh.log.length;
     result = await runMain(gh.url, {}, MAIN, payload);
     assert.equal(result.code, 0, result.out);
-    assert.equal(gh.log.slice(start).filter(r => r.url.endsWith('/merge')).length, 0, '同秒无法区分，旧新记录均不借用');
-    assert.match(result.out, /合并标签不对应当前提交.*摘掉重贴/);
+    assert.equal(gh.log.slice(start).filter(r => r.url.endsWith('/merge')).length, 1, '同提交的授权不依赖事件时间');
   } finally { gh.server.close(); }
 });
 
@@ -591,7 +591,7 @@ test('整机:其他事件、仓库、申请人、标签或坏载荷不能保存�
     p => { p.repository.full_name = 'other/repo'; },
     p => { p.pull_request.base.repo.full_name = 'other/repo'; },
     p => { p.label.name = 'other'; },
-    p => { p.pull_request.updated_at = null; },
+    p => { p.pull_request.number = null; },
     p => { p.pull_request.head.sha = 'bad'; },
     p => { p.action = 'synchronize'; },
   ];
@@ -662,4 +662,20 @@ test('同步或合并写入时 main 刚推进，当次重读后用新 main 同�
    assert.equal(patches.at(-1).body.status,'in_progress');
   }finally{gh.server.close();}
  }
+});
+
+test('独立保存任务只写通知授权；排队重算不重新保存且能读到授权',async()=>{
+ const gh=await fakeGitHub({mergeReady:true,bindingRecords:[]});
+ try {
+  const payload=labelPayload();payload.pull_request.updated_at='2026-09-29T10:00:01Z';
+  const saved=await runMain(gh.url,{AIWORK_GATE_PHASE:'binding'},MAIN,payload);
+  assert.equal(saved.code,0,saved.out);
+  assert.equal(gh.log.filter(r=>r.body?.name==='aiwork-merge-request').length,1);
+  assert.ok(!gh.log.some(r=>r.url.includes('/pulls?') || r.url.endsWith('/merge')),'保存不读 PR 现状、不重算、不合并');
+  const start=gh.log.length;
+  const result=await runMain(gh.url,{AIWORK_GATE_PHASE:'recompute'},MAIN,payload);
+  assert.equal(result.code,0,result.out);
+  assert.equal(gh.log.slice(start).filter(r=>r.body?.name==='aiwork-merge-request').length,0);
+  assert.equal(gh.log.slice(start).filter(r=>r.url.endsWith('/merge')).length,1,'保存独立于被取消的重算，之后的门铃可消费');
+ } finally {gh.server.close();}
 });

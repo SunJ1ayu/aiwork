@@ -29,7 +29,7 @@ import { mergeBindingKey, MERGE_BINDING_CHECK } from '../gate/merge-request.mjs'
 const base='c'.repeat(40), common='d'.repeat(40), newer='e'.repeat(40);
 function environment(over={}) {
  const at='2026-11-22T00:00:00Z', actor='aiwork-gate[bot]';
- const key=mergeBindingKey(1,p.merge_label,at,p.owner);
+ const key=mergeBindingKey(1,p.merge_label,old,p.owner);
  const intent=syncIntent(1,old,base,'main','builder/one',actor,key,[],over.overlap?['web/a.ts']:[],common);
  const pr={number:1,state:'open',changed_files:1,labels:[{name:p.merge_label}],mergeable:true,
   head:{sha:head,ref:'builder/one',repo:{full_name:'o/r'}},base:{sha:base,ref:'main'}};
@@ -144,4 +144,112 @@ test('同步前与文件核实后的 PR 快照改变均是瞬时状态，实际�
  const e=planning();e.api.get=async()=>{throw new Error('真实读取失败');};
  await assert.rejects(prepareSynchronization(e.api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),
   error=>error.constructor.name==='Error' && error.message==='真实读取失败');
+});
+
+import { bindingFromEvent } from '../gate/merge-request.mjs';
+function labelEnvironment(over={}) {
+ const e=environment();e.pr.head.sha=old;
+ const payload={action:'labeled',repository:{full_name:'o/r'},label:{name:p.merge_label},sender:{login:p.owner},
+  pull_request:{number:1,head:{sha:old},base:{repo:{full_name:'o/r'}},updated_at:'2026-11-22T00:00:01Z'}};
+ const binding={...bindingFromEvent('pull_request_target',payload,'o/r',p),app:{id:p.gate_app_id}};
+ const creation={id:1,activity_type:'branch_creation',before:'0'.repeat(40),after:old,timestamp:'2026-11-21',actor:{login:'SunJ1ayuBoT'}};
+ const activity=over.restore ? [{...creation,id:3,activity_type:'force_push',before:head,after:old,timestamp:'2026-11-24'},
+  {...creation,id:2,activity_type:'push',before:old,after:head,timestamp:'2026-11-23'},creation] : [creation];
+ const page=e.api.getPage.bind(e.api);
+ e.api.getPage=async path=>{
+  if(path.includes('/activity?'))return {data:over.incomplete?[]:activity};
+  if(path.includes('/issues/1/events'))return {data:[{id:1,event:'labeled',created_at:'2026-11-22T00:00:00Z',label:{name:p.merge_label},actor:{login:over.unauthorized?'stranger':p.owner}},
+   ...(over.relabel?[{id:2,event:'unlabeled',created_at:'2026-11-22T00:00:00Z',label:{name:p.merge_label},actor:{login:p.owner}},
+    {id:3,event:'labeled',created_at:'2026-11-22T00:00:00Z',label:{name:p.merge_label},actor:{login:p.owner}}]:[])]};
+  if(path.includes('/check-runs?'))return {data:{total_count:1,check_runs:[binding]}};
+  return page(path);
+ };
+ return e;
+}
+test('D：通知与历史差一秒，同提交摘掉重贴可沿用可信授权',async()=>{
+ for(const over of [{},{relabel:true}])assert.equal((await collect(labelEnvironment(over).api,'o/r',1,p)).merge_request.bound,true);
+});
+test('D：摘掉后推 B、重贴再强推回 A，不能借 A 的旧授权',async()=>{
+ const f=await collect(labelEnvironment({restore:true,relabel:true}).api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,false);assert.match(f.merge_request.reason,/回到|连续/);
+});
+test('D：没有完整活动记录不合；无权限的最新申请不合且给出真实原因',async()=>{
+ assert.equal((await collect(labelEnvironment({incomplete:true}).api,'o/r',1,p)).merge_request.bound,false);
+ const f=await collect(labelEnvironment({unauthorized:true}).api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,false);assert.match(f.merge_request.reason,/权限|不算数/);
+});
+
+test('D：不同可信申请人保存的授权可沿用，伪造账号和旧时间键不能充数',async()=>{
+ for(const variant of ['trusted','untrusted','legacy']){
+  const e=labelEnvironment(),page=e.api.getPage.bind(e.api);
+  e.api.getPage=async path=>{
+   const result=await page(path);
+   if(path.includes('/check-runs?'))result.data.check_runs[0].external_id=variant==='legacy'
+    ? JSON.stringify([1,p.merge_label,'2026-11-22T00:00:00Z',p.owner])
+    :mergeBindingKey(1,p.merge_label,old,variant==='trusted'?'merger':'stranger');
+   return result;
+  };
+  assert.equal((await collect(e.api,'o/r',1,{...p,merge_requesters:['merger']})).merge_request.bound,variant==='trusted');
+ }
+});
+
+import { cpSync, mkdtempSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+async function maintenanceGate(pattern,replacement,check) {
+ const dir=mkdtempSync(join(tmpdir(),'gate-history-maintenance-'));
+ try {
+  cpSync(new URL('../gate/',import.meta.url),join(dir,'gate'),{recursive:true});
+  const definitions=readdirSync(join(dir,'gate')).filter(n=>n.endsWith('.mjs')).map(n=>join(dir,'gate',n))
+   .filter(path=>pattern.test(readFileSync(path,'utf8')));
+  assert.equal(definitions.length,1,'被维护的概念只有一个定义');
+  const path=definitions[0];
+  writeFileSync(path,readFileSync(path,'utf8').replace(pattern,replacement));
+  const {collectPushes}=await import(pathToFileURL(join(dir,'gate/collect.mjs')));
+  const {retainsAuthorization}=await import(pathToFileURL(join(dir,'gate/merge-request.mjs')));
+  await check(collectPushes,retainsAuthorization);
+ } finally {rmSync(dir,{recursive:true,force:true});}
+}
+test('P1-1：只在活动定义增加一种推进类型，作者与授权连续性一起识别',async()=>{
+ await maintenanceGate(/const PUSH_TYPES = new Set\(\[/,'const PUSH_TYPES = new Set(["maintenance_push", ',async(collectPushes,retainsAuthorization)=>{
+  const acts=[{id:2,timestamp:'2026-11-23',activity_type:'maintenance_push',before:old,after:head,actor:{login:'builder'}},
+   {id:1,timestamp:'2026-11-22',activity_type:'branch_creation',before:'0'.repeat(40),after:old,actor:{login:'builder'}}];
+  const collected=await collectPushes({getPage:async()=>({data:acts})},'o/r','branch',head,true);
+  assert.equal(collected.activities.length,2,'作者和同步证明读到新增活动');
+  assert.equal(retainsAuthorization(collected.history,head,head,new Map()),true,'同一次维护也适用于授权连续性');
+ });
+});
+test('P1-1：只改创建边界时，授权不能再使用旧边界补全历史',async()=>{
+ await maintenanceGate(/if \((\w+)\.activity_type === (?:"branch_creation"|'branch_creation'|CREATION)\)/,
+  "if ($1.activity_type === 'maintenance_creation')",async(collectPushes,retainsAuthorization)=>{
+   const acts=[{id:3,timestamp:'2026-11-23',activity_type:'push',before:old,after:head,actor:{login:'builder'}},
+    {id:2,timestamp:'2026-11-22',activity_type:'branch_creation',before:'0'.repeat(40),after:old,actor:{login:'builder'}},
+    {id:1,timestamp:'2026-11-21',activity_type:'push',before:old,after:newer,actor:{login:'prior-builder'}}];
+   const facts=await collectPushes({getPage:async()=>({data:acts})},'o/r','branch',head,true);
+   assert.ok(facts.actors.includes('prior-builder'),'创建边界的维护已经影响作者识别');
+   assert.equal(retainsAuthorization(facts.history,head,head,new Map()),false,'授权也必须采用维护后的边界');
+  });
+});
+
+test('P1-1：删除屏障与重建分支共用边界，缺创建记录不能借上一世补齐',async()=>{
+ const {collectPushes}=await import('../gate/collect.mjs');
+ const {retainsAuthorization}=await import('../gate/merge-request.mjs');
+ const creation={id:1,timestamp:'2026-11-20',activity_type:'branch_creation',before:'0'.repeat(40),after:old,actor:{login:'old-builder'}};
+ const deletion={id:2,timestamp:'2026-11-21',activity_type:'branch_deletion',before:old,after:'0'.repeat(40)};
+ const latest={id:4,timestamp:'2026-11-23',activity_type:'push',before:old,after:head,actor:{login:'new-builder'}};
+ for(const rebuilt of [false,true]){
+  const acts=[latest,...(rebuilt?[{...creation,id:3,timestamp:'2026-11-22',actor:{login:'new-builder'}}]:[]),deletion,creation];
+  const facts=await collectPushes({getPage:async()=>({data:acts})},'o/r','branch',head,true);
+  assert.ok(facts.actors.every(a=>a==='new-builder'));
+  assert.equal(retainsAuthorization(facts.history,head,head,new Map()),rebuilt);
+ }
+});
+
+test('P2：叉库的可信合并申请说明不支持自动合并，不要求无效重贴',async()=>{
+ const e=labelEnvironment(),get=e.api.get.bind(e.api);
+ e.api.get=async path=>{const value=await get(path);if(path==='/repos/o/r/pulls/1')value.head.repo.full_name='fork/r';return value;};
+ const f=await collect(e.api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,false);assert.match(f.merge_request.reason,/叉库.*不支持/);
+ assert.doesNotMatch(f.merge_request.reason,/重贴/);
 });
