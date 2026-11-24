@@ -183,12 +183,14 @@ class CommentNetworkTests(unittest.TestCase):
                 return '[]'
             if '/comments?' in endpoint:
                 return json.dumps(self.comments)
-            return self.comments[-1]
+            return next((c for c in self.comments if str(c['id']) == endpoint.rsplit('/', 1)[1]), {})
         self.posts.append((endpoint, payload, kwargs))
-        item = {'id': 123, 'body': payload['body'],
+        identifier = (int(endpoint.rsplit('/', 1)[1]) if kwargs.get('method') == 'PATCH'
+                      else 123 + len(self.comments))
+        item = {'id': identifier, 'body': payload['body'],
                 'user': {'login': self.login, 'type': 'Bot'}}
         if self.accepted or self.failure is None:
-            self.comments[:] = [item]
+            self.comments[:] = [c for c in self.comments if c['id'] != identifier] + [item]
         if self.failure:
             failure, self.failure = self.failure, None
             raise failure
@@ -196,7 +198,7 @@ class CommentNetworkTests(unittest.TestCase):
 
     def publish(self, body='report', comment_id=None):
         return publisher.publish_dispatch_comment('fixture/project', 12, body,
-                                                   comment_id, pending=self.pending)
+                                                   comment_id, publication=self.pending)
 
     def test_proven_unsent_comment_is_retried(self):
         self.failure = publisher.UnsentWriteError('TLS handshake timeout')
@@ -222,7 +224,7 @@ class CommentNetworkTests(unittest.TestCase):
         self.assertEqual(self.publish('new report'), 123)
         self.assertEqual(len(self.posts), 2)
         self.assertEqual(self.posts[-1][2], {'method': 'PATCH'})
-        self.assertEqual(self.pending, {})
+        self.assertEqual(self.pending, {'id': 123})
 
     def test_ambiguous_patch_checks_same_comment_instead_of_reposting(self):
         self.publish()
@@ -237,6 +239,79 @@ class CommentNetworkTests(unittest.TestCase):
         with self.assertRaises(OSError):
             self.publish()
         self.assertEqual(len(self.posts), 1)
+
+
+    def recovered_update_failure(self, failure):
+        self.failure, self.accepted = OSError('response EOF'), True
+        self.visible_after = publisher._leg_session.RETRY_ATTEMPTS
+        with self.assertRaises(OSError):
+            self.publish('initial report')
+        original = self.api
+        def fail_patch(token, endpoint, payload=None, **kwargs):
+            if payload is not None and kwargs.get('method') == 'PATCH':
+                self.posts.append((endpoint, payload, kwargs))
+                raise failure
+            return original(token, endpoint, payload, **kwargs)
+        with patch.object(publisher, 'github', side_effect=fail_patch):
+            with self.assertRaises(type(failure)):
+                self.publish('second report')
+        self.assertEqual(self.publish('third report'), 123)
+        self.assertEqual(sum(not kwargs for _, _, kwargs in self.posts), 1)
+        self.assertEqual(self.posts[-1][0], 'repos/fixture/project/issues/comments/123')
+        self.assertEqual(len(self.comments), 1)
+        self.assertTrue(self.comments[0]['body'].startswith('third report'))
+
+    def test_recovered_id_survives_all_unsent_update_attempts(self):
+        self.recovered_update_failure(publisher.UnsentWriteError('TLS handshake timeout'))
+
+    def test_recovered_id_survives_unconfirmed_update(self):
+        self.recovered_update_failure(publisher.ReviewError('response EOF'))
+
+    def test_recovered_id_survives_privacy_refusal(self):
+        self.failure, self.accepted = OSError('response EOF'), True
+        self.visible_after = publisher._leg_session.RETRY_ATTEMPTS
+        with self.assertRaises(OSError):
+            self.publish()
+        with patch.object(publisher._leg_session, 'run', side_effect=publisher.ReviewError('privacy refused')):
+            with self.assertRaisesRegex(publisher.ReviewError, 'privacy refused'):
+                self.publish('second report')
+        self.assertEqual(self.publish('third report'), 123)
+        self.assertEqual([k.get('method', 'POST') for _, _, k in self.posts], ['POST', 'PATCH'])
+
+    def test_auto_notification_never_uses_unconfirmed_record_identity(self):
+        import io, tempfile
+        from contextlib import redirect_stderr
+        with tempfile.TemporaryDirectory() as directory:
+            self.failure, self.accepted = OSError('response EOF'), True
+            self.visible_after = publisher._leg_session.RETRY_ATTEMPTS * 2
+            report = {'head': 'a' * 40, 'attempts': []}
+            def driver(*_args, **kwargs):
+                kwargs['record'](report)
+                raise publisher.ReviewError('state unavailable')
+            with patch.object(publisher, 'data_path', return_value=Path(directory)), \
+                    patch.object(publisher, 'dispatch', side_effect=driver), \
+                    redirect_stderr(io.StringIO()):
+                with self.assertRaisesRegex(publisher.ReviewError, 'state unavailable'):
+                    publisher.auto_dispatch('fixture/project', 12, 'openai')
+            self.assertEqual(len(self.comments), 2)
+            self.assertTrue(self.comments[0]['body'].startswith('评审派发记录'))
+            self.assertTrue(self.comments[1]['body'].startswith('评审派发状态通知'))
+            self.assertEqual([k.get('method', 'POST') for _, _, k in self.posts], ['POST', 'POST'])
+            self.assertFalse(list(Path(directory).rglob('pending-comment.json')))
+
+
+    def test_rejected_creation_can_be_attempted_by_a_later_report(self):
+        for status in (403, 422, 429):
+            with self.subTest(status=status):
+                self.posts.clear()
+                self.comments.clear()
+                self.pending.clear()
+                self.failure = publisher.RejectedWriteError(f'GitHub rejected write with HTTP {status}')
+                with self.assertRaises(publisher.RejectedWriteError):
+                    self.publish()
+                self.assertEqual(len(self.posts), 1)
+                self.assertEqual(self.publish('later report'), 123)
+                self.assertEqual([k.get('method', 'POST') for _, _, k in self.posts], ['POST', 'POST'])
 
 if __name__ == '__main__':
     unittest.main()

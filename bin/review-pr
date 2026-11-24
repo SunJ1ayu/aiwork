@@ -60,6 +60,14 @@ class UnsentWriteError(ReviewError):
     """Transport proved that the target request was not sent."""
 
 
+class RejectedWriteError(ReviewError):
+    """A complete client-error response proves that this write was rejected."""
+
+
+class PublicationRefused(ReviewError):
+    """A deterministic publication guard failed; receipt polling must stop."""
+
+
 class PrivacyError(ReviewError):
     pass
 
@@ -179,7 +187,8 @@ def github_write(token: str, endpoint: str, payload: dict, *, method: str, timeo
     """One direct HTTPS write, with an explicit boundary before any HTTP bytes.
 
     http.client neither follows redirects nor replays a request. Connection/TLS
-    failures before request() are provably unsent; every later error is uncertain.
+    failures before request() are provably unsent. Complete 4xx responses are
+    known rejections; other failures after request() are uncertain.
     Authentication stays in memory, not argv, files or diagnostics.
     """
     connection = http.client.HTTPSConnection('api.github.com', timeout=timeout)
@@ -195,6 +204,8 @@ def github_write(token: str, endpoint: str, payload: dict, *, method: str, timeo
                          'X-GitHub-Api-Version': '2022-11-28'})
             response = connection.getresponse()
             data = response.read()
+            if 400 <= response.status < 500:
+                raise RejectedWriteError(f'GitHub rejected write with HTTP {response.status}; no publication created')
             if not 200 <= response.status < 300:
                 raise ReviewError(f'GitHub write returned HTTP {response.status}; publication unconfirmed')
             return data.decode('utf-8')
@@ -230,7 +241,7 @@ def pr_state(token: str, number: int, *, repository: str, preview: bool = False)
 
 def check_current_head(expected: str, current: dict) -> None:
     if current.get("state") != "open" or (current.get("head") or {}).get("sha") != expected:
-        raise ReviewError(f"PR head changed since review of {expected}; no review posted, rerun")
+        raise PublicationRefused(f"PR head changed since review of {expected}; refusing further publication, rerun")
 
 
 def main_document(repo: Path, path: str, *, required: bool = True,
@@ -452,6 +463,8 @@ def poll_publication(reconcile):
             receipt = reconcile()
             if receipt is not None:
                 return receipt
+        except PublicationRefused:
+            raise
         except (ReviewError, OSError):
             pass
         if attempt < _leg_session.RETRY_ATTEMPTS - 1:
@@ -460,15 +473,20 @@ def poll_publication(reconcile):
 
 
 def write_publication(write, reconcile, *, before_write=lambda: None,
-                      mark_attempt=lambda: None, clear_unsent=lambda: None):
-    """Retry proven unsent writes only; ambiguous writes get receipt queries only."""
+                      mark_attempt=lambda: None, clear_not_created=lambda: None):
+    """Retry unsent writes; stop on rejections; only query ambiguous writes."""
     for attempt in range(_leg_session.RETRY_ATTEMPTS):
         before_write()
         mark_attempt()
         try:
             return write()
+        except RejectedWriteError:
+            # No immediate retry of permission, validation or rate-limit rejections.
+            # A later saved-body recovery or report may try again after correction.
+            clear_not_created()
+            raise
         except UnsentWriteError:
-            clear_unsent()
+            clear_not_created()
             if attempt == _leg_session.RETRY_ATTEMPTS - 1:
                 raise
             time.sleep(_leg_session.retry_delay(attempt))
@@ -479,10 +497,10 @@ def write_publication(write, reconcile, *, before_write=lambda: None,
             raise
 
 
-def publication_attempt(directory: Path, *, unsent: bool = False) -> None:
+def publication_attempt(directory: Path, *, not_created: bool = False) -> None:
     # Persist uncertainty before sending, including across --retry-publish recovery.
     marker = directory / 'publication-attempted'
-    if unsent:
+    if not_created:
         marker.unlink()
     else:
         with marker.open('wb') as stream:
@@ -554,24 +572,28 @@ def project_reviewer_bot(token: str, repository: str) -> str:
     invalid = 'project main .aiwork/policy.json reviewer_bot is missing or invalid; refusing publication'
     content = response.get('content')
     if response.get('type') != 'file' or response.get('encoding') != 'base64' or not isinstance(content, str):
-        raise ReviewError(invalid)
+        raise PublicationRefused(invalid)
     try:
         policy = json.loads(base64.b64decode(''.join(content.split()), validate=True).decode('utf-8'))
     except ValueError as exc:
-        raise ReviewError(invalid) from exc
+        raise PublicationRefused(invalid) from exc
     bot = policy.get('reviewer_bot') if isinstance(policy, dict) else None
     if not isinstance(bot, str) or not bot.endswith('[bot]'):
-        raise ReviewError(invalid)
+        raise PublicationRefused(invalid)
     return bot
 
 
 def github_items(token: str, endpoint: str):
     page = 1
     while True:
-        items = json.loads(github(token, f'{endpoint}?per_page=100&page={page}',
-                                  raw=True, timeout=30, retry_reads=False))
+        raw = github(token, f'{endpoint}?per_page=100&page={page}',
+                     raw=True, timeout=30, retry_reads=False)
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ReviewError('GitHub returned invalid receipt JSON') from exc
         if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
-            raise ReviewError('cannot check existing publication receipts; refusing publication')
+            raise PublicationRefused('cannot check existing publication receipts; refusing publication')
         yield from items
         if len(items) < 100:
             return
@@ -591,7 +613,7 @@ def find_published_review(token: str, *, repository: str, number: int,
                 and publication_matches(item, body=body, reviewer_bot=reviewer_bot)):
             link = item.get('html_url')
             if not isinstance(link, str) or not link.startswith('https://github.com/'):
-                raise ReviewError('saved review already published but has no valid link; refusing duplicate publication')
+                raise PublicationRefused('saved review already published but has no valid link; refusing duplicate publication')
             return link
     return None
 
@@ -641,7 +663,7 @@ def publish_saved(directory: Path, *, repository: str, number: int, leg: str,
 
         return write_publication(write, reconcile, before_write=check_head,
             mark_attempt=lambda: publication_attempt(directory),
-            clear_unsent=lambda: publication_attempt(directory, unsent=True))
+            clear_not_created=lambda: publication_attempt(directory, not_created=True))
 
 
 def read_dispatch_state(repository: str, number: int, builder_family: str) -> dict:
@@ -716,18 +738,23 @@ def find_dispatch_comment(token, repository, number, body):
     return None
 
 
-def publish_dispatch_comment(repository, number, body, comment_id=None, *, pending=None):
-    if pending is None:
-        pending = {}
+def publish_dispatch_comment(repository, number, body, comment_id=None, *, publication=None):
+    """Keep one logical comment identity for this dispatch process, even on failure."""
+    if publication is None:
+        publication = {}
+    comment_id = publication.get('id', comment_id)
+    if comment_id is not None:
+        publication['id'] = comment_id
     token = _leg_session.network_read(lambda: review_token(repository))
     # If creation previously lost its response, recover its ID before updating the
     # evolving report. A later report must not blindly create a second comment.
-    if pending.get('body') is not None:
+    if publication.get('body') is not None:
         comment_id = poll_publication(lambda: find_dispatch_comment(
-            token, repository, number, pending['body']))
+            token, repository, number, publication['body']))
         if comment_id is None:
             raise ReviewError('dispatch comment creation remains unconfirmed; refusing another POST')
-        pending.clear()
+        publication['id'] = comment_id
+        publication.pop('body', None)
     body = publication_body(body)
     with tempfile.TemporaryDirectory(prefix='dispatch-record-') as temporary:
         path = Path(temporary) / 'body.md'
@@ -757,30 +784,31 @@ def publish_dispatch_comment(repository, number, body, comment_id=None, *, pendi
         return None
 
     result = write_publication(write, reconcile,
-        mark_attempt=lambda: pending.update(body=body) if comment_id is None else None,
-        clear_unsent=pending.clear)
-    pending.clear()
+        mark_attempt=lambda: publication.update(body=body) if comment_id is None else None,
+        clear_not_created=lambda: publication.pop('body', None))
+    publication['id'] = result
+    publication.pop('body', None)
     return result
 
 
-def publish_dispatch_record(repository, number, report, comment_id=None, *, pending=None):
+def publish_dispatch_record(repository, number, report, comment_id=None, *, publication=None):
     body = ('评审派发记录（合并条件以关卡为准）\n\n```json\n'
             + json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2) + '\n```')
-    return publish_dispatch_comment(repository, number, body, comment_id, pending=pending)
+    return publish_dispatch_comment(repository, number, body, comment_id, publication=publication)
 
 
-def publish_dispatch_failure(repository, number, head, attempted, report=None, *, pending=None):
+def publish_dispatch_failure(repository, number, head, attempted, report=None, *, publication=None):
     if report is None:
         report = dict(head=head, stopped=StopReason.DISPATCH_ERROR.value,
                       attempts=[dict(leg=leg, started=True) for leg in attempted])
     body = ('评审派发状态通知；合并条件以关卡结论为准。仅列已知事实，不判断腿的失败原因。\n\n```json\n'
             + json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2) + '\n```')
-    return publish_dispatch_comment(repository, number, body, pending=pending)
+    return publish_dispatch_comment(repository, number, body, publication=publication)
 
 
-def record_dispatch_failure(repository, number, head, attempted, report=None, *, pending=None):
+def record_dispatch_failure(repository, number, head, attempted, report=None, *, publication=None):
     try:
-        publish_dispatch_failure(repository, number, head, attempted, report, pending=pending)
+        publish_dispatch_failure(repository, number, head, attempted, report, publication=publication)
     except (ValueError, OSError):
         print('review-pr: failure notice could not be published; details remain local', file=sys.stderr)
 
@@ -792,16 +820,16 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory = Path(tempfile.mkdtemp(prefix=f'review-dispatch-{number}-', dir=root))
     attempts = []
-    comment_id = None
     latest = {}
-    pending_comment = {}
+    record_publication = {}
+    notice_publication = {}
 
     def record(report):
-        nonlocal comment_id, latest
+        nonlocal latest
         latest = report
         (directory / "summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         try:
-            comment_id = publish_dispatch_record(repository, number, report, comment_id, pending=pending_comment)
+            publish_dispatch_record(repository, number, report, publication=record_publication)
         except (ValueError, OSError) as exc:
             try:
                 with (directory / 'record-errors.log').open('a', encoding='utf-8') as stream:
@@ -809,9 +837,6 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
             except OSError:
                 pass
             print('review-pr: public record unavailable; continuing dispatch', file=sys.stderr)
-        finally:
-            (directory / 'pending-comment.json').write_text(
-                json.dumps(pending_comment, ensure_ascii=False) + '\n', encoding='utf-8')
 
     def run(leg, model, head):
         env = dict(os.environ)
@@ -853,13 +878,13 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
         outcomes = {item['leg']: item for item in latest.get('attempts', [])}
         stopped['attempts'] = [dict(outcomes.get(leg, {}), leg=leg, started=True) for leg in attempts]
         record(stopped)
-        record_dispatch_failure(repository, number, expected_head, attempts, stopped, pending=pending_comment)
+        record_dispatch_failure(repository, number, expected_head, attempts, stopped, publication=notice_publication)
         raise
     finally:
         print(f'review-pr: dispatch record {directory}', file=sys.stderr)
     (directory / 'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     if not report['target_met'] or not report['reviewed_families']:
-        record_dispatch_failure(repository, number, report['head'], attempts, report, pending=pending_comment)
+        record_dispatch_failure(repository, number, report['head'], attempts, report, publication=notice_publication)
     print(json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2))
     return 0 if report['minimum_met'] else 2
 

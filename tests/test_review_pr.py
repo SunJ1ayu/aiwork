@@ -272,6 +272,68 @@ class PublicationNetworkTests(unittest.TestCase):
                 self.assertEqual(connection.request.call_args.kwargs['headers']['Authorization'], 'Bearer ' + FAKE_TOKEN)
                 connection.close.assert_called_once()
 
+    def transport_api(self, token, endpoint, payload=None, **kwargs):
+        if payload is None:
+            return self.api(token, endpoint, payload, **kwargs)
+        self.posts.append(payload)
+        return self.raw_github(token, endpoint, payload, **kwargs)
+
+    def test_complete_rejection_allows_saved_publication_to_be_sent_later(self):
+        from unittest.mock import MagicMock
+        for status in (403, 422, 429):
+            with self.subTest(status=status):
+                directory = self.directory / str(status)
+                directory.mkdir()
+                self.save(directory)
+                self.posts.clear()
+                rejected, success = MagicMock(), MagicMock()
+                rejected.getresponse.return_value.status = status
+                rejected.getresponse.return_value.read.return_value = b'{"message":"rejected"}'
+                success.getresponse.return_value.status = 201
+                success.getresponse.return_value.read.return_value = json.dumps(
+                    {'html_url': published_review('')['html_url']}).encode()
+                with patch.object(self.review, 'github', side_effect=self.transport_api), \
+                        patch.object(self.review.http.client, 'HTTPSConnection', side_effect=[rejected, success]):
+                    with self.assertRaises(self.review.ReviewError):
+                        self.publish(directory)
+                    self.assertEqual(len(self.posts), 1)
+                    self.assertIn('pullrequestreview', self.publish(directory, recover_published=True))
+                self.assertEqual(len(self.posts), 2)
+                self.assertEqual(self.posts[0], self.posts[1])
+
+    def test_server_error_and_incomplete_rejection_remain_query_only(self):
+        from unittest.mock import MagicMock
+        for label, status in (('server', 502), ('truncated', 403)):
+            with self.subTest(label=label):
+                directory = self.directory / label
+                directory.mkdir()
+                self.save(directory)
+                self.posts.clear()
+                connection = MagicMock()
+                connection.getresponse.return_value.status = status
+                if label == 'truncated':
+                    connection.getresponse.return_value.read.side_effect = self.review.http.client.IncompleteRead(b'partial', 20)
+                else:
+                    connection.getresponse.return_value.read.return_value = b'{"message":"server error"}'
+                with patch.object(self.review, 'github', side_effect=self.transport_api), \
+                        patch.object(self.review.http.client, 'HTTPSConnection', return_value=connection):
+                    for recover in (False, True):
+                        with self.assertRaises(self.review.ReviewError):
+                            self.publish(directory, recover_published=recover)
+                self.assertEqual(len(self.posts), 1)
+                self.assertTrue((directory / 'publication-attempted').exists())
+
+    def test_head_change_during_receipt_poll_reports_the_head_change(self):
+        def moved(_token, _endpoint, payload=None, **_kwargs):
+            self.posts.append(payload)
+            self.head = 'b' * 40
+            raise self.review.ReviewError('original response EOF')
+        with patch.object(self.review, 'github', side_effect=moved):
+            with self.assertRaisesRegex(self.review.ReviewError, 'head changed'):
+                self.publish()
+        self.assertEqual(len(self.posts), 1)
+
+
 
 class CiFixture:
     """GitHub API-shaped responses; job log lines use real Actions timestamp format."""
@@ -823,6 +885,9 @@ class ReviewPrTests(unittest.TestCase):
                 return ci.api(endpoint, **kwargs)
             if payload is not None:
                 calls['post_attempts'].append(dict(payload))
+                if str(publication_failure).startswith('reject-') and not retry_phase:
+                    status = publication_failure.split('-')[1]
+                    raise self.review.RejectedWriteError(f'GitHub rejected write with HTTP {status}')
                 if (publication_failure == 'post' and not retry_phase
                         or publication_failure == 'lost_response' and not failed):
                     failed = True
@@ -969,6 +1034,7 @@ class ReviewPrTests(unittest.TestCase):
                     self.assertEqual(len(archives), 1)
                     archive = archives[0]
                     calls['retry_archive'] = archive.name
+                    calls['retry_attempt_recorded'] = (archive / 'publication-attempted').exists()
                     if retry_change is not None:
                         retry_change(archive, pr, config, calls)
                     stdout.seek(0)
@@ -1001,6 +1067,21 @@ class ReviewPrTests(unittest.TestCase):
                 saved = next(iter(calls['archives'].values()))
                 self.assertEqual(calls['posted_body'].encode(), saved['review-body.md'])
                 self.assertIn('publication.json', saved)
+                self.assertIn('pullrequestreview', stdout)
+
+    def test_retry_publish_cli_recovers_after_complete_rejection(self):
+        for status in (403, 422, 429):
+            with self.subTest(status=status):
+                rc, calls, stdout, stderr = self.run_main_with_leg_result(
+                    'gpt-5.6', publication_failure=f'reject-{status}', retry_publish=True)
+                self.assertEqual(calls['first_rc'], 1)
+                self.assertIn(f'HTTP {status}', calls['first_stderr'])
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(calls['leg_runs'], 1)
+                self.assertEqual(len(calls['post_attempts']), 2)
+                saved = next(iter(calls['archives'].values()))
+                self.assertFalse(calls['retry_attempt_recorded'])
+                self.assertEqual(calls['posted_body'].encode(), saved['review-body.md'])
                 self.assertIn('pullrequestreview', stdout)
 
     def test_publication_retry_refuses_changed_head(self):
