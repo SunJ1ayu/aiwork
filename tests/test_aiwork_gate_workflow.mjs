@@ -4,7 +4,10 @@ import { authorOf } from "../gate/decide.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { globToRegExp, matchAny } from "../gate/decide.mjs";
 import { validatePolicy } from "../gate/run.mjs";
 
@@ -444,11 +447,28 @@ test('保存与重算共用一个步骤定义，检出和令牌接线不会单�
 });
 
 
-test("builder registry schema agrees with the Python consumers", async () => {
+test("builder registry decisions match Python directly, including short boundary values", async () => {
   const { builderFamilies } = await import('../gate/builders.mjs');
-  for (const c of JSON.parse(read('tests/fixtures/builder-registry.json'))) {
-    if (c.families) assert.deepEqual(builderFamilies(c.policy), c.families, c.name);
-    else assert.throws(() => builderFamilies(c.policy), /builders/, c.name);
+  const cases = JSON.parse(read('tests/fixtures/builder-registry.json'));
+  const python = execFileSync('python3', ['-c', `
+import json,sys
+sys.path.insert(0, 'bin')
+from _aiwork_config import builder_families, ConfigError
+results=[]
+for policy in json.load(sys.stdin):
+    try:
+        results.append(dict(ok=True, value=builder_families(policy)))
+    except ConfigError:
+        results.append(dict(ok=False))
+print(json.dumps(results))
+`], {cwd:ROOT, input:JSON.stringify(cases.map(c => c.policy)), encoding:'utf8'});
+  const expected = JSON.parse(python);
+  for (const [i,c] of cases.entries()) {
+    let actual;
+    try { actual = {ok:true, value:builderFamilies(c.policy)}; }
+    catch { actual = {ok:false}; }
+    assert.deepEqual(actual, expected[i], c.name + ': JavaScript/Python disagree');
+    assert.deepEqual(actual, c.families ? {ok:true,value:c.families} : {ok:false}, c.name);
   }
 });
 
@@ -458,4 +478,43 @@ test("one added registry entry is recognized by the existing author rule", () =>
   validatePolicy(p);
   assert.deepEqual(authorOf({covers_head:true, actors:['fixture-builder[bot]']}, p),
     {known:true, family:'fixture', actors:['fixture-builder[bot]']});
+});
+
+
+test("legacy builder author results retain opaque string values", () => {
+  const p = policy();
+  p.builders = {'Display_Name':'FAMILY.V1', 'display_name':'MixedCase'};
+  validatePolicy(p);
+  for (const [login,family] of Object.entries(p.builders)) {
+    assert.deepEqual(authorOf({covers_head:true,actors:[login]},p), {known:true,family,actors:[login]});
+  }
+});
+
+
+test("editing the one format definition reaches both runtime readers", async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'builder-schema-'));
+  t.after(() => rmSync(directory, {recursive:true,force:true}));
+  for (const folder of ['bin', 'gate', '.aiwork']) mkdirSync(join(directory, folder));
+  for (const file of ['bin/_aiwork_config.py', 'gate/builders.mjs']) copyFileSync(new URL(file, ROOT), join(directory, file));
+  const schema = JSON.parse(read('.aiwork/builder-schema.json'));
+  const role = schema.additionalProperties.properties.role;
+  const original = role.pattern;
+  role.pattern = role.pattern.replace('*', '+');
+  assert.notEqual(role.pattern, original, 'mutation must change the actual shared definition');
+  writeFileSync(join(directory, '.aiwork/builder-schema.json'), JSON.stringify(schema));
+  const {builderFamilies} = await import(pathToFileURL(join(directory, 'gate/builders.mjs')));
+  const sample = JSON.parse(read('tests/fixtures/builder-registry.json')).find(c => c.name === 'short structured boundaries').policy;
+  assert.throws(() => builderFamilies(sample), /builders/);
+  const python = execFileSync('python3', ['-c', `
+import json,sys
+sys.path.insert(0, 'bin')
+from _aiwork_config import builder_families, ConfigError
+try:
+    builder_families(json.load(sys.stdin))
+except ConfigError:
+    print('rejected')
+else:
+    print('accepted')
+`], {cwd:directory,input:JSON.stringify(sample),encoding:'utf8'});
+  assert.equal(python.trim(), 'rejected');
 });

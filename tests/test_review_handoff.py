@@ -396,6 +396,15 @@ if __name__=='__main__':
                     if process.poll() is None:process.kill()
                     process.wait()
 
+    def test_legacy_handoff_keeps_its_existing_family_validation(self):
+        import base64,json
+        target = {'builders':{'legacy-builder':'MixedCase'}}
+        content = base64.b64encode(json.dumps(target).encode()).decode()
+        def github(token, endpoint):
+            return {'default_branch':'main'} if endpoint == 'repos/example/project' else {'sha':'b'*40, 'content':content}
+        with self.assertRaisesRegex(ValueError, 'invalid builder registration'):
+            worker.main_policy({'github':github}, 'token', 'example/project')
+
     def test_structured_builder_registry_is_normalized_without_changing_handoff(self):
         import base64,json
         target = {'builders':{'fixture-builder[bot]':{'family':'fixture', 'role':'build-fixture'}}}

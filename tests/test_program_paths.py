@@ -193,6 +193,7 @@ class ProgramPaths(unittest.TestCase):
                 shutil.copy2(source, fixture.bin / source.name)
         (fixture.root / '.aiwork').mkdir()
         shutil.copy2(ROOT / '.aiwork/policy.json', fixture.root / '.aiwork/policy.json')
+        shutil.copy2(ROOT / '.aiwork/builder-schema.json', fixture.root / '.aiwork/builder-schema.json')
         from _test_settings import write_platform_probe
         write_platform_probe(fixture.bin)
         fixture._write('ro-repo-exec', '#!/bin/sh\nshift 2\nexec "$@"\n')

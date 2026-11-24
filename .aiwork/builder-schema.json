@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "propertyNames": {
+    "type": "string",
+    "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*\\[bot\\]$"
+  },
+  "additionalProperties": {
+    "type": "object",
+    "required": [
+      "family",
+      "role"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "family": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*$"
+      },
+      "role": {
+        "type": "string",
+        "pattern": "^build-[a-z0-9][a-z0-9-]*$"
+      }
+    }
+  },
+  "x-caseInsensitiveKeys": true,
+  "x-uniqueValues": [
+    "family",
+    "role"
+  ]
+}

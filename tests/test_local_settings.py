@@ -43,6 +43,7 @@ class BuilderRegistryTest(unittest.TestCase):
             shutil.copy2(ROOT / 'bin' / name, self.bin / name)
         self.policy = self.root / '.aiwork/policy.json'
         self.policy.parent.mkdir()
+        shutil.copy2(ROOT / '.aiwork/builder-schema.json', self.policy.parent / 'builder-schema.json')
         self.settings = self.root / 'settings'
         (self.settings / 'apps').mkdir(parents=True)
         (self.settings / 'review.env').write_text('location=external\n')
@@ -121,7 +122,8 @@ else:
 
     def test_missing_malformed_and_legacy_policy_never_enable_dispatch_or_keys(self):
         for contents in (None, '{', '{}', '{"builders":{"bot":"openai"}}',
-                         '{"builders":{"bot[bot]":{"family":"fixture","role":"review"}}}'):
+                         '{"builders":{"bot[bot]":{"family":"fixture","role":"review"}}}',
+                         '{"builders":{"bot[bot]":{"family":"fixture","family":"other","role":"build-fixture"}}}'):
             with self.subTest(contents=contents):
                 if contents is None:
                     if self.policy.exists():
@@ -129,7 +131,8 @@ else:
                 else:
                     self.policy.write_text(contents)
                 for probe in ('import _label_dispatch',
-                              'import _aiwork_config as c; c.check_app_role("build")'):
+                              'import _aiwork_config as c; c.check_app_role("build")',
+                              'import _aiwork_config as c; c.check_app_role("review")'):
                     result = self.probe(probe, 'fixture')
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, '')

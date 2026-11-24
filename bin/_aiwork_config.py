@@ -554,36 +554,55 @@ def review_location() -> str:
     return rows[0][2]
 
 
+def _validate_builder_schema(value, schema):
+    """Interpret the shared schema subset, rejecting unsupported constraints."""
+    keywords = {'type', 'pattern', 'properties', 'required',
+                'additionalProperties', 'propertyNames', 'x-caseInsensitiveKeys', 'x-uniqueValues'}
+    def fail():
+        raise ConfigError('policy builders: invalid or ambiguous registration')
+    if not isinstance(schema, dict) or set(schema) - keywords:
+        fail()
+    if schema.get('type') == 'string':
+        if not isinstance(value, str) or ('pattern' in schema and re.fullmatch(schema['pattern'], value) is None):
+            fail()
+        return
+    if schema.get('type') != 'object' or not isinstance(value, dict):
+        fail()
+    if not set(schema.get('required', [])) <= value.keys():
+        fail()
+    properties = schema.get('properties', {})
+    for key, item in value.items():
+        if 'propertyNames' in schema:
+            _validate_builder_schema(key, schema['propertyNames'])
+        rule = properties.get(key, schema.get('additionalProperties', True))
+        if rule is False:
+            fail()
+        if isinstance(rule, dict):
+            _validate_builder_schema(item, rule)
+    if schema.get('x-caseInsensitiveKeys') and len({key.lower() for key in value}) != len(value):
+        fail()
+    for field in schema.get('x-uniqueValues', []):
+        if len({item[field] for item in value.values()}) != len(value):
+            fail()
+
+
 def _builder_entries(policy, *, require_roles=False):
-    """Policy schema; gate/builders.mjs consumes the same fixture cases."""
     builders = policy.get('builders') if isinstance(policy, dict) else None
     if not isinstance(builders, dict) or not builders:
         raise ConfigError('policy builders: nonempty object required')
-    structured = all(isinstance(value, dict) for value in builders.values())
-    legacy = all(isinstance(value, str) for value in builders.values())
-    if not structured and not legacy or require_roles and not structured:
-        raise ConfigError('policy builders: family and role registration required')
-    entries = {}
-    logins, families, roles = set(), set(), set()
-    for login, value in builders.items():
-        if (not isinstance(login, str)
-                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?', login)
-                or login.lower() in logins):
-            raise ConfigError('policy builders: invalid or duplicate login')
-        logins.add(login.lower())
-        family = value['family'] if structured and 'family' in value else value
-        if not isinstance(family, str) or not re.fullmatch(r'[a-z][a-z0-9-]*', family):
-            raise ConfigError('policy builders: invalid family')
-        if structured:
-            role = value.get('role')
-            if (set(value) != {'family', 'role'} or not login.endswith('[bot]')
-                    or not isinstance(role, str) or not re.fullmatch(r'build-[a-z0-9][a-z0-9-]*', role)
-                    or family in families or role in roles):
-                raise ConfigError('policy builders: invalid or ambiguous family/role')
-            families.add(family)
-            roles.add(role)
-        entries[login] = value if structured else {'family': family}
-    return entries
+    # Existing projects' string registrations keep their pre-migration values.
+    if all(isinstance(value, str) for value in builders.values()):
+        if require_roles:
+            raise ConfigError('policy builders: local registration requires roles')
+        return {login: {'family': family} for login, family in builders.items()}
+    try:
+        import json
+        schema_path = Path(__file__).resolve().parents[1] / '.aiwork/builder-schema.json'
+        schema = json.loads(schema_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise ConfigError('policy builders: cannot read registration schema') from exc
+    _validate_builder_schema(builders, schema)
+    return builders
 
 
 def builder_families(policy):

@@ -1,24 +1,39 @@
-// Policy schema; bin/_aiwork_config.py consumes the same fixture cases.
+import { readFileSync } from 'node:fs';
+
+function validateSchema(value, schema) {
+  const keywords = new Set(['type', 'pattern', 'properties', 'required',
+    'additionalProperties', 'propertyNames', 'x-caseInsensitiveKeys', 'x-uniqueValues']);
+  const fail = () => { throw new Error('policy builders: invalid or ambiguous registration'); };
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema) || Object.keys(schema).some(k => !keywords.has(k))) fail();
+  if (schema.type === 'string') {
+    if (typeof value !== 'string') fail();
+    if (Object.hasOwn(schema, 'pattern') && value.match(new RegExp(schema.pattern))?.[0] !== value) fail();
+    return;
+  }
+  if (schema.type !== 'object' || !value || typeof value !== 'object' || Array.isArray(value)) fail();
+  const keys = Object.keys(value);
+  if ((schema.required ?? []).some(k => !Object.hasOwn(value, k))) fail();
+  const properties = schema.properties ?? {};
+  for (const [key,item] of Object.entries(value)) {
+    if (schema.propertyNames) validateSchema(key, schema.propertyNames);
+    const rule = Object.hasOwn(properties, key) ? properties[key] : (schema.additionalProperties ?? true);
+    if (rule === false) fail();
+    if (typeof rule === 'object') validateSchema(item, rule);
+  }
+  if (schema['x-caseInsensitiveKeys'] && new Set(keys.map(k => k.toLowerCase())).size !== keys.length) fail();
+  for (const field of schema['x-uniqueValues'] ?? []) {
+    if (new Set(Object.values(value).map(item => item[field])).size !== keys.length) fail();
+  }
+}
+
 export function builderFamilies(policy) {
   const builders = policy?.builders;
-  const fail = () => { throw new Error('policy builders: invalid or ambiguous registration'); };
-  if (!builders || typeof builders !== 'object' || Array.isArray(builders) || !Object.keys(builders).length) fail();
-  const values = Object.values(builders);
-  const structured = values.every(v => v && typeof v === 'object' && !Array.isArray(v));
-  const legacy = values.every(v => typeof v === 'string');
-  if (!structured && !legacy) fail();
-  const logins = new Set(), families = new Set(), roles = new Set();
-  return Object.fromEntries(Object.entries(builders).map(([login, entry]) => {
-    if (!/^[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?$/.test(login) || logins.has(login.toLowerCase())) fail();
-    logins.add(login.toLowerCase());
-    const family = structured ? entry.family : entry;
-    if (typeof family !== 'string' || !/^[a-z][a-z0-9-]*$/.test(family)) fail();
-    if (structured) {
-      if (Object.keys(entry).sort().join(',') !== 'family,role' || !login.endsWith('[bot]') ||
-          typeof entry.role !== 'string' || !/^build-[a-z0-9][a-z0-9-]*$/.test(entry.role) ||
-          families.has(family) || roles.has(entry.role)) fail();
-      families.add(family); roles.add(entry.role);
-    }
-    return [login, family];
-  }));
+  if (!builders || typeof builders !== 'object' || Array.isArray(builders) || !Object.keys(builders).length) {
+    throw new Error('policy builders: nonempty object required');
+  }
+  // Old projects retain opaque string values and their existing author results.
+  if (Object.values(builders).every(v => typeof v === 'string')) return {...builders};
+  const schema = JSON.parse(readFileSync(new URL('../.aiwork/builder-schema.json', import.meta.url), 'utf8'));
+  validateSchema(builders, schema);
+  return Object.fromEntries(Object.entries(builders).map(([login, entry]) => [login, entry.family]));
 }
