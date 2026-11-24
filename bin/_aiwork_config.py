@@ -554,29 +554,78 @@ def review_location() -> str:
     return rows[0][2]
 
 
-BUILDER_APP_ROLES = {
-    'openai': 'build-codex',
-    'deepseek': 'build-deepseek',
-    'xiaomi': 'build-mimo',
-}
+def _builder_entries(policy, *, require_roles=False):
+    """Policy schema; gate/builders.mjs consumes the same fixture cases."""
+    builders = policy.get('builders') if isinstance(policy, dict) else None
+    if not isinstance(builders, dict) or not builders:
+        raise ConfigError('policy builders: nonempty object required')
+    structured = all(isinstance(value, dict) for value in builders.values())
+    legacy = all(isinstance(value, str) for value in builders.values())
+    if not structured and not legacy or require_roles and not structured:
+        raise ConfigError('policy builders: family and role registration required')
+    entries = {}
+    logins, families, roles = set(), set(), set()
+    for login, value in builders.items():
+        if (not isinstance(login, str)
+                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?', login)
+                or login.lower() in logins):
+            raise ConfigError('policy builders: invalid or duplicate login')
+        logins.add(login.lower())
+        family = value['family'] if structured and 'family' in value else value
+        if not isinstance(family, str) or not re.fullmatch(r'[a-z][a-z0-9-]*', family):
+            raise ConfigError('policy builders: invalid family')
+        if structured:
+            role = value.get('role')
+            if (set(value) != {'family', 'role'} or not login.endswith('[bot]')
+                    or not isinstance(role, str) or not re.fullmatch(r'build-[a-z0-9][a-z0-9-]*', role)
+                    or family in families or role in roles):
+                raise ConfigError('policy builders: invalid or ambiguous family/role')
+            families.add(family)
+            roles.add(role)
+        entries[login] = value if structured else {'family': family}
+    return entries
+
+
+def builder_families(policy):
+    return {login: entry['family'] for login, entry in _builder_entries(policy).items()}
+
+
+def builder_roles():
+    # Deployed aiwork main is the source, never the caller's cwd or an env override.
+    path = Path(__file__).resolve().parents[1] / '.aiwork/policy.json'
+    try:
+        import json
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ConfigError('policy builders: duplicate JSON key')
+                result[key] = value
+            return result
+        policy = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
+    except (OSError, ValueError) as exc:
+        raise ConfigError('cannot read deployed aiwork .aiwork/policy.json builder registration') from exc
+    return {entry['family']: entry['role']
+            for entry in _builder_entries(policy, require_roles=True).values()}
 
 
 def check_app_role(role: str) -> str:
+    roles = builder_roles()
     family = os.environ.get('AIWORK_BUILDER_FAMILY')
-    if (role == 'build' or role in BUILDER_APP_ROLES.values()) and family is not None:
-        if family not in BUILDER_APP_ROLES:
+    if (role == 'build' or role in roles.values()) and family is not None:
+        if family not in roles:
             raise ConfigError('AIWORK_BUILDER_FAMILY: unknown builder family')
-        selected = BUILDER_APP_ROLES[family]
+        selected = roles[family]
         if role != 'build' and role != selected:
             raise ConfigError('构建角色与派活执行家族不一致')
         role = selected
 
-    if role in BUILDER_APP_ROLES.values() and family is None:
+    if role in roles.values() and family is None:
         raise ConfigError('独立构建角色需要派活执行家族')
     location = review_location()
     if location == 'unisolated':
         return role
-    allowed = {'review'} if location == 'local' else {'build', *BUILDER_APP_ROLES.values()}
+    allowed = {'review'} if location == 'local' else {'build', *roles.values()}
     if role not in allowed:
         raise ConfigError('本机角色不允许使用这把机器人钥匙；评审由派活方交给评审机器')
     try:

@@ -317,6 +317,21 @@ if __name__=='__main__':
                     if process.poll() is None:process.kill()
                     process.wait()
 
+    def test_structured_builder_registry_is_normalized_without_changing_handoff(self):
+        import base64,json
+        target = {'builders':{'fixture-builder[bot]':{'family':'fixture', 'role':'build-fixture'}}}
+        content = base64.b64encode(json.dumps(target).encode()).decode()
+        def github(token, endpoint):
+            return {'default_branch':'main'} if endpoint == 'repos/example/project' else {'sha':'b'*40, 'content':content}
+        policy, blob = worker.main_policy({'github':github}, 'token', 'example/project')
+        self.assertEqual(policy['builders'], {'fixture-builder[bot]':'fixture'})
+        head = 'a'*40
+        result = worker.builder_for({'head':{'sha':head}, 'user':{'login':'fixture-builder[bot]'}},
+                                    {head:{'fixture'}}, policy)
+        self.assertEqual(result, (head, 'fixture-builder[bot]', 'fixture', 'fixture'))
+        worker.verify_dispatch_state({'head':head,'policy_sha':blob,'excluded':['fixture'],
+                                      'gate':{'summary':'✅ G1 current CI'}}, head, blob, 'fixture', policy)
+
     def test_target_policy_differs_from_tool_checkout(self):
         import base64,json,tempfile,subprocess
         with tempfile.TemporaryDirectory() as directory:

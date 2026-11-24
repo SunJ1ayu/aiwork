@@ -243,11 +243,7 @@ test("aiwork 自己的策略：真拦截，不登记共用的 build 账号，罩
   assert.equal(policy.builders["aiwork-build[bot]"], undefined);
   assert.equal(policy.modification_rounds.summary_account, "SunJ1ayuBoT");
   assert.equal(policy.builders[policy.modification_rounds.summary_account], undefined);
-  for (const [login, family] of Object.entries({
-    "aiwork-build-codex[bot]": "openai",
-    "aiwork-build-deepseek[bot]": "deepseek",
-    "aiwork-build-mimo[bot]": "xiaomi",
-  })) {
+  for (const [login, {family}] of Object.entries(policy.builders)) {
     assert.equal(authorOf({ covers_head: true, actors: [login] }, policy).family, family);
   }
   assert.equal(policy.high_min_families, 2);
@@ -445,4 +441,21 @@ test('保存与重算共用一个步骤定义，检出和令牌接线不会单�
  const anchor=binding?.match(/^    steps: &([\w-]+)$/m)?.[1];
  assert.ok(anchor,'共享步骤需要唯一锚点');
  assert.match(text.split(/^  gate:/m)[1],new RegExp(`^    steps: \\*${anchor}$`,'m'));
+});
+
+
+test("builder registry schema agrees with the Python consumers", async () => {
+  const { builderFamilies } = await import('../gate/builders.mjs');
+  for (const c of JSON.parse(read('tests/fixtures/builder-registry.json'))) {
+    if (c.families) assert.deepEqual(builderFamilies(c.policy), c.families, c.name);
+    else assert.throws(() => builderFamilies(c.policy), /builders/, c.name);
+  }
+});
+
+test("one added registry entry is recognized by the existing author rule", () => {
+  const p = policy();
+  p.builders['fixture-builder[bot]'] = {family:'fixture', role:'build-fixture'};
+  validatePolicy(p);
+  assert.deepEqual(authorOf({covers_head:true, actors:['fixture-builder[bot]']}, p),
+    {known:true, family:'fixture', actors:['fixture-builder[bot]']});
 });

@@ -1,0 +1,178 @@
+[
+  {
+    "name": "legacy",
+    "policy": {
+      "builders": {
+        "old-builder": "old-family"
+      }
+    },
+    "families": {
+      "old-builder": "old-family"
+    }
+  },
+  {
+    "name": "structured",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-example"
+        }
+      }
+    },
+    "families": {
+      "sample[bot]": "sample"
+    }
+  },
+  {
+    "name": "empty",
+    "policy": {
+      "builders": {}
+    }
+  },
+  {
+    "name": "list",
+    "policy": {
+      "builders": []
+    }
+  },
+  {
+    "name": "bad family",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "Wrong",
+          "role": "build-example"
+        }
+      }
+    }
+  },
+  {
+    "name": "reserved role",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "review"
+        }
+      }
+    }
+  },
+  {
+    "name": "path role",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-../../review"
+        }
+      }
+    }
+  },
+  {
+    "name": "missing role",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample"
+        }
+      }
+    }
+  },
+  {
+    "name": "unknown field",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-example",
+          "extra": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "non bot",
+    "policy": {
+      "builders": {
+        "sample": {
+          "family": "sample",
+          "role": "build-example"
+        }
+      }
+    }
+  },
+  {
+    "name": "duplicate family",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-one"
+        },
+        "other[bot]": {
+          "family": "sample",
+          "role": "build-two"
+        }
+      }
+    }
+  },
+  {
+    "name": "duplicate role",
+    "policy": {
+      "builders": {
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-one"
+        },
+        "other[bot]": {
+          "family": "other",
+          "role": "build-one"
+        }
+      }
+    }
+  },
+  {
+    "name": "case collision",
+    "policy": {
+      "builders": {
+        "Sample[bot]": {
+          "family": "sample",
+          "role": "build-one"
+        },
+        "sample[bot]": {
+          "family": "other",
+          "role": "build-two"
+        }
+      }
+    }
+  },
+  {
+    "name": "mixed",
+    "policy": {
+      "builders": {
+        "old": "old",
+        "sample[bot]": {
+          "family": "sample",
+          "role": "build-example"
+        }
+      }
+    }
+  },
+  {
+    "name": "empty legacy family",
+    "policy": {
+      "builders": {
+        "old": ""
+      }
+    }
+  },
+  {
+    "name": "null value",
+    "policy": {
+      "builders": {
+        "old": null
+      }
+    }
+  }
+]

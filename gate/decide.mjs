@@ -1,3 +1,4 @@
+import { builderFamilies } from "./builders.mjs";
 import { isMergeRequester } from "./merge-request.mjs";
 
 import { matchAny } from "./paths.mjs";
@@ -82,11 +83,12 @@ export function authorOf(pushes, policy) {
   if (!pushes || !pushes.covers_head) {
     return { known: false, why: "活动记录里找不到把分支推到当前 head 的那次推送" };
   }
+  const builders = builderFamilies(policy);
   const actors = [...new Set(pushes.actors)];
   if (actors.length === 0) return { known: false, why: "这个分支没有推送记录" };
-  const strangers = actors.filter((a) => !Object.hasOwn(policy.builders, a));
+  const strangers = actors.filter((a) => !Object.hasOwn(builders, a));
   if (strangers.length) return { known: false, why: `有非 Builder 账号推送过:${strangers.join("、")}` };
-  const families = [...new Set(actors.map((a) => policy.builders[a]))];
+  const families = [...new Set(actors.map((a) => builders[a]))];
   if (families.length !== 1) return { known: false, why: `推送者分属多个家族:${families.join("、")}` };
   return { known: true, family: families[0], actors };
 }
@@ -244,7 +246,7 @@ export function decide(facts, policy) {
   // 已知作者只排除本次实现家族:登记为 Builder 不代表写过所有 PR。
   // UNKNOWN 沿用保守边界,不能猜测共享账号这次实际调用的模型。
   const authorFamilies = new Set(author.known ? [author.family]
-    : [...Object.values(policy.builders), ...(policy.unknown_author_extra_families ?? [])]);
+    : [...Object.values(builderFamilies(policy)), ...(policy.unknown_author_extra_families ?? [])]);
   const passes = [];
   const reviewed = new Set();
   const blocks = [];
