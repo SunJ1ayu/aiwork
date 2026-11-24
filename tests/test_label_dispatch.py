@@ -306,6 +306,37 @@ class Capacity(unittest.TestCase):
                 d.capacity({'max_active': value})
         self.assertEqual(d.capacity({'max_active': 3}), 3)
 
+class SlotFaults(unittest.TestCase):
+    def test_missing_origin_is_isolated(self):
+        original = Admission().active()
+        result = d.plan([item(97, []), item(2, [event(20)])], original, set(), set(), 2)
+        self.assertEqual(result['candidate']['subject'], 'example/project#2')
+        self.assertTrue(any(x['reason'] == 'active_event_missing' for x in result['decisions']))
+        self.assertIn('example/project#97', result['state']['active'])
+
+    def test_missing_project_is_reported_and_retained(self):
+        result = d.plan([item(2, [event(20)])], Admission().active(), set(), set(), 2)
+        self.assertTrue(any(x['reason'] == 'active_observation_missing' for x in result['decisions']))
+        self.assertIn('example/project#97', result['state']['active'])
+
+    def test_pending_query_does_not_admit_in_either_mode(self):
+        candidate = self_candidate()
+        class Fake:
+            def observe(self, s): return [item(1, [event(1)], state='closed'), item(2, [event(2)])]
+            def busy(self): return set()
+            def accepted(self, c): return True
+            def post(self, c): raise AssertionError('must not post')
+        for preview in (True, False):
+            with self.subTest(preview=preview), tempfile.TemporaryDirectory() as td:
+                folder = Path(td)
+                original = d.upgraded(state())
+                original['active'][candidate['subject']] = {'subject':candidate['subject'], 'event_id':1}
+                original['pending'][candidate['subject']] = candidate
+                d.atomic(folder/d.FILES['state'], original)
+                result = d.poll({}, folder, preview, Fake())
+                self.assertTrue(result['ok'])
+                self.assertFalse(any(x['reason'] == d.Reason.ELIGIBLE for x in result['decisions']))
+
 class Delivery(unittest.TestCase):
     def test_pending_survives_lost_response_and_reconciles(self):
         with tempfile.TemporaryDirectory() as td:
