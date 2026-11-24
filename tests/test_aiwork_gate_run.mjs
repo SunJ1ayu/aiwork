@@ -1,6 +1,7 @@
 // aiwork 放行关卡的流程(gate/run.mjs):只有本轮 App 放行结论写回后才允许合并。
 // 每次运行把所有开着的 PR 全重算一遍(事件只是门铃);同一时间只有一次运行(workflow 并发组,见 test_aiwork_gate_workflow.mjs)。
 // 跑法:node --test tests/test_aiwork_gate_run.mjs
+import { bindingFromEvent } from "../gate/merge-request.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -16,7 +17,7 @@ function recorder() {
   let n = 0;
   const poster = {
     async start(sha) { calls.push(["start", sha]); return ++n; },
-    async finish(sha, result, id) { calls.push(["finish", sha, result.status, result.conclusion, result.title, id]); },
+    async finish(sha, result, id) { calls.push(["finish", sha, result.status, result.conclusion, result.title, id, result.summary]); },
   };
   return { calls, poster };
 }
@@ -27,7 +28,7 @@ const reviewBody = (sha, verdict) => "```json\n" + JSON.stringify({ verdict, hea
 // 假 GitHub:几个开着的 PR,各有自己的 head、改动文件和一条 aiwork-review 评审(verdict 为 null 就没有评审);
 // CI、推送记录按各自的 head 给。readHead 让"读 PR 本身"时读到另一个 head(列出之后又推进了),state 同理。
 // fail(path) 为真的请求一律报错;lists 依次给出每次"列开着的 PR"读到哪几个(读完了就一直是最后一个)。
-function prsApi(calls, prs, { fail = () => false, lists = null } = {}) {
+function prsApi(calls, prs, { fail = () => false, lists = null, bindingPolicy = policy } = {}) {
   const numbers = Object.keys(prs).map(Number);
   let listed = 0;
   const pr = (n, read = false) => ({
@@ -79,15 +80,16 @@ function prsApi(calls, prs, { fail = () => false, lists = null } = {}) {
         return { data: { workflow_runs: [{ id: 1, path: ".github/workflows/ci.yml", head_sha: ci[1], status: "completed", conclusion: "success", pull_requests: on, created_at: "2026-09-29T08:00:00Z" }] }, next: null };
       }
       const act = /\/activity\?ref=refs%2Fheads%2Fclaude%2Fpr(\d+)/.exec(p);
-      if (act) return { data: [{ id: 1, timestamp: "t", activity_type: "push", after: prs[act[1]].head, actor: { login: "SunJ1ayuBoT" } }], next: null };
+      if (act) return { data: [{ id: 1, timestamp: "t", activity_type: "branch_creation", before: "0".repeat(40), after: prs[act[1]].head, actor: { login: "SunJ1ayuBoT" } }], next: null };
       if (p.includes('/check-runs?')) {
         const checks = numbers.flatMap(n => {
           const x = prs[n];
           const e = x.bindingEvent ?? x.events?.filter(e => e.event === 'labeled' && e.label?.name === policy.merge_label).at(-1);
           if (!e || x.bindingSha === null) return [];
-          return [{ name: 'aiwork-merge-request', head_sha: x.bindingSha ?? x.head,
-            app: { id: x.bindingApp ?? policy.gate_app_id }, status: 'completed', conclusion: 'neutral',
-            external_id: JSON.stringify([n, policy.merge_label, e.created_at, e.actor?.login]) }];
+          const binding = bindingFromEvent('pull_request_target', {action:'labeled',repository:{full_name:'o/r'},
+            label:{name:policy.merge_label},sender:{login:e.actor?.login},
+            pull_request:{number:n,head:{sha:x.bindingSha ?? x.head},base:{repo:{full_name:'o/r'}}}}, 'o/r', bindingPolicy);
+          return binding ? [{...binding,app:{id:x.bindingApp ?? policy.gate_app_id}}] : [];
         });
         return { data: { total_count: checks.length, check_runs: checks }, next: null };
       }
@@ -270,7 +272,7 @@ test("M2 只认业主和 merge_requesters 里的人贴的标签:Builder 贴的�
   const builder = Object.keys(policy.builders)[0];
   for (const [who, expect] of [[builder, []], ["someone-else", []], ["aiwork-orchestrator[bot]", [[10, HEAD]]]]) {
     const r = recorder();
-    const api = prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events: [labeled(who)] } });
+    const api = prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events: [labeled(who)] } }, {bindingPolicy:{...policy,merge_requesters:["aiwork-orchestrator[bot]"]}});
     await run(r, api, { merger: mergeRecorder(r), policy: { ...policy, merge_requesters: ["aiwork-orchestrator[bot]"] } });
     assert.deepEqual(merges(r.calls), expect, who);
   }
@@ -321,7 +323,8 @@ test("M6 合并接口出错(比如判完之后又推了新提交)→ 记下原�
   });
   await run(r, api, { merger: mergeRecorder(r, { fail: (n) => n === 10 }), log: (l) => logs.push(l) });
   assert.deepEqual(merges(r.calls), [[10, HEAD]]);
-  assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[HEAD, "success"], [OTHER, "success"]]);
+  assert.deepEqual(finishes(r.calls).map((f) => [f[0], f[2]]), [[HEAD, "success"], [HEAD, "success"], [OTHER, "success"]]);
+  assert.match(r.calls.filter(c=>c[0]==="finish")[1][6], /合并被拒.*409/);
   assert.ok(logs.some((l) => /PR #10/.test(l) && /409/.test(l)), logs.join("\n"));
 });
 
@@ -351,7 +354,7 @@ test("M8 App 放行结论写回失败 → 不合并;其余 head 照算,运行最
 
 test("M9 贴着标签却不合并时,日志说清为什么:谁贴的不算数 / 找不到是谁贴的", async () => {
   const builder = Object.keys(policy.builders)[0];
-  for (const [events, why] of [[[labeled(builder)], new RegExp(`${builder}.*不算数`)], [[], /找不到是谁/]]) {
+  for (const [events, why] of [[[labeled(builder)], new RegExp(`${builder}.*不算数`)], [[], /找不到.*申请人/]]) {
     const r = recorder();
     const logs = [];
     await run(r, prsApi(r.calls, { 10: { head: HEAD, files: ["web/a.ts"], labels: [MERGE], events } }), { merger: mergeRecorder(r), log: (l) => logs.push(l) });
@@ -382,7 +385,7 @@ test("轮数显示复用既有读取和分页，不增接口；同 head 每个 P
       11: { head: HEAD, files: [], verdict: "PASS", summaries: [] },
     };
     const oldCalls = [], newCalls = [], merged = [];
-    const before = await run(recorder(), prsApi(oldCalls, prs));
+    const before = await run(recorder(), prsApi(oldCalls, prs), {merger:{async merge(){}}});
     const after = await run(recorder(), prsApi(newCalls, prs), { policy: roundPolicy, merger: { async merge(n) { merged.push(n); } } });
     assert.deepEqual(newCalls, oldCalls, "包括请求数量、路径、顺序都和旧策略相同");
     assert.equal(after[0].title, before[0].title);
@@ -415,12 +418,11 @@ test("同 head 的未选中 PR 停信号排在长详情之前，GitHub 摘要截
   assert.match(posted, /PR #11[^\n]*第 1 轮[^\n]*停：交业主/);
 });
 
-test("M11 合并标签只授权记录中的提交；缺记录、伪造 App、重贴后旧记录均不合", async () => {
+test("M11 合并标签只授权记录中的提交；缺记录、伪造 App 均不合", async () => {
   const event = labeled(policy.owner);
   const cases = [
     { bindingSha: OTHER }, { bindingSha: null },
     { bindingApp: policy.gate_app_id + 1 },
-    { bindingEvent: labeled(policy.owner, "2026-09-29T09:00:00Z") },
   ];
   for (const variant of cases) {
     const r = recorder(), logs = [];
@@ -470,4 +472,28 @@ test('同次重读不重复发送另一个 PR 已接受的同步请求',async()=
   async apply(i){applied.push(i.number);}
  }});
  assert.deepEqual(applied,[10,11]);
+});
+
+test('P1-1：同 head 的合并拒绝逐 PR 记录，不挡其余合并或改写放行',async()=>{
+ for(const reject of [[10],[10,11],[11]]){
+  const r=recorder();
+  const prs=Object.fromEntries([10,11].map(number=>[number,{
+   head:HEAD,files:['web/a.ts'],labels:[MERGE],events:[labeled(policy.owner)]
+  }]));
+  const outcomes=await run(r,prsApi(r.calls,prs),{merger:{async merge(number,sha){
+   r.calls.push(['merge',number,sha]);
+   const current=r.calls.filter(c=>c[0]==='finish').at(-1);
+   assert.equal(current[3],'success','合并接口看到的共享必需检查仍为 success');
+   if(reject.includes(number))throw new Error(`HTTP 405 rule rejects PR ${number}`);
+  }}});
+  assert.deepEqual(merges(r.calls),[[10,HEAD],[11,HEAD]]);
+  const writes=r.calls.filter(c=>c[0]==='finish');
+  assert.equal(writes.length,2,'先放行，全部尝试完再补一次摘要');
+  assert.ok(writes.every(c=>c[3]==='success'),'拒绝不改变 G1–G8 放行结论');
+  assert.ok(r.calls.indexOf(writes.at(-1))>r.calls.findLastIndex(c=>c[0]==='merge'));
+  for(const number of reject){
+   assert.match(writes.at(-1)[6],new RegExp(`PR #${number} 合并被拒.*405`));
+   assert.match(outcomes[0].summary,new RegExp(`PR #${number} 合并被拒`));
+  }
+ }
 });

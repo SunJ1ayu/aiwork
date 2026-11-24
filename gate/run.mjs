@@ -4,7 +4,7 @@ import { TransientPrState } from './synchronize.mjs';
 // 只守三件事:
 //   · **关卡的结论只取决于 GitHub 上的现状,与是哪个事件叫醒它无关**:每次运行把所有开着的 PR 全重算一遍,
 //     事件只是门铃。不从事件推"该算哪个 PR、写到哪个提交"—— 那条路上漏过好几次(没带 PR 的事件、旧提交、合并提交)。
-//   · **同一时间只有一次运行**(workflow 的并发组是一个固定名字、不取消正在跑的;排队的只留最新一个,它开始时读到的
+//   · **同一时间只有一次重算**(workflow 的 gate 任务并发组是一个固定名字、不取消正在跑的;排队的只留最新一个,它开始时读到的
 //     一定不比被它顶掉的旧一些)。所以同一提交上后写的结论一定出自后读的数据,不会有慢一步的旧运行盖掉新结论,
 //     也用不着猜 GitHub 在同名检查里按什么取"最新"(后发的一定后写完)。
 //   · **一个提交上的结论 = 以它为 head 的所有开着的 PR 的结论合在一起;读不全就不放行(G8)。**
@@ -157,7 +157,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
           r = g8(`判定出错:${e.message}`);
         }
         if (facts.merge_request && !facts.merge_request.bound) {
-          const merge_note = "合并标签不对应当前提交，要摘掉重贴。";
+          const merge_note = facts.merge_request.reason;
           r = { ...r, merge_note, summary: `${merge_note}\n\n${r.summary}` };
         }
         verdicts.push({ number: n, r, facts, request: facts.merge_request, mergeBy: mergeRequester(facts, policy) });
@@ -207,13 +207,12 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       }
     }
     // 4. 合并:只在这个提交上的 App 放行结论写上了的时候;
-    //    合并出错(判完又推了新提交、有冲突)只记下,请求留着
+    //    合并拒绝是逐 PR 的执行结果，不改变共享 head 的放行判定。
+    const mergeResult = result;
+    const mergeNotes = [];
     for (const v of verdicts) {
       if (v.request && !v.mergeBy) {
-        const who = v.request.by ? `是 ${v.request.by} 提的` : "在 PR 事件里找不到是谁提的";
-        log(v.request.bound
-          ? `PR #${v.number}:贴着合并标签,但合并请求${who},不算数(只认业主和 merge_requesters)`
-          : `PR #${v.number}:合并请求${who}；合并标签不对应当前提交，要摘掉重贴。`);
+        log(`PR #${v.number}:${v.request.reason}`);
       }
       if (!v.mergeBy || result.status !== "completed" || result.conclusion !== "success") continue;
       try {
@@ -224,10 +223,18 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
         if (e instanceof TransientPrState) {
           retry = true;
           result = pendingState(e);
-          await poster.finish(sha, result, ids.get(sha));
+        } else {
+          mergeNotes.push(`PR #${v.number} 合并被拒，合并请求保留：${e.message}`);
         }
         log(`PR #${v.number}:按 ${v.mergeBy} 的请求合并 ${sha.slice(0, 7)} 没成:${e.message}`);
       }
+    }
+    // 先尝试完该 head 上的合并，再补拒绝摘要，不能提前写坏共享必需检查。
+    if (mergeNotes.length || result !== mergeResult) {
+      if (mergeNotes.length) result={...result,
+        title:`${result.title}；合并未完成`,summary:mergeNotes.join('\n')+'\n\n'+result.summary};
+      try { await poster.finish(sha, result, ids.get(sha)); }
+      catch (e) { errors.push(e); }
     }
     results.push({ sha, title: result.title, summary: result.summary });
   }

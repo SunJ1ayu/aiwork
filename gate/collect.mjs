@@ -1,5 +1,6 @@
+import { branchHistory } from "./branch-history.mjs";
 import { proveSynchronizations } from "./synchronize.mjs";
-import { MERGE_BINDING_CHECK, mergeBindingKey } from "./merge-request.mjs";
+import { MERGE_BINDING_CHECK, bindingIdentity, retainsAuthorization, isMergeRequester } from "./merge-request.mjs";
 
 // aiwork 放行关卡的收集部分:从 GitHub API 读判定要的事实。只读,不执行、不检出 PR 的代码。
 // G8 失败即拒:任何一次请求出错、分页没取完、条数对不上,都抛错,由 run.mjs 判 failure。
@@ -85,11 +86,7 @@ export async function collectPrEvents(api, repo, prNumber, mergeLabel) {
     .sort((a, b) => (a.created_at === b.created_at ? a.id - b.id : a.created_at < b.created_at ? -1 : 1))
     .at(-1);
   const mergeLabelBy = lastMergeLabel?.event === "labeled" ? lastMergeLabel.actor?.login ?? null : null;
-  const mergeLabelUnique = lastMergeLabel && events.filter(e =>
-    (e.event === "labeled" || e.event === "unlabeled") && e.label?.name === mergeLabel &&
-    e.created_at === lastMergeLabel.created_at).length === 1;
-  return { base_changed_at: times.at(-1) ?? null, dismissedAt, mergeLabelBy,
-    mergeLabelAt: mergeLabelUnique ? lastMergeLabel.created_at : null };
+  return { base_changed_at: times.at(-1) ?? null, dismissedAt, mergeLabelBy };
 }
 
 // 每条评审发出之后有没有被改写过、何时改写(REST 不给,只有 GraphQL 的 lastEditedAt 有)。
@@ -119,28 +116,18 @@ export async function collectReviewEdits(api, repo, prNumber) {
   throw new Error(`PR #${prNumber} 的评审改写记录超过 ${MAX_PAGES} 页还没取完`);
 }
 
-const PUSH_TYPES = new Set(["push", "force_push", "branch_creation"]);
-
-// 只看分支这一世:从最新往回数,数到最近一次建分支为止;遇到删分支就停(那之前是上一世)。
+// 读取分支活动；分类、排序与生命周期边界见 branch-history.mjs。
 export async function collectPushes(api, repo, headRef, headSha, includeActivities = false) {
   const acts = await paginate(
     api,
     `/repos/${repo}/activity?ref=${encodeURIComponent(`refs/heads/${headRef}`)}&direction=desc&per_page=100`,
   );
-  const sorted = [...acts].sort((a, b) =>
-    a.timestamp === b.timestamp ? b.id - a.id : a.timestamp < b.timestamp ? 1 : -1,
-  );
-  const life = [];
-  for (const a of sorted) {
-    if (a.activity_type === "branch_deletion") break;
-    life.push(a);
-    if (a.activity_type === "branch_creation") break;
-  }
-  const pushes = life.filter((a) => PUSH_TYPES.has(a.activity_type));
+  const history = branchHistory(acts);
+  const { pushes } = history;
   return {
     covers_head: pushes.some((a) => a.after === headSha),
     actors: pushes.map((a) => a.actor?.login ?? "(已注销账号)"),
-    ...(includeActivities ? { activities: pushes } : {}),
+    ...(includeActivities ? { activities: pushes, history } : {}),
   };
 }
 
@@ -165,7 +152,7 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
   }));
 
   const ci = await collectCi(api, repo, headSha, policy, pr.number);
-  const { base_changed_at, dismissedAt, mergeLabelBy, mergeLabelAt } = await collectPrEvents(api, repo, pr.number, policy.merge_label);
+  const { base_changed_at, dismissedAt, mergeLabelBy } = await collectPrEvents(api, repo, pr.number, policy.merge_label);
   const edits = await collectReviewEdits(api, repo, pr.number);
   for (const r of reviews) {
     r.dismissed_at = r.state === "DISMISSED" ? dismissedAt.get(r.id) ?? null : null;
@@ -182,7 +169,6 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
   const sync = sameRepo ? await proveSynchronizations(api, bindingApi, repo, pr, policy, pushes.activities) : {proven:new Map(),current:null};
   if (sameRepo) {
     pushes.actors = pushes.activities.filter(a => !sync.proven.has(a.id)).map(a => a.actor?.login ?? "(已注销账号)");
-    delete pushes.activities;
   }
   let synchronization = sync.reason ? {review_heads:[],note:sync.reason} : null;
   if (sync.current) {
@@ -195,24 +181,41 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
   if ((pr.labels ?? []).some(l => l.name === policy.merge_label)) {
     let bound = false;
     let key = null;
-    if (mergeLabelBy && mergeLabelAt) {
+    let reason = null;
+    if (!isMergeRequester(mergeLabelBy, policy)) {
+      reason = mergeLabelBy ? `合并请求是 ${mergeLabelBy} 提的，不算数(只认业主和 merge_requesters)。`
+        : '合并标签在历史中找不到有效申请人，不合并。';
+    } else if (!sameRepo) {
+      reason = '叉库 PR 不支持自动合并，请人工处理。';
+    } else {
       const records = await paginate(bindingApi,
         `/repos/${repo}/commits/${headSha}/check-runs?check_name=${MERGE_BINDING_CHECK}&filter=all&per_page=100`, "check_runs");
-      key = mergeBindingKey(pr.number, policy.merge_label, mergeLabelAt, mergeLabelBy);
-      bound = (sync.current?.unchanged === true && sync.current.binding === key) || records.some(r => r.name === MERGE_BINDING_CHECK && r.app?.id === policy.gate_app_id &&
-        r.head_sha === headSha && r.external_id === key && r.status === "completed" && r.conclusion === "neutral");
+      const candidates = records.filter(r => r.name === MERGE_BINDING_CHECK && r.app?.id === policy.gate_app_id &&
+        r.head_sha === headSha && r.status === 'completed' && r.conclusion === 'neutral').map(r => r.external_id);
+      if (sync.current?.unchanged === true) candidates.push(sync.current.binding);
+      for (const candidate of candidates) {
+        const source = bindingIdentity(candidate, pr.number, policy.merge_label, policy);
+        if (source && retainsAuthorization(pushes.history, headSha, source, sync.proven)) {
+          key = candidate; bound = true; break;
+        }
+      }
+      if (!bound) reason = candidates.some(k => bindingIdentity(k, pr.number, policy.merge_label, policy))
+        ? '分支活动不能证明授权提交连续保留（可能换走后回到旧提交或记录不完整），不合并；要重新贴标签，仍无法证明时请人工处理。'
+        : '合并标签不对应当前提交：没有可信授权记录，要摘掉重贴。';
     }
-    mergeRequest = { by: mergeLabelBy, bound, key };
+    mergeRequest = { by: mergeLabelBy, bound, key, reason };
   }
 
+  delete pushes.activities;
+  delete pushes.history;
   return {
-    pr: { number: pr.number, state: pr.state, head_sha: headSha, base_sha: pr.base?.sha, base_ref: pr.base?.ref },
+    pr: { number: pr.number, state: pr.state, head_sha: headSha, base_ref: pr.base?.ref },
     files,
     reviews,
     ci,
     base_changed_at,
     pushes,
-    // 申请人及版本绑定共用这一份事实；无记录、歧义均不授权合并。
+    // 申请人、提交授权和连续性共用这一份事实。
     merge_request: mergeRequest,
     ...(synchronization ? {synchronization} : {}),
   };
