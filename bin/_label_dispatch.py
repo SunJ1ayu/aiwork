@@ -32,6 +32,10 @@ def capacity(config):
 
     Invalid or unreadable settings stop admission; they never fall back to extra capacity.
     The limit counts the union of durable issue slots and nonterminal hub lanes.
+    Configured dispatch rules use issue subjects as parallel lanes; other rules
+    count separately by (rule, lane), even when their lane equals an issue.
+    Empty lanes (serial rules) stop admission and release: their subject is unknown.
+    Protocol source: agent-autoloop v1.6.1 kernel/decide.ts enqueue and route.
     Lowering it keeps existing slots and queues new issues until occupancy drops.
     """
     value = config.get('max_active', DEFAULT_MAX_ACTIVE)
@@ -155,6 +159,7 @@ def plan(rows, original, busy, stops, max_active=DEFAULT_MAX_ACTIVE):
     capacity({'max_active': max_active})
     state=upgraded(original)
     decisions=[]
+    blocked=set()
     active=state.get('active')
     by_subject={subject(row):row for row in rows}
     for name, slot in list(active.items()):
@@ -162,11 +167,16 @@ def plan(rows, original, busy, stops, max_active=DEFAULT_MAX_ACTIVE):
             continue  # An ambiguous delivery cannot be released or overtaken.
         row=by_subject.get(name)
         if row is None:
+            blocked.add(name)
+            decisions.append({'subject':name,'reason':'active_observation_missing'})
             continue  # Missing observation must never mean closed or idle.
         trusted=trusted_accounts(row['project'])
         events=relevant(row)
         origin=[e for e in events if int(e['id'])==int(slot['event_id'])]
-        if len(origin)!=1:raise ValueError('active event missing')
+        if len(origin)!=1:
+            blocked.add(name)
+            decisions.append({'subject':name,'reason':'active_event_missing'})
+            continue
         active_label=origin[0]['label']['name']
         removed=[e for e in events if e['event']=='unlabeled' and
                  e['label']['name']==active_label and actor(e) in trusted and
@@ -210,7 +220,7 @@ def plan(rows, original, busy, stops, max_active=DEFAULT_MAX_ACTIVE):
     candidates.sort(key=lambda c:(int(c['event']['id']),c['subject']))
     occupied=set(active) | set(busy)
     # Continuations reuse their issue's slot, independently of other live lanes.
-    eligible=[c for c in candidates if c['subject'] not in busy
+    eligible=[c for c in candidates if c['subject'] not in busy and c['subject'] not in blocked
               and c['subject'] not in state['pending']
               and (c['subject'] in active or len(occupied) < max_active)]
     chosen=eligible[0] if eligible else None
@@ -301,9 +311,13 @@ class Backend:
                     issues[issue['number']] = issue
             for active in upgraded(state)['active'].values():
                 repo,n=split_subject(active['subject'])
-                if repo==project['repo']:issues[n]=self.api(project,issue_path(n))
+                if repo==project['repo']:
+                    try: issues[n]=self.api(project,issue_path(n))
+                    except Exception: continue  # The retained slot is reported by plan.
             for n,issue in sorted(issues.items()):
-                rows.append({'project':project,'issue':issue,'events':self.pages(project,issue_path(n,EVENTS_SUFFIX))})
+                try: events=self.pages(project,issue_path(n,EVENTS_SUFFIX))
+                except Exception: continue  # Missing observation cannot release a slot.
+                rows.append({'project':project,'issue':issue,'events':events})
         return rows
 
     def db(self):
@@ -311,8 +325,17 @@ class Backend:
 
     def busy(self):
         # Include retries and unknown results, across every rule: a finished process is not enough.
+        # v1.6.1 kernel/decide.ts enqueue uses subject only for parallel rules;
+        # serial rules have an empty lane. Never interpret that as idle.
+        routes = {route for project in self.config.get('projects', [])
+                  for route in (project['rule'], *project.get('builder_rules', {}).values())}
         with self.db() as db:
-            return {lane for lane,state in db.execute('select lane,state from runs') if state not in TERMINAL}
+            running = [(rule, lane) for rule, lane, state in
+                       db.execute('select rule,lane,state from runs') if state not in TERMINAL]
+        if any(not lane for rule, lane in running):
+            raise ValueError('hub_lane_unmapped')
+        return {lane if rule in routes else ('other_rule', rule, lane)
+                for rule, lane in running}
 
     def accepted(self,c):
         with self.db() as db:
@@ -385,6 +408,10 @@ def poll(config,folder,preview=False,backend=None):
                     state=deliver(folder,state,candidate,backend.post,backend.accepted)
                 except Exception as error:
                     errors.append({'subject':name,'error':type(error).__name__})
+        if state['pending'] or any(x['reason'] == Reason.PENDING for x in record['decisions']):
+            if errors: record['errors']=errors
+            record['ok']=not errors
+            return record
         record['stage']='observe'
         rows=backend.observe(state)
         record['observed']=[{'subject':subject(r),'event_id':int(e['id']),
@@ -401,8 +428,10 @@ def poll(config,folder,preview=False,backend=None):
         if errors:
             record['errors']=errors
             return record
-        record['ok']=True
+        record['ok']=not any(x['reason'] in ('active_event_missing', 'active_observation_missing')
+                             for x in record['decisions'])
     except Exception as error:
+        if str(error) == 'hub_lane_unmapped': record['reason']='hub_lane_unmapped'
         record['error']=type(error).__name__
         if getattr(backend,'operation',None):record['operation']=backend.operation
         # External diagnostics may contain credentials or private content.

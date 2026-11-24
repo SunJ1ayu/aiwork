@@ -221,7 +221,7 @@ class Capacity(unittest.TestCase):
         self.assertEqual(result['state']['sent'], legacy['sent'])
         self.assertEqual(legacy['active']['event_id'], 10)
 
-    def test_pending_failure_keeps_its_slot_but_other_work_proceeds(self):
+    def test_pending_failure_keeps_slots_and_defers_admission(self):
         rows = [item(n, [event(n)]) for n in (1, 2, 3)]
         class Fake:
             posted = []
@@ -241,8 +241,8 @@ class Capacity(unittest.TestCase):
             self.assertFalse(first['ok'])
             saved = json.loads((folder/d.FILES['state']).read_text())
             self.assertIn(d.subject(rows[0]), saved['pending'])
-            self.assertIn(d.event_key(PROJECT['repo'], 2), saved['sent'])
-            self.assertEqual(len(saved['active']), 2)
+            self.assertNotIn(d.event_key(PROJECT['repo'], 2), saved['sent'])
+            self.assertEqual(len(saved['active']), 1)
             d.poll({'max_active': 2}, folder, backend=backend)
             saved = json.loads((folder/d.FILES['state']).read_text())
             self.assertNotIn(d.event_key(PROJECT['repo'], 3), saved['sent'])
@@ -259,7 +259,7 @@ class Capacity(unittest.TestCase):
             self.assertIsNotNone(d.plan(rows, saved, {d.subject(rows[0])}, set(), 3)['candidate'])
             self.assertIsNone(d.plan(rows, saved, {'other/repo#1'}, set(), 3)['candidate'])
             self.assertIsNone(d.plan(rows, saved, set(), set(), 1)['candidate'])
-            self.assertEqual(len(saved['active']), 2)
+            self.assertEqual(len(saved['active']), 1)
             rows[1]['issue']['state'] = 'closed'
             released = d.plan(rows, saved, {d.subject(rows[0])}, set(), 2)
             self.assertEqual(released['candidate']['subject'], d.subject(rows[2]))
@@ -552,10 +552,24 @@ class Orchestration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p=Path(td)/'hub.db'
             with sqlite3.connect(p) as db:
-                db.execute('create table runs(lane text,state text)')
-                db.executemany('insert into runs values(?,?)',[
+                db.execute("create table runs(lane text,state text,rule text default 'legacy')")
+                db.executemany('insert into runs(lane,state) values(?,?)',[
                     ('a/repo#1','done'),('a/repo#2','unknown'),('b/repo#1','queued')])
-            self.assertEqual(d.Backend({'hub_db':str(p)}).busy(),{'a/repo#2','b/repo#1'})
+            self.assertEqual(d.Backend({'hub_db':str(p),'projects':[PROJECT]}).busy(),{'a/repo#2','b/repo#1'})
+
+    def test_other_rule_is_separate_and_empty_lane_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td)/'hub.db'
+            with sqlite3.connect(p) as db:
+                db.execute('create table runs(rule text,lane text,state text)')
+                db.executemany('insert into runs values(?,?,?)', [
+                    ('legacy','example/project#1','queued'),
+                    ('another','example/project#1','unknown')])
+            backend=d.Backend({'hub_db':str(p),'projects':[PROJECT]})
+            self.assertEqual(backend.busy(), {'example/project#1', ('other_rule','another','example/project#1')})
+            with sqlite3.connect(p) as db:
+                db.execute("insert into runs values('serial','','queued')")
+            with self.assertRaisesRegex(ValueError, 'hub_lane_unmapped'): backend.busy()
 
     def test_family_delivery_is_acknowledged_only_by_its_configured_rule(self):
         with tempfile.TemporaryDirectory() as td:
