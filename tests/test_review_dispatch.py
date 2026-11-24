@@ -239,6 +239,12 @@ class DispatchTests(unittest.TestCase):
 
 
 class PublisherIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        sleeper = patch("time.sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+
     def load_publisher(self):
         import importlib.util
         import importlib.machinery
@@ -312,7 +318,12 @@ class PublisherIntegrationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 2, '', private)
             result_frame(state, ['xiaomi'], ['xiaomi'], True, True, 0)
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
-        def api(token, endpoint, payload, **kwargs):
+        def api(token, endpoint, payload=None, **kwargs):
+            if payload is None:
+                if '/contents/' in endpoint:
+                    from test_review_pr import policy_response, CI_POLICY
+                    return policy_response(CI_POLICY)
+                return '[]' if '/comments?' in endpoint else {}
             bodies.append(payload['body'])
             return {'id': 123}
         with tempfile.TemporaryDirectory() as directory, \
@@ -346,7 +357,12 @@ class PublisherIntegrationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 2, '', private)
             result_frame(state, ['xiaomi'], ['xiaomi'], True, True, 0)
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
-        def api(token, endpoint, payload, **kwargs):
+        def api(token, endpoint, payload=None, **kwargs):
+            if payload is None:
+                if '/contents/' in endpoint:
+                    from test_review_pr import policy_response, CI_POLICY
+                    return policy_response(CI_POLICY)
+                return '[]' if '/comments?' in endpoint else {}
             bodies.append(payload['body'])
             if len(bodies) == 2:
                 raise OSError('comment temporarily unavailable '+private)
@@ -385,7 +401,12 @@ class PublisherIntegrationTests(unittest.TestCase):
         def run(command, **kwargs):
             calls.append(command[command.index('--leg')+1])
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
-        def api(token, endpoint, payload, **kwargs):
+        def api(token, endpoint, payload=None, **kwargs):
+            if payload is None:
+                if '/contents/' in endpoint:
+                    from test_review_pr import policy_response, CI_POLICY
+                    return policy_response(CI_POLICY)
+                return '[]' if '/comments?' in endpoint else {}
             bodies.append(payload['body'])
             return {'id': 123}
         with tempfile.TemporaryDirectory() as directory, \

@@ -15,6 +15,11 @@ publisher = importlib.util.module_from_spec(spec)
 loader.exec_module(publisher)
 
 class Notice(unittest.TestCase):
+    def setUp(self):
+        sleeper = patch("time.sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+
     def test_public_draw_record_is_privacy_checked_and_updated_in_same_comment(self):
         report = {'head': 'a'*40, 'draw': ['subkimi', 'submimo'],
                   'initial': ['subkimi'], 'reserve': ['submimo'],
@@ -148,6 +153,90 @@ if(JSON.stringify(before)!==JSON.stringify(decide(f,policy)))process.exit(1);
 if(before.blocks.length)process.exit(2);
 '''
         subprocess.run(['node','--input-type=module','-e',script],input=json.dumps(payload),text=True,cwd=ROOT,check=True)
+
+
+class CommentNetworkTests(unittest.TestCase):
+    def setUp(self):
+        from contextlib import ExitStack
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.posts, self.comments = [], []
+        self.failure = None
+        self.accepted = False
+        self.pending = {}
+        self.reads = 0
+        self.visible_after = 0
+        for target, name, kwargs in (
+            (publisher, 'review_token', {'return_value': 'fixture-token'}),
+            (publisher, 'project_reviewer_bot', {'return_value': 'project-review[bot]'}),
+            (publisher._leg_session, 'run', {}),
+            (publisher, 'github', {'side_effect': self.api}),
+        ):
+            self.stack.enter_context(patch.object(target, name, **kwargs))
+        self.stack.enter_context(patch('time.sleep'))
+
+    def api(self, _token, endpoint, payload=None, **kwargs):
+        if payload is None:
+            self.reads += 1
+            if self.reads <= self.visible_after:
+                return '[]'
+            if '/comments?' in endpoint:
+                return json.dumps(self.comments)
+            return self.comments[-1]
+        self.posts.append((endpoint, payload, kwargs))
+        item = {'id': 123, 'body': payload['body'],
+                'user': {'login': 'project-review[bot]', 'type': 'Bot'}}
+        if self.accepted or self.failure is None:
+            self.comments[:] = [item]
+        if self.failure:
+            failure, self.failure = self.failure, None
+            raise failure
+        return item
+
+    def publish(self, body='report', comment_id=None):
+        return publisher.publish_dispatch_comment('fixture/project', 12, body,
+                                                   comment_id, pending=self.pending)
+
+    def test_proven_unsent_comment_is_retried(self):
+        self.failure = publisher.UnsentWriteError('TLS handshake timeout')
+        self.assertEqual(self.publish(), 123)
+        self.assertEqual(len(self.posts), 2)
+        self.assertEqual(self.posts[0][1], self.posts[1][1])
+
+    def test_accepted_comment_recovers_delayed_id_without_duplicate(self):
+        self.failure, self.accepted, self.visible_after = OSError('response EOF'), True, 2
+        self.assertEqual(self.publish(), 123)
+        self.assertEqual(len(self.posts), 1)
+        self.assertGreater(self.reads, 2)
+
+    def test_later_report_recovers_pending_creation_before_patch(self):
+        self.failure, self.accepted = OSError('response EOF'), True
+        self.visible_after = publisher._leg_session.RETRY_ATTEMPTS * 3
+        with self.assertRaises(OSError):
+            self.publish()
+        with self.assertRaises(publisher.ReviewError):
+            self.publish('new report')
+        self.assertEqual(len(self.posts), 1)
+        self.visible_after = 0
+        self.assertEqual(self.publish('new report'), 123)
+        self.assertEqual(len(self.posts), 2)
+        self.assertEqual(self.posts[-1][2], {'method': 'PATCH'})
+        self.assertEqual(self.pending, {})
+
+    def test_ambiguous_patch_checks_same_comment_instead_of_reposting(self):
+        self.publish()
+        self.failure, self.accepted = publisher.ReviewError('read timeout'), True
+        self.assertEqual(self.publish('new report', 123), 123)
+        self.assertEqual(len(self.posts), 2)
+        self.assertEqual(self.posts[-1][2], {'method': 'PATCH'})
+
+    def test_other_bot_cannot_confirm_comment_receipt(self):
+        self.failure = OSError('response EOF')
+        self.comments = [{'id': 321, 'body': 'unrelated',
+                          'user': {'type': 'Bot', 'login': 'other-review[bot]'}}]
+        with self.assertRaises(OSError):
+            self.publish()
+        self.assertEqual(len(self.posts), 1)
 
 if __name__ == '__main__':
     unittest.main()

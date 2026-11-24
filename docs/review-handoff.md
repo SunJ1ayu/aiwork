@@ -19,3 +19,5 @@ SETTINGS 是仓库外、权限 600 的 JSON 文件，父目录权限 700。必�
 评审接收、验证、去重和收尾逻辑在仓库；中台路由、服务安装、配置与机器间传输留本机。其他本机适配器不因此自动收入仓库。
 
 合并后，操作员将中台固定启动命令改为本入口并传入 context 与设置文件；评审机安装设置并核对源码检出、程序路径和事件来源。不得把事件中的命令直接执行。先在目标环境验收，再替换旧入口；本 PR 不部署机器。并行与内存验收见 [Linux 评审机验收](linux-vm.md#评审交接并行验收)。
+
+评审和派发评论的发布恢复由 [review-pr 的 write_publication、publish_saved 与 publish_dispatch_comment](../bin/review-pr) 负责，边界依据见[业主决定](https://github.com/SunJ1ayu/aiwork/issues/213#issuecomment-7125277660)。合并后的目标环境核实步骤见 [Linux 评审发布验收](linux-vm.md#评审发布验收)。

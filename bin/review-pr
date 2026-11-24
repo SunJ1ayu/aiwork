@@ -8,6 +8,7 @@ import argparse
 import base64
 from contextlib import contextmanager
 import fcntl
+import http.client
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _leg_session
@@ -51,6 +54,10 @@ CONCLUSION_REQUIREMENT = (
 # instead of pasting it. The review is of the complete diff, deletions included.
 READER_INLINE_DIFF_BYTES = 200 * 1024
 REVIEW_DIFF_PATH = "aiwork-review.diff"
+
+
+class UnsentWriteError(ReviewError):
+    """Transport proved that the target request was not sent."""
 
 
 class PrivacyError(ReviewError):
@@ -145,16 +152,18 @@ def report_failure(directory: Path, run_id: str, *, include_diagnostic: bool = T
 
 
 def github(token: str, endpoint: str, payload: dict | None = None, *,
-           raw: bool = False, timeout: float | None = None, method: str = "POST") -> dict | str:
-    env = dict(os.environ, GH_TOKEN=token)
-    command = ["gh", "api", endpoint]
-    if payload is not None:
-        command += ["--method", method, "--input", "-"]
-    if timeout is not None:
-        command = [str(BIN / "aiwork-timeout"), "-k", "1", str(timeout), *command]
-    def request():
-        return _leg_session.run(command, env=env, input_text=json.dumps(payload) if payload is not None else None)
-    data = _leg_session.network_read(request) if payload is None else request()
+           raw: bool = False, timeout: float | None = None, method: str = "POST",
+           retry_reads: bool = True) -> dict | str:
+    if payload is None:
+        env = dict(os.environ, GH_TOKEN=token)
+        command = ["gh", "api", endpoint]
+        if timeout is not None:
+            command = [str(BIN / "aiwork-timeout"), "-k", "1", str(timeout), *command]
+        def request():
+            return _leg_session.run(command, env=env)
+        data = _leg_session.network_read(request) if retry_reads else request()
+    else:
+        data = github_write(token, endpoint, payload, method=method, timeout=timeout or 30)
     if raw:
         return data
     try:
@@ -164,6 +173,35 @@ def github(token: str, endpoint: str, payload: dict | None = None, *,
     if not isinstance(value, dict):
         raise ReviewError(f"GitHub returned a non-object for {endpoint}")
     return value
+
+
+def github_write(token: str, endpoint: str, payload: dict, *, method: str, timeout: float) -> str:
+    """One direct HTTPS write, with an explicit boundary before any HTTP bytes.
+
+    http.client neither follows redirects nor replays a request. Connection/TLS
+    failures before request() are provably unsent; every later error is uncertain.
+    Authentication stays in memory, not argv, files or diagnostics.
+    """
+    connection = http.client.HTTPSConnection('api.github.com', timeout=timeout)
+    try:
+        try:
+            connection.connect()
+        except (OSError, http.client.HTTPException) as exc:
+            raise UnsentWriteError('GitHub connection failed before sending request: ' + redact(str(exc))) from exc
+        try:
+            connection.request(method, '/' + endpoint, body=json.dumps(payload).encode('utf-8'),
+                headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json',
+                         'Content-Type': 'application/json', 'User-Agent': 'aiwork-review-pr',
+                         'X-GitHub-Api-Version': '2022-11-28'})
+            response = connection.getresponse()
+            data = response.read()
+            if not 200 <= response.status < 300:
+                raise ReviewError(f'GitHub write returned HTTP {response.status}; publication unconfirmed')
+            return data.decode('utf-8')
+        except (OSError, http.client.HTTPException, UnicodeError) as exc:
+            raise ReviewError('GitHub write result unconfirmed: ' + redact(str(exc))) from exc
+    finally:
+        connection.close()
 
 
 def review_token(repository: str) -> str:
@@ -402,6 +440,62 @@ def build_body(leg: str, model: str, report: str, block: dict,
             f"```json\n{json.dumps(block, ensure_ascii=False, separators=(',', ':'))}\n```\n")
 
 
+def publication_body(body: str) -> str:
+    # Equal reports from distinct model runs must not share a publication receipt.
+    return body + f"\n<!-- aiwork-publication:{uuid.uuid4().hex} -->\n"
+
+
+def poll_publication(reconcile):
+    """Bound receipt reads, including empty results; never infer failure from absence."""
+    for attempt in range(_leg_session.RETRY_ATTEMPTS):
+        try:
+            receipt = reconcile()
+            if receipt is not None:
+                return receipt
+        except (ReviewError, OSError):
+            pass
+        if attempt < _leg_session.RETRY_ATTEMPTS - 1:
+            time.sleep(_leg_session.retry_delay(attempt))
+    return None
+
+
+def write_publication(write, reconcile, *, before_write=lambda: None,
+                      mark_attempt=lambda: None, clear_unsent=lambda: None):
+    """Retry proven unsent writes only; ambiguous writes get receipt queries only."""
+    for attempt in range(_leg_session.RETRY_ATTEMPTS):
+        before_write()
+        mark_attempt()
+        try:
+            return write()
+        except UnsentWriteError:
+            clear_unsent()
+            if attempt == _leg_session.RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_leg_session.retry_delay(attempt))
+        except (ReviewError, OSError):
+            receipt = poll_publication(reconcile)
+            if receipt is not None:
+                return receipt
+            raise
+
+
+def publication_attempt(directory: Path, *, unsent: bool = False) -> None:
+    # Persist uncertainty before sending, including across --retry-publish recovery.
+    marker = directory / 'publication-attempted'
+    if unsent:
+        marker.unlink()
+    else:
+        with marker.open('wb') as stream:
+            stream.write(b'query receipt before any further write\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def publication_binding(record: dict) -> str:
     return sha256_bytes(json.dumps(record, sort_keys=True, ensure_ascii=False,
                                   separators=(',', ':')).encode('utf-8'))
@@ -409,7 +503,7 @@ def publication_binding(record: dict) -> str:
 
 def save_publication(directory: Path, *, body: str, repository: str,
                      number: int, leg: str, head: str) -> None:
-    body_bytes = body.encode('utf-8')
+    body_bytes = publication_body(body).encode('utf-8')
     record = {"version": 1, "repository": repository, "pr": number, "leg": leg,
               "head_sha": head, "body_sha256": sha256_bytes(body_bytes)}
     record["binding_sha256"] = publication_binding(record)
@@ -475,7 +569,8 @@ def find_published_review(token: str, *, repository: str, number: int,
                           head: str, body: str, reviewer_bot: str) -> str | None:
     page = 1
     while True:
-        raw = github(token, f'repos/{repository}/pulls/{number}/reviews?per_page=100&page={page}', raw=True)
+        raw = github(token, f'repos/{repository}/pulls/{number}/reviews?per_page=100&page={page}', raw=True,
+                     timeout=30, retry_reads=False)
         reviews = json.loads(raw)
         if not isinstance(reviews, list) or any(not isinstance(item, dict) for item in reviews):
             raise ReviewError('cannot check existing reviews; refusing publication')
@@ -501,22 +596,44 @@ def publish_saved(directory: Path, *, repository: str, number: int, leg: str,
                                  text=True, capture_output=True, check=False)
         if privacy.returncode:
             raise PrivacyError('privacy-check refused review publication:\n' + privacy.stdout + privacy.stderr)
-        token = review_token(repository)
+        token = _leg_session.network_read(lambda: review_token(repository))
         head = record['head_sha']
-        check_current_head(head, pr_state(token, number, repository=repository))
-        # New model runs can repeat earlier text; receipt lookup belongs to saved-body retries.
-        if recover_published:
-            bot = project_reviewer_bot(token, repository)
-            existing = find_published_review(token, repository=repository, number=number,
-                                             head=head, body=body, reviewer_bot=bot)
+
+        def check_head():
+            check_current_head(head, pr_state(token, number, repository=repository))
+
+        bot = None
+        def reconcile():
+            nonlocal bot
+            check_head()
+            if bot is None:
+                bot = project_reviewer_bot(token, repository)
+            return find_published_review(token, repository=repository, number=number,
+                                         head=head, body=body, reviewer_bot=bot)
+
+        check_head()
+        if (directory / 'publication-attempted').exists():
+            existing = poll_publication(reconcile)
             if existing is not None:
                 return existing
-        response = github(token, f'repos/{repository}/pulls/{number}/reviews',
-                          {'commit_id': head, 'event': 'COMMENT', 'body': body})
-        link = response.get('html_url')
-        if not isinstance(link, str) or not link.startswith('https://github.com/'):
-            raise ReviewError('review POST succeeded but returned no review link')
-        return link
+            raise ReviewError('previous publication is unconfirmed; refusing another POST')
+        # Legacy archives predate the attempted marker. Preserve their receipt lookup.
+        if recover_published:
+            existing = reconcile()
+            if existing is not None:
+                return existing
+
+        def write():
+            response = github(token, f'repos/{repository}/pulls/{number}/reviews',
+                              {'commit_id': head, 'event': 'COMMENT', 'body': body})
+            link = response.get('html_url')
+            if not isinstance(link, str) or not link.startswith('https://github.com/'):
+                raise ReviewError('review POST succeeded but returned no review link')
+            return link
+
+        return write_publication(write, reconcile, before_write=check_head,
+            mark_attempt=lambda: publication_attempt(directory),
+            clear_unsent=lambda: publication_attempt(directory, unsent=True))
 
 
 def read_dispatch_state(repository: str, number: int, builder_family: str) -> dict:
@@ -581,40 +698,93 @@ def public_dispatch_report(report):
     return public
 
 
-def publish_dispatch_comment(repository, number, body, comment_id=None):
+def find_dispatch_comment(token, repository, number, body):
+    bot = project_reviewer_bot(token, repository)
+    page = 1
+    while True:
+        comments = json.loads(github(token,
+            f'repos/{repository}/issues/{number}/comments?per_page=100&page={page}',
+            raw=True, timeout=30, retry_reads=False))
+        if not isinstance(comments, list) or any(not isinstance(item, dict) for item in comments):
+            raise ReviewError('cannot check existing dispatch comments')
+        for item in comments:
+            user = item.get('user')
+            identifier = item.get('id')
+            if (isinstance(user, dict) and user.get('type') == 'Bot'
+                    and user.get('login') == bot and item.get('body') == body
+                    and type(identifier) is int and identifier > 0):
+                return identifier
+        if len(comments) < 100:
+            return None
+        page += 1
+
+
+def publish_dispatch_comment(repository, number, body, comment_id=None, *, pending=None):
+    if pending is None:
+        pending = {}
+    token = _leg_session.network_read(lambda: review_token(repository))
+    # If creation previously lost its response, recover its ID before updating the
+    # evolving report. A later report must not blindly create a second comment.
+    if pending.get('body') is not None:
+        comment_id = poll_publication(lambda: find_dispatch_comment(
+            token, repository, number, pending['body']))
+        if comment_id is None:
+            raise ReviewError('dispatch comment creation remains unconfirmed; refusing another POST')
+        pending.clear()
+    body = publication_body(body)
     with tempfile.TemporaryDirectory(prefix='dispatch-record-') as temporary:
         path = Path(temporary) / 'body.md'
         path.write_text(body, encoding='utf-8')
         _leg_session.run([str(BIN / 'privacy-check'), '--files', str(path)])
-    token = review_token(repository)
-    if comment_id is None:
-        result = github(token, f'repos/{repository}/issues/{number}/comments', {'body': body})
-    else:
-        result = github(token, f'repos/{repository}/issues/comments/{comment_id}', {'body': body}, method='PATCH')
-    identifier = result.get('id')
-    if not isinstance(identifier, int) or isinstance(identifier, bool) or identifier < 1:
-        raise ReviewError('dispatch comment response has no valid id')
-    return identifier
+    endpoint = (f'repos/{repository}/issues/{number}/comments' if comment_id is None
+                else f'repos/{repository}/issues/comments/{comment_id}')
+
+    def write():
+        if comment_id is None:
+            result = github(token, endpoint, {'body': body})
+        else:
+            result = github(token, endpoint, {'body': body}, method='PATCH')
+        identifier = result.get('id')
+        if type(identifier) is not int or identifier < 1 or (comment_id is not None and identifier != comment_id):
+            raise ReviewError('dispatch comment response has no valid id')
+        return identifier
+
+    def reconcile():
+        if comment_id is None:
+            return find_dispatch_comment(token, repository, number, body)
+        result = github(token, endpoint, timeout=30, retry_reads=False)
+        bot = project_reviewer_bot(token, repository)
+        user = result.get('user')
+        if (result.get('id') == comment_id and result.get('body') == body
+                and isinstance(user, dict) and user.get('login') == bot and user.get('type') == 'Bot'):
+            return comment_id
+        return None
+
+    result = write_publication(write, reconcile,
+        mark_attempt=lambda: pending.update(body=body) if comment_id is None else None,
+        clear_unsent=pending.clear)
+    pending.clear()
+    return result
 
 
-def publish_dispatch_record(repository, number, report, comment_id=None):
+def publish_dispatch_record(repository, number, report, comment_id=None, *, pending=None):
     body = ('评审派发记录（合并条件以关卡为准）\n\n```json\n'
             + json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2) + '\n```')
-    return publish_dispatch_comment(repository, number, body, comment_id)
+    return publish_dispatch_comment(repository, number, body, comment_id, pending=pending)
 
 
-def publish_dispatch_failure(repository, number, head, attempted, report=None):
+def publish_dispatch_failure(repository, number, head, attempted, report=None, *, pending=None):
     if report is None:
         report = dict(head=head, stopped=StopReason.DISPATCH_ERROR.value,
                       attempts=[dict(leg=leg, started=True) for leg in attempted])
     body = ('评审派发状态通知；合并条件以关卡结论为准。仅列已知事实，不判断腿的失败原因。\n\n```json\n'
             + json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2) + '\n```')
-    return publish_dispatch_comment(repository, number, body)
+    return publish_dispatch_comment(repository, number, body, pending=pending)
 
 
-def record_dispatch_failure(repository, number, head, attempted, report=None):
+def record_dispatch_failure(repository, number, head, attempted, report=None, *, pending=None):
     try:
-        publish_dispatch_failure(repository, number, head, attempted, report)
+        publish_dispatch_failure(repository, number, head, attempted, report, pending=pending)
     except (ValueError, OSError):
         print('review-pr: failure notice could not be published; details remain local', file=sys.stderr)
 
@@ -628,13 +798,14 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
     attempts = []
     comment_id = None
     latest = {}
+    pending_comment = {}
 
     def record(report):
         nonlocal comment_id, latest
         latest = report
         (directory / "summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         try:
-            comment_id = publish_dispatch_record(repository, number, report, comment_id)
+            comment_id = publish_dispatch_record(repository, number, report, comment_id, pending=pending_comment)
         except (ValueError, OSError) as exc:
             try:
                 with (directory / 'record-errors.log').open('a', encoding='utf-8') as stream:
@@ -642,6 +813,9 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
             except OSError:
                 pass
             print('review-pr: public record unavailable; continuing dispatch', file=sys.stderr)
+        finally:
+            (directory / 'pending-comment.json').write_text(
+                json.dumps(pending_comment, ensure_ascii=False) + '\n', encoding='utf-8')
 
     def run(leg, model, head):
         env = dict(os.environ)
@@ -683,13 +857,13 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
         outcomes = {item['leg']: item for item in latest.get('attempts', [])}
         stopped['attempts'] = [dict(outcomes.get(leg, {}), leg=leg, started=True) for leg in attempts]
         record(stopped)
-        record_dispatch_failure(repository, number, expected_head, attempts, stopped)
+        record_dispatch_failure(repository, number, expected_head, attempts, stopped, pending=pending_comment)
         raise
     finally:
         print(f'review-pr: dispatch record {directory}', file=sys.stderr)
     (directory / 'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     if not report['target_met'] or not report['reviewed_families']:
-        record_dispatch_failure(repository, number, report['head'], attempts, report)
+        record_dispatch_failure(repository, number, report['head'], attempts, report, pending=pending_comment)
     print(json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2))
     return 0 if report['minimum_met'] else 2
 
