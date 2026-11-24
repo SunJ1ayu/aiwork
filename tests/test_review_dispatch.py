@@ -239,6 +239,12 @@ class DispatchTests(unittest.TestCase):
 
 
 class PublisherIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        sleeper = patch("time.sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+
     def load_publisher(self):
         import importlib.util
         import importlib.machinery
@@ -267,6 +273,11 @@ class PublisherIntegrationTests(unittest.TestCase):
         publisher = self.load_publisher()
         state = view(target=1, order=['subcursor'])
         seen = []
+        publications = []
+        def publish_record(_repository, _number, _report, *, publication):
+            publications.append((publication, publication.get('id')))
+            publication['id'] = 123
+            return 123
         def run(command, **kwargs):
             seen.append((command, kwargs))
             result_frame(state, ['moonshot'] if complete else [], ['moonshot'] if complete else [],
@@ -274,7 +285,7 @@ class PublisherIntegrationTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(publisher, 'publish_dispatch_failure', side_effect=notice_error) as failure_publication, \
-             patch.object(publisher, 'publish_dispatch_record', return_value=123) as public_record, \
+             patch.object(publisher, 'publish_dispatch_record', side_effect=publish_record) as public_record, \
              patch.object(publisher, 'data_path', return_value=Path(directory)), \
              patch.object(publisher, 'read_dispatch_state', side_effect=lambda *args: state.copy()) as read, \
              patch.object(publisher._leg_session, 'choose_leg', return_value=('moonshot', 'kimi-test')), \
@@ -285,8 +296,11 @@ class PublisherIntegrationTests(unittest.TestCase):
             reports = list(Path(directory).glob('*/summary.json'))
             self.assertEqual(len(reports), 1)
             self.assertGreaterEqual(public_record.call_count, 2)
-            self.assertIsNone(public_record.call_args_list[0].args[3])
-            self.assertEqual(public_record.call_args_list[-1].args[3], 123)
+            self.assertIsNone(publications[0][1])
+            self.assertEqual(publications[-1][1], 123)
+            self.assertTrue(all(state is publications[0][0] for state, _ in publications))
+            if not complete:
+                self.assertIsNot(failure_publication.call_args.kwargs['publication'], publications[0][0])
             report = json.loads(reports[0].read_text())
             self.assertEqual(report['pass_families'], ['moonshot'] if complete else [])
             self.assertEqual(report['target_met'], bool(complete))
@@ -312,7 +326,12 @@ class PublisherIntegrationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 2, '', private)
             result_frame(state, ['xiaomi'], ['xiaomi'], True, True, 0)
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
-        def api(token, endpoint, payload, **kwargs):
+        def api(token, endpoint, payload=None, **kwargs):
+            if payload is None:
+                if '/contents/' in endpoint:
+                    from test_review_pr import policy_response, CI_POLICY
+                    return policy_response(CI_POLICY)
+                return '[]' if '/comments?' in endpoint else {}
             bodies.append(payload['body'])
             return {'id': 123}
         with tempfile.TemporaryDirectory() as directory, \
@@ -346,7 +365,12 @@ class PublisherIntegrationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 2, '', private)
             result_frame(state, ['xiaomi'], ['xiaomi'], True, True, 0)
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
-        def api(token, endpoint, payload, **kwargs):
+        def api(token, endpoint, payload=None, **kwargs):
+            if payload is None:
+                if '/contents/' in endpoint:
+                    from test_review_pr import policy_response, CI_POLICY
+                    return policy_response(CI_POLICY)
+                return '[]' if '/comments?' in endpoint else {}
             bodies.append(payload['body'])
             if len(bodies) == 2:
                 raise OSError('comment temporarily unavailable '+private)
@@ -385,7 +409,12 @@ class PublisherIntegrationTests(unittest.TestCase):
         def run(command, **kwargs):
             calls.append(command[command.index('--leg')+1])
             return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
-        def api(token, endpoint, payload, **kwargs):
+        def api(token, endpoint, payload=None, **kwargs):
+            if payload is None:
+                if '/contents/' in endpoint:
+                    from test_review_pr import policy_response, CI_POLICY
+                    return policy_response(CI_POLICY)
+                return '[]' if '/comments?' in endpoint else {}
             bodies.append(payload['body'])
             return {'id': 123}
         with tempfile.TemporaryDirectory() as directory, \
