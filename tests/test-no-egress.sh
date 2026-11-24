@@ -320,6 +320,22 @@ PY
   out="$(in_host env PATH="$D/fakebin:$PATH" python3 "$TESTS/_suite_audit.py" "$suite" 2>&1)"; rc=$?
   [[ $rc -eq 78 ]] && grep -q '无出口守卫:' <<<"$out"
   check "N10: 无法隔离时完整加载也拒跑" $?
+  local fake="$D/audit-no-formal-isolation" real_unshare
+  real_unshare="$(command -v unshare)"
+  mkdir -p "$fake"
+  cat > "$fake/unshare" <<SH
+#!/usr/bin/env bash
+count=0
+[[ -f "$fake/count" ]] && read -r count < "$fake/count"
+count=\$((count + 1))
+echo "\$count" > "$fake/count"
+[[ \$count -ge 3 ]] && exit 1
+exec "$real_unshare" "\$@"
+SH
+  chmod +x "$fake/unshare"
+  out="$(in_host env PATH="$fake:$PATH" python3 "$TESTS/_suite_audit.py" "$suite" 2>&1)"; rc=$?
+  [[ $rc -eq 78 ]] && grep -q '无出口守卫:' <<<"$out"
+  check "N10: 加载成功后，正式脚本无法隔离时也拒跑" $?
 }
 
 echo "=== no-egress oracle ==="

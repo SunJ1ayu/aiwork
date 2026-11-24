@@ -68,6 +68,19 @@ class SuiteAudit(unittest.TestCase):
             "    return loader.loadTestsFromTestCase(First)\n" + MAIN)
         self.assert_rejected(result, "load_tests")
 
+    def test_unstable_generated_inventory_is_rejected(self):
+        result = self.run_suite(
+            "import os\n"
+            "Generated = type('Generated_' + str(os.getpid()), (unittest.TestCase,), "
+            "{'test_generated': lambda self: None})\n" + MAIN)
+        self.assert_rejected(result, "Generated_")
+
+    def test_stable_generated_inventory_is_not_miscounted(self):
+        result = self.run_suite(
+            "Generated = type('Generated', (unittest.TestCase,), "
+            "{'test_generated': lambda self: None})\n" + MAIN)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_empty_failure_and_early_success_stay_red(self):
         for source in (MAIN, ONE.replace("pass", "self.fail('fixture')") + MAIN,
                        ONE + "raise SystemExit(0)\n"):
