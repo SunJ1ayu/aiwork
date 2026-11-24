@@ -147,11 +147,17 @@ def trusted_accounts(project):
     return {project[k].lower() for k in ('owner','bot')}
 
 
+def project_rules(project):
+    """Map legacy/family routes from the deployed project settings in one place."""
+    families = project.get('builder_rules', {})
+    if not isinstance(families, dict) or not families.keys() <= builder_roles().keys():
+        raise ValueError('invalid builder rules')
+    return {None: project['rule'], **families}
+
+
 def label_route(project, label):
     parts = label.split(':', 2)
-    if len(parts) == 2:
-        return project['rule']
-    return project.get('builder_rules', {}).get(parts[2])
+    return project_rules(project).get(parts[2] if len(parts) == 3 else None)
 
 
 def label_kind(label):
@@ -344,7 +350,7 @@ class Backend:
         # v1.6.1 kernel/decide.ts enqueue uses subject only for parallel rules;
         # serial rules have an empty lane. Never interpret that as idle.
         routes = {route for project in self.config.get('projects', [])
-                  for route in (project['rule'], *project.get('builder_rules', {}).values())}
+                  for route in project_rules(project).values()}
         with self.db() as db:
             running = [(rule, lane) for rule, lane, state in
                        db.execute('select rule,lane,state from runs') if state not in TERMINAL]
@@ -396,10 +402,7 @@ def validate(config):
         for name in ('token_command','reference_command'):
             if not isinstance(p[name],list) or not p[name] or not all(isinstance(v,str) and v for v in p[name]):
                 raise ValueError('invalid adapter command')
-        rules = p.get('builder_rules', {})
-        if not isinstance(rules, dict) or not rules.keys() <= builder_roles().keys():
-            raise ValueError('invalid builder rules')
-        routes = [p['rule'], *rules.values()]
+        routes = list(project_rules(p).values())
         if (not all(isinstance(rule, str) and rule.strip() for rule in routes)
                 or len(set(routes)) != len(routes) or not p['reference_root'].startswith('/')):
             raise ValueError('invalid project settings')

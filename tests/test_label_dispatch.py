@@ -557,6 +557,18 @@ class Orchestration(unittest.TestCase):
                     ('a/repo#1','done'),('a/repo#2','unknown'),('b/repo#1','queued')])
             self.assertEqual(d.Backend({'hub_db':str(p),'projects':[PROJECT]}).busy(),{'a/repo#2','b/repo#1'})
 
+    def test_family_busy_lane_blocks_repeat_dispatch(self):
+        project=dict(PROJECT,builder_rules={'openai':'codex-builder'})
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'hub.db'
+            with sqlite3.connect(path) as db:
+                db.execute('create table runs(rule text,lane text,state text)')
+                db.execute("insert into runs values('codex-builder','example/project#1','queued')")
+            busy=d.Backend({'hub_db':str(path),'projects':[project]}).busy()
+            self.assertEqual(busy,{'example/project#1'})
+            row=item(1,[event(1)])
+            self.assertIsNone(d.plan([row],state(),busy,set(),3)['candidate'])
+
     def test_other_rule_is_separate_and_empty_lane_fails_closed(self):
         with tempfile.TemporaryDirectory() as td:
             p=Path(td)/'hub.db'
@@ -611,7 +623,6 @@ class Orchestration(unittest.TestCase):
                 backend.post(c)
             self.assertEqual(actions,['/reference/'+d.issue_path(1)+'/'+d.REFERENCE_LABEL_PREFIX+'1'+d.REFERENCE_SUFFIX,d.event_key(PROJECT['repo'],1)])
 
-if __name__=='__main__': unittest.main()
 
 class PollFaultReporting(unittest.TestCase):
     def test_candidate_read_failure_reports_subject_and_keeps_other_delivery(self):
@@ -653,3 +664,5 @@ class PollFaultReporting(unittest.TestCase):
             result=d.poll({},Path(td),backend=backend)
             self.assertFalse(result['ok'])
             self.assertEqual(result['reason'],d.Reason.HUB_LANE_UNMAPPED)
+
+if __name__=='__main__': unittest.main()
