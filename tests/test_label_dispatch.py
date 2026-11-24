@@ -311,12 +311,12 @@ class SlotFaults(unittest.TestCase):
         original = Admission().active()
         result = d.plan([item(97, []), item(2, [event(20)])], original, set(), set(), 2)
         self.assertEqual(result['candidate']['subject'], 'example/project#2')
-        self.assertTrue(any(x['reason'] == 'active_event_missing' for x in result['decisions']))
+        self.assertTrue(any(x['reason'] == d.Reason.ACTIVE_EVENT_MISSING for x in result['decisions']))
         self.assertIn('example/project#97', result['state']['active'])
 
     def test_missing_project_is_reported_and_retained(self):
         result = d.plan([item(2, [event(20)])], Admission().active(), set(), set(), 2)
-        self.assertTrue(any(x['reason'] == 'active_observation_missing' for x in result['decisions']))
+        self.assertTrue(any(x['reason'] == d.Reason.ACTIVE_OBSERVATION_MISSING for x in result['decisions']))
         self.assertIn('example/project#97', result['state']['active'])
 
     def test_pending_query_does_not_admit_in_either_mode(self):
@@ -569,7 +569,7 @@ class Orchestration(unittest.TestCase):
             self.assertEqual(backend.busy(), {'example/project#1', ('other_rule','another','example/project#1')})
             with sqlite3.connect(p) as db:
                 db.execute("insert into runs values('serial','','queued')")
-            with self.assertRaisesRegex(ValueError, 'hub_lane_unmapped'): backend.busy()
+            with self.assertRaisesRegex(ValueError, d.Reason.HUB_LANE_UNMAPPED): backend.busy()
 
     def test_family_delivery_is_acknowledged_only_by_its_configured_rule(self):
         with tempfile.TemporaryDirectory() as td:
@@ -612,3 +612,44 @@ class Orchestration(unittest.TestCase):
             self.assertEqual(actions,['/reference/'+d.issue_path(1)+'/'+d.REFERENCE_LABEL_PREFIX+'1'+d.REFERENCE_SUFFIX,d.event_key(PROJECT['repo'],1)])
 
 if __name__=='__main__': unittest.main()
+
+class PollFaultReporting(unittest.TestCase):
+    def test_candidate_read_failure_reports_subject_and_keeps_other_delivery(self):
+        backend=d.Backend({'projects':[PROJECT]})
+        backend.pages=lambda p,path: ([item(1,[])['issue'],item(2,[])['issue']]
+            if path.startswith('issues?') else [event(2)] if path.startswith('issues/2/')
+            else (_ for _ in ()).throw(TimeoutError('private diagnostic')))
+        backend.busy=lambda:set()
+        backend.post=lambda c:None
+        backend.accepted=lambda c:True
+        with tempfile.TemporaryDirectory() as td:
+            result=d.poll({'max_active':2},Path(td),backend=backend)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['errors'][0]['subject'],'example/project#1')
+            self.assertEqual(result['errors'][0]['error'],'TimeoutError')
+            self.assertNotIn('private diagnostic',json.dumps(result))
+            self.assertIn('example/project:2',json.loads((Path(td)/d.FILES['state']).read_text())['sent'])
+
+    def test_active_faults_fail_poll_and_keep_slot(self):
+        for rows,reason in (([], d.Reason.ACTIVE_OBSERVATION_MISSING),([item(97,[])], d.Reason.ACTIVE_EVENT_MISSING)):
+            class Fake:
+                def observe(self,s):return rows
+                def busy(self):return set()
+            with self.subTest(reason=reason),tempfile.TemporaryDirectory() as td:
+                folder=Path(td);d.atomic(folder/d.FILES['state'],Admission().active())
+                result=d.poll({},folder,backend=Fake())
+                self.assertFalse(result['ok'])
+                self.assertIn(reason,[x['reason'] for x in result['decisions']])
+                self.assertIn('example/project#97',json.loads((folder/d.FILES['state']).read_text())['active'])
+
+    def test_empty_lane_reason_survives_poll(self):
+        backend=d.Backend({'projects':[PROJECT]})
+        backend.observe=lambda s:[]
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'hub.db';backend.config['hub_db']=str(path)
+            with sqlite3.connect(path) as db:
+                db.execute('create table runs(rule text,lane text,state text)')
+                db.execute("insert into runs values('serial','','queued')")
+            result=d.poll({},Path(td),backend=backend)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['reason'],d.Reason.HUB_LANE_UNMAPPED)

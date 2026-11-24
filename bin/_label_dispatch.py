@@ -95,8 +95,18 @@ class Reason:
     ELIGIBLE = 'eligible'
     QUEUED = 'occupied_or_queued'
     PENDING = 'pending_delivery'
+    ACTIVE_OBSERVATION_MISSING = 'active_observation_missing'
+    ACTIVE_EVENT_MISSING = 'active_event_missing'
+    HUB_LANE_UNMAPPED = 'hub_lane_unmapped'
+    OBSERVATION_FAILED = 'observation_failed'
     LOCKED = 'poll_already_running'
     IMPORTED = 'legacy_import'
+
+
+class DispatchError(ValueError):
+    def __init__(self, reason):
+        self.reason=reason
+        super().__init__(reason)
 
 
 class Release(NamedTuple):
@@ -168,14 +178,14 @@ def plan(rows, original, busy, stops, max_active=DEFAULT_MAX_ACTIVE):
         row=by_subject.get(name)
         if row is None:
             blocked.add(name)
-            decisions.append({'subject':name,'reason':'active_observation_missing'})
+            decisions.append({'subject':name,'reason':Reason.ACTIVE_OBSERVATION_MISSING})
             continue  # Missing observation must never mean closed or idle.
         trusted=trusted_accounts(row['project'])
         events=relevant(row)
         origin=[e for e in events if int(e['id'])==int(slot['event_id'])]
         if len(origin)!=1:
             blocked.add(name)
-            decisions.append({'subject':name,'reason':'active_event_missing'})
+            decisions.append({'subject':name,'reason':Reason.ACTIVE_EVENT_MISSING})
             continue
         active_label=origin[0]['label']['name']
         removed=[e for e in events if e['event']=='unlabeled' and
@@ -303,6 +313,7 @@ class Backend:
 
     def observe(self,state):
         rows=[]
+        self.observation_errors=[]
         for project in self.config['projects']:
             issues={}
             # Discover labels independently of configured routes, including misspelled families.
@@ -313,10 +324,15 @@ class Backend:
                 repo,n=split_subject(active['subject'])
                 if repo==project['repo']:
                     try: issues[n]=self.api(project,issue_path(n))
-                    except Exception: continue  # The retained slot is reported by plan.
+                    except Exception as error:
+                        self.observation_errors.append({'subject':active['subject'],'reason':Reason.OBSERVATION_FAILED,'error':type(error).__name__})
+                        issues.pop(n,None)
+                        continue
             for n,issue in sorted(issues.items()):
                 try: events=self.pages(project,issue_path(n,EVENTS_SUFFIX))
-                except Exception: continue  # Missing observation cannot release a slot.
+                except Exception as error:
+                    self.observation_errors.append({'subject':issue_subject(project['repo'],n),'reason':Reason.OBSERVATION_FAILED,'error':type(error).__name__})
+                    continue
                 rows.append({'project':project,'issue':issue,'events':events})
         return rows
 
@@ -333,7 +349,7 @@ class Backend:
             running = [(rule, lane) for rule, lane, state in
                        db.execute('select rule,lane,state from runs') if state not in TERMINAL]
         if any(not lane for rule, lane in running):
-            raise ValueError('hub_lane_unmapped')
+            raise DispatchError(Reason.HUB_LANE_UNMAPPED)
         return {lane if rule in routes else ('other_rule', rule, lane)
                 for rule, lane in running}
 
@@ -399,7 +415,7 @@ def poll(config,folder,preview=False,backend=None):
         stops=set(json.loads(stop_path.read_text())) if stop_path.exists() else set()
         limit=capacity(config)
         state=upgraded(state)
-        errors=[]
+        errors=record['errors']=[]
         had_pending=bool(state['pending'])
         for name, candidate in list(state['pending'].items()):
             record['stage']='reconcile_delivery'
@@ -411,6 +427,7 @@ def poll(config,folder,preview=False,backend=None):
                     errors.append({'subject':name,'error':type(error).__name__})
         record['stage']='observe'
         rows=backend.observe(state)
+        errors.extend(getattr(backend,'observation_errors',[]))
         record['observed']=[{'subject':subject(r),'event_id':int(e['id']),
             'action':e['event'],'label':e['label']['name'],
             'trusted':actor(e) in trusted_accounts(r['project'])} for r in rows for e in relevant(r)]
@@ -429,10 +446,10 @@ def poll(config,folder,preview=False,backend=None):
         if errors:
             record['errors']=errors
             return record
-        record['ok']=not any(x['reason'] in ('active_event_missing', 'active_observation_missing')
+        record['ok']=not any(x['reason'] in (Reason.ACTIVE_EVENT_MISSING, Reason.ACTIVE_OBSERVATION_MISSING)
                              for x in record['decisions'])
     except Exception as error:
-        if str(error) == 'hub_lane_unmapped': record['reason']='hub_lane_unmapped'
+        if isinstance(error,DispatchError): record['reason']=error.reason
         record['error']=type(error).__name__
         if getattr(backend,'operation',None):record['operation']=backend.operation
         # External diagnostics may contain credentials or private content.
