@@ -110,7 +110,8 @@ export async function gate(options) {
   const wait = options.waitForState ?? ((attempt) => new Promise(resolve => setTimeout(resolve, retryDelay(attempt))));
   const syncing = new Set();
   // 占位检查在整次运行内复用：重读不重复新建，还没有最终结论的占位在下一轮收集前收尾。
-  // done 表示这条检查已经写出 completed 结论；同一次运行后面的重读轮不再改写它。
+  // done 表示这条检查当前已写成 completed；finalized 表示本次运行曾写成 completed，
+  // 即使合并遇到瞬时状态把当前结论改成进行中，也不能在收尾时改写成失败。
   const placeholders = new Map();
   for (let attempt = 0; attempt < MAX_STATE_READS; attempt++) {
     const {results, retry} = await gateAttempt(options, syncing, placeholders);
@@ -118,11 +119,11 @@ export async function gate(options) {
     await wait(attempt);
   }
 }
-// 只收尾还没有最终结论、又已经不在开放列表里的占位，不留 in_progress。
-// 已经写成 completed 的检查（例如本轮已放行并合并的提交）保持原结论，不能被收尾改写成失败。
+// 只收尾本次运行从未写出最终结论、又已经不在开放列表里的占位，不留 in_progress。
+// 曾经写成 completed 的检查（例如本轮已放行并合并的提交）不能被收尾改写成失败。
 async function finishLeftovers(poster, placeholders, keep = new Set()) {
   for (const [sha, holder] of [...placeholders]) {
-    if (keep.has(sha) || holder.done) continue;
+    if (keep.has(sha) || holder.finalized) continue;
     try { await poster.finish(sha, moved, holder.id); placeholders.delete(sha); } catch {}
   }
 }
@@ -145,7 +146,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
   const ids = new Map();
   for (const sha of heads.keys()) {
     try {
-      if (!placeholders.has(sha)) placeholders.set(sha, { id: await poster.start(sha), done: false });
+      if (!placeholders.has(sha)) placeholders.set(sha, { id: await poster.start(sha), done: false, finalized: false });
       ids.set(sha, placeholders.get(sha).id);
     } catch (e) {
       errors.push(e);
@@ -204,6 +205,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
     try {
       await poster.finish(sha, result, ids.get(sha));
       holder.done = result.status === 'completed';
+      holder.finalized ||= holder.done;
     } catch (e) {
       errors.push(e);
       continue;
@@ -262,6 +264,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       try {
         await poster.finish(sha, result, ids.get(sha));
         holder.done = result.status === 'completed';
+        holder.finalized ||= holder.done;
       } catch (e) { errors.push(e); }
     }
     results.push({ sha, title: result.title, summary: result.summary });

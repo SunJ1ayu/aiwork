@@ -32,6 +32,8 @@ test('沿用后：旧提交上较晚的 Approve 不能盖掉当前 head 上的 R
 test('沿用后：业主在旧提交上的反对/撤销挡住 G7,旧提交上的批准不算当前 head 批准',()=>{
  let f=facts();f.reviews=[pass(old),human(p.owner,'CHANGES_REQUESTED',old,'2026-11-23T12:00:00Z',90)];
  let r=decide(f,p);assert.notEqual(r.conclusion,'success');assert.match(r.summary,/Request changes|要求修改/);
+ assert.match(r.summary,/沿用来源提交 bbbbbbb 上业主要求修改/,'摘要要写清反对来自沿用的旧提交');
+ assert.doesNotMatch(r.summary,/当前 head 上业主要求修改/);
  f=facts();f.files=['.github/workflows/ci.yml'];f.reviews=[pass(old),human(p.owner,'APPROVED',old,'2026-11-23T12:00:00Z',91)];
  r=decide(f,p);assert.notEqual(r.conclusion,'success');assert.match(r.summary,/还没有/);
 });
@@ -47,7 +49,7 @@ test('沿用后：业主在当前 head 上批准,旧提交上更早的反对不�
 });
 
 import { collect } from '../gate/collect.mjs';
-import { prepareSynchronization, syncIntent, syncCheck, encodeSyncIntent, MAX_INTENT_BYTES, SYNC_CHECK } from '../gate/synchronize.mjs';
+import { prepareSynchronization, syncIntent, syncCheck, encodeSyncIntent, MAX_INTENT_BYTES, SYNC_CHECK, autoSyncBlocker } from '../gate/synchronize.mjs';
 import { mergeBindingKey, MERGE_BINDING_CHECK } from '../gate/merge-request.mjs';
 const base='c'.repeat(40), common='d'.repeat(40), newer='e'.repeat(40), merged='f'.repeat(40);
 function environment(over={}) {
@@ -77,13 +79,23 @@ function environment(over={}) {
   if(path==='/repos/o/r/git/ref/heads/main') return {object:{sha:base}};
   if(path==='/repos/o/r/pulls/1') return structuredClone(pr);
   if(path.startsWith('/repos/o/r/check-runs/')) return {output: over.lookupMissing?{}:{text: over.lookupText ?? record.output?.text}};
-  if(path.startsWith('/repos/o/r/compare/')) return {status: over.diverged?'diverged':'ahead'};
+  if(path.startsWith('/repos/o/r/compare/')){
+   if(path.includes('?per_page=100'))
+    return {total_commits:1,merge_base_commit:{sha:base},commits:[{sha:newer}]};
+   return {status: over.diverged?'diverged':'ahead'};
+  }
   if(path.startsWith('/repos/o/r/git/commits/')) {const id=path.split('/').at(-1);
    if(id===merged)return {sha:id,tree:{sha:id},parents:[{sha:old},{sha:newer}]};
    return {sha:id,tree:{sha:id},parents:id===head?[{sha:over.wrongParent?common:old},{sha:base}]:[]};}
   if(path.includes('/git/trees/')) {const id=path.split('/').at(-1).split('?')[0];return {truncated:!!over.truncated,tree:files[id]};}
   throw Error('unexpected get '+path);
  },async getPage(path){requests.push(path);
+  if(path.startsWith('/repos/o/r/compare/') && path.includes('?per_page=100'))
+   return {data:{commits:[{sha:newer}]},next:null};
+  if(path.startsWith(`/repos/o/r/commits/${newer}?`))
+   return {data:{files: over.advanceUnknown
+    ? Array.from({length:300},(_,i)=>({filename:`many/${i}.ts`}))
+    : [{filename: over.advanceTouches?'web/a.ts':'other.ts'}]},next:null};
   if(path.includes('/pulls/1/files'))return {data:[{filename:'web/a.ts'}]};
   if(path.includes('/pulls/1/reviews'))return {data:[{...pass(old),user:{login:p.reviewer_bot,type:'Bot'}}]};
   if(path.includes('/actions/runs'))return {data:{total_count:1,workflow_runs:[{id:1,path:p.ci.workflow_path,head_sha:pr.head.sha,event:p.ci.event,status:'completed',conclusion:'success',pull_requests:[{number:1}]}]}};
@@ -138,6 +150,25 @@ test('写意向之后 main 又前进：按合并提交的实际第二双亲核�
  assert.equal(f.merge_request.bound,true);
  assert.deepEqual(f.synchronization.review_heads,[old]);
  assert.match(f.synchronization.note,/main 又前进到 eeeeeee/);
+ // 账目：main 前进时 compare 两次（取总数/共同祖先后，分页再读首页）+ 逐个新提交 1 次文件列表读取（分页另计）。
+ assert.equal(e.requests.filter(p=>p.includes('/compare/')&&p.includes('?per_page=100')).length,2);
+ assert.equal(e.requests.filter(p=>p.startsWith(`/repos/o/r/commits/${newer}?`)).length,1);
+});
+test('P1-1 写意向之后 main 前进的那段碰了本单文件：认出同步但不沿用评审和标签',async()=>{
+ const e=environment({baseAdvanced:true,advanceTouches:true});
+ const f=await collect(e.api,'o/r',1,p),r=decide(f,p);
+ assert.equal(r.author.known,true,'仍认得出这是关卡自己的同步推送');
+ assert.equal(f.merge_request.bound,false);
+ assert.deepEqual(f.synchronization.review_heads,[]);
+ assert.match(f.synchronization.note,/main 碰了本单文件（web\/a\.ts）/);
+ assert.match(f.synchronization.note,/main 又前进到 eeeeeee/);
+ assert.notEqual(r.conclusion,'success');
+});
+test('P1-1 写意向之后 main 前进的那段文件列表被截断：不沿用评审和标签',async()=>{
+ const f=await collect(environment({baseAdvanced:true,advanceUnknown:true}).api,'o/r',1,p);
+ assert.equal(f.merge_request.bound,false);
+ assert.deepEqual(f.synchronization.review_heads,[]);
+ assert.match(f.synchronization.note,/文件列表可能被接口截断/);
 });
 test('合并提交的第二双亲不在意向基准之后：仍不能证明是干净同步',async()=>{
  const f=await collect(environment({diverged:true}).api,'o/r',1,p);
@@ -186,12 +217,20 @@ test('超长同步意向截断成可读回且明确不能沿用；核心字段�
  assert.equal(f.merge_request.bound,false);
  assert.deepEqual(f.synchronization.review_heads,[]);
  assert.match(f.synchronization.note,/重新评审并重贴合并标签/);
+ assert.match(f.synchronization.note,/同步意向超长被截断/,'不能把意向截断归因成 main 提交的文件列表截断');
 });
 function planning(over={}) {
  const e=environment();e.pr.head.sha=old;
  if(over.conflict)e.pr.mergeable=false;
  const original=e.api.get.bind(e.api);
  e.api.get=async path=>{
+  if(over.nonDefault && path==='/repos/o/r')return {default_branch:'develop'};
+  if(over.forkHead && path==='/repos/o/r/pulls/1'){
+   const pr=await original(path);pr.head.repo={full_name:'fork/r'};return pr;
+  }
+  if(over.draft && path==='/repos/o/r/pulls/1'){
+   const pr=await original(path);pr.draft=true;return pr;
+  }
   if(path.includes('/compare/'))return {total_commits:path.includes('...'+common)?0:over.upToDate?0:1,merge_base_commit:{sha:common}};
   return original(path);
  };
@@ -221,6 +260,24 @@ test('同步计划：冲突不同步；逐提交含重命名旧路径的交集�
  // 比较范围是固定提交，main 前进不会让条数自己变对；读取不全按 G8 拒绝，不能当成瞬时状态重读。
  await assert.rejects(prepareSynchronization(planning({incomplete:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]'),
   error=>error.constructor.name==='Error' && /条数对不上/.test(error.message));
+});
+test('P1-2 「关卡会不会自动同步」只有一处定义：同步准备与合并路径共用 autoSyncBlocker',async()=>{
+ const ok={head:{repo:{full_name:'o/r'}},base:{ref:'main'}};
+ assert.equal(autoSyncBlocker(ok,'main','o/r'),null);
+ assert.match(autoSyncBlocker({...ok,base:{ref:'dev'}},'main','o/r'),/不是默认分支/);
+ assert.match(autoSyncBlocker({...ok,head:{repo:{full_name:'fork/r'}}},'main','o/r'),/叉库/);
+ for(const v of [{over:{nonDefault:true},defaultBranch:'develop',want:/不是默认分支/,sync:false},
+                 {over:{forkHead:true},defaultBranch:'main',want:/叉库/,sync:false},
+                 // 只给同步准备加「草稿先不同步」这类单边维护时，判定仍说会同步，两边就会分叉。
+                 {over:{draft:true},defaultBranch:'main',want:null,sync:true}]){
+  const e=planning(v.over);
+  // 同一个 PR 和默认分支：判据拦下时同步准备必须返回 null；判据说能同步时必须继续准备。
+  const pr=await e.api.get('/repos/o/r/pulls/1');
+  const blocked=autoSyncBlocker(pr,v.defaultBranch,'o/r');
+  if(v.want)assert.match(blocked,v.want);else assert.equal(blocked,null);
+  const plan=await prepareSynchronization(e.api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
+  if(v.sync)assert.notEqual(plan,null,'判据说会同步，同步准备不能单边拒绝');else assert.equal(plan,null);
+ }
 });
 
 test('同步证明不足或后续有普通推送时，摘要写明为什么不能沿用',async()=>{

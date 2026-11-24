@@ -2,6 +2,7 @@
 // 每次运行把所有开着的 PR 全重算一遍(事件只是门铃);同一时间只有一次运行(workflow 并发组,见 test_aiwork_gate_workflow.mjs)。
 // 跑法:node --test tests/test_aiwork_gate_run.mjs
 import { bindingFromEvent } from "../gate/merge-request.mjs";
+import { TransientPrState } from "../gate/synchronize.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -510,6 +511,22 @@ test('P1-1：同一次运行重读时，已写出最终结论的 head 不再改�
   [['completed','success']]);
  assert.deepEqual(finishes(r.calls).filter(f=>f[0]===NEW).map(f=>[f[1],f[2]]),
   [['completed','success']],'重读轮仍处理还没写结论的新 head');
+});
+
+test('P2-2：合并瞬时状态把共享检查改回进行中后，重读收尾也不能把已写过的结论改成失败',async()=>{
+ const r=recorder();
+ const prs={
+  10:{head:HEAD,files:['web/a.ts'],labels:[MERGE],events:[labeled(policy.owner)]},
+  11:{head:HEAD,files:['web/b.ts'],labels:[MERGE],events:[labeled(policy.owner)]},
+ };
+ const merger={async merge(n){r.calls.push(['merge',n,HEAD]);
+  if(n===11)throw new TransientPrState('main 在读取或写入期间已前进');}};
+ // 第一次读到两单；重读时两单都已不在开放列表。
+ await run(r,prsApi(r.calls,prs,{lists:[[10,11],[10,11],[],[]]}),{merger,waitForState:async()=>{}});
+ const onHead=finishes(r.calls).filter(f=>f[0]===HEAD);
+ assert.deepEqual(onHead.map(f=>[f[1],f[2]]),[['completed','success'],['in_progress',null]]);
+ assert.ok(!onHead.some(f=>f[2]==='failure'),'曾经写成 completed 的检查不能再被收尾改成失败');
+ assert.ok(!onHead.some(f=>/已不是开着的 PR 的 head/.test(f[3])),'不能被收尾改写成「已不是 head」');
 });
 
 test('P1-1：同 head 的合并拒绝逐 PR 记录，不挡其余合并或改写放行',async()=>{

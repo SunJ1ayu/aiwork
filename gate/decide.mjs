@@ -342,8 +342,11 @@ export function decide(facts, policy) {
   if (blocked) needOwner.push("有 BLOCK");
   if (high.length) needOwner.push("high 路径");
   const ownerOk = !ownerObjection && (!needOwner.length || (approved && (!blocked || blockWaived)));
-  if (ownerObjection) add(false, "G7", `当前 head 上${ownerObjection}`);
-  else if (needOwner.length) {
+  if (ownerObjection) {
+    // 反对可能来自当前 head，也可能来自沿用来源提交；位置要写对，不能一律说成当前 head。
+    const at = ownerLast.commit_id === head ? "当前 head 上" : `沿用来源提交 ${ownerLast.commit_id.slice(0, 7)} 上`;
+    add(false, "G7", `${at}${ownerObjection}`);
+  } else if (needOwner.length) {
     const why = !approved ? "还没有" : blocked && !blockWaived ? "批准早于最后一条 BLOCK,要在看过 BLOCK 之后再批准" : "已批准";
     add(ownerOk, "G7", `需要业主在当前 head 上批准(${needOwner.join("、")}):${why}`);
   }

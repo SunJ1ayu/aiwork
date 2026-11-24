@@ -3,7 +3,7 @@
 // 读数据用 GITHUB_TOKEN(权限见 templates/aiwork-gate.yml 的 permissions);发检查结果用 aiwork-gate App 的临时令牌 ——
 // 分支规则只认这个 App 发的结果,PR 自己加的 workflow 用 GITHUB_TOKEN 发一个同名检查也冒充不了。
 // 合并(run.mjs 第 4 步)另换一张 App 令牌,只在真要合并或同步时才换:发检查的那张始终只有 checks: write。
-import { prepareSynchronization, syncCheck, TransientPrState, assertPrSnapshot, baseTip, assertBaseTip } from "./synchronize.mjs";
+import { prepareSynchronization, syncCheck, TransientPrState, assertPrSnapshot, baseTip, assertBaseTip, autoSyncBlocker } from "./synchronize.mjs";
 import { createSign } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { bindingFromEvent } from "./merge-request.mjs";
@@ -72,13 +72,12 @@ const poster = {
   },
 };
 
-// 关卡只对同仓库、指向默认分支的 PR 自动同步；先看它会不会同步，再决定落后算不算瞬时。
+// 先看关卡会不会自动同步，再决定落后算不算瞬时。判定本身只在 synchronize.mjs 一处，
+// 这里只负责缓存默认分支，避免合并路径和同步准备各写一份条件。
 let defaultBranch;
-async function autoSyncBlocker(pr) {
-  if (pr.head?.repo?.full_name !== repo) return 'head 来自叉库';
+async function autoSyncBlockerFor(pr) {
   defaultBranch ??= (await api.get(`/repos/${repo}`)).default_branch;
-  if (pr.base?.ref !== defaultBranch) return `目标分支 ${pr.base?.ref} 不是默认分支 ${defaultBranch}`;
-  return null;
+  return autoSyncBlocker(pr, defaultBranch, repo);
 }
 // 带上判过的 head:判完之后又推了新提交,接口就拒(409),不会把没判过的提交合进去
 async function recheckWrite(error, number, expected, { behindTransient = false } = {}) {
@@ -89,7 +88,7 @@ async function recheckWrite(error, number, expected, { behindTransient = false }
   // 同一提交上的前一个 PR 刚合入会推进 main，后一个可能在规则上被要求先跟上 main。
   // 只有合并路径、且关卡下一轮确实会自动同步时才当瞬时状态；否则保留真实拒绝原因，这一轮不合。
   if (pr.mergeable_state === 'behind' && behindTransient) {
-    const blocker = await autoSyncBlocker(pr);
+    const blocker = await autoSyncBlockerFor(pr);
     if (!blocker) throw new TransientPrState('分支落后于 main，重读后自动同步');
     throw new Error(`分支落后于 main，但关卡不会自动同步（${blocker}），这一轮不合并它；合并被拒：${error.message}`);
   }

@@ -166,7 +166,7 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
     ? await collectPushes(api, repo, pr.head.ref, headSha, true)
     : { covers_head: false, actors: [] };
 
-  const sync = sameRepo ? await proveSynchronizations(api, bindingApi, repo, pr, policy, pushes.activities) : {proven:new Map(),current:null};
+  const sync = sameRepo ? await proveSynchronizations(api, bindingApi, repo, pr, policy, pushes.activities, files) : {proven:new Map(),current:null};
   if (sameRepo) {
     pushes.actors = pushes.activities.filter(a => !sync.proven.has(a.id)).map(a => a.actor?.login ?? "(已注销账号)");
   }
@@ -180,9 +180,11 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
         ? `关卡同步后 PR 自身改动发生变化，须重新评审并重贴合并标签${advanced}。`
         : v.retains
           ? `沿用提交 ${v.review_heads.join("、")} 的评审：关卡自动干净同步，main 新提交未碰本单文件${advanced}。`
-          : v.overlap_unknown || v.truncated
-            ? `关卡自动干净同步，但 main 有提交的文件列表可能被接口截断，无法确认是否碰了本单文件，须重新评审并重贴合并标签${advanced}。`
-            : `关卡自动干净同步，但 main 碰了本单文件（${v.overlap.join("、")}），须重新评审并重贴合并标签${advanced}。`;
+          : v.truncated
+            ? `关卡自动干净同步，但同步意向超长被截断，无法确认是否碰了本单文件，须重新评审并重贴合并标签${advanced}。`
+            : v.overlap_unknown
+              ? `关卡自动干净同步，但 main 有提交的文件列表可能被接口截断，无法确认是否碰了本单文件，须重新评审并重贴合并标签${advanced}。`
+              : `关卡自动干净同步，但 main 碰了本单文件（${v.overlap.join("、")}），须重新评审并重贴合并标签${advanced}。`;
     synchronization={review_heads:v.review_heads,note};
   }
   let mergeRequest = null;

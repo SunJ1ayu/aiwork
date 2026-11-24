@@ -21,6 +21,13 @@ export async function assertBaseTip(api, repo, ref, expected) {
     throw new TransientPrState('main 在读取或写入期间已前进，重新读取现状后再判定');
 }
 export const SYNC_CHECK = 'aiwork-main-sync';
+// 关卡只对同仓库、指向目标仓库默认分支的 PR 自动同步。合并路径（判断落后算不算瞬时）
+// 和同步准备都调用这一处，不各写一份条件。
+export function autoSyncBlocker(pr, defaultBranch, repo) {
+  if (pr.head?.repo?.full_name !== repo) return 'head 来自叉库';
+  if (pr.base?.ref !== defaultBranch) return `目标分支 ${pr.base?.ref} 不是默认分支 ${defaultBranch}`;
+  return null;
+}
 // 检查结果正文的接口上限是 65535 个字符；留一点余量，按 UTF-8 字节判断。
 export const MAX_INTENT_BYTES = 60000;
 const sha = s => typeof s === 'string' && /^[0-9a-f]{40}$/.test(s);
@@ -94,7 +101,7 @@ async function descends(api,repo,base,actual) {
   const cmp=await api.get(`/repos/${repo}/compare/${base}...${actual}`);
   return cmp?.status === 'ahead' || cmp?.status === 'identical';
 }
-export async function proveSynchronizations(api, bindingApi, repo, pr, policy, activities) {
+export async function proveSynchronizations(api, bindingApi, repo, pr, policy, activities, files = []) {
   const proven = new Map();
   for (const a of activities) {
     if (a.activity_type !== 'push' || a.actor?.type !== 'Bot' ||
@@ -119,10 +126,25 @@ export async function proveSynchronizations(api, bindingApi, repo, pr, policy, a
       const after=await delta(api,repo,actualBase,a.after);
       const treeComplete=before !== null && after !== null;
       const unchanged=treeComplete && before === after;
-      // 只有树差相同、main 未碰本单文件且意向没有被截断，才延续评审与合并标签。
-      const retains=unchanged && !v.overlap_unknown && !v.truncated && v.overlap.length === 0;
+      // 意向里的 overlap 只算到写意向时的 main。写意向之后 main 又前进时，必须补算
+      // 这段新提交碰没碰本单文件；否则新 main 改了本单文件也会被当成干净同步沿用旧评审。
+      let overlap=v.overlap;
+      let overlapUnknown=!!v.overlap_unknown || !!v.truncated;
+      if (actualBase !== v.base) {
+        const {commits}=await commitsBetween(api,repo,v.base,actualBase);
+        const touched=new Set();
+        for (const c of commits) {
+          const list=await paginate(api,`/repos/${repo}/commits/${c.sha}?per_page=100`,'files');
+          if (list.length >= COMMIT_FILES_CAP) overlapUnknown=true;
+          for (const f of list) for (const name of [f.filename,f.previous_filename].filter(Boolean)) touched.add(name);
+        }
+        overlap=[...new Set([...overlap,...files.filter(f=>touched.has(f))])];
+      }
+      // 只有树差相同、main（含意向之后新增的提交）未碰本单文件且读取完整，才延续评审与合并标签。
+      const retains=unchanged && !overlapUnknown && overlap.length === 0;
       proven.set(a.id,{...v,base:actualBase,intent_base:v.base,base_advanced:actualBase!==v.base,
-        tree_complete:treeComplete,unchanged,retains,review_heads:retains?v.review_heads:[]}); break;
+        overlap,overlap_unknown:overlapUnknown,tree_complete:treeComplete,unchanged,retains,
+        review_heads:retains?v.review_heads:[]}); break;
     }
   }
   // 仅连续的关卡同步能延续绑定；普通推送，即使又推回旧 SHA，也会截断。
@@ -155,8 +177,8 @@ export async function prepareSynchronization(api,repo,number,facts,actor) {
   const pr=await api.get(`/repos/${repo}/pulls/${number}`);
   assertPrSnapshot(pr, facts.pr);
   const metadata=await api.get(`/repos/${repo}`);
-  // 本任务只同步 main/default branch，同仓库分支；不给叉库增加写权限。
-  if (pr.base.ref !== metadata.default_branch || pr.head.repo?.full_name !== repo) return null;
+  // 本任务只同步默认分支、同仓库分支；判定与合并路径共用 autoSyncBlocker，不给叉库增加写权限。
+  if (autoSyncBlocker(pr, metadata.default_branch, repo)) return null;
   const main=await baseTip(api,repo,pr.base.ref);
   const {first,commits}=await commitsBetween(api,repo,pr.head.sha,main);
   await assertBaseTip(api,repo,pr.base.ref,main);
