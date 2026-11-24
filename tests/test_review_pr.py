@@ -20,6 +20,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+import uuid
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
@@ -83,6 +84,11 @@ def snapshot_git(commands):
 
 
 class ReviewHandoffTests(unittest.TestCase):
+    def setUp(self):
+        sleeper = patch("time.sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+
     def test_request_binds_repository_head_and_builder_without_review_key(self):
         module = load_script()
         pr = {'state': 'open', 'head': {'sha': 'a' * 40, 'ref': 'feature'},
@@ -116,6 +122,217 @@ class ReviewHandoffTests(unittest.TestCase):
                 patch('sys.argv', ['review-pr', '12']):
             with self.assertRaisesRegex(ValueError, "head_changed"):
                 module.auto_dispatch('fixture/project', 12, 'openai', expected_head='a' * 40)
+
+
+class PublicationNetworkTests(unittest.TestCase):
+    def setUp(self):
+        self.review = load_script()
+        self.raw_github = self.review.github
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.head = 'a' * 40
+        self.receipts, self.posts, self.heads = [], [], []
+        self.failure = None
+        self.accepted = False
+        self.visible_after = 0
+        self.reads = 0
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        for target, name, kwargs in (
+            (self.review, 'data_path', {'return_value': self.directory / 'locks'}),
+            (self.review, 'review_token', {'return_value': FAKE_TOKEN}),
+            (self.review, 'pr_state', {'side_effect': self.state}),
+            (self.review, 'github', {'side_effect': self.api}),
+            (self.review.subprocess, 'run', {'return_value': subprocess.CompletedProcess([], 0, '', '')}),
+        ):
+            self.stack.enter_context(patch.object(target, name, **kwargs))
+        self.sleep = self.stack.enter_context(patch('time.sleep'))
+        self.save(self.directory)
+
+    def save(self, directory):
+        self.review.save_publication(directory, body='Finding\nConclusion: PASS\n',
+            repository='fixture/project', number=12, leg='subcursor', head=self.head)
+
+    def state(self, *_args, **_kwargs):
+        self.heads.append(self.head)
+        return {'state': 'open', 'head': {'sha': self.head}}
+
+    def api(self, _token, endpoint, payload=None, **_kwargs):
+        if '/contents/' in endpoint:
+            return policy_response(CI_POLICY)
+        if payload is None:
+            self.reads += 1
+            return json.dumps(self.receipts if self.reads > self.visible_after else [])
+        self.posts.append(payload)
+        if self.accepted or self.failure is None:
+            self.receipts.append(published_review(payload['body'], head=payload['commit_id']))
+        if self.failure:
+            failure, self.failure = self.failure, None
+            raise failure
+        return {'html_url': published_review('')['html_url']}
+
+    def publish(self, directory=None, **kwargs):
+        return self.review.publish_saved(directory or self.directory,
+            repository='fixture/project', number=12, leg='subcursor', **kwargs)
+
+    def test_token_failure_retries_before_any_post(self):
+        with patch.object(self.review, 'review_token', side_effect=[OSError('token EOF'), FAKE_TOKEN]) as token:
+            self.assertIn('pullrequestreview', self.publish())
+        self.assertEqual(token.call_count, 2)
+        self.assertEqual(len(self.posts), 1)
+
+    def test_proven_unsent_retries_and_rechecks_head(self):
+        self.failure = self.review.UnsentWriteError('TLS handshake timeout')
+        self.assertIn('pullrequestreview', self.publish())
+        self.assertEqual(len(self.posts), 2)
+        self.assertGreaterEqual(len(self.heads), 2)
+
+    def test_ambiguous_post_finds_delayed_receipt_without_second_post(self):
+        self.failure = self.review.ReviewError('POST EOF')
+        self.accepted, self.visible_after = True, 2
+        self.assertEqual(self.publish(), published_review('')['html_url'])
+        self.assertEqual(len(self.posts), 1)
+        self.assertGreater(self.reads, 2)
+
+    def test_ambiguous_post_is_preserved_and_saved_retry_never_blindly_posts(self):
+        self.failure = self.review.ReviewError('POST EOF')
+        for recover in (False, True):
+            with self.assertRaises(self.review.ReviewError):
+                self.publish(recover_published=recover)
+        self.assertEqual(len(self.posts), 1)
+        self.assertTrue((self.directory / 'review-body.md').is_file())
+        self.assertTrue((self.directory / 'publication.json').is_file())
+        self.assertLessEqual(self.reads, self.review._leg_session.RETRY_ATTEMPTS * 2)
+        self.receipts.append(published_review(self.posts[0]['body']))
+        self.assertIn('pullrequestreview', self.publish(recover_published=True))
+        self.assertEqual(len(self.posts), 1)
+
+    def test_unsent_retry_is_bounded(self):
+        def unsent(*args, **kwargs):
+            self.posts.append(args)
+            raise self.review.UnsentWriteError('TLS handshake timeout')
+        with patch.object(self.review, 'github', side_effect=unsent):
+            with self.assertRaises(self.review.ReviewError):
+                self.publish()
+        self.assertEqual(len(self.posts), self.review._leg_session.RETRY_ATTEMPTS)
+
+    def test_head_change_stops_a_proven_unsent_retry(self):
+        self.failure = self.review.UnsentWriteError('TLS handshake timeout')
+        self.sleep.side_effect = lambda *_: setattr(self, 'head', 'b' * 40)
+        with self.assertRaisesRegex(self.review.ReviewError, 'head changed'):
+            self.publish()
+        self.assertEqual(len(self.posts), 1)
+
+    def test_identical_new_model_text_cannot_recover_old_publication(self):
+        self.publish()
+        original = self.posts[0]['body']
+        other = self.directory / 'new-run'
+        other.mkdir()
+        self.save(other)
+        self.failure = self.review.ReviewError('POST EOF')
+        with self.assertRaises(self.review.ReviewError):
+            self.publish(other)
+        self.assertNotEqual(self.posts[-1]['body'], original)
+        self.assertEqual(len(self.posts), 2)
+
+    def test_only_connect_phase_failures_are_proven_unsent(self):
+        from unittest.mock import MagicMock
+        import ssl
+        endpoint = 'repos/fixture/project/pulls/12/reviews'
+        for phase, failure in (
+            ('connect', ssl.SSLError('handshake failed')),
+            ('connect', TimeoutError('handshake timed out')),
+            ('connect', ConnectionRefusedError('connection refused')),
+            ('request', OSError('EOF')),
+            ('getresponse', TimeoutError('read timeout')),
+        ):
+            with self.subTest(phase=phase):
+                connection = MagicMock()
+                getattr(connection, phase).side_effect = failure
+                with patch.object(self.review.http.client, 'HTTPSConnection', return_value=connection):
+                    with self.assertRaises(self.review.ReviewError) as caught:
+                        self.raw_github(FAKE_TOKEN, endpoint, {'body': 'test'})
+                self.assertEqual(isinstance(caught.exception, self.review.UnsentWriteError), phase == 'connect')
+                self.assertEqual(connection.request.call_count, 0 if phase == 'connect' else 1)
+                connection.close.assert_called_once()
+
+    def test_http_redirect_and_invalid_response_are_uncertain_and_never_replayed(self):
+        from unittest.mock import MagicMock
+        for status, body in ((307, b'redirect'), (502, b'bad gateway'), (201, b'invalid JSON')):
+            with self.subTest(status=status):
+                connection = MagicMock()
+                connection.getresponse.return_value.status = status
+                connection.getresponse.return_value.read.return_value = body
+                with patch.object(self.review.http.client, 'HTTPSConnection', return_value=connection):
+                    with self.assertRaises(self.review.ReviewError) as caught:
+                        self.raw_github(FAKE_TOKEN, 'repos/fixture/project/pulls/12/reviews', {'body': 'test'})
+                self.assertNotIsInstance(caught.exception, self.review.UnsentWriteError)
+                connection.request.assert_called_once()
+                self.assertEqual(connection.request.call_args.kwargs['headers']['Authorization'], 'Bearer ' + FAKE_TOKEN)
+                connection.close.assert_called_once()
+
+    def transport_api(self, token, endpoint, payload=None, **kwargs):
+        if payload is None:
+            return self.api(token, endpoint, payload, **kwargs)
+        self.posts.append(payload)
+        return self.raw_github(token, endpoint, payload, **kwargs)
+
+    def test_complete_rejection_allows_saved_publication_to_be_sent_later(self):
+        from unittest.mock import MagicMock
+        for status in (403, 422, 429):
+            with self.subTest(status=status):
+                directory = self.directory / str(status)
+                directory.mkdir()
+                self.save(directory)
+                self.posts.clear()
+                rejected, success = MagicMock(), MagicMock()
+                rejected.getresponse.return_value.status = status
+                rejected.getresponse.return_value.read.return_value = b'{"message":"rejected"}'
+                success.getresponse.return_value.status = 201
+                success.getresponse.return_value.read.return_value = json.dumps(
+                    {'html_url': published_review('')['html_url']}).encode()
+                with patch.object(self.review, 'github', side_effect=self.transport_api), \
+                        patch.object(self.review.http.client, 'HTTPSConnection', side_effect=[rejected, success]):
+                    with self.assertRaises(self.review.ReviewError):
+                        self.publish(directory)
+                    self.assertEqual(len(self.posts), 1)
+                    self.assertIn('pullrequestreview', self.publish(directory, recover_published=True))
+                self.assertEqual(len(self.posts), 2)
+                self.assertEqual(self.posts[0], self.posts[1])
+
+    def test_server_error_and_incomplete_rejection_remain_query_only(self):
+        from unittest.mock import MagicMock
+        for label, status in (('server', 502), ('truncated', 403)):
+            with self.subTest(label=label):
+                directory = self.directory / label
+                directory.mkdir()
+                self.save(directory)
+                self.posts.clear()
+                connection = MagicMock()
+                connection.getresponse.return_value.status = status
+                if label == 'truncated':
+                    connection.getresponse.return_value.read.side_effect = self.review.http.client.IncompleteRead(b'partial', 20)
+                else:
+                    connection.getresponse.return_value.read.return_value = b'{"message":"server error"}'
+                with patch.object(self.review, 'github', side_effect=self.transport_api), \
+                        patch.object(self.review.http.client, 'HTTPSConnection', return_value=connection):
+                    for recover in (False, True):
+                        with self.assertRaises(self.review.ReviewError):
+                            self.publish(directory, recover_published=recover)
+                self.assertEqual(len(self.posts), 1)
+                self.assertTrue((directory / 'publication-attempted').exists())
+
+    def test_head_change_during_receipt_poll_reports_the_head_change(self):
+        def moved(_token, _endpoint, payload=None, **_kwargs):
+            self.posts.append(payload)
+            self.head = 'b' * 40
+            raise self.review.ReviewError('original response EOF')
+        with patch.object(self.review, 'github', side_effect=moved):
+            with self.assertRaisesRegex(self.review.ReviewError, 'head changed'):
+                self.publish()
+        self.assertEqual(len(self.posts), 1)
+
 
 
 class CiFixture:
@@ -192,6 +409,9 @@ class ReviewPrTests(unittest.TestCase):
     def setUp(self):
         self.review = load_script()
         self.session = sys.modules["_leg_session"]
+        sleeper = patch("time.sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
 
     def choose(self, name):
         return self.session.choose_leg(name, self.review.BIN)
@@ -635,6 +855,7 @@ class ReviewPrTests(unittest.TestCase):
         calls['policy_reads'] = []
         reviews = list(existing_reviews or [])
         failed = False
+        retry_phase = False
 
         def require_live_token(token):
             if expire_during_leg and clock >= grants[token]:
@@ -657,15 +878,23 @@ class ReviewPrTests(unittest.TestCase):
             if payload is None and '/reviews?' in endpoint:
                 calls.setdefault('review_reads', []).append(endpoint)
                 page = int(parse_qs(urlsplit(endpoint).query)['page'][0])
+                if publication_failure == 'lost_response' and not retry_phase:
+                    return '[]'
                 return json.dumps(reviews[(page - 1) * 100:page * 100])
             if payload is None and ci is not None:
                 return ci.api(endpoint, **kwargs)
             if payload is not None:
                 calls['post_attempts'].append(dict(payload))
-                if publication_failure in ('post', 'lost_response') and not failed:
+                if str(publication_failure).startswith('reject-') and not retry_phase:
+                    status = publication_failure.split('-')[1]
+                    raise self.review.RejectedWriteError(f'GitHub rejected write with HTTP {status}')
+                if (publication_failure == 'post' and not retry_phase
+                        or publication_failure == 'lost_response' and not failed):
                     failed = True
                     if publication_failure == 'lost_response':
                         reviews.append(published_review(payload['body'], head=payload['commit_id']))
+                    if publication_failure == 'post':
+                        raise self.review.UnsentWriteError('TLS handshake timeout')
                     raise self.review.ReviewError('POST EOF')
                 calls["github_writes"].append(endpoint)
                 calls["posted_body"] = payload["body"]
@@ -675,7 +904,7 @@ class ReviewPrTests(unittest.TestCase):
         def fake_run(command, **kwargs):
             nonlocal failed
             if command[0].endswith("gh-app-token"):
-                if publication_failure == 'token' and len(grants) == 1 and not failed:
+                if publication_failure == 'token' and len(grants) == 1 and not retry_phase:
                     failed = True
                     raise self.review.ReviewError('token TLS failure')
                 calls["token_command"] = command
@@ -787,6 +1016,7 @@ class ReviewPrTests(unittest.TestCase):
                     patch.dict(os.environ, AIWORK_DATA_DIR=str(workspace / "data"), AIWORK_CONFIG_DIR=str(config)), \
                     patch.object(self.session, "run", side_effect=fake_run), \
                     patch("urllib.request.urlopen", side_effect=fake_public_read), \
+                    patch.object(self.review.uuid, "uuid4", return_value=uuid.UUID(int=1)), \
                     patch.object(self.review, "github", side_effect=fake_github), \
                     patch.object(self.review, "pr_state", side_effect=fake_pr_state) as state, \
                     patch.object(self.session, "snapshot", return_value=(
@@ -797,12 +1027,14 @@ class ReviewPrTests(unittest.TestCase):
                     redirect_stdout(stdout), redirect_stderr(stderr):
                 rc = self.review.main()
                 if retry_publish:
+                    retry_phase = True
                     calls['first_rc'] = rc
                     calls['first_stderr'] = stderr.getvalue()
                     archives = list((workspace / 'data/review-failures').iterdir())
                     self.assertEqual(len(archives), 1)
                     archive = archives[0]
                     calls['retry_archive'] = archive.name
+                    calls['retry_attempt_recorded'] = (archive / 'publication-attempted').exists()
                     if retry_change is not None:
                         retry_change(archive, pr, config, calls)
                     stdout.seek(0)
@@ -837,6 +1069,21 @@ class ReviewPrTests(unittest.TestCase):
                 self.assertIn('publication.json', saved)
                 self.assertIn('pullrequestreview', stdout)
 
+    def test_retry_publish_cli_recovers_after_complete_rejection(self):
+        for status in (403, 422, 429):
+            with self.subTest(status=status):
+                rc, calls, stdout, stderr = self.run_main_with_leg_result(
+                    'gpt-5.6', publication_failure=f'reject-{status}', retry_publish=True)
+                self.assertEqual(calls['first_rc'], 1)
+                self.assertIn(f'HTTP {status}', calls['first_stderr'])
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(calls['leg_runs'], 1)
+                self.assertEqual(len(calls['post_attempts']), 2)
+                saved = next(iter(calls['archives'].values()))
+                self.assertFalse(calls['retry_attempt_recorded'])
+                self.assertEqual(calls['posted_body'].encode(), saved['review-body.md'])
+                self.assertIn('pullrequestreview', stdout)
+
     def test_publication_retry_refuses_changed_head(self):
         def change(_archive, pr, _config, _calls):
             pr['head']['sha'] = 'e' * 40
@@ -844,7 +1091,7 @@ class ReviewPrTests(unittest.TestCase):
             'gpt-5.6', publication_failure='post', retry_publish=True, retry_change=change)
         self.assertEqual(rc, 1)
         self.assertIn('head changed', stderr)
-        self.assertEqual(len(calls['post_attempts']), 1)
+        self.assertEqual(len(calls['post_attempts']), self.session.RETRY_ATTEMPTS)
 
     def test_publication_retry_recovers_a_post_with_lost_response(self):
         rc, calls, stdout, stderr = self.run_main_with_leg_result(
@@ -904,7 +1151,7 @@ class ReviewPrTests(unittest.TestCase):
                     publication_failure='post', retry_publish=True)
                 self.assertEqual(rc, 0, stderr)
                 self.assertEqual(calls['leg_runs'], 1)
-                self.assertEqual(len(calls['post_attempts']), 2)
+                self.assertEqual(len(calls['post_attempts']), self.session.RETRY_ATTEMPTS + 1)
 
     def test_publication_dedup_reads_registered_reviewer_from_project_main(self):
         rc, original, _, stderr = self.run_main_with_leg_result('gpt-5.6')
@@ -919,7 +1166,7 @@ class ReviewPrTests(unittest.TestCase):
                 self.assertEqual(rc, 0, stderr)
                 self.assertEqual(calls['policy_reads'],
                     ['repos/SunJ1ayu/aiwork/contents/.aiwork/policy.json?ref=main'])
-                self.assertEqual(len(calls['post_attempts']), expected_posts)
+                self.assertEqual(len(calls['post_attempts']), self.session.RETRY_ATTEMPTS + expected_posts - 1)
 
     def test_publication_dedup_refuses_missing_or_invalid_registered_reviewer(self):
         for policy in ({}, {'reviewer_bot': 'human-reviewer'}, {'reviewer_bot': False}):
@@ -928,7 +1175,7 @@ class ReviewPrTests(unittest.TestCase):
                     publication_failure='post', retry_publish=True)
                 self.assertEqual(rc, 1)
                 self.assertIn('reviewer_bot', stderr)
-                self.assertEqual(len(calls['post_attempts']), 1)
+                self.assertEqual(len(calls['post_attempts']), self.session.RETRY_ATTEMPTS)
 
     def test_publication_retry_concurrent_retries_post_only_once(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -983,7 +1230,7 @@ class ReviewPrTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn('privacy-check refused', stderr)
         self.assertNotIn('Finding', stderr + stdout)
-        self.assertEqual(len(calls['post_attempts']), 1)
+        self.assertEqual(len(calls['post_attempts']), self.session.RETRY_ATTEMPTS)
 
     def test_publication_retry_refuses_missing_or_mismatched_artifacts(self):
         def edit_body(archive):
@@ -1009,7 +1256,7 @@ class ReviewPrTests(unittest.TestCase):
                     retry_change=lambda archive, *_: mutate(archive))
                 self.assertEqual(rc, 1)
                 self.assertIn(reason, stderr)
-                self.assertEqual(len(calls['post_attempts']), 1)
+                self.assertEqual(len(calls['post_attempts']), self.session.RETRY_ATTEMPTS)
 
     def test_publication_retry_does_not_require_model_preflight(self):
         def change(_archive, _pr, _config, _calls):
@@ -1046,7 +1293,7 @@ class ReviewPrTests(unittest.TestCase):
             publication_failure='post', retry_publish=True)
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(len(calls['review_reads']), 2)
-        self.assertEqual(len(calls['post_attempts']), 2)
+        self.assertEqual(len(calls['post_attempts']), self.session.RETRY_ATTEMPTS + 1)
         duplicate = dict(old, commit_id='a' * 40)
         rc, calls, stdout, stderr = self.run_main_with_leg_result(
             'gpt-5.6', existing_reviews=[other_leg] * 100 + [duplicate],
@@ -1054,7 +1301,7 @@ class ReviewPrTests(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         self.assertEqual(len(calls['review_reads']), 2)
         self.assertEqual(stdout.strip(), duplicate['html_url'])
-        self.assertEqual(len(calls['post_attempts']), 1)
+        self.assertEqual(len(calls['post_attempts']), self.session.RETRY_ATTEMPTS)
         self.assertEqual(calls['github_writes'], [])
 
     def test_expired_startup_token_does_not_prevent_review_publication(self):
@@ -1616,14 +1863,14 @@ grep -q -F -- "$3" "$clone/$4"
             self.assertEqual(self.review.aiwork_main_commit(), "d" * 40)
         self.assertEqual(len(calls), 3)
 
-    def test_publication_writes_are_never_retried(self):
-        # 发布评审这类写操作不能因网络重试被重复执行（issue #193 任务单边界）。
-        with patch.object(self.session, "run",
-                          side_effect=self.review.ReviewError("post failed")) as run:
+    def test_low_level_write_does_not_replay_ambiguous_failure(self):
+        from unittest.mock import MagicMock
+        connection = MagicMock()
+        connection.getresponse.side_effect = OSError('EOF')
+        with patch.object(self.review.http.client, 'HTTPSConnection', return_value=connection):
             with self.assertRaises(self.review.ReviewError):
-                self.review.github(FAKE_TOKEN, "repos/SunJ1ayu/aiwork/pulls/12/reviews",
-                                   {"body": "x"})
-        run.assert_called_once()
+                self.review.github(FAKE_TOKEN, 'repos/SunJ1ayu/aiwork/pulls/12/reviews', {'body': 'x'})
+        connection.request.assert_called_once()
 
     def test_cursor_model_is_frozen_for_leg_and_result(self):
         rc, calls, _stdout, stderr = self.run_main_with_leg_result("gpt-5.6")
