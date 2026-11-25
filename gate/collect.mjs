@@ -46,7 +46,7 @@ export function orderedCiRuns(runs, headSha, policy) {
 export function selectCiRun(runs, headSha, policy, prNumber) {
   const ciRuns = orderedCiRuns(runs, headSha, policy);
   return { run: ciRuns.find((r) => (r.pull_requests ?? []).some((p) => p.number === prNumber)) ?? null,
-           count: ciRuns.length };
+           count: ciRuns.length, latest: ciRuns[0] ?? null };
 }
 
 export async function collectCi(api, repo, headSha, policy, prNumber) {
@@ -55,10 +55,14 @@ export async function collectCi(api, repo, headSha, policy, prNumber) {
     `/repos/${repo}/actions/runs?head_sha=${headSha}&event=${policy.ci.event}&per_page=100`,
     "workflow_runs",
   );
-  const { run, count } = selectCiRun(runs, headSha, policy, prNumber);
+  const { run, count, latest } = selectCiRun(runs, headSha, policy, prNumber);
   if (!run) {
+    // 合并后 GitHub 不再把这些运行关联到 PR,但仍要带回创建时间:
+    // 派发桥给已合并的 PR 重算时靠它判断 CI 有没有测旧目标。
+    const createdAt = latest?.created_at ?? null;
     return count
-      ? { state: "failure", detail: `这个提交上有 ${count} 次 ci.yml 运行,但都没关联到 PR #${prNumber}` }
+      ? { state: "failure", detail: `这个提交上有 ${count} 次 ci.yml 运行,但都没关联到 PR #${prNumber}`,
+          ...(createdAt ? { created_at: createdAt } : {}) }
       : { state: "missing", detail: "没有 ci.yml 的运行" };
   }
   // created_at 是触发这次运行的事件的时间;重跑(re-run)沿用当时的合并提交,所以不看 run_started_at

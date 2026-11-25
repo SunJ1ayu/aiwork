@@ -5,10 +5,10 @@ import { decide } from '../gate/decide.mjs';
 import { validatePolicy } from '../gate/run.mjs';
 import { githubClient } from '../gate/github.mjs';
 
-// PR 被关卡按本轮评审直接合并后就会关闭。派发器收尾时还会再读状态，
-// 不能把这种预期内的关闭当成「读不到关卡状态」：先核对同一 head 上关卡
-// 自己写下的成功检查，再从检查所属 App 的 slug 认出合并账号。
-async function mergedByGate(api, repository, facts, policy) {
+// 派发器收尾时还会再读状态；PR 被关卡按这个 head 合并后就会关闭。
+// 「预期内的收尾」只有这一个判断：不区分直接合并还是按合并标签，也不在
+// 这里重算合并条件；两条合并路径都由关卡自己写下同一个成功检查并执行合并。
+async function finalizedByGate(api, repository, facts, policy) {
   if (facts.pr.state !== 'closed' || facts.pr.merged !== true || !facts.pr.merged_by) return false;
   const runs = await paginate(api,
     `/repos/${repository}/commits/${facts.pr.head_sha}/check-runs?check_name=${encodeURIComponent(policy.check_name)}&filter=all&per_page=100`,
@@ -34,17 +34,17 @@ if (source.type !== 'file' || source.encoding !== 'base64') throw new Error('inv
 const policy = JSON.parse(Buffer.from(source.content, 'base64').toString('utf8'));
 validatePolicy(policy);
 const facts = await collect(api, repository, number, policy);
-const merged = await mergedByGate(api, repository, facts, policy);
-if (!merged && facts.pr.state !== 'open') throw new Error('PR is not open');
+const finalized = await finalizedByGate(api, repository, facts, policy);
+if (!finalized && facts.pr.state !== 'open') throw new Error('PR is not open');
 // 合并后 GitHub 不再把 CI 运行关联到 PR；关卡能合并本身证明合并时 CI 是绿的。
-// 其余直接合并条件仍按当前事实重算，没达到就不算「按本轮评审直接合并」。
-const result = decide(merged
-  ? { ...facts, ci: { state: 'success', detail: '关卡已按这个 head 合并（合并即证明当时 CI 通过）' } }
+// 保留运行的真实创建时间，改过目标分支的 PR 才不会在重算时被误判成「CI 测的是旧目标」。
+const result = decide(finalized
+  ? { ...facts, ci: { state: 'success', detail: '关卡已按这个 head 合并（合并即证明当时 CI 通过）',
+      created_at: facts.ci.created_at ?? null } }
   : facts, policy);
-if (merged && result.direct_merge?.ok !== true)
-  throw new Error('PR closed without the direct-merge conditions for this head');
 process.stdout.write(JSON.stringify({
   head: facts.pr.head_sha, policy_sha: source.sha, ...result.review_state,
+  finalized,
   // 执行方只影响是否派腿，不能改写关卡对作者和评审的判断。
   excluded: [...new Set([...result.review_state.excluded, builder_family])],
   gate: { title: result.title, conclusion: result.conclusion, summary: result.summary },

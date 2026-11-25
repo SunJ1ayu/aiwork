@@ -56,7 +56,8 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
         candidates.append((leg, family, model))
     (shuffle or SystemRandom().shuffle)(candidates)
     draw = [item[0] for item in candidates]
-    slots = state['missing_target']
+    # 关卡已按这个 head 合并时，这一轮已经收尾：不再启动新腿。
+    slots = 0 if state.get('finalized') else state['missing_target']
     initial, reserve = draw[:slots], draw[slots:]
     running = {}
 
@@ -77,6 +78,7 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
                     attempt['confirmation_reason'] = 'no complete review confirmed by gate'
         return deepcopy(dict(head=head, policy_sha=policy_sha, plan=plan,
                              draw=draw, initial=initial, reserve=reserve, attempts=outcomes,
+                             finalized=bool(state.get('finalized')),
                              **{key: state[key] for key in ('reviewed_families', 'pass_families',
                                 'minimum_met', 'target_met', 'missing_target', 'next_step', 'gate')}))
 
@@ -90,6 +92,9 @@ def dispatch(read_state, identify, run, builder_family, *, shuffle=None, record=
     with ThreadPoolExecutor(max_workers=max(1, slots)) as pool:
         while True:
             state = refresh()
+            # 跑到一半被关卡合并：不再启动新腿，等已在跑的腿收尾后按成功结束。
+            if state.get('finalized'):
+                candidates.clear()
             pending = sum(attempt['family'] not in state['reviewed_families']
                           for attempt in running.values())
             available = max(0, state['missing_target'] - pending)

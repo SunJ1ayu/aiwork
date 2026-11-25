@@ -384,6 +384,15 @@ test("R2 别的 PR 在同一提交上的 CI 不算到本 PR(G1)", async () => {
   assert.notEqual((await collectCi(unlinked, "o/r", HEAD, policy, 10)).state, "success", "没关联任何 PR 的运行也不算");
 });
 
+test("R2b 收集:已合并 PR 的 CI 运行丢了 PR 关联,仍带回创建时间给重算用", async () => {
+  const unlinked = { id: 9, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed",
+    conclusion: "success", created_at: "2026-09-29T10:00:00Z", pull_requests: [] };
+  const api = { getPage: async () => ({ data: { workflow_runs: [unlinked] }, next: null }) };
+  const ci = await collectCi(api, "o/r", HEAD, policy, 10);
+  assert.equal(ci.state, "failure", "没关联到本 PR 的运行不能直接当成本 PR 的 CI 结论");
+  assert.equal(ci.created_at, "2026-09-29T10:00:00Z", "重算时还要靠这个时间判断 CI 是否测了旧目标");
+});
+
 test("R3 业主批准早于 BLOCK:豁免不了那条 BLOCK;BLOCK 之后再批准才算(G5 / G7)", () => {
   const early = run({ reviews: [review({ id: 1 }), approve(HEAD, "2026-09-29T11:00:00Z"), review({ id: 2, verdict: "BLOCK", at: "2026-09-29T12:00:00Z" })] });
   blocked(early, "G7");

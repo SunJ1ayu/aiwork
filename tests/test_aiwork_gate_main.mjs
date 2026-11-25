@@ -136,7 +136,7 @@ function fakeGitHub(opts = {}) {
       const reviews = opts.reviews ?? (opts.mergeReady ? [{ id: 1, user: { login: policy.reviewer_bot, type: "Bot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-09-29T09:00:00Z", body: pass }] : []);
       const reviewsRoute=/^\/repos\/o\/r\/pulls\/(\d+)\/reviews/.exec(u);
       if (reviewsRoute && numbers.includes(Number(reviewsRoute[1]))) return send(200, reviews);
-      if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: numbers.map((number,i) => ({ id: i+1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", pull_requests: [{ number }] })) });
+      if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: numbers.map((number,i) => ({ id: i+1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", created_at: "2026-09-29T08:00:00Z", pull_requests: opts.closedPr ? [] : [{ number }] })) });
       if (u.startsWith("/repos/o/r/activity")) return send(200, [{ id: 1, timestamp: "t", activity_type: "branch_creation", before: "0".repeat(40), after: HEAD, actor: { login: opts.actorLogin ?? "SunJ1ayuBoT" } }]);
       if (u.includes('/check-runs?')) {
         const requested = new URL(u, "http://fake").searchParams.get('check_name');
@@ -546,6 +546,35 @@ test('派发桥:最后一家交卷后关卡按本轮评审直接合并，PR 已�
     assert.equal(state.missing_target,0);
     assert.equal(state.gate.conclusion,'success');
     assert.ok(gh.log.some(r=>r.url.includes(`check-runs?check_name=${policy.check_name}`)),'用关卡自己的检查确认合并者身份');
+  } finally {gh.server.close();}
+});
+
+test('派发桥:改过目标分支的直接合并 PR 仍按这一轮成功收尾',async()=>{
+  const current=dispatchPolicy();
+  const gh=await fakeGitHub({dispatchPolicy:current,closedPr:true,files:['web/a.ts'],
+    events:[{id:2,event:'base_ref_changed',created_at:'2026-09-01T00:00:00Z'}],
+    reviews:[dispatchReview('openai','PASS',1),dispatchReview('moonshot','PASS',2)]});
+  try {
+    const result=await runDispatchBridge(gh.url);assert.equal(result.code,0,result.err);
+    const state=JSON.parse(result.out);
+    assert.equal(state.finalized,true);
+    assert.equal(state.gate.conclusion,'success','合并后重算用的是这个 head 上 CI 的真实创建时间');
+    assert.equal(state.target_met,true);
+  } finally {gh.server.close();}
+});
+
+test('派发桥:按合并标签由关卡合并的 PR 也按这一轮成功收尾',async()=>{
+  const current=dispatchPolicy();
+  const gh=await fakeGitHub({dispatchPolicy:current,closedPr:true,mergeReady:true,files:['desktop/main.js'],
+    reviews:[dispatchReview('moonshot','PASS',1),
+      {id:2,user:{login:policy.owner,type:'User'},state:'APPROVED',commit_id:HEAD,
+        submitted_at:'2026-09-29T09:30:00Z',body:''}]});
+  try {
+    const result=await runDispatchBridge(gh.url);assert.equal(result.code,0,result.err);
+    const state=JSON.parse(result.out);
+    assert.equal(state.finalized,true,'是否预期收尾只看这一条，不按合并路径另加条件');
+    assert.equal(state.minimum_met,false,'high 路径只有一家 PASS');
+    assert.equal(state.target_met,false);
   } finally {gh.server.close();}
 });
 

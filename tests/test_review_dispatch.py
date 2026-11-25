@@ -19,7 +19,7 @@ def view(target=3, order=None):
             'plan': {'tier': 'high', 'target': target, 'minimum': 2, 'order': order or ['a', 'b', 'c', 'd']},
             'pass_families': [], 'reviewed_families': [], 'excluded': ['anthropic', 'openai'],
             'minimum_met': False, 'target_met': False, 'missing_target': target,
-            'next_step': '交业主', 'gate': {'title': '等业主批准'}}
+            'next_step': '交业主', 'finalized': False, 'gate': {'title': '等业主批准'}}
 
 
 def result_frame(state, passes, reviewed, minimum_met, target_met, missing_target):
@@ -229,6 +229,15 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(result['missing_target'], 0)
         self.assertFalse(result['attempts'][0]['ok'])
 
+    def test_gate_already_finalized_starts_no_more_legs(self):
+        state = view(target=3, order=['a', 'b'])
+        state.update(finalized=True, minimum_met=False, target_met=False, missing_target=2)
+        calls = []
+        report = dispatch(lambda _: state.copy(), lambda leg: (leg, None),
+                          lambda *args: calls.append(args) or {'ok': True}, 'openai')
+        self.assertEqual(calls, [])
+        self.assertTrue(report['finalized'])
+
     def test_policy_change_stops(self):
         state = view(order=['a', 'b'])
         def read(family):
@@ -300,6 +309,56 @@ class PublisherIntegrationTests(unittest.TestCase):
             report = json.loads(next(Path(directory).glob('*/summary.json')).read_text())
             self.assertTrue(report['minimum_met'])
             self.assertTrue(report['target_met'])
+            self.assertNotIn('stopped', report)
+
+    def test_merged_head_other_than_reviewed_still_fails(self):
+        # 关卡合并的不是这一轮评审的 head：仍然按读到的状态不符报失败。
+        import tempfile, io
+        from unittest.mock import patch
+        from contextlib import redirect_stdout, redirect_stderr
+        publisher = self.load_publisher()
+        state = view(target=1, order=['subkimi'])
+        state.update(finalized=True, minimum_met=True, target_met=True, missing_target=0,
+                     reviewed_families=['moonshot'])
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
+             patch.object(publisher, 'publish_dispatch_record', return_value=123), \
+             patch.object(publisher, 'data_path', return_value=Path(directory)), \
+             patch.object(publisher, 'read_dispatch_state', return_value=state.copy()), \
+             patch.dict(os.environ, {'GH_TOKEN': 'not-for-model'}), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, 'head_changed'):
+                publisher.auto_dispatch('example/repo', 1, 'openai', expected_head='b' * 40)
+            failure_publication.assert_called_once()
+
+    def test_label_merge_before_target_reports_success_without_failure_notice(self):
+        # 业主在凑够目标前按合并标签让关卡合并时，派发器也不能把收尾改写成失败。
+        import tempfile, json, io, subprocess
+        from unittest.mock import patch
+        from contextlib import redirect_stdout, redirect_stderr
+        publisher = self.load_publisher()
+        state = view(target=3, order=['subkimi'])
+        state.update(finalized=True, minimum_met=False, target_met=False, missing_target=2,
+                     reviewed_families=['moonshot'])
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, '', '')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
+             patch.object(publisher, 'publish_dispatch_record', return_value=123), \
+             patch.object(publisher, 'data_path', return_value=Path(directory)), \
+             patch.object(publisher, 'read_dispatch_state', return_value=state.copy()), \
+             patch.object(publisher._leg_session, 'choose_leg', return_value=('moonshot', None)), \
+             patch.object(publisher.subprocess, 'run', side_effect=run), \
+             patch.dict(os.environ, {'GH_TOKEN': 'not-for-model'}), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(publisher.auto_dispatch('example/repo', 1, 'openai'), 0)
+            failure_publication.assert_not_called()
+            self.assertEqual(calls, [], '已合并后不再启动新的评审腿')
+            report = json.loads(next(Path(directory).glob('*/summary.json')).read_text())
+            self.assertTrue(report['finalized'])
+            self.assertFalse(report['minimum_met'])
             self.assertNotIn('stopped', report)
 
     def publisher_case(self, complete, notice_error=None):
