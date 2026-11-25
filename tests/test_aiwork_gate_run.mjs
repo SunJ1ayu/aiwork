@@ -677,3 +677,16 @@ test("M16 汇总降级 + 业主当前 head 批准才放行；没有批准、或�
   assert.deepEqual(oldHead.merged, [], "旧 head 上的降级不认");
   assert.match(oldHead.summary, /G5/);
 });
+
+test("M17 全部 BLOCK 被汇总降级、业主当前 head 批准 → 关卡按合并标签合并（PR #172 情形）", async () => {
+  const blocks = [botReview(5, "openai", "BLOCK"), botReview(6, "deepseek", "BLOCK", "2026-09-29T09:01:00Z")];
+  const pr = {
+    head: HEAD, files: ["web/a.ts"], verdict: null,
+    summaries: summaries(blocks, downgradeReview([5, 6]), ownerApprove()),
+    labels: [MERGE], events: [labeled(policy.owner)],
+  };
+  const r = recorder();
+  await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), [[10, HEAD]]);
+  assert.match(finishSummary(r.calls), /汇总降级按家族计入/);
+});

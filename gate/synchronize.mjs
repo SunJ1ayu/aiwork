@@ -200,7 +200,7 @@ export async function prepareSynchronization(api,repo,number,facts,actor) {
   await assertBaseTip(api,repo,pr.base.ref,main);
   return {intent:syncIntent(number,pr.head.sha,main,pr.base.ref,pr.head.ref,actor,
     facts.merge_request?.key ?? null,facts.synchronization?.review_heads ?? [],overlap,first.merge_base_commit.sha,overlapUnknown),
-    note:overlapUnknown ? '关卡将自动同步 main；main 有提交的文件列表可能被接口截断（单个提交最多 300 个），无法确认是否碰了本单文件，同步后须重新评审并重贴合并标签。'
-      :overlap.length ? `关卡将自动同步 main；main 碰了本单文件（${overlap.join('、')}），同步后须重新评审并重贴合并标签。`
+    note:overlapUnknown ? '关卡将自动同步 main；main 有提交的文件列表可能被接口截断（单个提交最多 300 个），无法确认是否碰了本单文件，同步后须重新评审，再按当时的合并路径继续。'
+      :overlap.length ? `关卡将自动同步 main；main 碰了本单文件（${overlap.join('、')}），同步后须重新评审，再按当时的合并路径继续。`
       :`关卡将自动同步 main；main 没有碰本单文件，同步后沿用 ${pr.head.sha} 的评审，仍须新 head 的 CI 通过。`};
 }

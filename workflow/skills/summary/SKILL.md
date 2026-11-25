@@ -27,7 +27,7 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 2. 核实：按 [REVIEW-RULES 第二节第 3 条「核实与五级证据」](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md#3-核实与五级证据)执行，逐条对照本 skill「汇总核对清单」。
 3. 定级：见 REVIEW-RULES 第二节第 1 条。
 4. 决定下一步：按 REVIEW-RULES 第三节第 5 条的优先顺序。选「合并」之前，先看关卡在当前 head 上的结论。
-   - 普通 PR（不碰判卷面、不走 high、没有汇总降级、作者已知）：只差目标家数时，由汇总按项目策略运行 `review-pr --auto` 补派评审；补派的腿出结果后按新一轮再核对。同一 head 上所有候选家族都已试过（有结论或明确失败），合格 PASS 仍少于目标家数，就是凑不够，选交业主并写明缺几家。
+   - 普通 PR（不碰判卷面、不走 high、没有汇总降级、作者已知）：只差目标家数时，由汇总按项目策略运行 `review-pr --auto` 补派评审；补派期间不写只表示「已补派」的汇总记录（`next_step` 仍只有三档），补派的腿出结果后按新一轮汇总再写记录。同一 head 上所有候选家族都已试过（有结论或明确失败），合格 PASS 仍少于目标家数，就是凑不够，选交业主并写明缺几家。
    - 判卷面、high、汇总降级或作者未知的 PR：除了业主批准还缺别的（比如额度不够、凑不齐最低家数），就选交业主，写明缺什么；条件齐了也要业主在当前 head 上批准并贴合并标签。
    派修改单的规则和格式见 `delegate` skill。P2 放不放进这张单，见 REVIEW-RULES 第三节第 4 条。
 5. 发到 PR 上：使用项目策略 `modification_rounds.summary_account` 登记的账号，向这次核实的完整 head 提交一条 COMMENT 评审，正文按本 skill「汇总的格式」。发出后不编辑；纠错先交业主，不用改写或再发一条相互冲突的记录覆盖。关卡复用评审和改写记录读取它；汇总不批准、不贴合并标签、不推代码。普通 PR 凑够目标家数后由关卡直接合并，不需要合并标签。未启用该策略的项目保持原来的非 `reviewer_bot` 账号 COMMENT 做法，关卡不显示轮数。
@@ -119,13 +119,13 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
   "required": ["head_sha", "reviews", "evidence"],
   "properties": {
     "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "reviews": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
-    "evidence": {"type": "string", "minLength": 1}
+    "reviews": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}},
+    "evidence": {"type": "string", "minLength": 1, "pattern": "\\S"}
   }
 }
 ```
 
-降级只把列出的当前 head 上的 BLOCK 从 G5 移走，不等于批准：仍要业主在当前 head 上批准；这一单也不能由关卡直接合并，仍要合并标签。记录只加不减，要撤回由业主决定。降级不改变 P1/P2 的判定标准；降级记录和汇总记录分开写，不能互相替代。
+降级把列出的当前 head 上的 BLOCK 从 G5 移走，不等于批准：仍要业主在当前 head 上批准，且批准要晚于最后一条 BLOCK（含被降级的）；这一单也不能由关卡直接合并，仍要合并标签。降级后哪些评审按家族计入 G3 / G6、还差什么才放行，见 `gate/README.md`「汇总降级」。记录只加不减，要撤回由业主决定。降级不改变 P1/P2 的判定标准；降级记录和汇总记录分开写，不能互相替代。
 
 ## 标签派活占位
 

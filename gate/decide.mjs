@@ -9,7 +9,8 @@ import { reviewPlan } from "./review-plan.mjs";
 //
 //   G1 CI:当前 head 上、来自 ci.yml 的那次运行成功,且是在最后一次改目标分支之后触发的 —— 业主批准也豁免不了
 //   G2 判卷面:改了 CI / 测试入口 / 关卡自己 → 要业主批准
-//   G3 评审:当前 head 或 synchronize.mjs 核实的沿用来源上至少一条合格 PASS(aiwork-review 发的、完整、家族不是本次作者的家族)—— 豁免不了
+//   G3 评审:当前 head 或 synchronize.mjs 核实的沿用来源上至少一条合格 PASS(aiwork-review 发的、完整、家族不是本次作者的家族)—— 豁免不了；
+//      汇总降级的当前 head BLOCK 里，结论块完整、范围合格的那些按家族计入（同一家族只算一家），但仍要业主批准
 //   G4 作者:扣除已核实关卡同步后，这个分支上的每次推送都来自已知 Builder 账号,否则 UNKNOWN → 要业主批准
 //   G5 当前 head 及沿用来源上任何一条 BLOCK → 要业主在最后一条 BLOCK 之后批准。BLOCK = aiwork-review 在当前 head 上发的、
 //      除"格式完整且结论不是 BLOCK"以外的一切(BLOCK 结论、Request changes、正文结论行写 BLOCK、结论块看不懂),
@@ -17,12 +18,12 @@ import { reviewPlan } from "./review-plan.mjs";
 //      撤销抹不掉反对;被撤销的评审看不出原来是什么,一律按反对算,反对的时刻是撤销那一刻)。
 //      同一个人取最后一次表态(含沿用来源);但如果最后一次是旧提交上的 Approve,它不能盖掉
 //      这个人在当前 head 上的反对 —— 对旧提交补一个批准不能绕过当前内容上的反对。
-//   G6 high 路径:至少 high_min_families 个不同的非作者家族 PASS(豁免不了)+ 业主批准
+//   G6 high 路径:至少 high_min_families 个不同的非作者家族 PASS 或汇总降级计入(豁免不了)+ 业主批准
 //   G7 业主批准 = 业主在当前 head 上最后一次表态是 Approve;最后一次是 Request changes 或被撤销则一律不放行。
 //      批准不从沿用的旧提交搬移;但业主在沿用来源上更新的反对/撤销会挡住放行,须在当前 head 上重新批准。
 //   G8 数据不全 → 由 collect.mjs 抛错,run.mjs 判 failure
 //
-// 放不放行只由 decide() 说了算;合不合并 = 放行 且 合并请求算数(mergeRequester;run.mjs 第 4 步)。
+// 放不放行只由 decide() 说了算;合不合并 = 放行 且（合并请求算数，或普通 PR 满足直接合并条件；mergeRequester / direct_merge，run.mjs 第 4 步）。
 
 // 通用默认上限；项目策略只在需要覆盖时提供 limit。
 export const DEFAULT_MODIFICATION_ROUND_LIMIT = 3;
@@ -195,7 +196,7 @@ const downgradeBlocks = (body) => fencedBlocks(body, "aiwork-downgrade");
 
 // 汇总降级的机器记录：只认登记账号在当前 head 上发出、未被改写、恰好一个记录围栏、
 // 字段恰好三个、核实过程非空，且列出的都是当前 head 上评审机器人的 BLOCK。
-// 格式定义在 summary skill；测试从那里读取对照。
+// 格式定义在 summary skill；tests/test_aiwork_gate.mjs 从 schema 生成对照用例，只改一处会先红。
 const DOWNGRADE_FIELDS = "evidence,head_sha,reviews";
 function parseDowngradeRecord(r, head) {
   if (r.state !== "COMMENTED" || r.edited_at) return null;
@@ -302,15 +303,22 @@ export function decide(facts, policy) {
       reviewed.add(p.value.family);
     }
     if (why !== null) {
-      blocks.push({ id: r.id, bot: true, at: effectiveAt(r, policy), family: p.ok ? p.value.family : "?", model: `${p.ok ? p.value.model : `评审 #${r.id}`}${why ? `,${why}` : ""}` });
+      blocks.push({
+        id: r.id, bot: true, commit_id: r.commit_id, complete: p.ok,
+        verdict: p.ok ? p.value.verdict : null, scopeReason,
+        at: effectiveAt(r, policy), family: p.ok ? p.value.family : "?",
+        model: `${p.ok ? p.value.model : `评审 #${r.id}`}${why ? `,${why}` : ""}`,
+      });
       continue;
     }
     const v = p.value;
+    // 「需要更多信息」不直接合并，不管它是否因范围问题不能算合格评审。
+    // 放在范围检查之前，避免 partial / 作者家族等被跳过时漏掉这种表态。
+    if (v.verdict === "NEEDS_MORE_INFO") needsMore.push({ id: r.id, family: v.family, model: v.model });
     if (scopeReason !== null) {
       rejected.push(`评审 #${r.id}:${scopeReason}`);
       continue;
     }
-    if (v.verdict === "NEEDS_MORE_INFO") needsMore.push({ id: r.id, family: v.family, model: v.model });
     if (v.verdict !== "PASS") {
       rejected.push(`评审 #${r.id}:结论是 ${v.verdict}`);
       continue;
@@ -330,30 +338,45 @@ export function decide(facts, policy) {
 
   // 汇总降级只降当前 head 上评审机器人的 BLOCK:登记账号、未改写、格式完整、核实过程非空，
   // 且列出的每条都在当前 head 的 BLOCK 里。人的反对不能这样降级。
-  const botBlockIds = new Set(blocks.filter((b) => b.bot).map((b) => b.id));
+  // 只认当前 head 上的 BLOCK；同步沿用的旧提交评审不在降级范围里。
+  const currentBotBlocks = new Map(blocks
+    .filter((b) => b.bot && b.commit_id === head)
+    .map((b) => [b.id, b]));
   const downgraded = new Set();
   const summaryAccount = policy.modification_rounds?.summary_account;
   if (summaryAccount) {
     for (const r of facts.reviews) {
       if (r.login?.toLowerCase() !== summaryAccount.toLowerCase() || r.commit_id !== head) continue;
       const record = parseDowngradeRecord(r, head);
-      if (!record || !record.reviews.every((id) => botBlockIds.has(id))) continue;
+      if (!record || !record.reviews.every((id) => currentBotBlocks.has(id))) continue;
       for (const id of record.reviews) downgraded.add(id);
     }
+  }
+  const downgradedFamilies = new Set();
+  for (const id of downgraded) {
+    const b = currentBotBlocks.get(id);
+    // 只降 G5 还不够补评审家数：结论块要完整，范围要合格（当前 head、非作者家族）。
+    if (!b?.complete || b.scopeReason !== null || b.verdict !== "BLOCK") continue;
+    downgradedFamilies.add(b.family);
   }
   const activeBlocks = blocks.filter((b) => !downgraded.has(b.id));
 
   // G3
   const plan = reviewPlan(facts.files, policy);
-  const reviewOk = new Set(passes.map(p => p.family)).size >= plan.g3_minimum;
-  add(
-    reviewOk,
-    "G3",
-    reviewOk
-      ? `合格 PASS:${passes.map((p) => `${p.model}(${p.family})`).join("、")}`
-      : passes.length ? `合格 PASS 家族数不足(要 ${plan.g3_minimum} 家)`
-      : `当前 head 上没有合格 PASS${stale ? `(另有 ${stale} 条评审针对旧提交,不算)` : ""}`,
-  );
+  const passFamilies = [...new Set(passes.map((p) => p.family))];
+  const releaseFamilies = new Set([...passFamilies, ...downgradedFamilies]);
+  const reviewOk = releaseFamilies.size >= plan.g3_minimum;
+  const passText = passes.map((p) => `${p.model}(${p.family})`);
+  const downgradedText = [...downgradedFamilies];
+  const reviewText = reviewOk
+    ? [
+        passText.length ? `合格 PASS:${passText.join("、")}` : "",
+        downgradedText.length ? `汇总降级按家族计入:${downgradedText.join("、")}` : "",
+      ].filter(Boolean).join("；")
+    : passes.length ? `合格 PASS 家族数不足(要 ${plan.g3_minimum} 家)${downgradedText.length ? `；汇总降级按家族计入:${downgradedText.join("、")}` : ""}`
+    : downgradedText.length ? `合格 PASS 和汇总降级的家族数不足(要 ${plan.g3_minimum} 家；汇总降级计入:${downgradedText.join("、")})`
+    : `当前 head 上没有合格 PASS${stale ? `(另有 ${stale} 条评审针对旧提交,不算)` : ""}`;
+  add(reviewOk, "G3", reviewText);
   for (const r of rejected) lines.push(`   · ${r}`);
 
   // G5
@@ -365,19 +388,21 @@ export function decide(facts, policy) {
   const judging = facts.files.filter((f) => matchAny(policy.judging_surface, f));
   const high = facts.files.filter((f) => matchAny(policy.high, f));
   if (judging.length) add(false, "G2", `改了判卷面:${judging.slice(0, 5).join("、")}${judging.length > 5 ? " 等" : ""}`);
-  const families = [...new Set(passes.map((p) => p.family))];
   if (policy.review_dispatch) lines.push(`评审目标 ${plan.target} 家；底线 ${plan.minimum} 家；档位 ${plan.tier}（目标不足不豁免底线，也不另挡合并）`);
-  const highOk = !high.length || families.length >= plan.minimum;
+  const highOk = !high.length || releaseFamilies.size >= plan.minimum;
   if (high.length) {
-    add(highOk, "G6", `high 路径:${high.slice(0, 5).join("、")}${high.length > 5 ? " 等" : ""};不同家族 PASS ${families.length} 家(要 ${plan.minimum} 家)`);
+    const familyText = downgradedFamilies.size
+      ? `不同家族 PASS 或汇总降级计入 ${releaseFamilies.size} 家`
+      : `不同家族 PASS ${releaseFamilies.size} 家`;
+    add(highOk, "G6", `high 路径:${high.slice(0, 5).join("、")}${high.length > 5 ? " 等" : ""};${familyText}(要 ${plan.minimum} 家)`);
   }
 
   // G7
   // 批准只认当前 head 上的表态;ownerLast 可能是更晚的旧提交反对/撤销,照样挡住。
   const approved = ownerCurrent?.state === "APPROVED";
   const ownerObjection = ownerLast === null || ownerLast.state === "APPROVED" ? null : ownerLast.state === "DISMISSED" ? "业主的评审被撤销了,要业主重新表态" : "业主要求修改(Request changes)";
-  const lastBlockAt = activeBlocks.map((b) => b.at).sort().at(-1) ?? "";
-  // 批准要晚于最后一条 BLOCK:业主批准时还没看到的 BLOCK,不能被那次批准豁免
+  // 批准要晚于最后一条 BLOCK（含被降级的）:业主批准时还没看到的 BLOCK,不能被那次批准豁免。
+  const lastBlockAt = blocks.map((b) => b.at).sort().at(-1) ?? "";
   const blockWaived = approved && effectiveAt(ownerCurrent, policy) > lastBlockAt;
   const needOwner = [];
   if (!author.known) needOwner.push("作者 UNKNOWN");
@@ -385,20 +410,20 @@ export function decide(facts, policy) {
   if (blocked) needOwner.push("有 BLOCK");
   if (downgraded.size) needOwner.push("汇总降级");
   if (high.length) needOwner.push("high 路径");
-  const ownerOk = !ownerObjection && (!needOwner.length || (approved && (!blocked || blockWaived)));
+  const ownerOk = !ownerObjection && (!needOwner.length || (approved && (!blocks.length || blockWaived)));
   if (ownerObjection) {
     // 反对可能来自当前 head，也可能来自沿用来源提交；位置要写对，不能一律说成当前 head。
     const at = ownerLast.commit_id === head ? "当前 head 上" : `沿用来源提交 ${ownerLast.commit_id.slice(0, 7)} 上`;
     add(false, "G7", `${at}${ownerObjection}`);
   } else if (needOwner.length) {
-    const why = !approved ? "还没有" : blocked && !blockWaived ? "批准早于最后一条 BLOCK,要在看过 BLOCK 之后再批准" : "已批准";
+    const why = !approved ? "还没有" : !blockWaived ? "批准早于最后一条 BLOCK,要在看过 BLOCK 之后再批准" : "已批准";
     add(ownerOk, "G7", `需要业主在当前 head 上批准(${needOwner.join("、")}):${why}`);
   }
 
   // 直接合并:目标家数只在这里用。判卷面 / high / 汇总降级 / 作者 UNKNOWN 的 PR 仍走
   // 业主批准 + 合并标签；其余普通 PR 在凑够目标家数的合格 PASS、没有 BLOCK 或
   // 「需要更多信息」、CI 绿时由关卡直接合并。未配置 review_dispatch 的项目保持原行为。
-  const targetOk = families.length >= plan.target;
+  const targetOk = passFamilies.length >= plan.target;
   const directReasons = [];
   if (policy.review_dispatch) {
     if (judging.length || high.length) directReasons.push("改了判卷面或走 high 路径，仍要业主批准并贴合并标签");
@@ -407,7 +432,7 @@ export function decide(facts, policy) {
     else {
       if (!ciOk) directReasons.push(pending ? "CI 还在跑" : "CI 没通过");
       if (!reviewOk) directReasons.push(`合格 PASS 不足底线 ${plan.g3_minimum} 家`);
-      if (!targetOk) directReasons.push(`合格 PASS ${families.length} 家，目标 ${plan.target} 家`);
+      if (!targetOk) directReasons.push(`合格 PASS ${passFamilies.length} 家，目标 ${plan.target} 家`);
       if (blocked) directReasons.push("还有 BLOCK");
       if (needsMore.length) directReasons.push(`还有需要更多信息:${needsMore.map((p) => `${p.model}(${p.family})`).join("、")}`);
       if (ownerObjection) directReasons.push("业主要求修改");
@@ -441,7 +466,8 @@ export function decide(facts, policy) {
       plan,
       excluded: [...authorFamilies],
       reviewed_families: [...reviewed],
-      pass_families: families,
+      pass_families: passFamilies,
+      downgraded_families: [...downgradedFamilies],
       minimum_met: minimumMet,
       target_met: missingTarget === 0,
       missing_target: missingTarget,

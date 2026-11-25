@@ -125,7 +125,7 @@ test('直接合并的 PR 没有合并标签，也能准备自动同步（绑定�
 test('收集链：main 碰了同一文件，旧评审和合并标签都不沿用',async()=>{
  const e=environment({overlap:true});const f=await collect(e.api,'o/r',1,p);
  assert.equal(f.merge_request.bound,false);assert.equal(decide(f,p).conclusion,'failure');
- assert.match(f.synchronization.note,/须重新评审并重贴合并标签/);
+ assert.match(f.synchronization.note,/须重新评审，再按当时的合并路径继续/);
 });
 test('同步后普通推送或推回同步 SHA 都截断标签和评审沿用',async()=>{
  for(const over of [{laterPush:true},{restore:true}]){
@@ -147,7 +147,7 @@ test('自动合并移动了 PR 文件仍不能沿用；树截断时认出同步�
  assert.equal(decide(t,p).author.known,true,'截断的树仍能认出这是关卡的同步推送，不能变成作者 UNKNOWN');
  assert.equal(t.merge_request.bound,false);
  assert.deepEqual(t.synchronization.review_heads,[]);
- assert.match(t.synchronization.note,/无法完整比对.*重新评审并重贴合并标签/);
+ assert.match(t.synchronization.note,/无法完整比对.*重新评审，再按当时的合并路径继续/);
  assert.notEqual(decide(t,p).conclusion,'success');
 });
 test('写意向之后 main 又前进：按合并提交的实际第二双亲核实并写明中途前进',async()=>{
@@ -223,7 +223,7 @@ test('超长同步意向截断成可读回且明确不能沿用；核心字段�
  const f=await collect(e.api,'o/r',1,p);
  assert.equal(f.merge_request.bound,false);
  assert.deepEqual(f.synchronization.review_heads,[]);
- assert.match(f.synchronization.note,/重新评审并重贴合并标签/);
+ assert.match(f.synchronization.note,/重新评审，再按当时的合并路径继续/);
  assert.match(f.synchronization.note,/同步意向超长被截断/,'不能把意向截断归因成 main 提交的文件列表截断');
 });
 function planning(over={}) {
@@ -261,7 +261,7 @@ test('同步计划：冲突不同步；逐提交含重命名旧路径的交集�
  }
  const capped=await prepareSynchronization(planning({files300:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
  assert.equal(capped.intent.overlap_unknown,true);assert.deepEqual(capped.intent.review_heads,[]);
- assert.match(capped.note,/可能被接口截断.*重新评审并重贴合并标签/);
+ assert.match(capped.note,/可能被接口截断.*重新评审，再按当时的合并路径继续/);
  const conflict=await prepareSynchronization(planning({conflict:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
  assert.equal(conflict.conflict,true);assert.equal(conflict.intent,undefined);
  // 比较范围是固定提交，main 前进不会让条数自己变对；读取不全按 G8 拒绝，不能当成瞬时状态重读。

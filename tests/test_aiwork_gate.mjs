@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 const { decide, parseReviewBlock, matchAny, conclusionLines } = await import("../gate/decide.mjs");
 const { collect, collectCi, collectPushes, paginate } = await import("../gate/collect.mjs");
 const policy = JSON.parse(readFileSync(new URL("./fixtures/gate-logic-policy.json", import.meta.url), "utf8"));
+const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 
 const HEAD = "a".repeat(40);
 const OLD = "b".repeat(40);
@@ -745,7 +746,7 @@ test("直接合并:未配置 review_dispatch 的项目保持原行为，不新�
 });
 
 const downgradePolicy = { ...directPolicy, modification_rounds: { summary_account: "summary-user" } };
-const blockReview = (id = 5) => review({ id, family: "google", model: "gemini", verdict: "BLOCK" });
+const blockReview = (id = 5, family = "google", model = `${family}-block`) => review({ id, family, model, verdict: "BLOCK" });
 const downgradeRecord = ({ id = 20, head = HEAD, reviews = [5], evidence = "跑了复现脚本,按第二节第 1 条只是显示问题,不算 P1", ...over } = {}) => ({
   id, login: "summary-user", type: "User", state: "COMMENTED", commit_id: head,
   submitted_at: "2026-09-29T10:30:00Z", edited_at: null,
@@ -794,4 +795,133 @@ test("汇总降级:非汇总账号、旧 head、格式不合、降级对象不�
     assert.equal(result.conclusion, "failure", `${name}:${result.summary}`);
     assert.match(result.summary, /G5/, name);
   }
+});
+
+test("直接合并:评审范围不合格的需要更多信息也不能直接合并", () => {
+  for (const over of [
+    { completeness: "partial" },
+    { family: "anthropic", model: "claude-test" },
+  ]) {
+    const result = direct(["web/src/a.ts"], [
+      ...twoFamilies(),
+      review({ id: 3, family: "google", model: "gemini", verdict: "NEEDS_MORE_INFO", ...over }),
+    ]);
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, /需要更多信息/);
+  }
+});
+
+test("汇总降级:当前 head 的降级记录不能降级同步沿用来的旧提交 BLOCK", () => {
+  const oldBlock = review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), oldBlock, downgradeRecord({ reviews: [5] }), approve()],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.match(result.summary, /G5/, "旧提交上的 BLOCK 仍在 G5");
+  assert.doesNotMatch(result.summary, /汇总降级/, "当前 head 的记录不能降级旧提交 BLOCK");
+});
+
+test("汇总降级:全部 BLOCK 降级且业主在当前 head 批准后放行（PR #172 情形），仍不能直接合并", () => {
+  const allBlocks = [blockReview(5, "google", "gemini"), blockReview(6, "deepseek", "deepseek-test")];
+  const released = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [...allBlocks, downgradeRecord({ reviews: [5, 6] }), approve()],
+  }), downgradePolicy);
+  assert.equal(released.conclusion, "success", released.summary);
+  assert.match(released.summary, /汇总降级按家族计入:google、deepseek/);
+  assert.equal(released.direct_merge.ok, false, "被降级的 BLOCK 不能让直接合并成立");
+
+  const noApproval = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [...allBlocks, downgradeRecord({ reviews: [5, 6] })],
+  }), downgradePolicy);
+  assert.equal(noApproval.conclusion, "failure", noApproval.summary);
+  assert.match(noApproval.summary, /业主.*批准/);
+
+  const sameFamily = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [blockReview(5, "google"), blockReview(6, "google"), downgradeRecord({ reviews: [5, 6] }), approve()],
+  }), downgradePolicy);
+  assert.equal(sameFamily.conclusion, "failure", "同一家族不能凑成两家");
+  assert.match(sameFamily.summary, /high 路径/);
+});
+
+test("summary skill 的降级记录定义直接生成关卡对照用例", () => {
+  const skill = read("../workflow/skills/summary/SKILL.md");
+  const match = /```aiwork-downgrade-schema\n([\s\S]*?)\n```/.exec(skill);
+  assert.ok(match, "降级记录格式必须在 summary skill 定义");
+  const schema = JSON.parse(match[1]);
+  assert.equal(schema.title, "aiwork-downgrade");
+
+  function accepts(spec, value) {
+    if (spec.type === "object" && (!value || typeof value !== "object" || Array.isArray(value))) return false;
+    if (spec.type === "array" && !Array.isArray(value)) return false;
+    if (spec.type === "integer" && !Number.isSafeInteger(value)) return false;
+    if (spec.type && !["object", "array", "integer"].includes(spec.type) && typeof value !== spec.type) return false;
+    if (Object.hasOwn(spec, "pattern") && (typeof value !== "string" || !new RegExp(spec.pattern).test(value))) return false;
+    if (spec.minLength !== undefined && (typeof value !== "string" || value.length < spec.minLength)) return false;
+    if (spec.minItems !== undefined && (!Array.isArray(value) || value.length < spec.minItems)) return false;
+    if (spec.uniqueItems && (!Array.isArray(value) || new Set(value).size !== value.length)) return false;
+    if (spec.minimum !== undefined && (typeof value !== "number" || value < spec.minimum)) return false;
+    if (spec.maximum !== undefined && (typeof value !== "number" || value > spec.maximum)) return false;
+    if (spec.required?.some((key) => !Object.hasOwn(value, key))) return false;
+    if (spec.additionalProperties === false && Object.keys(value).some((key) => !Object.hasOwn(spec.properties, key))) return false;
+    for (const [key, child] of Object.entries(spec.properties ?? {})) {
+      if (Object.hasOwn(value, key) && !accepts(child, value[key])) return false;
+    }
+    if (spec.items && Array.isArray(value) && !value.every((item) => accepts(spec.items, item))) return false;
+    return true;
+  }
+
+  const recognize = (value, blocks = [blockReview()]) => {
+    const record = {
+      id: 20, login: "summary-user", type: "User", state: "COMMENTED", commit_id: HEAD,
+      submitted_at: "2026-09-29T10:30:00Z", edited_at: null,
+      body: "```" + schema.title + "\n" + JSON.stringify(value) + "\n```\n",
+    };
+    const result = decide(facts({ files: ["web/src/a.ts"], reviews: [...twoFamilies(), ...blocks, record] }), downgradePolicy);
+    return /汇总降级/.test(result.summary) && !/❌ G5/.test(result.summary);
+  };
+
+  const base = { head_sha: HEAD, reviews: [5], evidence: "核实过程" };
+  const candidates = [
+    base,
+    { ...base, head_sha: "short" },
+    { ...base, head_sha: HEAD.toUpperCase() },
+    { ...base, reviews: [] },
+    { ...base, reviews: [0] },
+    { ...base, reviews: [1.5] },
+    { ...base, reviews: [Number.MAX_SAFE_INTEGER + 1] },
+    { ...base, reviews: ["5"] },
+    { ...base, reviews: [5, 5] },
+    { ...base, evidence: "" },
+    { ...base, evidence: "   " },
+    { ...base, evidence: 42 },
+    { ...base, extra: true },
+    { reviews: [5], evidence: "核实过程" },
+    { head_sha: HEAD, evidence: "核实过程" },
+    { head_sha: HEAD, reviews: [5] },
+  ];
+  for (const value of candidates) {
+    assert.equal(recognize(value), accepts(schema, value), JSON.stringify(value));
+  }
+  const largerId = { ...base, reviews: [50] };
+  assert.equal(recognize(largerId, [blockReview(50)]), accepts(schema, largerId));
+
+  // 从定义本身生成合法记录；只改 schema 一处（例如字段改名）时这里会先红。
+  const generated = {};
+  for (const key of schema.required) {
+    generated[key] = key === "head_sha" ? HEAD : key === "reviews" ? [5] : key === "evidence" ? "核实过程" : "x";
+  }
+  assert.deepEqual(Object.keys(generated).toSorted(), schema.required.toSorted());
+  assert.equal(accepts(schema, generated), true);
+  assert.equal(recognize(generated), true, `schema 生成的合法记录应被关卡认:${JSON.stringify(generated)}`);
+
+  const exampleMatch = /```aiwork-downgrade\n([\s\S]*?)\n```/.exec(skill);
+  assert.ok(exampleMatch, "summary skill 必须有降级记录示例");
+  const example = JSON.parse(exampleMatch[1]);
+  example.head_sha = HEAD;
+  assert.equal(accepts(schema, example), true);
+  assert.equal(recognize(example, example.reviews.map((id) => blockReview(id))), true);
 });
