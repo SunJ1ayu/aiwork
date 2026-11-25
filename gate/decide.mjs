@@ -231,44 +231,62 @@ function parseDowngradeRecord(r, head) {
   return v;
 }
 
-// 只追加派单提示，不参与放行。格式源在 summary skill；测试从该定义生成对照用例。
-function modificationRoundLine(reviews, config) {
+// 汇总记录的唯一读取：轮数显示和普通 PR 直接合并都只调用这里。
+// 返回每个 head 最早的一条可信记录（byHead）、全部可信记录、上限，以及读不清的原因。
+// 别人写的、旧 head 的记录留在 byHead 的各 head 下，由调用方只看当前 head；改写过、格式错误、
+// 字段冲突的记录不进 byHead，只让轮数显示读不清，不提供合并结论。
+const reviewRecordOrder = (a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id;
+function readSummaryRecords(reviews, config) {
   const limit = config.limit ?? DEFAULT_MODIFICATION_ROUND_LIMIT;
   const byHead = new Map();
-  const order = (a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id;
-  const unclear = (r, why) => `轮数：读不清（汇总 #${r.id}：${why}）`;
+  const conflicted = new Set();
+  let unclear = null;
+  const markUnclear = (r, why) => { if (!unclear) unclear = { id: r.id, why }; };
   for (const r of reviews) {
     if (r.login?.toLowerCase() !== config.summary_account.toLowerCase()) continue;
     // 只处理记录围栏；旧式汇总和普通评审的改写不污染轮数。
     const blocks = summaryBlocks(r.body);
     if (!blocks.length) continue;
-    if (r.edited_at) return unclear(r, "发出后被改写过");
-    if (blocks.length !== 1) return unclear(r, "记录块应恰好一个");
+    if (r.edited_at) { markUnclear(r, "发出后被改写过"); continue; }
+    if (blocks.length !== 1) { markUnclear(r, "记录块应恰好一个"); continue; }
     const [block] = blocks;
-    if (block.json === undefined) return unclear(r, "记录围栏没有结束");
-    if (!block.valid) return unclear(r, "记录围栏格式不合法");
+    if (block.json === undefined) { markUnclear(r, "记录围栏没有结束"); continue; }
+    if (!block.valid) { markUnclear(r, "记录围栏格式不合法"); continue; }
     let v;
-    try { v = JSON.parse(block.json); } catch { return unclear(r, "记录不是合法 JSON"); }
+    try { v = JSON.parse(block.json); } catch { markUnclear(r, "记录不是合法 JSON"); continue; }
     const task = block.task;
     if (!v || typeof v !== "object" || Array.isArray(v) ||
         Object.keys(v).sort().join(",") !== "has_p1,head_sha,next_step" ||
         typeof v.head_sha !== "string" || !SHA_RE.test(v.head_sha) ||
         !["交业主", "照单修", "合并"].includes(v.next_step) || typeof v.has_p1 !== "boolean" ||
         (v.next_step === "照单修" && (!v.has_p1 || !task)) ||
-        (v.next_step === "合并" && v.has_p1)) return unclear(r, "记录字段或字段组合不合法");
+        (v.next_step === "合并" && v.has_p1)) { markUnclear(r, "记录字段或字段组合不合法"); continue; }
     if (r.state !== "COMMENTED" || r.commit_id !== v.head_sha || !Number.isFinite(Date.parse(r.submitted_at))) {
-      return unclear(r, "不是 COMMENT 评审、head 对不上或缺发出时间");
+      markUnclear(r, "不是 COMMENT 评审、head 对不上或缺发出时间");
+      continue;
     }
     const key = JSON.stringify([v.next_step, v.has_p1, task]);
     const previous = byHead.get(v.head_sha);
-    if (previous && previous.key !== key) return unclear(r, "同一个 head 的记录互相冲突");
+    if (previous && previous.key !== key) {
+      markUnclear(r, "同一个 head 的记录互相冲突");
+      conflicted.add(v.head_sha);
+      byHead.delete(v.head_sha);
+      continue;
+    }
+    if (conflicted.has(v.head_sha)) continue;
     const record = { key, value: v, at: r.submitted_at, id: r.id };
-    if (!previous || order(record, previous) < 0) byHead.set(v.head_sha, record);
+    if (!previous || reviewRecordOrder(record, previous) < 0) byHead.set(v.head_sha, record);
   }
-  const records = [...byHead.values()];
+  return { limit, byHead, records: [...byHead.values()], unclear };
+}
+
+// 只追加派单提示，不改变 G1–G8；直接合并另读同一份结果的当前 head 记录。
+function modificationRoundLine(summary) {
+  const { limit, records, unclear } = summary;
+  if (unclear) return `轮数：读不清（汇总 #${unclear.id}：${unclear.why}）`;
   if (!records.length) return "轮数：未知（没有新格式的汇总记录）";
   const count = records.filter((r) => r.value.next_step === "照单修").length;
-  const latest = records.sort(order).at(-1).value;
+  const latest = [...records].sort(reviewRecordOrder).at(-1).value;
   // 停的定义见 REVIEW-RULES 第三节第 1 条。
   const stop = latest.has_p1 && (count > limit || (count === limit && latest.next_step !== "照单修"));
   return `轮数：第 ${count} 轮 / 上限 ${limit}${stop ? "；停：交业主" : ""}`;
@@ -278,6 +296,8 @@ export function decide(facts, policy) {
   const head = facts.pr.head_sha;
   const lines = [];
   const add = (ok, rule, text) => lines.push(`${ok ? "✅" : "❌"} ${rule} ${text}`);
+  // 汇总记录读一次：轮数显示和直接合并共用同一份解析。
+  const summaryRead = policy.modification_rounds ? readSummaryRecords(facts.reviews, policy.modification_rounds) : null;
 
   // G1
   const ci = facts.ci;
@@ -458,6 +478,12 @@ export function decide(facts, policy) {
     else if (downgraded.size) directReasons.push("有汇总降级，仍要业主批准并贴合并标签");
     else if (!author.known) directReasons.push("作者 UNKNOWN，要业主批准");
     else {
+      const summaryStep = summaryRead?.byHead.get(head)?.value;
+      if (summaryStep?.has_p1) {
+        directReasons.push(`汇总记录确认还有 P1（下一步是「${summaryStep.next_step}」），不能直接合并`);
+      } else if (summaryStep && summaryStep.next_step !== "合并") {
+        directReasons.push(`汇总记录下一步是「${summaryStep.next_step}」，不是「合并」，不能直接合并`);
+      }
       if (facts.pr.draft) directReasons.push("草稿 PR 不能直接合并");
       if (!ciOk) directReasons.push(pending ? "CI 还在跑" : "CI 没通过");
       if (!reviewOk) directReasons.push(`合格 PASS 不足底线 ${plan.g3_minimum} 家`);
@@ -484,7 +510,7 @@ export function decide(facts, policy) {
     return "放行";
   })();
   const pass = verdictLine === "放行";
-  const roundLine = policy.modification_rounds ? modificationRoundLine(facts.reviews, policy.modification_rounds) : null;
+  const roundLine = summaryRead ? modificationRoundLine(summaryRead) : null;
   return {
     status: pending ? "in_progress" : "completed",
     conclusion: pending ? null : pass ? "success" : "failure",

@@ -770,6 +770,47 @@ const downgradeRecord = ({ id = 20, head = HEAD, reviews = [5], evidence = "跑�
   body: '```aiwork-downgrade\n' + JSON.stringify({ head_sha: head, reviews, evidence }) + '\n```\n',
   ...over,
 });
+const summaryRecord = ({ id = 30, head = HEAD, next_step = "合并", has_p1 = false, task = "", ...over } = {}) => ({
+  id, login: "summary-user", type: "User", state: "COMMENTED", commit_id: head,
+  submitted_at: "2026-09-29T10:40:00Z", edited_at: null,
+  body: '```aiwork-summary\n' + JSON.stringify({ head_sha: head, next_step, has_p1 }) + '\n```\n' + (task ? `\n${task}` : ""),
+  ...over,
+});
+
+test("直接合并:当前 head 的汇总记录确认有 P1 或下一步不是合并 → 不直接合并", () => {
+  const p1 = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), summaryRecord({ next_step: "照单修", has_p1: true, task: "修复已复现的问题" })],
+  }), downgradePolicy);
+  assert.equal(p1.conclusion, "success", "汇总记录不改变放行底线");
+  assert.equal(p1.direct_merge.ok, false, p1.summary);
+  assert.match(p1.summary, /汇总记录确认还有 P1/, p1.summary);
+
+  const handoff = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), summaryRecord({ next_step: "交业主", has_p1: false })],
+  }), downgradePolicy);
+  assert.equal(handoff.conclusion, "success", "汇总记录不改变放行底线");
+  assert.equal(handoff.direct_merge.ok, false, handoff.summary);
+  assert.match(handoff.summary, /下一步是「交业主」/, handoff.summary);
+});
+
+test("直接合并:汇总记录写合并、别人写的、旧 head、改写过的都不挡", () => {
+  const records = [
+    summaryRecord({ next_step: "合并", has_p1: false }),
+    summaryRecord({ next_step: "合并", has_p1: false, login: "other-user" }),
+    summaryRecord({ next_step: "合并", has_p1: false, head: OLD, commit_id: OLD }),
+    summaryRecord({ next_step: "照单修", has_p1: true, task: "修复已复现的问题", edited_at: "2026-09-29T10:41:00Z" }),
+  ];
+  for (const record of records) {
+    const result = decide(facts({
+      files: ["web/src/a.ts"],
+      reviews: [...twoFamilies(), record],
+    }), downgradePolicy);
+    assert.equal(result.conclusion, "success", result.summary);
+    assert.equal(result.direct_merge.ok, true, `${record.login} ${record.commit_id} ${result.summary}`);
+  }
+});
 const downgraded = (extra = {}) => decide(facts({
   files: ["web/src/a.ts"],
   reviews: [...twoFamilies(), blockReview(), downgradeRecord(), approve(), ...(extra.reviews ?? [])],

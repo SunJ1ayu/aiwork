@@ -10,7 +10,8 @@
 #     PR 改 workflow、改策略、改关卡都改不到正在判它的这一份。这里不检出 PR 的代码，只读 GitHub API。
 #   · 事件只是门铃:每次运行都把所有开着的 PR 全重算一遍(见 gate/run.mjs 文件头)。
 #     关卡读的每样输入变了都要有门铃(对照表见 gate/README.md「每样输入的门铃」):
-#     推送 / 开关 PR / 改目标分支(edited,改标题正文时顺带重算一次,无害)/ 关闭(同一提交上少了一个 PR)、
+#     推送 / 开关 PR / 改目标分支(edited,改标题正文时顺带重算一次,无害)/ 草稿转正式(ready_for_review)/
+#     关闭(同一提交上少了一个 PR)、
 #     CI 开跑与跑完(workflow_run requested / in_progress / completed;重跑不一定发 requested,开始跑时会发 in_progress)、
 #     评审提交 / 改写 / 撤销(aiwork-review-ping);
 #     aiwork main 的关卡代码变化由 schedule 定时补算，间隔与限制见门铃表。
@@ -29,7 +30,7 @@ on:
   schedule:
     - cron: '7,22,37,52 * * * *'
   pull_request_target:
-    types: [opened, synchronize, reopened, closed, labeled, edited]
+    types: [opened, synchronize, reopened, ready_for_review, closed, labeled, edited]
   workflow_run:
     workflows: [ci, aiwork-review-ping]
     types: [requested, in_progress, completed]

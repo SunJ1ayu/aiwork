@@ -170,7 +170,7 @@ test("本仓库的两份 workflow 与模板逐字相同", () => {
 test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwork main 的关卡，不检出 PR", () => {
   const text = read("templates/aiwork-gate.yml");
   assert.match(text, /^name: aiwork-gate$/m);
-  assert.match(text, /types: \[opened, synchronize, reopened, closed, labeled, edited\]/);
+  assert.match(text, /types: \[opened, synchronize, reopened, ready_for_review, closed, labeled, edited\]/);
   assert.match(text, /workflows: \[ci, aiwork-review-ping\]/);
   assert.match(text, /types: \[requested, in_progress, completed\]/);
   assert.doesNotMatch(text, /^ {2}pull_request:/m);

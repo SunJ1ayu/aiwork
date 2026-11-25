@@ -35,7 +35,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 
 项目可在策略中配置 `modification_rounds`，其中可选的 `limit` 是正整数覆盖值（省略时的上限来源见下段），`summary_account` 是汇总账号，不能兼任评审机器人或合并申请人（含业主）。汇总账号也不能兼任 Builder，依据见 [业主决定](https://github.com/SunJ1ayu/aiwork/issues/43#issuecomment-6888714838)。接入项目升级共享关卡前，先将汇总账号移出执行方名单。未配置时，关卡输出和行为保持原样。aiwork 启用此项；其他项目要用时修改自己的策略。
 
-上限与停的定义见 `REVIEW-RULES.md` 第三节第 1 条。记录格式和计数约定见 `workflow/skills/summary/SKILL.md`「汇总的格式」，由 `tests/test_aiwork_gate_rounds.mjs` 从定义读取并对照。关卡复用已经取全的 PR 评审与 GraphQL 改写时间，不增加请求；`decide.mjs` 只追加显示，`run.mjs` 在共享 head 的结论中保留每个 PR 的轮数和停信号，G1–G8 和合并条件不变。新汇总通过已有评审门铃重算。
+上限与停的定义见 `REVIEW-RULES.md` 第三节第 1 条。记录格式和计数约定见 `workflow/skills/summary/SKILL.md`「汇总的格式」，由 `tests/test_aiwork_gate_rounds.mjs` 从定义读取并对照。关卡复用已经取全的 PR 评审与 GraphQL 改写时间，不增加请求；`decide.mjs` 用同一份解析显示轮数，并让普通 PR 直接合并读取当前 head 的可信记录（见「普通 PR 直接合并」）；`run.mjs` 在共享 head 的结论中保留每个 PR 的轮数和停信号，G1–G8 不变。新汇总通过已有评审门铃重算。
 
 启用后的已有 PR 没有新格式记录时显示「未知」。汇总从合并后的下一次起使用新格式，不回填历史修改单。
 
@@ -138,6 +138,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 | 关卡读的输入 | 变了靠什么叫醒 |
 |---|---|
 | PR 的 head、改动文件、推送记录 | `pull_request_target`:`opened` / `synchronize` / `reopened` |
+| PR 是草稿还是正式（草稿不直接合并） | `pull_request_target`:`ready_for_review`（草稿转正式）；`opened` / `edited` 也会读当前状态 |
 | 目标分支(G1 要 CI 晚于最后一次改目标分支) | `pull_request_target`:`edited` |
 | 开着的 PR 有哪些(同一提交上几个 PR 合在一起判) | `pull_request_target`:`opened` / `reopened` / `closed` |
 | CI(以最后开始的那次执行为准) | `workflow_run`(ci):`requested` / `in_progress` / `completed`(重跑不一定发 `requested`,开始跑时会发 `in_progress`) |
@@ -179,6 +180,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 - 这次改动不碰 `judging_surface`，也不碰 `high`（判卷面 / high 仍要业主批准 + 合并标签，凑够家数也不能跳过）；
 - 当前 head（含已核实的沿用来源）上，不同家族的合格 PASS 家数达到这一档的 `review_dispatch.targets` 目标家数；
 - 没有任何 BLOCK，也没有任何 `NEEDS_MORE_INFO`（不论那条评审的范围是否算合格）；
+- 当前 head 上没有可信汇总记录，或该记录写「合并」（`next_step: "合并"`、`has_p1: false`）。记录写 `has_p1: true` 或下一步是「交业主」「照单修」时不直接合并，摘要写明原因；别人写的、旧 head 的、发出后被改写的、格式不合法或互相冲突的记录不算当前 head 的可信记录，不提供合并结论；
 - 不是草稿 PR（草稿即使凑够家数也不直接合并）；
 - CI 绿、其余放行条件满足（作者已知、无业主反对等）。
 
