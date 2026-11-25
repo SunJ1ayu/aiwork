@@ -219,7 +219,11 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
   delete pushes.activities;
   delete pushes.history;
   return {
-    pr: { number: pr.number, state: pr.state, head_sha: headSha, base_ref: pr.base?.ref },
+    pr: {
+      number: pr.number, state: pr.state, draft: pr.draft === true,
+      merged: pr.merged === true, merged_by: pr.merged_by?.login ?? null,
+      head_sha: headSha, base_ref: pr.base?.ref,
+    },
     files,
     reviews,
     ci,

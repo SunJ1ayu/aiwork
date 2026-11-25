@@ -705,6 +705,14 @@ test("直接合并:普通 PR 凑够目标家数、无 BLOCK/需要更多信息�
   assert.match(result.summary, /目标 2 家/);
 });
 
+test("直接合并:草稿 PR 凑够目标家数也不直接合并", () => {
+  const result = direct(["web/src/a.ts"], twoFamilies(),
+    { pr: { number: 10, state: "open", draft: true, head_sha: HEAD } });
+  assert.equal(result.conclusion, "success", "草稿本身不改变放行条件");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /草稿 PR 不能直接合并/);
+});
+
 test("直接合并:只到底线不到目标家数 → 不直接合并，摘要写明差什么", () => {
   const result = direct(["web/src/a.ts"], [review({})]);
   assert.equal(result.conclusion, "success", "底线 1 家仍放行");

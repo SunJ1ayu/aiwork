@@ -33,7 +33,10 @@ function fakeGitHub(opts = {}) {
   const numbers = opts.twoPrs ? [10, 11] : [10];
   let merged10 = false;
   const prFor = (number) => ({
-    number, state: "open", changed_files: opts.files?.length ?? 1,
+    number, state: opts.closedPr ? "closed" : "open", changed_files: opts.files?.length ?? 1,
+    ...(opts.closedPr ? { merged: opts.merged ?? true,
+      merged_by: opts.merged === false ? null : { login: opts.mergedBy ?? "aiwork-gate[bot]", type: "Bot" } } : {}),
+    ...(opts.draft ? { draft: true } : {}),
     labels: opts.mergeReady ? [{ name: policy.merge_label }] : [],
     mergeable: opts.conflict ? false : true,
     ...(opts.behindAlways || (opts.twoPrs && merged10 && number === 11) ? { mergeable_state: 'behind' } : {}),
@@ -136,6 +139,15 @@ function fakeGitHub(opts = {}) {
       if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: numbers.map((number,i) => ({ id: i+1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", pull_requests: [{ number }] })) });
       if (u.startsWith("/repos/o/r/activity")) return send(200, [{ id: 1, timestamp: "t", activity_type: "branch_creation", before: "0".repeat(40), after: HEAD, actor: { login: opts.actorLogin ?? "SunJ1ayuBoT" } }]);
       if (u.includes('/check-runs?')) {
+        const requested = new URL(u, "http://fake").searchParams.get('check_name');
+        if (requested === policy.check_name) {
+          const records = opts.gateCheckRuns ?? [{
+            id: 9001, name: policy.check_name, head_sha: HEAD, status: "completed",
+            conclusion: opts.gateCheckConclusion ?? "success",
+            app: { id: policy.gate_app_id, slug: opts.gateAppSlug ?? "aiwork-gate" },
+          }];
+          return send(200, { total_count: records.length, check_runs: records });
+        }
         const saved = [...checks.values()].filter(c => c.head_sha === HEAD && c.name === 'aiwork-merge-request');
         const records = opts.bindingRecords ?? (opts.mergeReady ? numbers.map(number => ({ name: 'aiwork-merge-request',
           head_sha: HEAD, app: { id: policy.gate_app_id }, status: 'completed', conclusion: 'neutral',
@@ -522,6 +534,37 @@ test('执行方已有 PASS 时派发记录保留真关卡结论，只跳过执�
     }
   } finally {gh.server.close();}
 });
+test('派发桥:最后一家交卷后关卡按本轮评审直接合并，PR 已关闭仍返回这一轮成功状态',async()=>{
+  const current=dispatchPolicy();
+  const gh=await fakeGitHub({dispatchPolicy:current,closedPr:true,files:['web/a.ts'],
+    reviews:[dispatchReview('openai','PASS',1),dispatchReview('moonshot','PASS',2)]});
+  try {
+    const result=await runDispatchBridge(gh.url);assert.equal(result.code,0,result.err);
+    const state=JSON.parse(result.out);
+    assert.equal(state.minimum_met,true);
+    assert.equal(state.target_met,true);
+    assert.equal(state.missing_target,0);
+    assert.equal(state.gate.conclusion,'success');
+    assert.ok(gh.log.some(r=>r.url.includes(`check-runs?check_name=${policy.check_name}`)),'用关卡自己的检查确认合并者身份');
+  } finally {gh.server.close();}
+});
+
+test('派发桥:PR 被别的原因关闭，照旧报失败',async()=>{
+  for (const options of [
+    {name:'直接关掉没合并',closedPr:true,merged:false},
+    {name:'不是关卡合并的',closedPr:true,mergedBy:'someone-else'},
+    {name:'关卡没有成功检查',closedPr:true,gateCheckRuns:[]},
+    {name:'关卡检查没成功',closedPr:true,gateCheckConclusion:'failure'},
+  ]) {
+    const gh=await fakeGitHub({dispatchPolicy:dispatchPolicy(),files:['web/a.ts'],
+      reviews:[dispatchReview('openai','PASS',1),dispatchReview('moonshot','PASS',2)],...options});
+    try {
+      const result=await runDispatchBridge(gh.url);
+      assert.notEqual(result.code,0,options.name);assert.equal(result.out,'',options.name);
+    } finally {gh.server.close();}
+  }
+});
+
 test('派发桥不吞 GraphQL 错误',async()=>{
   const gh=await fakeGitHub({dispatchPolicy:dispatchPolicy(),graphqlErrors:true});
   try {

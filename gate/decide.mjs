@@ -430,6 +430,7 @@ export function decide(facts, policy) {
     else if (downgraded.size) directReasons.push("有汇总降级，仍要业主批准并贴合并标签");
     else if (!author.known) directReasons.push("作者 UNKNOWN，要业主批准");
     else {
+      if (facts.pr.draft) directReasons.push("草稿 PR 不能直接合并");
       if (!ciOk) directReasons.push(pending ? "CI 还在跑" : "CI 没通过");
       if (!reviewOk) directReasons.push(`合格 PASS 不足底线 ${plan.g3_minimum} 家`);
       if (!targetOk) directReasons.push(`合格 PASS ${passFamilies.length} 家，目标 ${plan.target} 家`);

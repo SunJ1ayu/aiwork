@@ -25,7 +25,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 
 ## 评审分档与派发
 
-项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发策略；`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`candidates` 是所有档位共用的候选腿，`selection: "random"` 要求排除作者及执行方家族、已交卷家族，再按家族等概率洗牌，前面的补足目标，余下的是有序备用。high 优先于其他档位，底线仍由 `high_min_families` 定义。`review-pr --auto` 同时启动所缺目标家数；每家结束后重新读关卡，只有未确认完整交卷留下的空位才补派，补派与尚在跑的腿并行，目标凑够后不再启动。BLOCK 也是完整交卷，不因未达 PASS 底线无限补腿。每轮启动前在 PR 普通评论公开 head、策略版本、抽选结果和备用顺序，结束后更新该评论，仅包含实际启动的腿及关卡确认结果；中途停止时公开停止状态和派发停止原因，不推断单腿结果，不写单腿失败原因、类别或日志原文；这份记录不作为评审结论。公开内容只从已知事实的固定字段生成，再过隐私检查；完整诊断留在本机。公开记录检查或发布失败仅记本机日志，不影响评审和补派。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测候选或目标。旧的 `order`、`high_only` 字段不再接受，接入项目需在自己的策略 PR 中迁移。
+项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发策略；`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`candidates` 是所有档位共用的候选腿，`selection: "random"` 要求排除作者及执行方家族、已交卷家族，再按家族等概率洗牌，前面的补足目标，余下的是有序备用。high 优先于其他档位，底线仍由 `high_min_families` 定义。`review-pr --auto` 同时启动所缺目标家数；每家结束后重新读关卡，只有未确认完整交卷留下的空位才补派，补派与尚在跑的腿并行，目标凑够后不再启动。BLOCK 也是完整交卷，不因未达 PASS 底线无限补腿。每轮启动前在 PR 普通评论公开 head、策略版本、抽选结果和备用顺序，结束后更新该评论，仅包含实际启动的腿及关卡确认结果；中途停止时公开停止状态和派发停止原因，不推断单腿结果，不写单腿失败原因、类别或日志原文；这份记录不作为评审结论。PR 在派发器收尾前被关卡按本轮评审直接合并时，这一轮按成功收尾；只有读不到关卡状态、head 或策略变化、或者因别的原因关闭时才停止。公开内容只从已知事实的固定字段生成，再过隐私检查；完整诊断留在本机。公开记录检查或发布失败仅记本机日志，不影响评审和补派。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测候选或目标。旧的 `order`、`high_only` 字段不再接受，接入项目需在自己的策略 PR 中迁移。
 
 工具用法见 README「Review commands」；汇总读取 PR 上的公开派发记录，本地诊断不作为公开记录的一部分。关卡摘要显示目标与底线：底线参与 G3 / G6，目标家数只决定普通 PR 能否由关卡直接合并（见「合并」），不改变放行底线；其他规则不变。隔离保障链的推导和漏项检查见 `tests/test_aiwork_gate_workflow.mjs`。
 
@@ -179,6 +179,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 - 这次改动不碰 `judging_surface`，也不碰 `high`（判卷面 / high 仍要业主批准 + 合并标签，凑够家数也不能跳过）；
 - 当前 head（含已核实的沿用来源）上，不同家族的合格 PASS 家数达到这一档的 `review_dispatch.targets` 目标家数；
 - 没有任何 BLOCK，也没有任何 `NEEDS_MORE_INFO`（不论那条评审的范围是否算合格）；
+- 不是草稿 PR（草稿即使凑够家数也不直接合并）；
 - CI 绿、其余放行条件满足（作者已知、无业主反对等）。
 
 差一个条件就不直接合并，检查摘要的「直接合并」一行写明差什么。只有底线家数、没到目标家数时仍然判「放行」，只是不直接合并，由汇总按 `workflow/skills/summary/SKILL.md` 第 4 步补派评审凑目标，凑不够再交业主。

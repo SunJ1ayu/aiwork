@@ -266,6 +266,42 @@ class PublisherIntegrationTests(unittest.TestCase):
     def test_notice_failure_preserves_report_and_exit(self):
         self.publisher_case(False, OSError('network unavailable'))
 
+    def test_last_leg_then_gate_direct_merge_reports_success_without_failure_notice(self):
+        # 关卡在派发器收尾前按本轮评审直接合并时，桥返回的仍是同一 head 的成功状态。
+        # 这里钉住派发器不把预期内的关闭改写成 state_unavailable。
+        import tempfile, json, io, subprocess
+        from unittest.mock import patch
+        from contextlib import redirect_stdout, redirect_stderr
+        publisher = self.load_publisher()
+        state = view(target=1, order=['subkimi'])
+        merged = False
+        def read(*args):
+            value = state.copy()
+            if merged:
+                result_frame(value, ['moonshot'], ['moonshot'], True, True, 0)
+                value['pr_state'] = 'closed'
+            return value
+        def run(command, **kwargs):
+            nonlocal merged
+            merged = True
+            result_frame(state, ['moonshot'], ['moonshot'], True, True, 0)
+            return subprocess.CompletedProcess(command, 0, 'https://github.com/example/review\n', '')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(publisher, 'publish_dispatch_failure') as failure_publication, \
+             patch.object(publisher, 'publish_dispatch_record', return_value=123), \
+             patch.object(publisher, 'data_path', return_value=Path(directory)), \
+             patch.object(publisher, 'read_dispatch_state', side_effect=read), \
+             patch.object(publisher._leg_session, 'choose_leg', return_value=('moonshot', None)), \
+             patch.object(publisher.subprocess, 'run', side_effect=run), \
+             patch.dict(os.environ, {'GH_TOKEN': 'not-for-model'}), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(publisher.auto_dispatch('example/repo', 1, 'openai'), 0)
+            failure_publication.assert_not_called()
+            report = json.loads(next(Path(directory).glob('*/summary.json')).read_text())
+            self.assertTrue(report['minimum_met'])
+            self.assertTrue(report['target_met'])
+            self.assertNotIn('stopped', report)
+
     def publisher_case(self, complete, notice_error=None):
         import tempfile, json, io, subprocess
         from unittest.mock import patch
