@@ -102,13 +102,15 @@ export function authorOf(pushes, policy) {
 // BLOCK 从宽认、PASS 从严认:Request changes、结论块写 BLOCK、正文结论行写 BLOCK、结论块看不懂(缺字段、
 // 不止一个、不是 JSON、没有)、发出后正文被改写过(不再是它当时写下的结论)都算 —— 看不出它想说什么,
 // 或说不准是不是它说的,就当它反对(哪怕已被撤销)。review-pr 从不改写评审,要改结论就发一条新的。
+// 空串表示结论块可读、正文没被改写且结论行一致；结论行与结论块不一致的评审（不论结论块是 PASS 还是
+// BLOCK）仍算 BLOCK，但返回原因，不能计家族数。
 function blockReason(r, p) {
   if (r.edited_at) return "发出后正文被改写过";
-  if (r.state === "CHANGES_REQUESTED") return "";
   if (!p.ok) return `看不懂:${p.why}`;
-  if (p.value.verdict === "BLOCK") return "";
   const off = conclusionLines(r.body).find((c) => c !== p.value.verdict);
   if (off) return `正文结论行写的是 ${off},结论块是 ${p.value.verdict}`;
+  if (r.state === "CHANGES_REQUESTED") return "";
+  if (p.value.verdict === "BLOCK") return "";
   return null;
 }
 
