@@ -166,16 +166,26 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
     ? await collectPushes(api, repo, pr.head.ref, headSha, true)
     : { covers_head: false, actors: [] };
 
-  const sync = sameRepo ? await proveSynchronizations(api, bindingApi, repo, pr, policy, pushes.activities) : {proven:new Map(),current:null};
+  const sync = sameRepo ? await proveSynchronizations(api, bindingApi, repo, pr, policy, pushes.activities, files) : {proven:new Map(),current:null};
   if (sameRepo) {
     pushes.actors = pushes.activities.filter(a => !sync.proven.has(a.id)).map(a => a.actor?.login ?? "(已注销账号)");
   }
   let synchronization = sync.reason ? {review_heads:[],note:sync.reason} : null;
   if (sync.current) {
     const v=sync.current;
-    synchronization={review_heads:v.review_heads,note:!v.unchanged ? "关卡同步后 PR 自身改动发生变化，须重新评审并重贴合并标签。" : v.review_heads.length
-      ? `沿用提交 ${v.review_heads.join("、")} 的评审：关卡自动干净同步，main 新提交未碰本单文件。`
-      : `关卡自动干净同步，但 main 碰了本单文件（${v.overlap.join("、")}），须重新评审。`};
+    const advanced=v.base_advanced ? `（写下意向后 main 又前进到 ${v.base.slice(0,7)}，已按实际合并基准核实）` : '';
+    const note=v.tree_complete === false
+      ? `无法完整比对关卡同步前后的 Git tree（接口截断），不能证明 PR 自身改动未变，须按当前 head 重新评审并重贴合并标签${advanced}。`
+      : !v.unchanged
+        ? `关卡同步后 PR 自身改动发生变化，须重新评审并重贴合并标签${advanced}。`
+        : v.retains
+          ? `沿用提交 ${v.review_heads.join("、")} 的评审：关卡自动干净同步，main 新提交未碰本单文件${advanced}。`
+          : v.truncated
+            ? `关卡自动干净同步，但同步意向超长被截断，无法确认是否碰了本单文件，须重新评审并重贴合并标签${advanced}。`
+            : v.overlap_unknown
+              ? `关卡自动干净同步，但 main 有提交的文件列表可能被接口截断，无法确认是否碰了本单文件，须重新评审并重贴合并标签${advanced}。`
+              : `关卡自动干净同步，但 main 碰了本单文件（${v.overlap.join("、")}），须重新评审并重贴合并标签${advanced}。`;
+    synchronization={review_heads:v.review_heads,note};
   }
   let mergeRequest = null;
   if ((pr.labels ?? []).some(l => l.name === policy.merge_label)) {
@@ -192,7 +202,7 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
         `/repos/${repo}/commits/${headSha}/check-runs?check_name=${MERGE_BINDING_CHECK}&filter=all&per_page=100`, "check_runs");
       const candidates = records.filter(r => r.name === MERGE_BINDING_CHECK && r.app?.id === policy.gate_app_id &&
         r.head_sha === headSha && r.status === 'completed' && r.conclusion === 'neutral').map(r => r.external_id);
-      if (sync.current?.unchanged === true) candidates.push(sync.current.binding);
+      if (sync.current?.retains === true) candidates.push(sync.current.binding);
       for (const candidate of candidates) {
         const source = bindingIdentity(candidate, pr.number, policy.merge_label, policy);
         if (source && retainsAuthorization(pushes.history, headSha, source, sync.proven)) {

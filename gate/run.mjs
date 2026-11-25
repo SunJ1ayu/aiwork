@@ -104,19 +104,33 @@ async function openPrs(api, repo) {
 
 // 同一运行重读整份事实，不能只重试最后一次写操作或沿用旧授权。
 export const MAX_STATE_READS = 8;
+// 单次 1 秒等 8 次常常赶不上 GitHub 后台计算；指数退避，总等待约一分半。
+export const retryDelay = (attempt) => Math.min(30000, 1000 * 2 ** attempt);
 export async function gate(options) {
-  const wait = options.waitForState ?? (() => new Promise(resolve => setTimeout(resolve, 1000)));
+  const wait = options.waitForState ?? ((attempt) => new Promise(resolve => setTimeout(resolve, retryDelay(attempt))));
   const syncing = new Set();
+  // 占位检查在整次运行内复用：重读不重复新建，还没有最终结论的占位在下一轮收集前收尾。
+  // done 表示这条检查当前已写成 completed；finalized 表示本次运行曾写成 completed，
+  // 即使合并遇到瞬时状态把当前结论改成进行中，也不能在收尾时改写成失败。
+  const placeholders = new Map();
   for (let attempt = 0; attempt < MAX_STATE_READS; attempt++) {
-    const {results, retry} = await gateAttempt(options, syncing);
+    const {results, retry} = await gateAttempt(options, syncing, placeholders);
     if (!retry || attempt === MAX_STATE_READS - 1) return results;
-    await wait();
+    await wait(attempt);
+  }
+}
+// 只收尾本次运行从未写出最终结论、又已经不在开放列表里的占位，不留 in_progress。
+// 曾经写成 completed 的检查（例如本轮已放行并合并的提交）不能被收尾改写成失败。
+async function finishLeftovers(poster, placeholders, keep = new Set()) {
+  for (const [sha, holder] of [...placeholders]) {
+    if (keep.has(sha) || holder.finalized) continue;
+    try { await poster.finish(sha, moved, holder.id); placeholders.delete(sha); } catch {}
   }
 }
 const pendingState = e => ({status:'in_progress',conclusion:null,title:'状态正在变化，重读后继续',
   summary:`${e.message}；当前快照不再用于授权写入，不是数据读取失败。本次运行会重读事实；若持续变化超过重读预算，保留进行中，后续门铃继续核实。`});
 
-async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger = null, synchronizer = null, log = () => {} }, syncing) {
+async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger = null, synchronizer = null, log = () => {} }, syncing, placeholders = new Map()) {
   const errors = [];
   let retry = false;
   // 1. 所有开着的 PR,按 head 提交分组
@@ -128,20 +142,24 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
   }
   validatePolicy(policy);
 
-  // 2. 先给每个 head 发 App 占位,之后才读 PR 的数据
+  // 2. 先给每个 head 发 App 占位,之后才读 PR 的数据；同一次运行的重读复用已有占位。
   const ids = new Map();
   for (const sha of heads.keys()) {
     try {
-      ids.set(sha, await poster.start(sha));
+      if (!placeholders.has(sha)) placeholders.set(sha, { id: await poster.start(sha), done: false, finalized: false });
+      ids.set(sha, placeholders.get(sha).id);
     } catch (e) {
       errors.push(e);
     }
   }
+  // 重读后已经不在开放列表里的 head(推进/关闭)先收尾，不能留 in_progress，也不盖住本轮新 head 的结论。
+  await finishLeftovers(poster, placeholders, new Set(heads.keys()));
 
   // 3. 每个 head:以它为 head 的 PR 全判一遍,合成一个结论写一次
   const results = [];
   for (const [sha, numbers] of heads) {
-    if (!ids.has(sha)) continue;
+    const holder = placeholders.get(sha);
+    if (!ids.has(sha) || holder?.done) continue;
     let result;
     let syncReady = false;
     const verdicts = [];
@@ -186,26 +204,36 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
     }
     try {
       await poster.finish(sha, result, ids.get(sha));
+      holder.done = result.status === 'completed';
+      holder.finalized ||= holder.done;
     } catch (e) {
       errors.push(e);
       continue;
     }
     log(`${sha.slice(0, 7)}:${result.title}\n${result.summary}`);
     // 意向和同步都在本轮结论成功写回后执行；同步 head 留给下一轮重新收集。
+    // 同步失败只影响对应 PR：不改共享放行的 G1–G8 结论，也不挡同 head 其他 PR 的合并。
+    const syncNotes = [];
+    const syncFailed = new Set();
     for (const v of (syncReady ? verdicts.filter(v=>v.sync?.intent) : [])) {
       try {
         await synchronizer.apply(v.sync.intent);
         syncing.add(`${v.number}:${sha}`);
       }
       catch (e) {
-        const failed=e instanceof TransientPrState ? pendingState(e) : {...result,status:'completed',conclusion:'failure',title:'自动同步 main 未完成',
-          summary:`PR #${v.number} 自动同步未完成：${e.message}\n\n${result.summary}`};
-        if (e instanceof TransientPrState) retry = true;
-        result=failed;
-        await poster.finish(sha,failed,ids.get(sha));
-        log(failed.summary);
+        syncFailed.add(v.number);
+        if (e instanceof TransientPrState) {
+          retry = true;
+          result = pendingState(e);
+          syncNotes.push(`PR #${v.number} 自动同步遇到瞬时状态，本轮回读：${e.message}`);
+        } else {
+          syncNotes.push(`PR #${v.number} 自动同步未完成，这一轮不合并它：${e.message}`);
+        }
+        log(`PR #${v.number}:自动同步没成:${e.message}`);
       }
     }
+    if (syncNotes.length) result={...result,
+      title:`${result.title}；自动同步未完成`,summary:syncNotes.join('\n')+'\n\n'+result.summary};
     // 4. 合并:只在这个提交上的 App 放行结论写上了的时候;
     //    合并拒绝是逐 PR 的执行结果，不改变共享 head 的放行判定。
     const mergeResult = result;
@@ -214,7 +242,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       if (v.request && !v.mergeBy) {
         log(`PR #${v.number}:${v.request.reason}`);
       }
-      if (!v.mergeBy || result.status !== "completed" || result.conclusion !== "success") continue;
+      if (!v.mergeBy || syncFailed.has(v.number) || result.status !== "completed" || result.conclusion !== "success") continue;
       try {
         if (!merger) throw new Error("没有合并接口");
         await merger.merge(v.number, sha, v.facts.pr);
@@ -230,11 +258,14 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       }
     }
     // 先尝试完该 head 上的合并，再补拒绝摘要，不能提前写坏共享必需检查。
-    if (mergeNotes.length || result !== mergeResult) {
+    if (syncNotes.length || mergeNotes.length || result !== mergeResult) {
       if (mergeNotes.length) result={...result,
         title:`${result.title}；合并未完成`,summary:mergeNotes.join('\n')+'\n\n'+result.summary};
-      try { await poster.finish(sha, result, ids.get(sha)); }
-      catch (e) { errors.push(e); }
+      try {
+        await poster.finish(sha, result, ids.get(sha));
+        holder.done = result.status === 'completed';
+        holder.finalized ||= holder.done;
+      } catch (e) { errors.push(e); }
     }
     results.push({ sha, title: result.title, summary: result.summary });
   }

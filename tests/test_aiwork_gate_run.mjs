@@ -2,6 +2,7 @@
 // 每次运行把所有开着的 PR 全重算一遍(事件只是门铃);同一时间只有一次运行(workflow 并发组,见 test_aiwork_gate_workflow.mjs)。
 // 跑法:node --test tests/test_aiwork_gate_run.mjs
 import { bindingFromEvent } from "../gate/merge-request.mjs";
+import { TransientPrState } from "../gate/synchronize.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -174,16 +175,16 @@ test("R5d App 发不出占位(私钥坏了)→ 不读该提交的数据、不合
   assert.deepEqual(finishes(r.calls).map((f) => f[0]), [OTHER]);
 });
 
-test("R5e PR 已关闭不再处理；head 变化在本次运行重读而不写失败", async () => {
+test("R5e PR 已关闭不再处理；head 变化在本次运行重读，未写结论的旧占位收尾为 moved", async () => {
   const closed = recorder();
   await run(closed, prsApi(closed.calls, one({readState:"closed"})));
   assert.deepEqual(finishes(closed.calls)[0].slice(0,3),[HEAD,"completed","failure"]);
   const r=recorder(), prs=one({verdict:"PASS",readHead:OTHER});
   await run(r,prsApi(r.calls,prs),{waitForState:async()=>{prs[10].head=OTHER;}});
   const f=finishes(r.calls);
-  assert.deepEqual(f[0].slice(0,3),[HEAD,"in_progress",null]);
-  assert.equal(f.at(-1)[0],OTHER);
-  assert.equal(f.at(-1)[2],"success");
+  assert.deepEqual(f.slice(0,3).map(x=>[x[0],x[1],x[2]]),
+    [[HEAD,"in_progress",null],[HEAD,"completed","failure"],[OTHER,"completed","success"]]);
+  assert.match(f[1][3],/已不是开着的 PR 的 head/,"旧 head 没有写过最终结论，收尾为 moved");
 });
 
 test("R14c App 写不回结论(PATCH 失败)→ 运行失败", async () => {
@@ -472,6 +473,60 @@ test('同次重读不重复发送另一个 PR 已接受的同步请求',async()=
   async apply(i){applied.push(i.number);}
  }});
  assert.deepEqual(applied,[10,11]);
+});
+
+test('P1-1：重读轮只收尾没有最终结论的占位，不把已放行并合并的提交改写成失败',async()=>{
+ const NEW='d'.repeat(40);
+ const r=recorder();
+ const prs={
+  10:{head:HEAD,files:['web/a.ts'],labels:[MERGE],events:[labeled(policy.owner)]},
+  11:{head:OTHER,files:['web/b.ts'],verdict:'PASS',readHead:NEW},
+ };
+ await run(r,prsApi(r.calls,prs,{lists:[[10,11],[10,11],[11]]}),{
+  merger:mergeRecorder(r),
+  waitForState:async()=>{prs[11].head=NEW;},
+ });
+ const onMerged=finishes(r.calls).filter(f=>f[0]===HEAD);
+ assert.deepEqual(onMerged.map(f=>[f[1],f[2]]),[['completed','success']],'已合并提交的检查保持放行');
+ assert.ok(!onMerged.some(f=>/已不是开着的 PR 的 head/.test(f[3])),'不能被收尾改写成「已不是 head」');
+ assert.deepEqual(merges(r.calls),[[10,HEAD]]);
+ assert.deepEqual(finishes(r.calls).filter(f=>f[0]===NEW).map(f=>[f[1],f[2]]),
+  [['completed','success']],'新 head 由重读轮算出');
+ assert.ok(!r.calls.some(c=>c[0]==='finish'&&c[1]===HEAD&&/已不是开着的 PR 的 head/.test(c[4])),
+  '没有对已合并提交发 moved 结论');
+});
+
+test('P1-1：同一次运行重读时，已写出最终结论的 head 不再改写',async()=>{
+ const NEW='d'.repeat(40);
+ const r=recorder();
+ const prs={
+  10:{head:HEAD,files:['web/a.ts'],verdict:'PASS'},
+  11:{head:OTHER,files:['web/b.ts'],verdict:'PASS',readHead:NEW},
+ };
+ await run(r,prsApi(r.calls,prs,{lists:[[10,11],[10,11]]}),{
+  waitForState:async()=>{prs[11].head=NEW;},
+ });
+ assert.equal(finishes(r.calls).filter(f=>f[0]===HEAD).length,1,'已写出结论的 head 不重写');
+ assert.deepEqual(finishes(r.calls).filter(f=>f[0]===HEAD).map(f=>[f[1],f[2]]),
+  [['completed','success']]);
+ assert.deepEqual(finishes(r.calls).filter(f=>f[0]===NEW).map(f=>[f[1],f[2]]),
+  [['completed','success']],'重读轮仍处理还没写结论的新 head');
+});
+
+test('P2-2：合并瞬时状态把共享检查改回进行中后，重读收尾也不能把已写过的结论改成失败',async()=>{
+ const r=recorder();
+ const prs={
+  10:{head:HEAD,files:['web/a.ts'],labels:[MERGE],events:[labeled(policy.owner)]},
+  11:{head:HEAD,files:['web/b.ts'],labels:[MERGE],events:[labeled(policy.owner)]},
+ };
+ const merger={async merge(n){r.calls.push(['merge',n,HEAD]);
+  if(n===11)throw new TransientPrState('main 在读取或写入期间已前进');}};
+ // 第一次读到两单；重读时两单都已不在开放列表。
+ await run(r,prsApi(r.calls,prs,{lists:[[10,11],[10,11],[],[]]}),{merger,waitForState:async()=>{}});
+ const onHead=finishes(r.calls).filter(f=>f[0]===HEAD);
+ assert.deepEqual(onHead.map(f=>[f[1],f[2]]),[['completed','success'],['in_progress',null]]);
+ assert.ok(!onHead.some(f=>f[2]==='failure'),'曾经写成 completed 的检查不能再被收尾改成失败');
+ assert.ok(!onHead.some(f=>/已不是开着的 PR 的 head/.test(f[3])),'不能被收尾改写成「已不是 head」');
 });
 
 test('P1-1：同 head 的合并拒绝逐 PR 记录，不挡其余合并或改写放行',async()=>{

@@ -3,7 +3,7 @@
 // 读数据用 GITHUB_TOKEN(权限见 templates/aiwork-gate.yml 的 permissions);发检查结果用 aiwork-gate App 的临时令牌 ——
 // 分支规则只认这个 App 发的结果,PR 自己加的 workflow 用 GITHUB_TOKEN 发一个同名检查也冒充不了。
 // 合并(run.mjs 第 4 步)另换一张 App 令牌,只在真要合并或同步时才换:发检查的那张始终只有 checks: write。
-import { prepareSynchronization, syncCheck, TransientPrState, assertPrSnapshot, baseTip, assertBaseTip } from "./synchronize.mjs";
+import { prepareSynchronization, syncCheck, TransientPrState, assertPrSnapshot, baseTip, assertBaseTip, autoSyncBlocker } from "./synchronize.mjs";
 import { createSign } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { bindingFromEvent } from "./merge-request.mjs";
@@ -72,12 +72,26 @@ const poster = {
   },
 };
 
+// 先看关卡会不会自动同步，再决定落后算不算瞬时。判定本身只在 synchronize.mjs 一处，
+// 这里只负责缓存默认分支，避免合并路径和同步准备各写一份条件。
+let defaultBranch;
+async function autoSyncBlockerFor(pr) {
+  defaultBranch ??= (await api.get(`/repos/${repo}`)).default_branch;
+  return autoSyncBlocker(pr, defaultBranch, repo);
+}
 // 带上判过的 head:判完之后又推了新提交,接口就拒(409),不会把没判过的提交合进去
-async function recheckWrite(error, number, expected) {
+async function recheckWrite(error, number, expected, { behindTransient = false } = {}) {
   const pr = await api.get(`/repos/${repo}/pulls/${number}`);
   assertPrSnapshot(pr, expected);
   await assertBaseTip(api,repo,expected.base_ref,expected.main_sha);
   if (pr.mergeable === null) throw new TransientPrState('GitHub 还在计算能否干净合并');
+  // 同一提交上的前一个 PR 刚合入会推进 main，后一个可能在规则上被要求先跟上 main。
+  // 只有合并路径、且关卡下一轮确实会自动同步时才当瞬时状态；否则保留真实拒绝原因，这一轮不合。
+  if (pr.mergeable_state === 'behind' && behindTransient) {
+    const blocker = await autoSyncBlockerFor(pr);
+    if (!blocker) throw new TransientPrState('分支落后于 main，重读后自动同步');
+    throw new Error(`分支落后于 main，但关卡不会自动同步（${blocker}），这一轮不合并它；合并被拒：${error.message}`);
+  }
   throw error;
 }
 const merger = {
@@ -86,7 +100,7 @@ const merger = {
     assertPrSnapshot(await api.get(`/repos/${repo}/pulls/${number}`),expected);
     try {
       await request("PUT", `/repos/${repo}/pulls/${number}/merge`, await appToken(MERGE), { sha, merge_method: "merge" });
-    } catch (e) { await recheckWrite(e, number, expected); }
+    } catch (e) { await recheckWrite(e, number, expected, { behindTransient: true }); }
   },
 };
 
@@ -109,7 +123,8 @@ const synchronizer = {
       await request('PUT',`/repos/${repo}/pulls/${intent.number}/update-branch`,await appToken(MERGE),
         {expected_head_sha:intent.head});
     } catch (e) {
-      await recheckWrite(e, intent.number, {head_sha:intent.head,main_sha:intent.base,base_ref:intent.ref});
+      // 这是同步写入本身被拒：落后或其它拒绝都保留原始错误，不能再报「重读后自动同步」。
+      await recheckWrite(e, intent.number, {head_sha:intent.head,main_sha:intent.base,base_ref:intent.ref}, { behindTransient: false });
     }
   },
 };
@@ -134,7 +149,11 @@ if (env.AIWORK_GATE_PHASE !== "binding") await gate({
   api,
   poster,
   // 使用已有的检查令牌读取绑定，不增加 workflow 凭证权限。
-  bindingApi: { async getPage(path) { return reader(await appToken(CHECKS)).getPage(path); } },
+  bindingApi: {
+    async getPage(path) { return reader(await appToken(CHECKS)).getPage(path); },
+    // 检查列表没带正文时按 id 重取；这一步需要 checks 权限，不能用 workflow 的 GITHUB_TOKEN。
+    async get(path) { return reader(await appToken(CHECKS)).get(path); },
+  },
   merger,
   synchronizer,
   log: (line) => {

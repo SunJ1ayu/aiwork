@@ -7,6 +7,7 @@ import { mergeBindingKey } from "../gate/merge-request.mjs";
 import { test } from "node:test";
 import { collect } from "../gate/collect.mjs";
 import { decide } from "../gate/decide.mjs";
+import { retryDelay } from "../gate/run.mjs";
 import { githubClient } from "../gate/github.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -29,6 +30,16 @@ function fakeGitHub(opts = {}) {
   if (opts.previousSuccess) checks.set(4241, { id: 4241, name: policy.check_name, status: "completed", conclusion: "success" });
   let nextCheck = 4242;
   let baseSha=SYNC_BASE;
+  const numbers = opts.twoPrs ? [10, 11] : [10];
+  let merged10 = false;
+  const prFor = (number) => ({
+    number, state: "open", changed_files: opts.files?.length ?? 1,
+    labels: opts.mergeReady ? [{ name: policy.merge_label }] : [],
+    mergeable: opts.conflict ? false : true,
+    ...(opts.behindAlways || (opts.twoPrs && merged10 && number === 11) ? { mergeable_state: 'behind' } : {}),
+    head: { sha: HEAD, ref: "claude/x", repo: { full_name: (opts.forkHead || (opts.forkAfterMerge && merged10)) && number === 11 ? "fork/r" : "o/r" } },
+    base: { ref: "main", sha: opts.staleBase ?? baseSha },
+  });
 
   const server = createServer((req, res) => {
     let body = "";
@@ -49,16 +60,27 @@ function fakeGitHub(opts = {}) {
         opts.onPause(); return;
       }
       if (u === '/app') return send(200,{id:policy.gate_app_id,slug:'aiwork-gate'});
-      if (u.startsWith('/repos/o/r/compare/')) return send(200,{total_commits:opts.sync && u.includes('...'+baseSha)?1:0,commits:opts.sync && u.includes('...'+baseSha)?[{sha:baseSha}]:[],merge_base_commit:{sha:'c'.repeat(40)}});
+      if (u.startsWith('/repos/o/r/compare/')) {
+        const behind=(opts.sync || (opts.behindAfterMerge && merged10)) && u.includes('...'+baseSha);
+        return send(200,{total_commits:behind?1:0,commits:behind?[{sha:baseSha}]:[],merge_base_commit:{sha:'c'.repeat(40)}});
+      }
       if (u.startsWith(`/repos/o/r/commits/${baseSha}?`)) return send(200,{files:[{filename:opts.overlap?'web/a.ts':'main-only.ts'}]});
-      if (u === '/repos/o/r/pulls/10/update-branch' && req.method === 'PUT') {
+      if (/^\/repos\/o\/r\/pulls\/\d+\/update-branch$/.test(u) && req.method === 'PUT') {
+        const number=Number(u.split('/').at(-2));
+        const fails=opts.updateFails || opts.updateFailsNumber===number;
         if(opts.moveOnUpdate){opts.moveOnUpdate=false;baseSha='d'.repeat(40);return send(422,{message:'branch changed'});}
-        return send(opts.updateFails?422:202,{message:opts.updateFails?'branch moved':'updating'});
+        return send(fails?422:202,{message:fails?'branch moved':'updating'});
       }
       if (u === "/repos/o/r/installation") return send(200, { id: 777 });
       // 按要的权限发不同的令牌,好分清哪个请求用的是哪张
       if (u === "/app/installations/777/access_tokens") return send(201, { token: JSON.parse(body).permissions.checks ? "app-check-token" : "app-merge-token" });
-      if (u === "/repos/o/r/pulls/10/merge" && req.method === "PUT") {
+      if (/^\/repos\/o\/r\/pulls\/\d+\/merge$/.test(u) && req.method === "PUT") {
+        const number=Number(u.split('/').at(-2));
+        if(opts.twoPrs){
+          if(number===10 && !merged10){merged10=true;baseSha='d'.repeat(40);return send(200,{merged:true});}
+          if(number===11 && merged10)return send(405,{message:'Head branch is not up to date'});
+          return send(200,{merged:true});
+        }
         if(opts.moveOnMerge){opts.moveOnMerge=false;opts.sync=true;baseSha='d'.repeat(40);return send(409,{message:'base changed'});}
         return opts.mergeFails?send(405,{message:"Required status check aiwork-gate is expected"}):send(200, { merged: true });
       }
@@ -87,38 +109,42 @@ function fakeGitHub(opts = {}) {
       }
       if (opts.prFails && u === "/repos/o/r/pulls/10") return send(502, { message: "bad gateway" });
       // mergeReady:有合格 PASS、业主贴了合并标签 → 放行并合并
-      const labels = opts.mergeReady ? [{ name: policy.merge_label }] : [];
-      const pr10 = { number: 10, state: "open", changed_files: opts.files?.length ?? 1, labels, mergeable:opts.conflict?false:true, head: { sha: HEAD, ref: "claude/x", repo: { full_name: "o/r" } }, base: { ref: "main", sha:opts.staleBase ?? baseSha } };
-      if (u === "/repos/o/r/pulls?state=open&per_page=100") return send(200, [pr10]);
-      if (u === "/repos/o/r/pulls/10") {
+      if (u === "/repos/o/r/pulls?state=open&per_page=100")
+        return send(200, numbers.filter(number => !(opts.twoPrs && number === 10 && merged10)).map(prFor));
+      const prRoute=/^\/repos\/o\/r\/pulls\/(\d+)$/.exec(u);
+      if (prRoute && numbers.includes(Number(prRoute[1]))) {
+        const number=Number(prRoute[1]), pr=prFor(number);
         // collect 和 prepare 都读取 PR；在 prepare 读取时才推进状态样本。
-        if(opts.mergeableStates) {
+        if(opts.mergeableStates && number===10) {
           const readCount=log.filter(r=>r.url===u).length;
-          pr10.mergeable=opts.mergeableStates[Math.min(Math.floor((readCount-1)/2),opts.mergeableStates.length-1)];
+          pr.mergeable=opts.mergeableStates[Math.min(Math.floor((readCount-1)/2),opts.mergeableStates.length-1)];
         }
-        return send(200, pr10);
+        return send(200, pr);
       }
-      if (u.startsWith("/repos/o/r/pulls/10/files")) {
+      const filesRoute=/^\/repos\/o\/r\/pulls\/(\d+)\/files/.exec(u);
+      if (filesRoute && numbers.includes(Number(filesRoute[1]))) {
         const files = (opts.files ?? ['web/a.ts']).map(filename=>({filename}));
         if (opts.paginateFiles && !u.includes('page=2')) {
-          return send(200, files.slice(0,1), {link:`<http://127.0.0.1:${server.address().port}/repos/o/r/pulls/10/files?per_page=100&page=2>; rel="next"`});
+          return send(200, files.slice(0,1), {link:`<http://127.0.0.1:${server.address().port}/repos/o/r/pulls/${filesRoute[1]}/files?per_page=100&page=2>; rel="next"`});
         }
         return send(200, opts.paginateFiles ? files.slice(1) : files);
       }
       const pass = "```json\n" + JSON.stringify({ verdict: "PASS", head_sha: HEAD, model: "gpt-x", family: "openai", completeness: "complete" }) + "\n```";
       const reviews = opts.reviews ?? (opts.mergeReady ? [{ id: 1, user: { login: policy.reviewer_bot, type: "Bot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-09-29T09:00:00Z", body: pass }] : []);
-      if (u.startsWith("/repos/o/r/pulls/10/reviews")) return send(200, reviews);
-      if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: [{ id: 1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", pull_requests: [{ number: 10 }] }] });
+      const reviewsRoute=/^\/repos\/o\/r\/pulls\/(\d+)\/reviews/.exec(u);
+      if (reviewsRoute && numbers.includes(Number(reviewsRoute[1]))) return send(200, reviews);
+      if (u.startsWith("/repos/o/r/actions/runs")) return send(200, { workflow_runs: numbers.map((number,i) => ({ id: i+1, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed", conclusion: "success", pull_requests: [{ number }] })) });
       if (u.startsWith("/repos/o/r/activity")) return send(200, [{ id: 1, timestamp: "t", activity_type: "branch_creation", before: "0".repeat(40), after: HEAD, actor: { login: opts.actorLogin ?? "SunJ1ayuBoT" } }]);
       if (u.includes('/check-runs?')) {
         const saved = [...checks.values()].filter(c => c.head_sha === HEAD && c.name === 'aiwork-merge-request');
-        const records = opts.bindingRecords ?? (opts.mergeReady ? [{ name: 'aiwork-merge-request',
+        const records = opts.bindingRecords ?? (opts.mergeReady ? numbers.map(number => ({ name: 'aiwork-merge-request',
           head_sha: HEAD, app: { id: policy.gate_app_id }, status: 'completed', conclusion: 'neutral',
-          external_id: mergeBindingKey(10, policy.merge_label, HEAD, policy.owner) }] : []);
+          external_id: mergeBindingKey(number, policy.merge_label, HEAD, policy.owner) })) : []);
         return send(200, { total_count: records.length + saved.length, check_runs: [...records, ...saved] });
       }
       const events = opts.events ?? (opts.mergeReady ? [{ id: 1, event: "labeled", label: { name: policy.merge_label }, actor: { login: policy.owner }, created_at: "2026-09-29T10:00:00Z" }] : []);
-      if (u.startsWith("/repos/o/r/issues/10/events")) return send(200, events);
+      const eventsRoute=/^\/repos\/o\/r\/issues\/(\d+)\/events/.exec(u);
+      if (eventsRoute && numbers.includes(Number(eventsRoute[1]))) return send(200, events);
       const nodes = reviews.map((r) => ({ databaseId: r.id, submittedAt: r.submitted_at, lastEditedAt: null }));
       if (u === "/graphql" && opts.graphqlErrors) return send(200, { errors: [{message:"unavailable"}] });
       if (u === "/graphql" && req.method === "POST") return send(200, { data: { repository: { pullRequest: { reviews: { totalCount: nodes.length, pageInfo: { hasNextPage: false }, nodes } } } } });
@@ -157,46 +183,48 @@ function runMain(apiUrl, extraEnv = {}, main = MAIN, event = { pull_request: { n
 // 不在替身里模拟 GitHub 的历史淘汰。平台保留规则见 README 的官方出处；
 // 本测试钉住程序不借旧放行、不追加 status；绑定检查仅用于授权合并。
 test("整机:不追加 status，合并时只读申请检查，每轮新建放行检查", async () => {
-  const opts = {};
-  const gh = await fakeGitHub(opts);
-  const previousIds = new Set();
   const budget = readFileSync(new URL("../gate/README.md", import.meta.url), "utf8")
     .match(/即约 `(\d+) \+ (\d+)P` 次 REST 请求/);
-  try {
-    assert.ok(budget, "README 要给出 GITHUB_TOKEN 的单轮 REST 公式");
-    for (const ready of [false, true]) {
-      opts.mergeReady = ready;
-      const start = gh.log.length;
+  assert.ok(budget, "README 要给出 GITHUB_TOKEN 的单轮 REST 公式");
+  // 每条路径都钉住实际 GITHUB_TOKEN REST 读数（P=1，基础公式 2+6P 从 README 读出）；
+  // 各路径的加数不在这里复述，见 README「代价」。
+  for (const { name, options, readCount: expected, merged } of [
+    { name: "不合并", options: {}, readCount: 8, merged: 0 },
+    { name: "放行并合并", options: { mergeReady: true }, readCount: 16, merged: 1 },
+    { name: "同步后等新 head", options: { sync: true, mergeReady: true }, readCount: 19, merged: 0 },
+    { name: "合并被拒并核实", options: { mergeReady: true, mergeFails: true }, readCount: 18, merged: 1 },
+  ]) {
+    const gh = await fakeGitHub(options);
+    try {
+      const beforeIds = new Set(gh.checks.keys());
       const { code, out } = await runMain(gh.url);
       assert.equal(code, 0, out);
-      const round = gh.log.slice(start);
+      const round = gh.log;
       const readCount=round.filter((r) => r.auth === "Bearer read_token" && r.url !== "/graphql").length;
-      if (!ready) assert.equal(readCount, Number(budget[1]) + Number(budget[2]),
-        "不合并时 P=1 的实际 REST 请求数必须与 README 公式一致");
-      else assert.ok(readCount > Number(budget[1]) + Number(budget[2]),"合并前另读最新 main 和同步事实");
+      assert.equal(readCount, expected, `${name}：README 账目要和实际请求数一致`);
       assert.equal(round.filter((r) => r.url === "/graphql").length, 1);
       assert.ok(round.filter((r) => r.auth === "Bearer read_token").every((r) =>
         r.method === "GET" || r.url === "/graphql"), "workflow 凭证只读事实，不写检查");
       assert.deepEqual(checkWrites(round).filter((r) => r.method === "POST").map((r) => r.body.name),
-        [policy.check_name], "每轮只新建 App 检查");
-      const writes = appWrites(round);
-      assert.equal(writes.length, 2, "历史多少条都只创建/改写本轮检查，不扫描或重写历史");
-      const [create, finish] = writes;
+        options.sync ? [policy.check_name, "aiwork-main-sync"] : [policy.check_name], "每轮只新建本轮检查");
+      const writes = appWrites(round).filter((r) => r.method === "PATCH" || r.body?.name === policy.check_name);
+      assert.equal(writes.length, options.mergeFails ? 3 : 2, "历史多少条都只创建/改写本轮检查，不扫描或重写历史");
+      const [create, finish] = [writes[0], writes.at(-1)];
       assert.equal(create.method, "POST");
       assert.equal(create.body.head_sha, HEAD);
       assert.equal(create.body.status, "in_progress");
-      assert.ok(!previousIds.has(create.checkId), "新一轮不能复用上一轮的检查");
+      assert.ok(!beforeIds.has(create.checkId), "新一轮不能复用上一轮的检查");
       assert.equal(finish.method, "PATCH");
       assert.equal(finish.url, `/repos/o/r/check-runs/${create.checkId}`);
-      assert.equal(finish.body.conclusion, ready ? "success" : "failure");
-      previousIds.add(create.checkId);
-      assert.equal(round.filter((r) => r.url === "/repos/o/r/pulls/10/merge").length, ready ? 1 : 0);
+      if (options.sync) assert.equal(finish.body.status, "in_progress", `${name}：最终状态`);
+      else assert.equal(finish.body.conclusion, options.mergeReady ? "success" : "failure", `${name}：最终结论`);
+      assert.equal(round.filter((r) => r.url === "/repos/o/r/pulls/10/merge").length, merged);
+      assert.equal(round.filter((r) => r.url.includes("/statuses/")).length, 0, "旧 status 即使已满也不访问");
+      assert.equal(round.filter((r) => r.method === "GET" && r.url.includes("check-runs")).length,
+        options.mergeReady ? 1 : 0, "只有带标签的 PR 读取绑定记录；默认检查历史不参与放行");
+    } finally {
+      gh.server.close();
     }
-    assert.equal(gh.log.filter((r) => r.url.includes("/statuses/")).length, 0, "旧 status 即使已满也不访问");
-    assert.equal(gh.log.filter((r) => r.method === "GET" && r.url.includes("check-runs")).length, 1,
-      "只有带标签的 PR 读取绑定记录；默认检查历史不参与放行");
-  } finally {
-    gh.server.close();
   }
 });
 
@@ -629,7 +657,13 @@ test('整机：仅其他条件齐全时同步，先存意向，写权限只用�
    }
    const final=checkWrites(gh.log).filter(r=>r.method==='PATCH').at(-1);
    if(opts.conflict)assert.match(final.body.output.summary,/冲突/);
-   if(opts.updateFails || opts.syncRecordFails)assert.equal(final.body.conclusion,'failure');
+   if(opts.updateFails || opts.syncRecordFails){
+    // 同步写失败只影响这一单：共享 head 的放行判定不变，摘要写明未同步、本轮不合并。
+    assert.notEqual(final.body.conclusion,'failure',JSON.stringify(final.body.output));
+    assert.equal(final.body.status,'in_progress',JSON.stringify(final.body.output));
+    assert.match(final.body.output.title,/自动同步未完成/);
+    assert.match(final.body.output.summary,/PR #10 自动同步未完成.*不合并/);
+   }
    if(expected && !opts.updateFails)assert.equal(final.body.status,'in_progress');
   }finally{gh.server.close();}
  }
@@ -663,6 +697,92 @@ test('同步或合并写入时 main 刚推进，当次重读后用新 main 同�
    assert.equal(patches.at(-1).body.status,'in_progress');
   }finally{gh.server.close();}
  }
+});
+
+test('同 head 前一个 PR 合并推进 main 后，后一个「要跟上 main」在当次运行重读并同步',async()=>{
+ const gh=await fakeGitHub({twoPrs:true,mergeReady:true,behindAfterMerge:true});
+ try{
+  const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+  const patches=checkWrites(gh.log).filter(r=>r.method==='PATCH'&&r.body?.output);
+  assert.ok(patches.every(r=>r.body.conclusion!=='failure'),out);
+  assert.ok(patches.some(r=>r.body.output.title.includes('重读')),out);
+  assert.equal(gh.log.filter(r=>r.url==='/repos/o/r/pulls/10/merge').length,1);
+  const updates=gh.log.filter(r=>r.url.endsWith('/pulls/11/update-branch'));
+  assert.equal(updates.length,1,out);
+  assert.deepEqual(updates[0].body,{expected_head_sha:HEAD});
+  const intents=gh.log.filter(r=>r.method==='POST'&&r.body?.name==='aiwork-main-sync');
+  assert.equal(intents.length,1);
+  assert.equal(JSON.parse(intents[0].body.output.text).base,'d'.repeat(40),'按合并后的新 main 同步');
+  assert.equal(patches.at(-1).body.status,'in_progress');
+  // 同一次运行内重读复用同一个占位检查，不再为同一个 head 新建第二条。
+  const starts=gh.log.filter(r=>r.method==='POST'&&r.body?.name===policy.check_name);
+  assert.equal(starts.length,1,out);
+ }finally{gh.server.close();}
+});
+
+test('P1-2 合并被拒且分支落后、关卡不会自动同步时，写明真实原因且不重读重试',async()=>{
+ for(const variant of [{defaultBranch:'develop'},{forkAfterMerge:true}]){
+  const gh=await fakeGitHub({twoPrs:true,mergeReady:true,...variant});
+  try{
+   const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+   const patches=checkWrites(gh.log).filter(r=>r.method==='PATCH'&&r.body?.output);
+   assert.equal(patches.length,2,out);
+   const final=patches.at(-1).body;
+   assert.equal(final.conclusion,'success',out);
+   assert.match(final.output.summary,/PR #11 合并被拒/);
+   assert.match(final.output.summary,/分支落后于 main，但关卡不会自动同步/);
+   assert.match(final.output.summary,JSON.stringify(variant).includes('forkAfterMerge')?/叉库/:/不是默认分支/);
+   assert.match(final.output.summary,/405|Head branch is not up to date/);
+   assert.equal(gh.log.filter(r=>r.url.endsWith('/pulls/11/update-branch')).length,0,out);
+   assert.equal(gh.log.filter(r=>r.url==='/repos/o/r/pulls/11/merge').length,1,'只尝试合并一次');
+   assert.equal(gh.log.filter(r=>r.method==='POST'&&r.body?.name===policy.check_name).length,1,'不新建占位重试');
+  }finally{gh.server.close();}
+ }
+});
+
+test('P1-2 同步写入被拒且 PR 仍落后时，保留原始拒绝原因，不改成「重读后自动同步」',async()=>{
+ const gh=await fakeGitHub({sync:true,mergeReady:true,updateFails:true,behindAlways:true});
+ try{
+  const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+  const patches=checkWrites(gh.log).filter(r=>r.method==='PATCH'&&r.body?.output);
+  assert.equal(patches.length,2,out);
+  const final=patches.at(-1).body;
+  assert.equal(final.status,'in_progress');
+  assert.match(final.output.title,/自动同步未完成/);
+  assert.match(final.output.summary,/PR #10 自动同步未完成，这一轮不合并它/);
+  assert.match(final.output.summary,/422|branch moved/);
+  assert.doesNotMatch(final.output.summary,/重读后自动同步/);
+  assert.equal(gh.log.filter(r=>r.url.endsWith('/update-branch')).length,1,out);
+  assert.equal(gh.log.filter(r=>r.url.endsWith('/merge')).length,0);
+ }finally{gh.server.close();}
+});
+
+test('自动同步只失败一个 PR 时，不改共享放行结论，也不挡同 head 其他 PR 的同步',async()=>{
+ const gh=await fakeGitHub({twoPrs:true,mergeReady:true,sync:true,updateFailsNumber:10});
+ try{
+  const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+  const patches=checkWrites(gh.log).filter(r=>r.method==='PATCH'&&r.body?.output);
+  assert.ok(patches.every(r=>r.body.conclusion!=='failure'),out);
+  const final=patches.at(-1).body;
+  assert.equal(final.status,'in_progress');
+  assert.match(final.output.title,/自动同步未完成/);
+  assert.match(final.output.summary,/PR #10 自动同步未完成，这一轮不合并它/);
+  const updates=gh.log.filter(r=>r.url.endsWith('/update-branch'));
+  assert.deepEqual(updates.map(r=>r.url).sort(),['/repos/o/r/pulls/10/update-branch','/repos/o/r/pulls/11/update-branch'].sort(),out);
+  assert.equal(gh.log.filter(r=>r.url.endsWith('/merge')).length,0,'同步未完成时不能先合并任何一单');
+ }finally{gh.server.close();}
+});
+
+test('重读等待按指数退避且有上限；同一 head 的占位检查跨重读复用',async()=>{
+ assert.deepEqual([0,1,4,5,10].map(retryDelay),[1000,2000,16000,30000,30000]);
+ const gh=await fakeGitHub({mergeReady:true,sync:true,mergeableStates:[null,true]});
+ try{
+  const {code,out}=await runMain(gh.url);assert.equal(code,0,out);
+  const starts=gh.log.filter(r=>r.method==='POST'&&r.body?.name===policy.check_name);
+  assert.equal(starts.length,1,'重读不能为同一个 head 新建第二条占位');
+  const patches=gh.log.filter(r=>r.method==='PATCH'&&r.url===`/repos/o/r/check-runs/${starts[0].checkId}`);
+  assert.ok(patches.length>=2,'至少一次等待状态、一次最终结论');
+ }finally{gh.server.close();}
 });
 
 test('独立保存任务只写通知授权；排队重算不重新保存且能读到授权',async()=>{
