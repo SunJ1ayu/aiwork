@@ -178,7 +178,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 
 - 这次改动不碰 `judging_surface`，也不碰 `high`（判卷面 / high 仍要业主批准 + 合并标签，凑够家数也不能跳过）；
 - 当前 head（含已核实的沿用来源）上，不同家族的合格 PASS 家数达到这一档的 `review_dispatch.targets` 目标家数；
-- 没有任何 BLOCK，也没有任何 `NEEDS_MORE_INFO`；
+- 没有任何 BLOCK，也没有任何 `NEEDS_MORE_INFO`（不论那条评审的范围是否算合格）；
 - CI 绿、其余放行条件满足（作者已知、无业主反对等）。
 
 差一个条件就不直接合并，检查摘要的「直接合并」一行写明差什么。只有底线家数、没到目标家数时仍然判「放行」，只是不直接合并，由汇总按 `workflow/skills/summary/SKILL.md` 第 4 步补派评审凑目标，凑不够再交业主。
@@ -191,7 +191,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 
 评审腿判 BLOCK、汇总核实后降为 P2 时，汇总账号在当前 head 上的一条 COMMENT 评审里放一个 `aiwork-downgrade` 记录围栏（格式见 `workflow/skills/summary/SKILL.md`「汇总降级」），写明核实过程（跑过什么、为什么不算 P1）和被降级的评审编号。
 
-关卡只认同时满足这些的记录：登记账号（`modification_rounds.summary_account`）发出、`commit_id` 和记录里的 `head_sha` 都是当前 head、发出后未被改写、正文恰好一个格式合法的 `aiwork-downgrade` 记录围栏、列出的编号都是当前 head 上评审机器人的 BLOCK。别人写的、旧 head 上（包括同步沿用的来源提交）的、格式不合的、降的不是当前 head BLOCK 的，都不认。
+关卡只认同时满足这些的记录：登记账号（`modification_rounds.summary_account`）发出、`commit_id` 和记录里的 `head_sha` 都是当前 head、发出后未被改写、正文恰好一个格式符合 `workflow/skills/summary/SKILL.md`「汇总降级」中 `aiwork-downgrade-schema` 的 `aiwork-downgrade` 记录围栏、列出的编号都是当前 head 上评审机器人的 BLOCK。别人写的、旧 head 上（包括同步沿用的来源提交）的、格式不合的、降的不是当前 head BLOCK 的，都不认。
 
 被降级的 BLOCK 不再算 G5 的 BLOCK。其中结论块完整、评审范围合格（当前 head、不是本次作者家族）的当前 head 评审，按家族计入 G3 / G6 的评审家数；同一家族只算一家。这样本 issue 起因的情形——评审都 BLOCK、汇总核实后全部降级、业主在当前 head 上批准——可以放行；结论块不完整或范围不合格的降级记录只移走 G5，不能补家数。
 

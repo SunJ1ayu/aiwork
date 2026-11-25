@@ -587,9 +587,9 @@ const ownerApprove = (id = 30, at = "2026-09-29T11:00:00Z") => ({
   id, user: { login: policy.owner, type: "User" }, state: "APPROVED", commit_id: HEAD,
   submitted_at: at, body: "",
 });
-const downgradeReview = (reviews, { id = 31, login = "summary-user", head = HEAD, evidence = "跑了复现脚本,只是显示问题,按第二节第 1 条不算 P1", edited_at = null } = {}) => ({
+const downgradeReview = (reviews, { id = 31, login = "summary-user", head = HEAD, evidence = "跑了复现脚本,只是显示问题,按第二节第 1 条不算 P1" } = {}) => ({
   id, user: { login, type: "User" }, state: "COMMENTED", commit_id: head,
-  submitted_at: "2026-09-29T10:30:00Z", edited_at,
+  submitted_at: "2026-09-29T10:30:00Z",
   body: '```aiwork-downgrade\n' + JSON.stringify({ head_sha: head, reviews, evidence }) + '\n```\n',
 });
 const summaries = (...items) => items.flat();
