@@ -36,7 +36,10 @@ class RuntimeGroupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.counter = self.root / 'group-counter-signed'
-        for mock in (patch.object(session, 'account_data', return_value=self.root),
+        exists = Path.exists
+        for mock in (patch.object(Path, 'exists', lambda path:
+                                 path == Path('/etc/subgid') or exists(path)),
+                     patch.object(session, 'account_data', return_value=self.root),
                      patch('grp.getgrgid', side_effect=KeyError),
                      patch.object(Path, 'read_text', return_value='')):
             mock.start()
