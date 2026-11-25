@@ -15,9 +15,9 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 | `merge-request.mjs` | 合并标签事件的冻结提交与绑定记录格式 |
 | `collect.mjs` | 只读 GitHub API 收集事实;出错、分页没取完、条数对不上一律抛错(G8) |
 | `decide.mjs` | 纯判定,不碰网络(G1–G7) |
-| `run.mjs` | 流程:每次运行把所有开着的 PR 全重算一遍(事件只是门铃)。列出开着的 PR、按 head 分组 → 先在每个 head 上占位 → 每个 head 把以它为 head 的 PR 全判一遍、合成一个结论写一次;读不全就不放行;写上的是放行,就合并有合并请求的 PR(见下「合并」) |
+| `run.mjs` | 流程:每次运行把所有开着的 PR 全重算一遍(事件只是门铃)。列出开着的 PR、按 head 分组 → 先在每个 head 上占位 → 每个 head 把以它为 head 的 PR 全判一遍、合成一个结论写一次;读不全就不放行;写上的是放行,就合并该合的 PR(有可信合并请求的,或普通 PR 凑够目标家数后直接合并;见下「合并」) |
 | `main.mjs` | 接线:真实 API、`aiwork-gate` App 令牌、发 / 改检查、合并。策略路径只认 `AIWORK_POLICY_PATH` |
-| 调用方的 `.aiwork/policy.json` | 策略:判卷面、high 路径、`high_min_families`、Builder、评审 App、检查名、App ID、合并标签和谁贴的算数 |
+| 调用方的 `.aiwork/policy.json` | 策略:判卷面、high 路径、`high_min_families`、Builder、评审 App、检查名、App ID、合并标签和谁贴的算数、直接合并的目标家数、事后抽查设置 |
 
 测试:`tests/test_aiwork_gate.mjs`(判定与收集)、`tests/test_aiwork_gate_run.mjs`(流程与失败处理)、
 `tests/test_aiwork_gate_main.mjs`(假 GitHub API 上真跑 `main.mjs`)、`tests/test_aiwork_gate_workflow.mjs`(workflow 形状和本仓库策略)、`tests/test_aiwork_gate_sync.mjs`(同步来源、文件交集和沿用范围)。
@@ -27,7 +27,7 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 
 项目 main 的 `.aiwork/policy.json` 中 `review_dispatch` 定义派发策略；`gate/review-plan.mjs` 同时供关卡和 `review-pr --auto` 使用。字段：`minimum_families` 是 G3 底线；`targets` 按 `documentation`、`code`、`high` 给出目标家族数；`documentation_paths` 是普通说明文档 glob，判卷面匹配优先按代码算；`candidates` 是所有档位共用的候选腿，`selection: "random"` 要求排除作者及执行方家族、已交卷家族，再按家族等概率洗牌，前面的补足目标，余下的是有序备用。high 优先于其他档位，底线仍由 `high_min_families` 定义。`review-pr --auto` 同时启动所缺目标家数；每家结束后重新读关卡，只有未确认完整交卷留下的空位才补派，补派与尚在跑的腿并行，目标凑够后不再启动。BLOCK 也是完整交卷，不因未达 PASS 底线无限补腿。每轮启动前在 PR 普通评论公开 head、策略版本、抽选结果和备用顺序，结束后更新该评论，仅包含实际启动的腿及关卡确认结果；中途停止时公开停止状态和派发停止原因，不推断单腿结果，不写单腿失败原因、类别或日志原文；这份记录不作为评审结论。公开内容只从已知事实的固定字段生成，再过隐私检查；完整诊断留在本机。公开记录检查或发布失败仅记本机日志，不影响评审和补派。未配置 `review_dispatch` 的项目保留原有关卡行为，自动派发拒绝猜测候选或目标。旧的 `order`、`high_only` 字段不再接受，接入项目需在自己的策略 PR 中迁移。
 
-工具用法见 README「Review commands」；汇总读取 PR 上的公开派发记录，本地诊断不作为公开记录的一部分。关卡摘要显示目标与底线，只有底线参与 G3 / G6；其他规则不变。隔离保障链的推导和漏项检查见 `tests/test_aiwork_gate_workflow.mjs`。
+工具用法见 README「Review commands」；汇总读取 PR 上的公开派发记录，本地诊断不作为公开记录的一部分。关卡摘要显示目标与底线：底线参与 G3 / G6，目标家数只决定普通 PR 能否由关卡直接合并（见「合并」），不改变放行底线；其他规则不变。隔离保障链的推导和漏项检查见 `tests/test_aiwork_gate_workflow.mjs`。
 
 `decide.mjs` 的 `review_state` 是派发器消费的机器状态：底线是否满足、已排除家族、完整已交卷家族及目标缺口均在那里定义。派发桥只读取默认分支策略、收集事实并转交该状态；Python 只按状态选择下一条腿，不计算评审资格或底线。派发桥仅在选择腿的排除集合中加入实际执行方；关卡返回的作者、评审资格、底线及原文保持原样。读取桥与关卡入口共用 `github.mjs`，配置仍由入口环境提供。
 
@@ -144,14 +144,14 @@ G3 的合格 PASS 条件见 `decide.mjs`。结论块的必填字段由 `parseRev
 | 评审(读当前正文;机器人评审发出后被改写过一律按 BLOCK、时刻按改写那一刻;人的评审被撤销按撤销那一刻) | `aiwork-review-ping`:`submitted` / `edited` / `dismissed` → `workflow_run` |
 | 策略 `.aiwork/policy.json`(只认 main 上的) | 改 main 之后 CI 跑完的 `workflow_run` |
 | 关卡代码（aiwork main 的 `gate/`） | `schedule`：计划间隔 15 分钟，具体 cron 见模板；[2026-10-30 实测](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6526765438)约每 4–7 小时一次。GitHub 可能延迟、丢弃或停用定时任务，不能保证准时；用途与限制见下方「定时重算」 |
-| 合并请求(PR 上有没有 `aiwork:merge`、最后是谁贴的及其提交绑定) | `pull_request_target`:`labeled`(撤掉标签不用叫醒:只会少合并,下一次运行自然读到) |
+| 合并请求(PR 上有没有 `aiwork:merge`、最后是谁贴的及其提交绑定) | `pull_request_target`:`labeled`(撤掉标签不用叫醒:只会少合并,下一次运行自然读到)；直接合并靠评审、CI、PR 事件和定时重算叫醒 |
 | 手动重算 | 给 PR 加任何标签(如 `aiwork:recheck`) |
 
 ### 定时重算：门铃漏响时的补救
 
 按[业主决定](https://github.com/SunJ1ayu/aiwork/issues/98#issuecomment-6554312340)，保留定时重算，不追求准时，也不另加跨仓库叫醒机制。
 它在其他门铃漏响时自动补算：重新检出最新的 aiwork main，按现状重算全部开放 PR、补写结论，
-并为已有有效合并请求、且本次判为放行的 PR 补上合并。正常合并路径见下方「合并」；在该路径的分支规则前提下，
+并为本次判为放行、且该合的 PR（有有效合并请求，或普通 PR 直接合并条件成立）补上合并。正常合并路径见下方「合并」；在该路径的分支规则前提下，
 PR 上挂着的旧结论只影响显示。旧放行残留的场景及已接受风险见 `.aiwork/accepted-risks.md` 第 7 条。
 
 计划与实测频率见上表。计划间隔不是实际等待或写回的时限；成功运行还要经过并发队列、runner 分配、检出和重算，
@@ -164,11 +164,38 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
 ## 已知限制:状态检查只能"最终一致"
 
 关卡靠"输入变了 → 叫醒 → 重算 → 写回",写在提交上的结论总是某一刻的。这种做法本身有补不死的上限,
-写在上面这几句里。项目若接受它,记在项目的 `.aiwork/accepted-risks.md`。经合并标签合并的 PR 不靠提交上的旧结论,见下「合并」。
+写在上面这几句里。项目若接受它,记在项目的 `.aiwork/accepted-risks.md`。关卡直接合并用的是当前 head 的结论；经合并标签合并的 PR 不靠提交上的旧结论,见下「合并」。
 
-## 合并:贴 `aiwork:merge`
+## 合并:普通 PR 直接合并与贴 `aiwork:merge`
 
 当前目标分支提交统一从 Git ref 读取（`synchronize.mjs` 的 `baseTip`），不把 PR 的 `base.sha` 当作当前 main。同步比较、文件交集和意向使用同一固定提交；读取或写入期间 main 前进会重读，合并被拒的原因写回检查摘要。
+
+合并有两条路，判定都来自同一次 `decide()`：普通 PR 凑够目标家数后由关卡直接合并；其余 PR 仍要业主在当前 head 上批准并贴合并标签。
+
+### 普通 PR 直接合并
+
+前提是项目策略配置了 `review_dispatch`（没有配置的项目保持原来的合并标签行为）。满足以下全部条件时，关卡不等合并标签直接合并：
+
+- 这次改动不碰 `judging_surface`，也不碰 `high`（判卷面 / high 仍要业主批准 + 合并标签，凑够家数也不能跳过）；
+- 当前 head（含已核实的沿用来源）上，不同家族的合格 PASS 家数达到这一档的 `review_dispatch.targets` 目标家数；
+- 没有任何 BLOCK，也没有任何 `NEEDS_MORE_INFO`；
+- CI 绿、其余放行条件满足（作者已知、无业主反对等）。
+
+差一个条件就不直接合并，检查摘要的「直接合并」一行写明差什么。只有底线家数、没到目标家数时仍然判「放行」，只是不直接合并，由汇总按 `workflow/skills/summary/SKILL.md` 第 4 步补派评审凑目标，凑不够再交业主。
+
+`review_dispatch` 的 `high` 档只用于派发目标；直接合并完全不覆盖判卷面和 high。
+
+`post_merge_check` 只控制直接合并后的巡检抽查比例（`all`、`sample` 配 `sample_every`、`off`；未配置按 `all`）；查什么、记在哪见 `workflow/skills/patrol/SKILL.md`「合并后抽查」。
+
+### 汇总降级
+
+评审腿判 BLOCK、汇总核实后降为 P2 时，汇总账号在当前 head 上的一条 COMMENT 评审里放一个 `aiwork-downgrade` 记录围栏（格式见 `workflow/skills/summary/SKILL.md`「汇总降级」），写明核实过程（跑过什么、为什么不算 P1）和被降级的评审编号。
+
+关卡只认同时满足这些的记录：登记账号（`modification_rounds.summary_account`）发出、`commit_id` 和记录里的 `head_sha` 都是当前 head、发出后未被改写、正文恰好一个格式合法的记录围栏、列出的编号都是当前 head 上评审机器人的 BLOCK。别人写的、旧 head 上的、格式不合的、降的不是当前 BLOCK 的，都不认。
+
+被降级的 BLOCK 不再算 G5 的 BLOCK，但仍要业主在当前 head 上批准才放行（G7 的「汇总降级」）；并且不能让「直接合并」成立 —— 这一单仍要合并标签。降级记录只加不减；要撤回只能由业主决定。
+
+### 合并标签的授权
 
 - **谁贴的算数**:业主(`policy.json` 的 `owner`)和 `merge_requesters` 里的账号(以后放 OpenClaw 的身份)。
   Builder 贴的不算,也写不进名单(策略校验会拒)—— 不然 Builder 能把自己的 PR 合进去。
@@ -190,11 +217,11 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
   保存本身不读当前 head、不重算、不合并；迟到或重跑的通知只能保存通知中的提交。
   保存仍可能因运行被人工取消、平台失败或超时而缺失，缺授权不合并；重算被顶掉后由其他门铃消费已保存的授权。
 - **不另起一套判定**:关卡每次运行照常把所有开着的 PR 判一遍;某个 head 的 App 结论写上了、
-  而且是放行,就当场合并这个 head 上有合并请求的 PR。合并用的就是这次刚读到的数据,调合并接口时带上判过的
-  head(`sha`):判完之后又推了新提交,接口会拒,不会把没判过的提交合进去。
+  而且是放行,就当场合并这个 head 上该合的 PR（有可信合并请求的，或普通 PR 直接合并条件成立的）。
+  合并用的就是这次刚读到的数据,调合并接口时带上判过的 head(`sha`):判完之后又推了新提交,接口会拒,不会把没判过的提交合进去。
 - **没放行的请求留着**:只有授权提交连续保留、标签仍挂着且最后贴标签者可信（或满足下段关卡自动干净同步的例外），之后哪次运行判为放行，才在那次合。不想合了就撤掉标签(关卡正在合的那几秒里撤可能来不及,
   见项目的 `.aiwork/accepted-risks.md`)。
-- **自动同步最新 main**：按[业主决定](https://github.com/SunJ1ayu/aiwork/issues/205#issuecomment-7088746460)，仅当 G1–G8 与合并请求都已满足时，关卡才检查默认分支是否落后。
+- **自动同步最新 main**：按[业主决定](https://github.com/SunJ1ayu/aiwork/issues/205#issuecomment-7088746460)，仅当 G1–G8 与合并条件都已满足时（有可信合并请求，或普通 PR 直接合并条件成立），关卡才检查默认分支是否落后。
   有冲突就停止同步并在检查摘要说明，关卡不解冲突。无冲突时先用 Checks 令牌保存 `synchronize.mjs` 定义的同步意向，再用现有合并令牌调用 [update-branch](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch)，带 `expected_head_sha`，拒绝同步已经推进的分支。
   GitHub 尚在后台计算（`mergeable: null`）或 PR/目标分支在核实、写入期间推进时，不判为数据出错。关卡在同一次运行内等待并重读开放列表、事实、授权及全部放行条件；重读预算见 `run.mjs` 的 `MAX_STATE_READS`，默认间隔按指数退避（1 秒起、单次最多 30 秒），耗尽后保留进行中。同一 head 在本轮重读时复用已创建的占位检查，不再重复新建；同一次运行里曾经写出 `completed` 结论的检查，即使后来因合并瞬时状态改回进行中，消失时也不能收尾成失败；若它仍在开放列表且当前结论是进行中，重读轮照常重新算出结论。重读后消失、但本次运行从未写出最终结论的 head 当场收尾，不留 `in_progress`。已接受的同步请求在该次运行内不重复发送，等实际 head 改变后再核实。真正的读取失败及不合法数据仍按 G8 拒绝；不修改门铃、定时或权限。背景计算与轮询方式见 [GitHub 文档](https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-your-git-database#checking-mergeability-of-pull-requests)。
   同步意向整段写进检查结果，长度超过接口上限时保留核心字段、把 overlap 截到能放下并标记截断；下一轮据此拒绝沿用，不把半截意向当成干净同步。列表接口没带完整正文或正文解析失败时，按检查 id 用有 Checks 权限的令牌重取一次；仍读不出按 G8 拒绝，不当成「没有意向」。比较范围是固定提交，提交条数与首页总数对不上属于读取不完整，同样按 G8 拒绝，不按瞬时状态反复重读。
@@ -207,7 +234,7 @@ Actions 被关、environment 等审批、检出/API 失败时，定时任务也�
   无论是否沿用，CI 只认新 head；业主的批准仍按 GitHub 实际返回的当前 head 表态认定，不自行搬移。
   同步写入失败是逐 PR 的执行结果：非瞬时失败只记在对应 PR 的摘要并跳过它的合并，不改共享 head 的放行结论；同 head 其他 PR 的同步仍继续，但共享结论在同步完成前保持进行中，这一轮不合并该 head 上任何一单；瞬时失败则重读全部事实。意向丢失、实际双亲不符或树差变化时不沿用；数据读不全按 G8 拒绝。
   main 规则集的「合并前分支必须和 main 同步」继续保留：同轮先合入另一单后，后续单在合并前重新读 main，先同步、等新 head 的 CI，再重算合并。
-- **合并没成**(分支落后于 main、有冲突、评审讨论没解决完、刚推了新提交):原因按 PR 写在那次运行的摘要里,请求留着。
+- **合并没成**(分支落后于 main、有冲突、评审讨论没解决完、刚推了新提交):原因按 PR 写在那次运行的摘要里；贴了标签的请求留着，直接合并的下一轮按现状重算。
   非瞬时的合并拒绝不改变 G1–G8 的放行判定：同一 head 的已授权 PR 各自尝试，全部尝试完再补写拒绝摘要。
   瞬时状态（PR/目标分支在写入期间推进、GitHub 还在计算、分支被规则要求先跟上 main **且关卡下一轮确实会自动同步**）则停止这一轮剩余的合并，重读全部事实后再试，
   不会把瞬时竞争写成最终拒绝。目标分支不是默认分支或 head 来自叉库时，关卡不会自动同步；这种落后以及同步写入被非瞬时拒绝的情况保留原始拒绝原因，这一轮不合并该 PR，不把它报成「重读后自动同步」。
@@ -283,7 +310,11 @@ aiwork 的执行方登记只在 [`.aiwork/policy.json` 的 `builders`](../.aiwor
 | S13c | 在 S13 的同步后、CI 完成前，由 Builder 再推一个普通提交，补齐新 head 放行条件 | 旧合并标签失效，不自动合并；摘掉重贴后才可继续 | 同步例外不放松后续推送拦截 |
 | S13d | 制造一次「写意向之后、update-branch 之前 main 前进」：在另一单合入的同一时段触发同步，核对同步合并提交的第二双亲 | 下一轮仍能证明这是关卡的同步；摘要写出 main 中途前进；干净时沿用、有交集时要求重评，作者不变成 UNKNOWN | 实际合并基准核实与摘要可读 |
 | S13e | 用单个提交改动 300 个文件的 main 更新与截断的 Git tree 样本核对同步摘要 | 摘要说明无法确认文件交集或无法比对树，要求重新评审并重贴标签；不误放行 | 平台截断下的保守处理 |
-| S15 | 用已满足其他合并条件、未贴 `aiwork:merge` 的测试 PR，以仓库管理员身份在网页上尝试合并 | 被 `main-gate-merge-only` 拒绝更新 main，PR 未合并 | 管理员不能借提交上的放行绕过关卡合并 |
+| S15 | 用判卷面或 high 路径、已满足其他合并条件但未贴 `aiwork:merge` 的测试 PR（这种单不会直接合并），以仓库管理员身份在网页上尝试合并 | 被 `main-gate-merge-only` 拒绝更新 main，PR 未合并 | 管理员不能借提交上的放行绕过关卡合并 |
+| S16 | 普通 PR 当前 head 达标目标家数、无 BLOCK/需要更多信息、CI 绿，未贴 `aiwork:merge` | 关卡直接合并；摘要写明按目标家数直接合并，合并者是 `aiwork-gate` App，合的是判过的 head | 普通 PR 直接合并 |
+| S17 | 普通 PR 只到 G3 底线、没到目标家数；汇总补派评审 | 补派前关卡判放行但不合并；补派凑够目标且 CI 绿后直接合并 | 底线与目标的区别；汇总补派 |
+| S18 | 判卷面或 high 的 PR，或当前 head 有汇总降级；凑够目标家数但不贴合并标签 | 不直接合并；仍然要业主在当前 head 批准并贴合并标签 | 家族数不能跳过判卷面、high 与降级 |
+| S19 | 汇总在当前 head 对 BLOCK 写下合法的降级记录，业主随后在当前 head 批准并贴合并标签 | 放行并合并；摘要显示汇总降级；没有直接合并 | 降级只解除 G5 的 BLOCK，不等于批准，也不能直接合并 |
 
 S14 是历史上的批准迁移样本，见 `ACCEPTANCE.md`「发现」；保留编号，不复用。
 

@@ -681,3 +681,117 @@ test("R30 代码里的 conclusion: pending 不是结论行；独占一行的 Con
   blocked(run({ reviews: [withLine(9, "Conclusion: BLOCK")] }), "G5");
 });
 
+
+// ── 直接合并、汇总降级（issue #175）─────────────────────────────────────────
+// 目标家数来自 review_dispatch.targets；底线仍只由 G3 / G6 决定。
+const dispatch = {
+  targets: { documentation: 1, code: 2, high: 3 },
+  documentation_paths: ["*.md", "**/*.md"],
+  minimum_families: 1,
+  candidates: ["subdeepseek-agent", "subkimi"],
+  selection: "random",
+};
+const directPolicy = { ...policy, review_dispatch: dispatch };
+const twoFamilies = () => [review({ id: 1 }), review({ id: 2, family: "deepseek", model: "deepseek-test" })];
+const direct = (files, reviews, extra = {}) => decide(facts({ files, reviews, ...extra }), directPolicy);
+
+test("直接合并:普通 PR 凑够目标家数、无 BLOCK/需要更多信息、CI 绿 → 关卡直接合并", () => {
+  const result = direct(["web/src/a.ts"], twoFamilies());
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.equal(result.direct_merge.enabled, true);
+  assert.equal(result.direct_merge.ok, true, result.summary);
+  assert.match(result.summary, /✅ 直接合并/);
+  assert.match(result.summary, /目标 2 家/);
+});
+
+test("直接合并:只到底线不到目标家数 → 不直接合并，摘要写明差什么", () => {
+  const result = direct(["web/src/a.ts"], [review({})]);
+  assert.equal(result.conclusion, "success", "底线 1 家仍放行");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /直接合并/);
+  assert.match(result.summary, /目标 2 家/);
+  assert.match(result.summary, /合格 PASS 1 家/);
+});
+
+test("直接合并:判卷面或 high 的 PR 即使凑够家数也不直接合并", () => {
+  for (const [files, reviews] of [
+    [["AGENTS.md"], [...twoFamilies(), approve()]],
+    [["desktop/main.js"], [...twoFamilies(), approve()]],
+  ]) {
+    const result = direct(files, reviews);
+    assert.equal(result.conclusion, "success", result.summary);
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, /直接合并/);
+    assert.match(result.summary, /判卷面|high/);
+  }
+});
+
+test("直接合并:有 BLOCK 或需要更多信息 → 不直接合并", () => {
+  const nmi = direct(["web/src/a.ts"], [...twoFamilies(), review({ id: 3, family: "google", model: "gemini", verdict: "NEEDS_MORE_INFO" })]);
+  assert.equal(nmi.conclusion, "success", nmi.summary);
+  assert.equal(nmi.direct_merge.ok, false, nmi.summary);
+  assert.match(nmi.summary, /需要更多信息/);
+
+  const blockedResult = direct(["web/src/a.ts"], [...twoFamilies(), review({ id: 4, family: "google", model: "gemini", verdict: "BLOCK" })]);
+  assert.equal(blockedResult.conclusion, "failure", blockedResult.summary);
+  assert.equal(blockedResult.direct_merge.ok, false, blockedResult.summary);
+});
+
+test("直接合并:未配置 review_dispatch 的项目保持原行为，不新增直接合并", () => {
+  const result = decide(facts({ reviews: twoFamilies() }), policy);
+  assert.equal(result.direct_merge.enabled, false);
+  assert.equal(result.direct_merge.ok, false);
+  assert.doesNotMatch(result.summary, /直接合并/);
+});
+
+const downgradePolicy = { ...directPolicy, modification_rounds: { summary_account: "summary-user" } };
+const blockReview = (id = 5) => review({ id, family: "google", model: "gemini", verdict: "BLOCK" });
+const downgradeRecord = ({ id = 20, head = HEAD, reviews = [5], evidence = "跑了复现脚本,按第二节第 1 条只是显示问题,不算 P1", ...over } = {}) => ({
+  id, login: "summary-user", type: "User", state: "COMMENTED", commit_id: head,
+  submitted_at: "2026-09-29T10:30:00Z", edited_at: null,
+  body: '```aiwork-downgrade\n' + JSON.stringify({ head_sha: head, reviews, evidence }) + '\n```\n',
+  ...over,
+});
+const downgraded = (extra = {}) => decide(facts({
+  files: ["web/src/a.ts"],
+  reviews: [...twoFamilies(), blockReview(), downgradeRecord(), approve(), ...(extra.reviews ?? [])],
+  ...extra.facts,
+}), extra.policy ?? downgradePolicy);
+
+test("汇总降级:当前 head 上登记账号的合法降级记录让 BLOCK 不再拦合并，但仍要业主批准", () => {
+  const withoutApproval = decide(facts({ reviews: [...twoFamilies(), blockReview(), downgradeRecord()] }), downgradePolicy);
+  assert.equal(withoutApproval.conclusion, "failure", withoutApproval.summary);
+  assert.doesNotMatch(withoutApproval.summary, /G5/, "降级后不再有 BLOCK");
+  assert.match(withoutApproval.summary, /汇总降级/);
+  assert.match(withoutApproval.summary, /业主.*批准/);
+
+  const result = downgraded();
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.equal(result.direct_merge.ok, false, "被降级的 BLOCK 不能让直接合并成立");
+  assert.match(result.summary, /直接合并/);
+  assert.match(result.summary, /汇总降级/);
+});
+
+test("汇总降级:非汇总账号、旧 head、格式不合、降级对象不是当前 head 的 BLOCK 都不认", () => {
+  const base = [...twoFamilies(), blockReview()];
+  const withExtraField = {
+    ...downgradeRecord(),
+    body: '```aiwork-downgrade\n' + JSON.stringify({
+      head_sha: HEAD, reviews: [5], evidence: "核实过", extra: true,
+    }) + '\n```\n',
+  };
+  const cases = [
+    ["别人写的", downgradeRecord({ login: "other-user" })],
+    ["旧 head", downgradeRecord({ head: OLD })],
+    ["空核实过程", downgradeRecord({ evidence: "  " })],
+    ["降级一条 PASS", downgradeRecord({ reviews: [1] })],
+    ["降级不存在的评审", downgradeRecord({ reviews: [999] })],
+    ["格式多字段", withExtraField],
+    ["发出后改写", downgradeRecord({ edited_at: "2026-09-29T11:30:00Z" })],
+  ];
+  for (const [name, record] of cases) {
+    const result = decide(facts({ files: ["web/src/a.ts"], reviews: [...base, record] }), downgradePolicy);
+    assert.equal(result.conclusion, "failure", `${name}:${result.summary}`);
+    assert.match(result.summary, /G5/, name);
+  }
+});

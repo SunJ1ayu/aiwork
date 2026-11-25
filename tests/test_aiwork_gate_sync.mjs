@@ -56,7 +56,7 @@ function environment(over={}) {
  const at='2026-11-22T00:00:00Z', actor='aiwork-gate[bot]';
  const key=mergeBindingKey(1,p.merge_label,old,p.owner);
  const intent=syncIntent(1,old,base,'main','builder/one',actor,key,[],over.overlap?['web/a.ts']:[],common);
- const pr={number:1,state:'open',changed_files:1,labels:[{name:p.merge_label}],mergeable:true,
+ const pr={number:1,state:'open',changed_files:1,labels:over.noLabel?[]:[{name:p.merge_label}],mergeable:true,
   head:{sha:head,ref:'builder/one',repo:{full_name:'o/r'}},base:{sha:common,ref:'main'}};
  const activity=[{id:2,before:old,after:head,actor:{login:actor,type:'Bot'},activity_type:'push',timestamp:'2026-11-23'},
   {id:1,before:'0'.repeat(40),after:old,actor:{login:'SunJ1ayuBoT',type:'User'},activity_type:'branch_creation',timestamp:'2026-11-22'}];
@@ -99,7 +99,7 @@ function environment(over={}) {
   if(path.includes('/pulls/1/files'))return {data:[{filename:'web/a.ts'}]};
   if(path.includes('/pulls/1/reviews'))return {data:[{...pass(old),user:{login:p.reviewer_bot,type:'Bot'}}]};
   if(path.includes('/actions/runs'))return {data:{total_count:1,workflow_runs:[{id:1,path:p.ci.workflow_path,head_sha:pr.head.sha,event:p.ci.event,status:'completed',conclusion:'success',pull_requests:[{number:1}]}]}};
-  if(path.includes('/issues/1/events'))return {data:[{id:1,event:'labeled',label:{name:p.merge_label},actor:{login:p.owner},created_at:at}]};
+  if(path.includes('/issues/1/events'))return {data:over.noLabel?[]:[{id:1,event:'labeled',label:{name:p.merge_label},actor:{login:p.owner},created_at:at}]};
   if(path.includes('/activity?'))return {data:activity};
   if(path.includes('/check-runs?')){
    const records=path.includes(`/commits/${old}/`)?(path.includes(`check_name=${SYNC_CHECK}`)?[record]:[binding]):[];
@@ -114,6 +114,13 @@ test('收集与判定联测：关卡推送双亲与树差相同，作者仍是 B
  assert.equal(r.conclusion,'success',r.summary);assert.equal(r.author.known,true);
  assert.equal(f.merge_request.bound,true);assert.deepEqual(f.synchronization.review_heads,[old]);
  assert.match(r.summary,/沿用提交/);
+});
+test('直接合并的 PR 没有合并标签，也能准备自动同步（绑定为空）',async()=>{
+ const e=environment({noLabel:true});const f=await collect(e.api,'o/r',1,p);
+ assert.equal(f.merge_request,null);
+ const sync=await prepareSynchronization(e.api,'o/r',1,f,'aiwork-gate[bot]');
+ assert.ok(sync?.intent);
+ assert.equal(sync.intent.binding,null);
 });
 test('收集链：main 碰了同一文件，旧评审和合并标签都不沿用',async()=>{
  const e=environment({overlap:true});const f=await collect(e.api,'o/r',1,p);

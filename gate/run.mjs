@@ -16,7 +16,8 @@ import { TransientPrState } from './synchronize.mjs';
 //   2. 先给每个 head 发 App 的 in_progress 占位,之后才读 PR 的数据 ——
 //      半路卡住或死掉,已创建且未完成的检查停在 in_progress,压住上一次的结论;
 //   3. 每个 head:把以它为 head 的 PR 全判一遍,合成一个结论写一次;
-//   4. 结论写上且是放行,就当场合并这个 head 上有合并请求的 PR(见 decide.mjs 的 mergeRequester),
+//   4. 结论写上且是放行,就当场合并这个 head 上该合的 PR:有可信合并请求的(见 decide.mjs 的
+//      mergeRequester),或普通 PR 凑够目标家数后由关卡直接合并(见 decide.mjs 的 direct_merge)。
 //      带上判过的 head —— 合并用的就是这次刚读到的数据,判完之后又推了新提交,合并接口会拒。
 //      没放行的请求留着,等哪次运行判为放行再合。这就是"合并那一刻再判一次":不另起一套判定。
 //
@@ -61,6 +62,17 @@ export function validatePolicy(p) {
         otherRoles.some((r) => typeof r === "string" && r.toLowerCase() === account.toLowerCase())) {
       bad.push("modification_rounds");
     }
+  }
+  if (p && Object.hasOwn(p, "post_merge_check")) {
+    const c = p.post_merge_check;
+    const modes = ["all", "sample", "off"];
+    const valid = Boolean(c) && typeof c === "object" && !Array.isArray(c) &&
+      modes.includes(c.mode) &&
+      Object.keys(c).every((k) => k === "mode" || k === "sample_every") &&
+      (c.mode === "sample"
+        ? Number.isSafeInteger(c.sample_every) && c.sample_every >= 1
+        : !Object.hasOwn(c, "sample_every"));
+    if (!valid) bad.push("post_merge_check");
   }
   validateReviewPolicy(p);
   if (bad.length) throw new Error(`.aiwork/policy.json 不完整或不合法:${bad.join("、")}`);
@@ -183,7 +195,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       result = verdicts.length ? combine(verdicts) : moved;
       if (synchronizer && result.status === 'completed' && result.conclusion === 'success') {
         for (const v of verdicts) {
-          if (!v.mergeBy) continue;
+          if (!v.mergeBy && !v.r.direct_merge?.ok) continue;
           v.sync = syncing.has(`${v.number}:${sha}`)
             ? {note:'同步请求已接受，等待实际 head 变化后重算。'}
             : await synchronizer.prepare(v.number, v.facts);
@@ -242,19 +254,25 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       if (v.request && !v.mergeBy) {
         log(`PR #${v.number}:${v.request.reason}`);
       }
-      if (!v.mergeBy || syncFailed.has(v.number) || result.status !== "completed" || result.conclusion !== "success") continue;
+      // 两条合并路径:可信的合并标签请求,或普通 PR 凑够目标家数后由关卡直接合并。
+      // 后者不进 merge_request,也不产生合并授权;放行与直接合并条件都由 decide() 判。
+      const direct = !v.mergeBy && v.r.direct_merge?.ok === true;
+      if ((!v.mergeBy && !direct) || syncFailed.has(v.number) || result.status !== "completed" || result.conclusion !== "success") continue;
+      const how = v.mergeBy ? `按 ${v.mergeBy} 的请求` : "按目标家数直接";
       try {
         if (!merger) throw new Error("没有合并接口");
         await merger.merge(v.number, sha, v.facts.pr);
-        log(`PR #${v.number}:按 ${v.mergeBy} 的请求合并了 ${sha.slice(0, 7)}`);
+        log(`PR #${v.number}:${how}合并了 ${sha.slice(0, 7)}`);
       } catch (e) {
         if (e instanceof TransientPrState) {
           retry = true;
           result = pendingState(e);
         } else {
-          mergeNotes.push(`PR #${v.number} 合并被拒，合并请求保留：${e.message}`);
+          mergeNotes.push(v.mergeBy
+            ? `PR #${v.number} 合并被拒，合并请求保留：${e.message}`
+            : `PR #${v.number} 直接合并未完成：${e.message}`);
         }
-        log(`PR #${v.number}:按 ${v.mergeBy} 的请求合并 ${sha.slice(0, 7)} 没成:${e.message}`);
+        log(`PR #${v.number}:${how}合并 ${sha.slice(0, 7)} 没成:${e.message}`);
       }
     }
     // 先尝试完该 head 上的合并，再补拒绝摘要，不能提前写坏共享必需检查。

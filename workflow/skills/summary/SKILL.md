@@ -26,8 +26,11 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 1. 去重：同一处问题合成一条，注明哪几家提的。
 2. 核实：按 [REVIEW-RULES 第二节第 3 条「核实与五级证据」](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md#3-核实与五级证据)执行，逐条对照本 skill「汇总核对清单」。
 3. 定级：见 REVIEW-RULES 第二节第 1 条。
-4. 决定下一步：按 REVIEW-RULES 第三节第 5 条的优先顺序。选「合并」之前，先看关卡在当前 head 上的结论：除了业主批准还缺别的（比如额度不够、凑不齐几家不同家族的 PASS），就选交业主，写明缺什么。派修改单的规则和格式见 `delegate` skill。P2 放不放进这张单，见 REVIEW-RULES 第三节第 4 条。
-5. 发到 PR 上：使用项目策略 `modification_rounds.summary_account` 登记的账号，向这次核实的完整 head 提交一条 COMMENT 评审，正文按本 skill「汇总的格式」。发出后不编辑；纠错先交业主，不用改写或再发一条相互冲突的记录覆盖。关卡复用评审和改写记录读取它；汇总不批准、不贴合并标签、不推代码。未启用该策略的项目保持原来的非 `reviewer_bot` 账号 COMMENT 做法，关卡不显示轮数。
+4. 决定下一步：按 REVIEW-RULES 第三节第 5 条的优先顺序。选「合并」之前，先看关卡在当前 head 上的结论。
+   - 普通 PR（不碰判卷面、不走 high、没有汇总降级、作者已知）：只差目标家数时，由汇总按项目策略运行 `review-pr --auto` 补派评审；补派的腿出结果后按新一轮再核对。同一 head 上所有候选家族都已试过（有结论或明确失败），合格 PASS 仍少于目标家数，就是凑不够，选交业主并写明缺几家。
+   - 判卷面、high、汇总降级或作者未知的 PR：除了业主批准还缺别的（比如额度不够、凑不齐最低家数），就选交业主，写明缺什么；条件齐了也要业主在当前 head 上批准并贴合并标签。
+   派修改单的规则和格式见 `delegate` skill。P2 放不放进这张单，见 REVIEW-RULES 第三节第 4 条。
+5. 发到 PR 上：使用项目策略 `modification_rounds.summary_account` 登记的账号，向这次核实的完整 head 提交一条 COMMENT 评审，正文按本 skill「汇总的格式」。发出后不编辑；纠错先交业主，不用改写或再发一条相互冲突的记录覆盖。关卡复用评审和改写记录读取它；汇总不批准、不贴合并标签、不推代码。普通 PR 凑够目标家数后由关卡直接合并，不需要合并标签。未启用该策略的项目保持原来的非 `reviewer_bot` 账号 COMMENT 做法，关卡不显示轮数。
 6. 下一步写「合并」或「交业主」的那次汇总，当场把这个 PR 历次汇总里还没记的 P2 都按 REVIEW-RULES 第二节第 1 条「待办与业主决定」记入项目待办。
 
 ## 汇总核对清单
@@ -99,6 +102,30 @@ description: 一轮评审跑完以后，汇总各家结论、核实、定级，�
 ```
 
 关卡只认登记账号发出且未改写的记录，按不同 `head_sha` 的「照单修」计数；同一 head 的重复记录只计一次，字段或修改单原文不同则读不清。合入 main、失败腿重派和小改本身不加轮。同一记录以最早的提交时间、再按最小评审编号确定首次出现，迟到的重复记录不更新它的时刻；去重后最新汇总按提交时间、再按评审编号确定，与接口返回次序无关；停的定义见 REVIEW-RULES 第三节第 1 条。没新记录的旧 PR 显示未知；带记录围栏的评审被改写、格式错误、head 不一致或记录冲突显示读不清；无记录围栏的评审不参与计数。此显示不改变 G1–G8 或合并结果。
+
+### 汇总降级
+
+评审腿判 BLOCK、汇总按 REVIEW-RULES 第二节第 1 条核实后认为只算 P2 时，汇总账号在当前 head 上另发一条 COMMENT 评审，正文放恰好一个 `aiwork-downgrade` 记录围栏，写明核实过程（跑过什么、为什么不算 P1）和被降级的评审编号；降级结论也写在这条评审正文里。这是降级记录格式的唯一定义。评审的 `commit_id` 必须与记录里的 `head_sha`、当前 head 三者一致；发出后不编辑。别人写的、旧 head 上的、改写过的、格式不合的记录，关卡都不认。
+
+```aiwork-downgrade
+{"head_sha":"0000000000000000000000000000000000000000","reviews":[12,15],"evidence":"跑了复现脚本……"}
+```
+
+```aiwork-downgrade-schema
+{
+  "title": "aiwork-downgrade",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["head_sha", "reviews", "evidence"],
+  "properties": {
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "reviews": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+    "evidence": {"type": "string", "minLength": 1}
+  }
+}
+```
+
+降级只把列出的当前 head 上的 BLOCK 从 G5 移走，不等于批准：仍要业主在当前 head 上批准；这一单也不能由关卡直接合并，仍要合并标签。记录只加不减，要撤回由业主决定。降级不改变 P1/P2 的判定标准；降级记录和汇总记录分开写，不能互相替代。
 
 ## 标签派活占位
 
