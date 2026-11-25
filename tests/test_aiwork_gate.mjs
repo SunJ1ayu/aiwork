@@ -864,6 +864,39 @@ test("汇总降级:全部 BLOCK 降级且业主在当前 head 批准后放行（
   assert.match(sameFamily.summary, /high 路径/);
 });
 
+test("汇总降级:被改写过的 BLOCK 只移走 G5，不按改写后正文的家族计 G3/G6", () => {
+  const edited = (r) => ({ ...r, edited_at: "2026-09-29T10:20:00Z" });
+  const result = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [
+      edited(blockReview(5, "google", "gemini")),
+      edited(blockReview(6, "deepseek", "deepseek-test")),
+      downgradeRecord({ reviews: [5, 6] }), approve(),
+    ],
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "failure", result.summary);
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.deepEqual(result.review_state.downgraded_families, [], "改写过的正文不能提供家族数");
+  assert.deepEqual(result.review_state.pass_families, []);
+  assert.deepEqual(result.review_state.reviewed_families, [], "正常计数也不把改写过的评审算进来");
+  assert.match(result.summary, /已降级但不计家数/, result.summary);
+  assert.match(result.summary, /改写过/, "摘要要说明为什么不计家数");
+  assert.match(result.summary, /❌ G3/, "没有合格家数，不能放行");
+  assert.doesNotMatch(result.summary, /❌ G5/, "降级仍把 BLOCK 移出 G5");
+
+  // 对照：同样两条没改写的 BLOCK，降级后照旧能计家数并放行。
+  const intact = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [
+      blockReview(5, "google", "gemini"),
+      blockReview(6, "deepseek", "deepseek-test"),
+      downgradeRecord({ reviews: [5, 6] }), approve(),
+    ],
+  }), downgradePolicy);
+  assert.equal(intact.conclusion, "success", intact.summary);
+  assert.deepEqual([...intact.review_state.downgraded_families].sort(), ["deepseek", "google"]);
+});
+
 test("summary skill 的降级记录定义直接生成关卡对照用例", () => {
   const skill = read("../workflow/skills/summary/SKILL.md");
   const match = /```aiwork-downgrade-schema\n([\s\S]*?)\n```/.exec(skill);

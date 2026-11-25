@@ -10,7 +10,8 @@ import { reviewPlan } from "./review-plan.mjs";
 //   G1 CI:当前 head 上、来自 ci.yml 的那次运行成功,且是在最后一次改目标分支之后触发的 —— 业主批准也豁免不了
 //   G2 判卷面:改了 CI / 测试入口 / 关卡自己 → 要业主批准
 //   G3 评审:当前 head 或 synchronize.mjs 核实的沿用来源上至少一条合格 PASS(aiwork-review 发的、完整、家族不是本次作者的家族)—— 豁免不了；
-//      汇总降级的当前 head BLOCK 里，结论块完整、范围合格的那些按家族计入（同一家族只算一家），但仍要业主批准
+//      汇总降级的当前 head BLOCK 里，结论可信（结论块完整、正文没被改写、结论与正文一致）且范围合格的按家族计入
+//      （同一家族只算一家），但仍要业主批准；不可信的降级只移走 G5，不计家数
 //   G4 作者:扣除已核实关卡同步后，这个分支上的每次推送都来自已知 Builder 账号,否则 UNKNOWN → 要业主批准
 //   G5 当前 head 及沿用来源上任何一条 BLOCK → 要业主在最后一条 BLOCK 之后批准。BLOCK = aiwork-review 在当前 head 上发的、
 //      除"格式完整且结论不是 BLOCK"以外的一切(BLOCK 结论、Request changes、正文结论行写 BLOCK、结论块看不懂),
@@ -18,7 +19,7 @@ import { reviewPlan } from "./review-plan.mjs";
 //      撤销抹不掉反对;被撤销的评审看不出原来是什么,一律按反对算,反对的时刻是撤销那一刻)。
 //      同一个人取最后一次表态(含沿用来源);但如果最后一次是旧提交上的 Approve,它不能盖掉
 //      这个人在当前 head 上的反对 —— 对旧提交补一个批准不能绕过当前内容上的反对。
-//   G6 high 路径:至少 high_min_families 个不同的非作者家族 PASS 或汇总降级计入(豁免不了)+ 业主批准
+//   G6 high 路径:至少 high_min_families 个不同的非作者家族 PASS 或可计家数的汇总降级(豁免不了)+ 业主批准
 //   G7 业主批准 = 业主在当前 head 上最后一次表态是 Approve;最后一次是 Request changes 或被撤销则一律不放行。
 //      批准不从沿用的旧提交搬移;但业主在沿用来源上更新的反对/撤销会挡住放行,须在当前 head 上重新批准。
 //   G8 数据不全 → 由 collect.mjs 抛错,run.mjs 判 failure
@@ -120,6 +121,18 @@ function reviewScopeReason(r, v, head, author, authorFamilies) {
   if (v.completeness !== "complete") return `不完整(${v.completeness})`;
   if (authorFamilies.has(v.family)) return `${v.family} ${author.known ? "是本次作者家族" : "是可能的 Builder 家族"},不能提供独立评审`;
   return null;
+}
+
+// 「这条评审的结论能不能拿来计家族数」的唯一判断：结论块完整可读、正文发出后没被改写
+// （正文结论行与结论块一致）、范围合格（当前 head、完整、非作者家族）、结论不是 UNKNOWN。
+// 正常评审家数（reviewed / passes）和汇总降级计数都只调用这里；各自只再要求结论是
+// PASS / BLOCK。返回 {family} 或 {reason}；reason 只用于摘要说明「已降级但不计家数」的原因。
+function countableFamily(p, why, scopeReason) {
+  if (!p.ok) return { reason: `看不懂:${p.why}` };
+  if (why !== null && why !== "") return { reason: why };
+  if (scopeReason !== null) return { reason: `评审范围不合格:${scopeReason}` };
+  if (p.value.verdict === "UNKNOWN") return { reason: "结论是 UNKNOWN" };
+  return { family: p.value.family };
 }
 
 // 一条评审只有一个生效时刻 = 它现在的立场为我们所知的那一刻。选"最后一次表态"、定 BLOCK 时刻、比"批准是否晚于
@@ -299,13 +312,12 @@ export function decide(facts, policy) {
     const p = parseReviewBlock(r.body);
     const why = blockReason(r, p);
     const scopeReason = p.ok ? reviewScopeReason(r, p.value, r.commit_id, author, authorFamilies) : null;
-    if (p.ok && scopeReason === null && (why === null || why === "") && p.value.verdict !== "UNKNOWN") {
-      reviewed.add(p.value.family);
-    }
+    const count = countableFamily(p, why, scopeReason);
+    if (count.family) reviewed.add(count.family);
     if (why !== null) {
       blocks.push({
         id: r.id, bot: true, commit_id: r.commit_id, complete: p.ok,
-        verdict: p.ok ? p.value.verdict : null, scopeReason,
+        verdict: p.ok ? p.value.verdict : null, scopeReason, count,
         at: effectiveAt(r, policy), family: p.ok ? p.value.family : "?",
         model: `${p.ok ? p.value.model : `评审 #${r.id}`}${why ? `,${why}` : ""}`,
       });
@@ -323,7 +335,7 @@ export function decide(facts, policy) {
       rejected.push(`评审 #${r.id}:结论是 ${v.verdict}`);
       continue;
     }
-    passes.push({ id: r.id, family: v.family, model: v.model });
+    passes.push({ id: r.id, family: count.family, model: v.model });
   }
   const stale = botReviews.length - onHead.length;
 
@@ -353,11 +365,21 @@ export function decide(facts, policy) {
     }
   }
   const downgradedFamilies = new Set();
+  const uncountedDowngrades = [];
   for (const id of downgraded) {
     const b = currentBotBlocks.get(id);
-    // 只降 G5 还不够补评审家数：结论块要完整，范围要合格（当前 head、非作者家族）。
-    if (!b?.complete || b.scopeReason !== null || b.verdict !== "BLOCK") continue;
-    downgradedFamilies.add(b.family);
+    // 只降 G5 还不够补评审家数：调用正常计数同一个「能不能计家数」判断。
+    // 改写过、看不懂、范围不合格的评审仍按 P2 降级，但不能拿正文里的家族补 G3/G6。
+    if (!b) continue;
+    if (!b.count.family) {
+      uncountedDowngrades.push(`评审 #${id}:${b.count.reason}`);
+      continue;
+    }
+    if (b.verdict !== "BLOCK") {
+      uncountedDowngrades.push(`评审 #${id}:结论是 ${b.verdict},不是 BLOCK`);
+      continue;
+    }
+    downgradedFamilies.add(b.count.family);
   }
   const activeBlocks = blocks.filter((b) => !downgraded.has(b.id));
 
@@ -381,7 +403,11 @@ export function decide(facts, policy) {
 
   // G5
   const blocked = activeBlocks.length > 0;
-  if (downgraded.size) lines.push(`   · 汇总降级：${[...downgraded].map((id) => `评审 #${id}`).join("、")} 按 P2 记（仍要业主批准，不能直接合并）`);
+  if (downgraded.size) {
+    const uncounted = uncountedDowngrades.length
+      ? `；已降级但不计家数：${uncountedDowngrades.join("、")}` : "";
+    lines.push(`   · 汇总降级：${[...downgraded].map((id) => `评审 #${id}`).join("、")} 按 P2 记（仍要业主批准，不能直接合并）${uncounted}`);
+  }
   if (blocked) add(false, "G5", `有 BLOCK:${activeBlocks.map((b) => `${b.model}(${b.family})`).join("、")}`);
 
   // G2 / G6
