@@ -28,6 +28,89 @@ BIN = Path(__file__).resolve().parents[1] / 'bin'
 DIFF_MARKER = 'UNIQUE_DIFF_CONTENT_7015'
 
 
+class RuntimeGroupTests(unittest.TestCase):
+    def setUp(self):
+        import _leg_session as session
+        self.session = session
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.counter = self.root / 'group-counter-signed'
+        exists = Path.exists
+        for mock in (patch.object(Path, 'exists', lambda path:
+                                 path == Path('/etc/subgid') or exists(path)),
+                     patch.object(session, 'account_data', return_value=self.root),
+                     patch('grp.getgrgid', side_effect=KeyError),
+                     patch.object(Path, 'read_text', return_value='')):
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def seed(self, value):
+        self.counter.write_text(str(value))
+        self.counter.chmod(0o600)
+
+    def test_allocations_fit_signed_gid_and_do_not_repeat_after_restart(self):
+        first = self.session.next_group()
+        second = self.session.next_group()
+        self.assertLessEqual(first, 2**31 - 1)
+        self.assertGreater(first, 0)
+        self.assertEqual(second, first + 1)
+        # Reopen persisted state, not an in-memory sequence.
+        self.assertEqual(int(self.counter.read_bytes()), second)
+
+    def test_concurrent_allocators_do_not_reuse_groups(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            groups = list(pool.map(lambda _: self.session.next_group(), range(32)))
+        self.assertEqual(len(set(groups)), len(groups))
+        self.assertEqual(max(groups) - min(groups), len(groups) - 1)
+
+    def test_legacy_high_counter_is_preserved_and_disjoint(self):
+        legacy = self.root / 'group-counter'
+        for old in (0xc0000001, 0xfffffffd):
+            with self.subTest(old=old):
+                legacy.write_text(str(old))
+                legacy.chmod(0o600)
+                allocated = self.session.next_group()
+                self.assertLessEqual(allocated, 2**31 - 1)
+                self.assertNotEqual(allocated, old)
+                self.assertEqual(legacy.read_bytes().decode(), str(old))
+
+    def test_skips_system_group_and_overlapping_subordinate_ranges(self):
+        first = self.session.next_group()
+        with patch('grp.getgrgid', side_effect=lambda gid:
+                   object() if gid == first + 1 else self.missing_group(gid)), \
+             patch.object(Path, 'read_text', return_value=
+                          f'fixture:{first + 2}:3\nother:{first + 4}:4\n'):
+            self.assertEqual(self.session.next_group(), first + 8)
+
+    @staticmethod
+    def missing_group(gid):
+        raise KeyError(gid)
+
+    def test_last_signed_gid_then_exhaustion_never_wraps(self):
+        self.seed(2**31 - 2)
+        self.assertEqual(self.session.next_group(), 2**31 - 1)
+        for _ in range(2):
+            with self.assertRaisesRegex(self.session.ReviewError, '耗尽'):
+                self.session.next_group()
+        self.assertEqual(self.counter.read_bytes().decode(), str(2**31 - 1))
+
+    def test_subordinate_range_past_limit_refuses_without_changing_counter(self):
+        self.seed(2**31 - 2)
+        with patch.object(Path, 'read_text', return_value=f'fixture:{2**31 - 1}:100\n'):
+            with self.assertRaisesRegex(self.session.ReviewError, '耗尽'):
+                self.session.next_group()
+        self.assertEqual(self.counter.read_bytes().decode(), str(2**31 - 2))
+
+    def test_invalid_counter_refuses_instead_of_reusing_groups(self):
+        for invalid in ('broken', '-1', str(2**32)):
+            with self.subTest(invalid=invalid):
+                self.seed(invalid)
+                with self.assertRaises(self.session.ReviewError):
+                    self.session.next_group()
+
+
 class SeparateAccountTests(unittest.TestCase):
     def setUp(self):
         import pwd

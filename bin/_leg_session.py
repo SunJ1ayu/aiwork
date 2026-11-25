@@ -427,19 +427,29 @@ def account_data():
     return root
 
 
+# Bubblewrap writes gid maps as signed integers. Keep the new namespace
+# disjoint from the legacy unsigned allocator, including across downgrades.
+RUN_GROUP_FIRST = 0x40000000
+RUN_GROUP_LAST = 0x7fffffff
+
+
 def next_group():
     # Never reuse a job group: a previous job may leave setgid files in its
     # writable login store. This counter is publisher-private, not OS accounts.
-    path = account_data() / 'group-counter'
+    path = account_data() / 'group-counter-signed'
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'r+') as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
         info = os.fstat(stream.fileno())
         if info.st_uid != 0 or info.st_nlink != 1 or info.st_mode & 0o077:
             raise ReviewError('评审运行组计数器权限不安全')
-        gid = int(stream.read() or str(0xc0000000)) + 1
-        if gid >= 0xfffffffe:
-            raise ReviewError('评审运行组计数器已耗尽')
+        try:
+            previous = int(stream.read() or str(RUN_GROUP_FIRST - 1))
+        except ValueError as exc:
+            raise ReviewError('评审运行组计数器无效；拒绝复用编号') from exc
+        if not RUN_GROUP_FIRST - 1 <= previous <= RUN_GROUP_LAST:
+            raise ReviewError('评审运行组计数器超出范围；拒绝复用编号')
+        gid = previous + 1
         import grp
         ranges = []
         subordinate = Path('/etc/subgid')
@@ -449,12 +459,12 @@ def next_group():
                     _, first, count = line.split(':')
                     ranges.append((int(first), int(first) + int(count)))
         while True:
+            if gid > RUN_GROUP_LAST:
+                raise ReviewError('评审运行组计数器已耗尽')
             reserved = next((end for start, end in ranges if start <= gid < end), None)
             if reserved is not None:
                 gid = reserved
                 continue
-            if gid >= 0xfffffffe:
-                raise ReviewError('评审运行组计数器已耗尽')
             try:
                 grp.getgrgid(gid)
             except KeyError:
