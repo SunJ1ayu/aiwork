@@ -35,6 +35,7 @@ function prsApi(calls, prs, { fail = () => false, lists = null, bindingPolicy = 
   const pr = (n, read = false) => ({
     number: n,
     state: read ? prs[n].readState ?? "open" : "open",
+    draft: prs[n].draft === true,
     changed_files: prs[n].files.length,
     labels: (prs[n].labels ?? []).map((name) => ({ name })),
     head: { sha: read ? prs[n].readHead ?? prs[n].head : prs[n].head, ref: `claude/pr${n}`, repo: { full_name: "o/r" } },
@@ -607,6 +608,17 @@ test("M13 普通 PR 凑够目标家数、没有合并标签 → 关卡直接合�
   const merged = r.calls.findIndex((c) => c[0] === "merge");
   const wrote = r.calls.findIndex((c) => c[0] === "finish" && c[1] === HEAD && c[3] === "success");
   assert.ok(wrote >= 0 && wrote < merged, "先写上放行结论,再直接合并");
+});
+
+test("M13b 草稿 PR 凑够目标家数也不直接合并", async () => {
+  const r = recorder();
+  const api = prsApi(r.calls, {
+    10: { head: HEAD, files: ["web/a.ts"], verdict: null, draft: true,
+      summaries: summaries(botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")) },
+  });
+  await run(r, api, { policy: directPolicy, merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), []);
+  assert.match(finishSummary(r.calls), /草稿 PR 不能直接合并/);
 });
 
 test("M13a 直接合并条件成立且分支落后 → 先自动同步，这一轮不直接合并", async () => {
