@@ -388,7 +388,13 @@ export function decide(facts, policy) {
     ...Object.keys(builderFamilies(policy)),
   ].filter(Boolean).map((login) => login.toLowerCase()));
   const allowedDirectReviewIds = new Set(passes.map((p) => p.id));
-  if (ownerCurrent?.state === "APPROVED") allowedDirectReviewIds.add(ownerCurrent.id);
+  // 同一 head 上可有多条业主批准（重复批准、先撤销再批准等）。每一条都在白名单里；
+  // 更晚的要求修改 / 撤销由 ownerObjection 挡，不靠把较早的批准算成未允许记录。
+  for (const r of facts.reviews) {
+    if (r.commit_id === head && r.login === policy.owner && r.type === "User" && r.state === "APPROVED") {
+      allowedDirectReviewIds.add(r.id);
+    }
+  }
   // 汇总记录复用轮数显示的同一份解析：同 head 第二条、改写、格式坏、冲突都不会进 byHead，
   // 或作为另一条记录留在下面被算作未允许，所以「唯一」不另写一份判断。
   const summaryRecord = summaryRead?.byHead.get(head);
@@ -528,7 +534,7 @@ export function decide(facts, policy) {
     if (!targetOk) directReasons.push(`合格 PASS ${passFamilies.length} 家，目标 ${plan.target} 家`);
     const directOk = directReasons.length === 0;
     add(directOk, "直接合并", directOk
-      ? `按白名单直接合并：目标 ${plan.target} 家合格 PASS 已凑齐，当前 head 上没有其他记录，CI 绿。`
+      ? `可直接合并：目标 ${plan.target} 家合格 PASS 已凑齐，当前 head 上没有其他记录，CI 绿。`
       : `不直接合并：${directReasons.join("；")}。`);
   }
   const directMerge = { enabled: Boolean(policy.review_dispatch), ok: Boolean(policy.review_dispatch) && directReasons.length === 0, reasons: directReasons };

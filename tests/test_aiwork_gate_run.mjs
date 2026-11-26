@@ -502,7 +502,7 @@ test('P1-1：重读轮只收尾没有最终结论的占位，不把已放行并�
   waitForState:async()=>{prs[11].head=NEW;},
  });
  const onMerged=finishes(r.calls).filter(f=>f[0]===HEAD);
- assert.deepEqual(onMerged.map(f=>[f[1],f[2]]),[['completed','success']],'已合并提交的检查保持放行');
+ assert.deepEqual(onMerged.map(f=>[f[1],f[2]]),[['completed','success'],['completed','success']],'已合并提交的结论和合并路径两次写入都保持放行');
  assert.ok(!onMerged.some(f=>/已不是开着的 PR 的 head/.test(f[3])),'不能被收尾改写成「已不是 head」');
  assert.deepEqual(merges(r.calls),[[10,HEAD]]);
  assert.deepEqual(finishes(r.calls).filter(f=>f[0]===NEW).map(f=>[f[1],f[2]]),
@@ -609,7 +609,7 @@ test("M13 普通 PR 凑够目标家数、没有合并标签 → 关卡直接合�
   });
   await run(r, api, { policy: directPolicy, merger: mergeRecorder(r) });
   assert.deepEqual(merges(r.calls), [[10, HEAD]]);
-  assert.match(finishSummary(r.calls), /直接合并|按目标家数/);
+  assert.match(finishSummary(r.calls), /实际合并路径：PR #10 按目标家数直接合并/);
   const merged = r.calls.findIndex((c) => c[0] === "merge");
   const wrote = r.calls.findIndex((c) => c[0] === "finish" && c[1] === HEAD && c[3] === "success");
   assert.ok(wrote >= 0 && wrote < merged, "先写上放行结论,再直接合并");
@@ -723,6 +723,22 @@ test("M19 白名单允许的业主批准、汇总唯一「合并」记录不挡�
     await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
     assert.deepEqual(merges(r.calls), [[10, HEAD]], JSON.stringify(extra));
   }
+});
+
+test("M20 两家 PASS 且贴了合并标签：摘要记的实际合并路径是标签，不是直接合并", async () => {
+  const r = recorder();
+  const pr = {
+    head: HEAD, files: ["web/a.ts"], verdict: null,
+    summaries: summaries(botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")),
+    labels: [MERGE], events: [labeled(policy.owner)],
+  };
+  const logs = [];
+  await run(r, prsApi(r.calls, { 10: pr }), { policy: directPolicy, merger: mergeRecorder(r), log: (l) => logs.push(l) });
+  assert.deepEqual(merges(r.calls), [[10, HEAD]]);
+  assert.ok(logs.some((l) => /PR #10:按 SunJ1ayu 的请求合并了/.test(l)), "实际走的是合并标签路径");
+  const summary = finishSummary(r.calls);
+  assert.match(summary, /实际合并路径：PR #10 按 SunJ1ayu 的合并标签合并/, summary);
+  assert.doesNotMatch(summary, /实际合并路径：PR #10 按目标家数直接合并/, "摘要不能把标签路径记成直接合并");
 });
 
 test("M17 全部 BLOCK 被汇总降级、业主当前 head 批准 → 关卡按合并标签合并（PR #172 情形）", async () => {

@@ -17,7 +17,7 @@ import { TransientPrState } from './synchronize.mjs';
 //      半路卡住或死掉,已创建且未完成的检查停在 in_progress,压住上一次的结论;
 //   3. 每个 head:把以它为 head 的 PR 全判一遍,合成一个结论写一次;
 //   4. 结论写上且是放行,就当场合并这个 head 上该合的 PR:有可信合并请求的(见 decide.mjs 的
-//      mergeRequester),或普通 PR 当前 head 干净、只有够数合格 PASS 时由关卡直接合并(见 decide.mjs 的 direct_merge)。
+//      mergeRequester),或普通 PR 当前 head 干净、只有白名单允许的记录且满足直接合并条件时由关卡直接合并(见 decide.mjs 的 direct_merge)。
 //      带上判过的 head —— 合并用的就是这次刚读到的数据,判完之后又推了新提交,合并接口会拒。
 //      没放行的请求留着,等哪次运行判为放行再合。这就是"合并那一刻再判一次":不另起一套判定。
 //
@@ -250,11 +250,12 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
     //    合并拒绝是逐 PR 的执行结果，不改变共享 head 的放行判定。
     const mergeResult = result;
     const mergeNotes = [];
+    const mergePaths = [];
     for (const v of verdicts) {
       if (v.request && !v.mergeBy) {
         log(`PR #${v.number}:${v.request.reason}`);
       }
-      // 两条合并路径:可信的合并标签请求,或普通 PR 当前 head 干净、只有够数合格 PASS 时由关卡直接合并。
+      // 两条合并路径:可信的合并标签请求,或普通 PR 当前 head 干净、只有白名单允许的记录且满足直接合并条件时由关卡直接合并。
       // 后者不进 merge_request,也不产生合并授权;放行与直接合并条件都由 decide() 判。
       const direct = !v.mergeBy && v.r.direct_merge?.ok === true;
       if ((!v.mergeBy && !direct) || syncFailed.has(v.number) || result.status !== "completed" || result.conclusion !== "success") continue;
@@ -262,6 +263,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       try {
         if (!merger) throw new Error("没有合并接口");
         await merger.merge(v.number, sha, v.facts.pr);
+        mergePaths.push(`PR #${v.number} ${v.mergeBy ? `按 ${v.mergeBy} 的合并标签合并` : "按目标家数直接合并"}`);
         log(`PR #${v.number}:${how}合并了 ${sha.slice(0, 7)}`);
       } catch (e) {
         if (e instanceof TransientPrState) {
@@ -275,8 +277,13 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
         log(`PR #${v.number}:${how}合并 ${sha.slice(0, 7)} 没成:${e.message}`);
       }
     }
+    // 实际走了哪条路只有合并成功才知道：抽查靠这一行区分直接合并和按标签合并，不能从
+    // 判定摘要里的资格条件反推。
+    if (mergePaths.length) {
+      result = { ...result, summary: `实际合并路径：${mergePaths.join("；")}\n\n${result.summary}` };
+    }
     // 先尝试完该 head 上的合并，再补拒绝摘要，不能提前写坏共享必需检查。
-    if (syncNotes.length || mergeNotes.length || result !== mergeResult) {
+    if (syncNotes.length || mergeNotes.length || mergePaths.length || result !== mergeResult) {
       if (mergeNotes.length) result={...result,
         title:`${result.title}；合并未完成`,summary:mergeNotes.join('\n')+'\n\n'+result.summary};
       try {

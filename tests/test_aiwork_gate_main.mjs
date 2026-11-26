@@ -220,7 +220,9 @@ test("整机:不追加 status，合并时只读申请检查，每轮新建放行
       assert.deepEqual(checkWrites(round).filter((r) => r.method === "POST").map((r) => r.body.name),
         options.sync ? [policy.check_name, "aiwork-main-sync"] : [policy.check_name], "每轮只新建本轮检查");
       const writes = appWrites(round).filter((r) => r.method === "PATCH" || r.body?.name === policy.check_name);
-      assert.equal(writes.length, options.mergeFails ? 3 : 2, "历史多少条都只创建/改写本轮检查，不扫描或重写历史");
+      // 合并成功后多改写一次，补上「实际合并路径」；合并被拒本来就多一次拒绝摘要。
+      const mergeWrites = options.mergeFails ? 3 : options.mergeReady && !options.sync ? 3 : 2;
+      assert.equal(writes.length, mergeWrites, "历史多少条都只创建/改写本轮检查，不扫描或重写历史");
       const [create, finish] = [writes[0], writes.at(-1)];
       assert.equal(create.method, "POST");
       assert.equal(create.body.head_sha, HEAD);
@@ -404,8 +406,9 @@ test("整机:业主贴了合并标签、判为放行 → 结论写完之后,用�
   try {
     const { code, out } = await runMain(gh.url);
     assert.equal(code, 0, out);
-    const last = appWrites(gh.log).at(-1);
-    assert.equal(last.body.conclusion, "success", out);
+    const writes = appWrites(gh.log);
+    const conclusion = writes.find((r) => r.method === "PATCH");
+    assert.equal(conclusion.body.conclusion, "success", out);
     const merge = gh.log.filter((r) => r.url === "/repos/o/r/pulls/10/merge");
     assert.equal(merge.length, 1, out);
     assert.equal(merge[0].method, "PUT");
@@ -415,8 +418,10 @@ test("整机:业主贴了合并标签、判为放行 → 结论写完之后,用�
     const tok = gh.log.find((r) => r.url === "/app/installations/777/access_tokens" && !r.body.permissions.checks);
     assert.deepEqual(tok.body, { repositories: ["r"], permissions: { contents: "write", pull_requests: "write", workflows: "write" } });
     assert.ok(checkWrites(gh.log).every((r) => r.auth !== "Bearer app-merge-token"), "发检查不用合并令牌");
-    const written = gh.log.indexOf(last);
+    const written = gh.log.indexOf(conclusion);
     assert.ok(written >= 0 && written < gh.log.indexOf(merge[0]), "先写放行的结论,再合并");
+    assert.match(writes.at(-1).body.output.summary, /实际合并路径：PR #10 按 SunJ1ayu 的合并标签合并/,
+      "合并后补写的摘要要记实际走的标签路径");
   } finally {
     gh.server.close();
   }

@@ -167,6 +167,17 @@ test("本仓库的两份 workflow 与模板逐字相同", () => {
   assert.equal(read(".github/workflows/aiwork-review-ping.yml"), read("templates/aiwork-review-ping.yml"));
 });
 
+test("文档：只有被白名单挡下的普通 PR 才要业主批准，合并路径由检查摘要区分", () => {
+  const readme = read("gate/README.md");
+  assert.doesNotMatch(readme, /其余 PR 仍要业主在当前 head 上批准并贴合并标签/);
+  assert.match(readme, /被白名单挡下（当前 head 或已核实的干净同步沿用来源上有不允许的记录）的普通 PR 要业主在当前 head 上批准并贴合并标签/);
+  assert.match(readme, /只到底线、没有不允许记录的普通 PR 仍按合并标签合并，不额外要求业主批准/);
+  const rules = read("REVIEW-RULES.md");
+  assert.doesNotMatch(rules, /否则业主批准并贴合并标签/);
+  assert.match(rules, /被白名单挡下的要业主批准并贴合并标签/);
+  assert.match(read("workflow/skills/patrol/SKILL.md"), /「实际合并路径」写明按目标家数直接合并/);
+});
+
 test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwork main 的关卡，不检出 PR", () => {
   const text = read("templates/aiwork-gate.yml");
   assert.match(text, /^name: aiwork-gate$/m);

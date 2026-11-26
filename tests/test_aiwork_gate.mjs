@@ -842,6 +842,26 @@ test("直接合并:业主在当前 head 上批准不挡；要求修改、撤销�
   assert.match(oldApproval.summary, /业主记录 #99/, oldApproval.summary);
 });
 
+test("直接合并:业主同一 head 上的多次批准都不挡；更晚的要求修改、撤销仍挡", () => {
+  const first = { ...approve(HEAD, "2026-09-29T10:00:00Z"), id: 97 };
+  const second = { ...approve(HEAD, "2026-09-29T11:00:00Z"), id: 98 };
+  const twice = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), first, second],
+  }), downgradePolicy);
+  assert.equal(twice.conclusion, "success", twice.summary);
+  assert.equal(twice.direct_merge.ok, true, twice.summary);
+
+  const lateChanges = { ...approve(HEAD, "2026-09-29T12:00:00Z", "CHANGES_REQUESTED"), id: 100 };
+  const changed = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), first, second, lateChanges],
+  }), downgradePolicy);
+  assert.equal(changed.conclusion, "failure", changed.summary);
+  assert.equal(changed.direct_merge.ok, false, "更晚的要求修改照旧挡");
+  assert.match(changed.summary, /业主.*要求修改|G7/, changed.summary);
+});
+
 test("直接合并:可信账号的其他记录一律挡住；非可信账号 COMMENT 不挡；旧 head 且未同步沿用的不算", () => {
   for (const record of [
     { ...approve(), state: "COMMENTED", body: "" },
