@@ -17,7 +17,7 @@ import { TransientPrState } from './synchronize.mjs';
 //      半路卡住或死掉,已创建且未完成的检查停在 in_progress,压住上一次的结论;
 //   3. 每个 head:把以它为 head 的 PR 全判一遍,合成一个结论写一次;
 //   4. 结论写上且是放行,就当场合并这个 head 上该合的 PR:有可信合并请求的(见 decide.mjs 的
-//      mergeRequester),或普通 PR 凑够目标家数后由关卡直接合并(见 decide.mjs 的 direct_merge)。
+//      mergeRequester),或普通 PR 当前 head 干净、只有够数合格 PASS 时由关卡直接合并(见 decide.mjs 的 direct_merge)。
 //      带上判过的 head —— 合并用的就是这次刚读到的数据,判完之后又推了新提交,合并接口会拒。
 //      没放行的请求留着,等哪次运行判为放行再合。这就是"合并那一刻再判一次":不另起一套判定。
 //
@@ -254,7 +254,7 @@ async function gateAttempt({ repo, policy, api, poster, bindingApi = api, merger
       if (v.request && !v.mergeBy) {
         log(`PR #${v.number}:${v.request.reason}`);
       }
-      // 两条合并路径:可信的合并标签请求,或普通 PR 凑够目标家数后由关卡直接合并。
+      // 两条合并路径:可信的合并标签请求,或普通 PR 当前 head 干净、只有够数合格 PASS 时由关卡直接合并。
       // 后者不进 merge_request,也不产生合并授权;放行与直接合并条件都由 decide() 判。
       const direct = !v.mergeBy && v.r.direct_merge?.ok === true;
       if ((!v.mergeBy && !direct) || syncFailed.has(v.number) || result.status !== "completed" || result.conclusion !== "success") continue;

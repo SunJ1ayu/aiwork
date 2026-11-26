@@ -748,11 +748,13 @@ test("直接合并:有 BLOCK 或需要更多信息 → 不直接合并", () => {
   const nmi = direct(["web/src/a.ts"], [...twoFamilies(), review({ id: 3, family: "google", model: "gemini", verdict: "NEEDS_MORE_INFO" })]);
   assert.equal(nmi.conclusion, "success", nmi.summary);
   assert.equal(nmi.direct_merge.ok, false, nmi.summary);
-  assert.match(nmi.summary, /需要更多信息/);
+  assert.match(nmi.summary, /未允许的记录/);
+  assert.match(nmi.summary, /评审记录 #3/);
 
   const blockedResult = direct(["web/src/a.ts"], [...twoFamilies(), review({ id: 4, family: "google", model: "gemini", verdict: "BLOCK" })]);
   assert.equal(blockedResult.conclusion, "failure", blockedResult.summary);
   assert.equal(blockedResult.direct_merge.ok, false, blockedResult.summary);
+  assert.match(blockedResult.summary, /评审记录 #4/, blockedResult.summary);
 });
 
 test("直接合并:未配置 review_dispatch 的项目保持原行为，不新增直接合并", () => {
@@ -777,39 +779,64 @@ const summaryRecord = ({ id = 30, head = HEAD, next_step = "合并", has_p1 = fa
   ...over,
 });
 
-test("直接合并:当前 head 的汇总记录确认有 P1 或下一步不是合并 → 不直接合并", () => {
-  const p1 = decide(facts({
-    files: ["web/src/a.ts"],
-    reviews: [...twoFamilies(), summaryRecord({ next_step: "照单修", has_p1: true, task: "修复已复现的问题" })],
-  }), downgradePolicy);
-  assert.equal(p1.conclusion, "success", "汇总记录不改变放行底线");
-  assert.equal(p1.direct_merge.ok, false, p1.summary);
-  assert.match(p1.summary, /汇总记录确认还有 P1/, p1.summary);
-
-  const handoff = decide(facts({
-    files: ["web/src/a.ts"],
-    reviews: [...twoFamilies(), summaryRecord({ next_step: "交业主", has_p1: false })],
-  }), downgradePolicy);
-  assert.equal(handoff.conclusion, "success", "汇总记录不改变放行底线");
-  assert.equal(handoff.direct_merge.ok, false, handoff.summary);
-  assert.match(handoff.summary, /下一步是「交业主」/, handoff.summary);
-});
-
-test("直接合并:汇总记录写合并、别人写的、旧 head、改写过的都不挡", () => {
+test("直接合并:当前 head 上任何汇总记录都不直接合并，包括写「合并」、读不清和改写过的", () => {
   const records = [
     summaryRecord({ next_step: "合并", has_p1: false }),
-    summaryRecord({ next_step: "合并", has_p1: false, login: "other-user" }),
-    summaryRecord({ next_step: "合并", has_p1: false, head: OLD, commit_id: OLD }),
-    summaryRecord({ next_step: "照单修", has_p1: true, task: "修复已复现的问题", edited_at: "2026-09-29T10:41:00Z" }),
+    summaryRecord({ next_step: "照单修", has_p1: true, task: "修复已复现的问题" }),
+    summaryRecord({ next_step: "交业主", has_p1: false }),
+    summaryRecord({ next_step: "合并", has_p1: false, edited_at: "2026-09-29T10:41:00Z" }),
+    summaryRecord({ next_step: "合并", has_p1: false, body: "```aiwork-summary\nnot json\n```\n" }),
   ];
   for (const record of records) {
     const result = decide(facts({
       files: ["web/src/a.ts"],
       reviews: [...twoFamilies(), record],
     }), downgradePolicy);
-    assert.equal(result.conclusion, "success", result.summary);
-    assert.equal(result.direct_merge.ok, true, `${record.login} ${record.commit_id} ${result.summary}`);
+    assert.equal(result.conclusion, "success", "汇总记录不改变放行底线");
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, new RegExp(`汇总记录 #${record.id}`), result.summary);
   }
+});
+
+test("直接合并:业主在当前 head 上要求修改或被撤销也不直接合并", () => {
+  for (const state of ["CHANGES_REQUESTED", "DISMISSED"]) {
+    const result = decide(facts({
+      files: ["web/src/a.ts"],
+      reviews: [...twoFamilies(), approve(HEAD, "2026-09-29T11:00:00Z", state)],
+    }), downgradePolicy);
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, /业主记录 #99/, result.summary);
+  }
+});
+
+test("直接合并:只有合格 PASS 以外的记录一律挡住，旧 head 且未同步沿用的不算", () => {
+  for (const record of [
+    approve(),
+    review({ id: 40, login: "aiwork-build-deepseek[bot]", type: "Bot" }),
+    review({ id: 41, login: "someone", type: "User", state: "APPROVED" }),
+  ]) {
+    const result = decide(facts({
+      files: ["web/src/a.ts"],
+      reviews: [...twoFamilies(), record],
+    }), downgradePolicy);
+    assert.equal(result.conclusion, "success", result.summary);
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, /未允许的记录/, result.summary);
+  }
+
+  const oldOnly = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), summaryRecord({ head: OLD, commit_id: OLD })],
+  }), downgradePolicy);
+  assert.equal(oldOnly.direct_merge.ok, true, "旧 head 且没有同步沿用，不在白名单检查范围");
+
+  const synced = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), summaryRecord({ head: OLD, commit_id: OLD })],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.equal(synced.direct_merge.ok, false, "同步沿用的旧 head 记录也要看");
+  assert.match(synced.summary, /汇总记录 #30/, synced.summary);
 });
 const downgraded = (extra = {}) => decide(facts({
   files: ["web/src/a.ts"],
@@ -829,6 +856,7 @@ test("汇总降级:当前 head 上登记账号的合法降级记录让 BLOCK 不
   assert.equal(result.direct_merge.ok, false, "被降级的 BLOCK 不能让直接合并成立");
   assert.match(result.summary, /直接合并/);
   assert.match(result.summary, /汇总降级/);
+  assert.match(result.summary, /降级记录 #20/);
 });
 
 test("汇总降级:非汇总账号、旧 head、格式不合、降级对象不是当前 head 的 BLOCK 都不认", () => {
@@ -865,7 +893,8 @@ test("直接合并:评审范围不合格的需要更多信息也不能直接合�
       review({ id: 3, family: "google", model: "gemini", verdict: "NEEDS_MORE_INFO", ...over }),
     ]);
     assert.equal(result.direct_merge.ok, false, result.summary);
-    assert.match(result.summary, /需要更多信息/);
+    assert.match(result.summary, /未允许的记录/);
+    assert.match(result.summary, /评审记录 #3/);
   }
 });
 
@@ -878,6 +907,19 @@ test("汇总降级:当前 head 的降级记录不能降级同步沿用来的旧�
   }), downgradePolicy);
   assert.match(result.summary, /G5/, "旧提交上的 BLOCK 仍在 G5");
   assert.doesNotMatch(result.summary, /汇总降级/, "当前 head 的记录不能降级旧提交 BLOCK");
+});
+
+test("汇总降级:干净同步产生新 head 后旧 head 的降级记录不沿用，BLOCK 重新进入 G5（#242 已记录）", () => {
+  const oldBlock = review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" });
+  const oldDowngrade = downgradeRecord({ head: OLD, commit_id: OLD, reviews: [5] });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), oldBlock, oldDowngrade],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "failure", result.summary);
+  assert.match(result.summary, /❌ G5/, "旧 head 的降级记录不在当前 head，BLOCK 重新拦");
+  assert.doesNotMatch(result.summary, /汇总降级：评审 #5/, "旧 head 的降级记录不被当前判定采用");
 });
 
 test("汇总降级:全部 BLOCK 降级且业主在当前 head 批准后放行（PR #172 情形），仍不能直接合并", () => {

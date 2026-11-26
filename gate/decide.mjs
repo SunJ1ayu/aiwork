@@ -24,7 +24,7 @@ import { reviewPlan } from "./review-plan.mjs";
 //      批准不从沿用的旧提交搬移;但业主在沿用来源上更新的反对/撤销会挡住放行,须在当前 head 上重新批准。
 //   G8 数据不全 → 由 collect.mjs 抛错,run.mjs 判 failure
 //
-// 放不放行只由 decide() 说了算;合不合并 = 放行 且（合并请求算数，或普通 PR 满足直接合并条件；mergeRequester / direct_merge，run.mjs 第 4 步）。
+// 放不放行只由 decide() 说了算;合不合并 = 放行 且（合并请求算数，或普通 PR 满足直接合并白名单条件；mergeRequester / direct_merge，run.mjs 第 4 步）。
 
 // 通用默认上限；项目策略只在需要覆盖时提供 limit。
 export const DEFAULT_MODIFICATION_ROUND_LIMIT = 3;
@@ -280,6 +280,20 @@ function readSummaryRecords(reviews, config) {
   return { limit, byHead, records: [...byHead.values()], unclear };
 }
 
+// 只在直接合并的白名单里用：给挡住合并的记录一个可读名字。记录类型只影响摘要，
+// 是否允许一律由调用方按「是不是合格 PASS」判断。
+function directRecordName(r, policy) {
+  const who = r.login ?? "(未知账号)";
+  if (summaryBlocks(r.body ?? "").length) return `汇总记录 #${r.id}（${who}）`;
+  if (downgradeBlocks(r.body ?? "").length) return `降级记录 #${r.id}（${who}）`;
+  const summaryAccount = policy.modification_rounds?.summary_account;
+  if (summaryAccount && r.login?.toLowerCase() === summaryAccount.toLowerCase()) {
+    return `汇总账号记录 #${r.id}（${who}）`;
+  }
+  if (r.login === policy.owner) return `业主记录 #${r.id}（${who}）`;
+  return `评审记录 #${r.id}（${who}，${r.state ?? "状态未知"}）`;
+}
+
 // 只追加派单提示，不改变 G1–G8；直接合并另读同一份结果的当前 head 记录。
 function modificationRoundLine(summary) {
   const { limit, records, unclear } = summary;
@@ -360,6 +374,14 @@ export function decide(facts, policy) {
     passes.push({ id: r.id, family: count.family, model: v.model });
   }
   const stale = botReviews.length - onHead.length;
+  // 直接合并的白名单：当前 head 和同步沿用来源上，只允许上面计过家数的合格 PASS。
+  // 其余评审（含汇总/降级记录、读不清的记录、业主和其他账号的表态）都算「别的记录」。
+  const allowedDirectReviewIds = new Set(passes.map((p) => p.id));
+  const unexpectedDirectRecords = [];
+  for (const r of facts.reviews) {
+    if (!reviewHeads.has(r.commit_id) || allowedDirectReviewIds.has(r.id)) continue;
+    unexpectedDirectRecords.push(directRecordName(r, policy));
+  }
 
   // 人的表态:业主单独看(G7);其他人最后一次表态不是 Approve 的,都算 BLOCK(G5)
   const { all: stances, current: currentStances } = stancesOnHeads(facts.reviews, policy, head, reviewHeads);
@@ -468,33 +490,26 @@ export function decide(facts, policy) {
     add(ownerOk, "G7", `需要业主在当前 head 上批准(${needOwner.join("、")}):${why}`);
   }
 
-  // 直接合并:目标家数只在这里用。判卷面 / high / 汇总降级 / 作者 UNKNOWN 的 PR 仍走
-  // 业主批准 + 合并标签；其余普通 PR 在凑够目标家数的合格 PASS、没有 BLOCK 或
-  // 「需要更多信息」、CI 绿时由关卡直接合并。未配置 review_dispatch 的项目保持原行为。
+  // 直接合并是白名单：当前 head（及同步沿用来源）上只允许计过家数的合格 PASS。
+  // 其余记录（汇总/降级、BLOCK、需要更多信息、业主和其他账号的表态、读不清的围栏）
+  // 都从 `unexpectedDirectRecords` 进来；以后出现新记录类型也默认不放行。
+  // 判卷面 / high / 作者 UNKNOWN 仍走业主批准 + 合并标签；未配置 review_dispatch 保持原行为。
   const targetOk = passFamilies.length >= plan.target;
   const directReasons = [];
   if (policy.review_dispatch) {
-    if (judging.length || high.length) directReasons.push("改了判卷面或走 high 路径，仍要业主批准并贴合并标签");
-    else if (downgraded.size) directReasons.push("有汇总降级，仍要业主批准并贴合并标签");
-    else if (!author.known) directReasons.push("作者 UNKNOWN，要业主批准");
-    else {
-      const summaryStep = summaryRead?.byHead.get(head)?.value;
-      if (summaryStep?.has_p1) {
-        directReasons.push(`汇总记录确认还有 P1（下一步是「${summaryStep.next_step}」），不能直接合并`);
-      } else if (summaryStep && summaryStep.next_step !== "合并") {
-        directReasons.push(`汇总记录下一步是「${summaryStep.next_step}」，不是「合并」，不能直接合并`);
-      }
-      if (facts.pr.draft) directReasons.push("草稿 PR 不能直接合并");
-      if (!ciOk) directReasons.push(pending ? "CI 还在跑" : "CI 没通过");
-      if (!reviewOk) directReasons.push(`合格 PASS 不足底线 ${plan.g3_minimum} 家`);
-      if (!targetOk) directReasons.push(`合格 PASS ${passFamilies.length} 家，目标 ${plan.target} 家`);
-      if (blocked) directReasons.push("还有 BLOCK");
-      if (needsMore.length) directReasons.push(`还有需要更多信息:${needsMore.map((p) => `${p.model}(${p.family})`).join("、")}`);
-      if (ownerObjection) directReasons.push("业主要求修改");
+    if (unexpectedDirectRecords.length) {
+      const shown = unexpectedDirectRecords.slice(0, 5);
+      directReasons.push(`当前 head 上只允许目标家数内的合格 PASS；另有 ${unexpectedDirectRecords.length} 条未允许的记录：${shown.join("、")}${unexpectedDirectRecords.length > 5 ? " 等" : ""}`);
     }
+    if (judging.length || high.length) directReasons.push("改了判卷面或走 high 路径，仍要业主批准并贴合并标签");
+    if (!author.known) directReasons.push("作者 UNKNOWN，要业主批准");
+    if (facts.pr.draft) directReasons.push("草稿 PR 不能直接合并");
+    if (!ciOk) directReasons.push(pending ? "CI 还在跑" : "CI 没通过");
+    if (!reviewOk) directReasons.push(`合格 PASS 不足底线 ${plan.g3_minimum} 家`);
+    if (!targetOk) directReasons.push(`合格 PASS ${passFamilies.length} 家，目标 ${plan.target} 家`);
     const directOk = directReasons.length === 0;
     add(directOk, "直接合并", directOk
-      ? `按目标家数直接合并：目标 ${plan.target} 家合格 PASS 已凑齐，没有 BLOCK 或需要更多信息，CI 绿。`
+      ? `按白名单直接合并：目标 ${plan.target} 家合格 PASS 已凑齐，当前 head 上没有其他记录，CI 绿。`
       : `不直接合并：${directReasons.join("；")}。`);
   }
   const directMerge = { enabled: Boolean(policy.review_dispatch), ok: Boolean(policy.review_dispatch) && directReasons.length === 0, reasons: directReasons };
