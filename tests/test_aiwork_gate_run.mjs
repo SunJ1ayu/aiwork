@@ -715,14 +715,34 @@ test("M18 有不允许的记录：没有业主批准时贴合并标签也不合�
   assert.match(withApproval.summary, /不直接合并/);
 });
 
-test("M19 白名单允许的业主批准、汇总唯一「合并」记录不挡直接合并", async () => {
+test("M19 业主在当前 head 上的批准不挡直接合并", async () => {
   const passes = [botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")];
-  for (const extra of [ownerApprove(), summaryReview({ next_step: "合并" })]) {
-    const r = recorder();
-    const pr = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, extra) };
-    await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
-    assert.deepEqual(merges(r.calls), [[10, HEAD]], JSON.stringify(extra));
-  }
+  const r = recorder();
+  const pr = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, ownerApprove()) };
+  await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), [[10, HEAD]]);
+});
+
+test("M19b 汇总账号写过任何记录（含「合并 / 无 P1」）都不直接合并；业主批准后才按标签合并", async () => {
+  const passes = [botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")];
+  const record = summaryReview({ next_step: "合并" });
+
+  const without = recorder();
+  const plain = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, record) };
+  await run(without, prsApi(without.calls, { 10: plain }), { policy: downgradePolicy, merger: mergeRecorder(without) });
+  assert.deepEqual(merges(without.calls), [], "汇总记录只能挡、不能授权");
+  assert.match(finishSummary(without.calls), /不直接合并/);
+  assert.match(finishSummary(without.calls), /汇总记录 #60/);
+
+  const approved = recorder();
+  const withOwner = {
+    head: HEAD, files: ["web/a.ts"], verdict: null,
+    summaries: summaries(passes, record, ownerApprove()),
+    labels: [MERGE], events: [labeled(policy.owner)],
+  };
+  await run(approved, prsApi(approved.calls, { 10: withOwner }), { policy: downgradePolicy, merger: mergeRecorder(approved) });
+  assert.deepEqual(merges(approved.calls), [[10, HEAD]], finishSummary(approved.calls));
+  assert.match(finishSummary(approved.calls), /实际合并路径：PR #10 按 SunJ1ayu 的合并标签合并/);
 });
 
 test("M20 两家 PASS 且贴了合并标签：摘要记的实际合并路径是标签，不是直接合并", async () => {

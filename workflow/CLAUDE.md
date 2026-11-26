@@ -23,10 +23,10 @@
    `review-pr` 必须在沙箱外运行；使用目标仓库当前 PR head 和 main 的规则来源。
    `review-pr` 从共享检出跑，跑之前先把共享检出更新到最新 main。
    派评审使用 `review-pr --auto --builder-family 本次执行方家族`；分档、顺序和目标见项目 main 的 `.aiwork/policy.json`，工具用法见 README「Review commands」。
-   各腿出结果后，由汇总处理（见 `summary` skill）。普通 PR 只到放行底线、没到目标家数时，由汇总按 `summary` skill 第 4 步补派评审，凑够后由关卡直接合并；补派也凑不够再交业主。
+   各腿出结果后，由汇总处理（见 `summary` skill）。普通 PR 只到放行底线、没到目标家数时，由汇总按 `summary` skill 第 4 步补派评审，凑够后按 `gate/README.md`「合并」判断能否直接合并；汇总账号在当前 head 写过记录时，这一单要业主批准并贴合并标签；补派也凑不够再交业主。
 6. 修改方怎么修，见 REVIEW-RULES 开头的「一轮」。
    合并由项目关卡或业主完成。合并后用 `sync-workflow-docs` 同步部署出去的工作流文档。
-   普通 PR 凑够目标家数后由关卡直接合并，不需要合并标签；判卷面、high、汇总降级等仍要业主在当前 head 批准并贴合并标签（见 `gate/README.md`「合并」）。
+   普通 PR 凑够目标家数、当前 head 上没有汇总记录时由关卡直接合并，不需要合并标签；判卷面、high、汇总降级、有汇总记录等仍要业主在当前 head 批准并贴合并标签（见 `gate/README.md`「合并」）。
 
 ## 执行方提问与续接
 

@@ -213,7 +213,7 @@ const downgradeBlocks = (body) => fencedBlocks(body, "aiwork-downgrade");
 // 字段恰好三个、核实过程非空，且列出的都是当前 head 上评审机器人的 BLOCK。
 // 格式定义在 summary skill；tests/test_aiwork_gate.mjs 从 schema 生成对照用例，只改一处会先红。
 const DOWNGRADE_FIELDS = "evidence,head_sha,reviews";
-function parseDowngradeRecord(r, head) {
+export function parseDowngradeRecord(r, head) {
   if (r.state !== "COMMENTED" || r.edited_at) return null;
   const blocks = downgradeBlocks(r.body);
   if (blocks.length !== 1) return null;
@@ -223,6 +223,8 @@ function parseDowngradeRecord(r, head) {
   try { v = JSON.parse(block.json); } catch { return null; }
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   if (Object.keys(v).sort().join(",") !== DOWNGRADE_FIELDS) return null;
+  // head_sha 的格式由 summary skill 的 schema 定义；这里先按同一形状校验，再要求就是当前 head。
+  if (typeof v.head_sha !== "string" || !SHA_RE.test(v.head_sha)) return null;
   if (v.head_sha !== head) return null;
   if (!Array.isArray(v.reviews) || v.reviews.length === 0) return null;
   if (!v.reviews.every((id) => Number.isSafeInteger(id) && id > 0)) return null;
@@ -231,8 +233,7 @@ function parseDowngradeRecord(r, head) {
   return v;
 }
 
-// 汇总记录的唯一读取：轮数显示，以及直接合并白名单里允许的汇总记录，都只调用这里；
-// 白名单对其余记录仍扫描原始评审列表。
+// 汇总记录的唯一读取：轮数显示只调用这里，白名单不再把任何汇总记录当作放行依据。
 // 返回每个 head 最早的一条可信记录（byHead）、全部可信记录、上限，以及读不清的原因。
 // 别人写的、旧 head 的记录留在 byHead 的各 head 下，由调用方只看当前 head；改写过、格式错误、
 // 字段冲突的记录不进 byHead，只让轮数显示读不清，不提供合并结论。
@@ -282,7 +283,7 @@ function readSummaryRecords(reviews, config) {
 }
 
 // 只在直接合并的白名单里用：给挡住合并的记录一个可读名字。记录类型只影响摘要，
-// 是否允许由调用方的白名单判断（合格 PASS、汇总唯一「合并」记录、业主当前批准）。
+// 是否允许由调用方的白名单判断（合格 PASS、业主当前批准）。
 function directRecordName(r, policy) {
   const who = r.login ?? "(未知账号)";
   if (summaryBlocks(r.body ?? "").length) return `汇总记录 #${r.id}（${who}）`;
@@ -311,7 +312,7 @@ export function decide(facts, policy) {
   const head = facts.pr.head_sha;
   const lines = [];
   const add = (ok, rule, text) => lines.push(`${ok ? "✅" : "❌"} ${rule} ${text}`);
-  // 汇总记录读一次：轮数显示和直接合并白名单里允许的汇总记录共用同一份解析。
+  // 汇总记录读一次，只用于轮数显示；白名单不使用汇总记录。
   const summaryRead = policy.modification_rounds ? readSummaryRecords(facts.reviews, policy.modification_rounds) : null;
 
   // G1
@@ -379,7 +380,7 @@ export function decide(facts, policy) {
   const ownerLast = [...stances.values()].find((r) => r.login === policy.owner && r.type === "User") ?? null;
   const ownerCurrent = [...currentStances.values()].find((r) => r.login === policy.owner && r.type === "User") ?? null;
   // 直接合并的白名单：当前 head 和同步沿用来源上，只允许计过家数的合格 PASS，
-  // 外加业主在当前 head 上的批准、汇总在当前 head 上唯一合法且写「合并 / 无 P1」的记录。
+  // 外加业主在当前 head 上的批准。汇总账号的记录只能挡、不能授权：写过任何记录都不直接合并。
   // 其余可信账号记录、任何看不懂的记录都算「别的记录」。
   const trustedDirectAccounts = new Set([
     policy.owner,
@@ -394,12 +395,6 @@ export function decide(facts, policy) {
     if (r.commit_id === head && r.login === policy.owner && r.type === "User" && r.state === "APPROVED") {
       allowedDirectReviewIds.add(r.id);
     }
-  }
-  // 汇总记录复用轮数显示的同一份解析：同 head 第二条、改写、格式坏、冲突都不会进 byHead，
-  // 或作为另一条记录留在下面被算作未允许，所以「唯一」不另写一份判断。
-  const summaryRecord = summaryRead?.byHead.get(head);
-  if (summaryRecord?.value.next_step === "合并" && summaryRecord.value.has_p1 === false) {
-    allowedDirectReviewIds.add(summaryRecord.id);
   }
   const unexpectedDirectRecords = [];
   for (const r of facts.reviews) {

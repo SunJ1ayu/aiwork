@@ -178,6 +178,23 @@ test("文档：只有被白名单挡下的普通 PR 才要业主批准，合并�
   assert.match(read("workflow/skills/patrol/SKILL.md"), /「实际合并路径」写明按目标家数直接合并/);
 });
 
+test("文档：汇总记录只能挡不能授权，任何汇总记录都不让普通 PR 直接合并", () => {
+  const readme = read("gate/README.md");
+  assert.doesNotMatch(readme, /「允许的记录」只有三种/);
+  assert.doesNotMatch(readme, /唯一一条格式合法、发出后未改写、写「合并」且 `has_p1: false` 的汇总记录/);
+  assert.match(readme, /「允许的记录」只有两种/);
+  assert.match(readme, /汇总账号的记录只能挡、不能授权/);
+  assert.match(readme, /写过任何记录，普通 PR 都不直接合并，合法的「合并 \/ 无 P1」记录也一样/);
+
+  const skill = read("workflow/skills/summary/SKILL.md");
+  assert.doesNotMatch(skill, /汇总唯一合法「合并」且无 P1 的记录外没有别的记录/);
+  assert.match(skill, /汇总记录只能挡、不能授权/);
+  assert.match(skill, /汇总账号在当前 head（含已核实的干净同步沿用来源）上写过任何记录/);
+
+  const workflow = read("workflow/CLAUDE.md");
+  assert.match(workflow, /当前 head 上没有汇总记录时由关卡直接合并/);
+});
+
 test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwork main 的关卡，不检出 PR", () => {
   const text = read("templates/aiwork-gate.yml");
   assert.match(text, /^name: aiwork-gate$/m);

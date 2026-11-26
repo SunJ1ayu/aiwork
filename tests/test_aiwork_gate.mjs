@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const { decide, parseReviewBlock, matchAny, conclusionLines } = await import("../gate/decide.mjs");
+const { decide, parseReviewBlock, matchAny, conclusionLines, parseDowngradeRecord } = await import("../gate/decide.mjs");
 const { collect, collectCi, collectPushes, paginate } = await import("../gate/collect.mjs");
 const policy = JSON.parse(readFileSync(new URL("./fixtures/gate-logic-policy.json", import.meta.url), "utf8"));
 const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
@@ -780,13 +780,34 @@ const summaryRecord = ({ id = 30, head = HEAD, next_step = "合并", has_p1 = fa
   ...over,
 });
 
-test("直接合并:当前 head 上唯一合法「合并」且无 P1 的汇总记录不挡", () => {
+test("直接合并:汇总账号在当前 head 上写过任何记录（含「合并 / 无 P1」）都不直接合并", () => {
   const result = decide(facts({
     files: ["web/src/a.ts"],
     reviews: [...twoFamilies(), summaryRecord({ next_step: "合并", has_p1: false })],
   }), downgradePolicy);
-  assert.equal(result.conclusion, "success", result.summary);
-  assert.equal(result.direct_merge.ok, true, result.summary);
+  assert.equal(result.conclusion, "failure", "汇总记录只能挡、不能授权，要业主批准");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /汇总记录 #30/, result.summary);
+  assert.match(result.summary, /业主.*批准/, result.summary);
+});
+
+test("直接合并:汇总正文写 BLOCK / 有 P1 / 照单修、记录却写「合并 / 无 P1」也不直接合并", () => {
+  const contradictory = summaryRecord({
+    next_step: "合并",
+    has_p1: false,
+    body: 'Conclusion: BLOCK\nP1：本轮实测有功能错误。\n下一步：照单修\n\n'
+      + '```aiwork-summary\n'
+      + JSON.stringify({ head_sha: HEAD, next_step: "合并", has_p1: false })
+      + '\n```\n',
+  });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), contradictory],
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "failure", result.summary);
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /汇总记录 #30/, result.summary);
+  assert.match(result.summary, /业主.*批准/, result.summary);
 });
 
 test("直接合并:汇总记录写 P1/其他下一步、多条、改写、读不清都挡住", () => {
@@ -1107,14 +1128,34 @@ test("summary skill 的降级记录定义直接生成关卡对照用例", () => 
   const schema = JSON.parse(match[1]);
   assert.equal(schema.title, "aiwork-downgrade");
 
+  // 只解释 schema 用到的关键字；定义里出现新关键字时先在这里红，逼着补出对应边界。
+  const SUPPORTED = new Set([
+    "title", "type", "required", "additionalProperties", "properties",
+    "pattern", "minLength", "maxLength", "minItems", "maxItems", "uniqueItems",
+    "items", "minimum", "maximum", "enum", "const",
+  ]);
+  const seen = new Set();
+  const walk = (spec) => {
+    for (const key of Object.keys(spec)) seen.add(key);
+    for (const child of Object.values(spec.properties ?? {})) walk(child);
+    if (spec.items && typeof spec.items === "object") walk(spec.items);
+  };
+  walk(schema);
+  assert.deepEqual([...seen].filter((key) => !SUPPORTED.has(key)), [], "schema 出现未支持的约束");
+
   function accepts(spec, value) {
+    if (Object.hasOwn(spec, "const") && value !== spec.const) return false;
+    if (spec.enum && !spec.enum.includes(value)) return false;
     if (spec.type === "object" && (!value || typeof value !== "object" || Array.isArray(value))) return false;
     if (spec.type === "array" && !Array.isArray(value)) return false;
     if (spec.type === "integer" && !Number.isSafeInteger(value)) return false;
-    if (spec.type && !["object", "array", "integer"].includes(spec.type) && typeof value !== spec.type) return false;
+    if (spec.type === "string" && typeof value !== "string") return false;
+    if (spec.type && !["object", "array", "integer", "string"].includes(spec.type) && typeof value !== spec.type) return false;
     if (Object.hasOwn(spec, "pattern") && (typeof value !== "string" || !new RegExp(spec.pattern).test(value))) return false;
     if (spec.minLength !== undefined && (typeof value !== "string" || value.length < spec.minLength)) return false;
+    if (spec.maxLength !== undefined && (typeof value !== "string" || value.length > spec.maxLength)) return false;
     if (spec.minItems !== undefined && (!Array.isArray(value) || value.length < spec.minItems)) return false;
+    if (spec.maxItems !== undefined && (!Array.isArray(value) || value.length > spec.maxItems)) return false;
     if (spec.uniqueItems && (!Array.isArray(value) || new Set(value).size !== value.length)) return false;
     if (spec.minimum !== undefined && (typeof value !== "number" || value < spec.minimum)) return false;
     if (spec.maximum !== undefined && (typeof value !== "number" || value > spec.maximum)) return false;
@@ -1127,54 +1168,83 @@ test("summary skill 的降级记录定义直接生成关卡对照用例", () => 
     return true;
   }
 
-  const recognize = (value, blocks = [blockReview()]) => {
-    const record = {
-      id: 20, login: "summary-user", type: "User", state: "COMMENTED", commit_id: HEAD,
-      submitted_at: "2026-09-29T10:30:00Z", edited_at: null,
-      body: "```" + schema.title + "\n" + JSON.stringify(value) + "\n```\n",
-    };
-    const result = decide(facts({ files: ["web/src/a.ts"], reviews: [...twoFamilies(), ...blocks, record] }), downgradePolicy);
-    return /汇总降级/.test(result.summary) && !/❌ G5/.test(result.summary);
+  const record = (value) => ({
+    id: 20, login: "summary-user", type: "User", state: "COMMENTED", commit_id: HEAD,
+    submitted_at: "2026-09-29T10:30:00Z", edited_at: null,
+    body: "```" + schema.title + "\n" + JSON.stringify(value) + "\n```\n",
+  });
+  // head 绑定是格式之外的规则：这里把合成记录的 commit_id/head 都对到候选值，
+  // 只比较「格式约束」本身；绑定由其他用例钉住。
+  const gateAccepts = (value) => {
+    const head = value && typeof value === "object" && typeof value.head_sha === "string" ? value.head_sha : HEAD;
+    return parseDowngradeRecord(record(value), head) !== null;
   };
 
-  const base = { head_sha: HEAD, reviews: [5], evidence: "核实过程" };
-  const candidates = [
-    base,
-    { ...base, head_sha: "short" },
-    { ...base, head_sha: HEAD.toUpperCase() },
-    { ...base, reviews: [] },
-    { ...base, reviews: [0] },
-    { ...base, reviews: [1.5] },
-    { ...base, reviews: [Number.MAX_SAFE_INTEGER + 1] },
-    { ...base, reviews: ["5"] },
-    { ...base, reviews: [5, 5] },
-    { ...base, evidence: "" },
-    { ...base, evidence: "   " },
-    { ...base, evidence: 42 },
-    { ...base, extra: true },
-    { reviews: [5], evidence: "核实过程" },
-    { head_sha: HEAD, evidence: "核实过程" },
-    { head_sha: HEAD, reviews: [5] },
-  ];
-  for (const value of candidates) {
-    assert.equal(recognize(value), accepts(schema, value), JSON.stringify(value));
-  }
-  const largerId = { ...base, reviews: [50] };
-  assert.equal(recognize(largerId, [blockReview(50)]), accepts(schema, largerId));
-
-  // 从定义本身生成合法记录；只改 schema 一处（例如字段改名）时这里会先红。
-  const generated = {};
+  // 从 schema 的 required/properties 生成合法基线；字段改名或必填变化会直接反映在这里。
+  const base = {};
   for (const key of schema.required) {
-    generated[key] = key === "head_sha" ? HEAD : key === "reviews" ? [5] : key === "evidence" ? "核实过程" : "x";
+    base[key] = key === "head_sha" ? HEAD : key === "reviews" ? [5] : key === "evidence" ? "核实过程" : "x";
   }
-  assert.deepEqual(Object.keys(generated).toSorted(), schema.required.toSorted());
-  assert.equal(accepts(schema, generated), true);
-  assert.equal(recognize(generated), true, `schema 生成的合法记录应被关卡认:${JSON.stringify(generated)}`);
+  assert.equal(accepts(schema, base), true, "schema 生成的基线应合法");
 
+  const stringBoundaries = (spec) => {
+    const values = ["", " ", "\n", "x", "xy", "x".repeat(3), "x".repeat(10), "0".repeat(40), "g".repeat(40), HEAD, HEAD.slice(1), HEAD + "0", HEAD.toUpperCase(), 42, null];
+    if (spec.minLength !== undefined) {
+      for (const n of [spec.minLength - 1, spec.minLength, spec.minLength + 1]) if (n >= 0) values.push("x".repeat(n));
+    }
+    if (spec.maxLength !== undefined) {
+      for (const n of [spec.maxLength - 1, spec.maxLength, spec.maxLength + 1]) if (n >= 0) values.push("x".repeat(n));
+    }
+    return values;
+  };
+  const valuesFor = (key, spec) => {
+    if (key === "head_sha") {
+      // 只给不合法或与当前 head 等长的值，避免把「有效但不同 head」的绑定规则混进格式对照。
+      return ["", "short", HEAD.slice(1), HEAD + "0", HEAD.toUpperCase(), "0".repeat(39), "0".repeat(41), "g".repeat(40), 42, null];
+    }
+    if (spec.type === "integer") {
+      const values = [0, -1, 1, 1.5, "1", Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1];
+      if (spec.minimum !== undefined) values.push(spec.minimum - 1, spec.minimum, spec.minimum + 1);
+      if (spec.maximum !== undefined) values.push(spec.maximum - 1, spec.maximum, spec.maximum + 1);
+      return values;
+    }
+    if (spec.type === "array") {
+      const values = [[], [5], [5, 5], [0], [-1], [1.5], ["5"], [Number.MAX_SAFE_INTEGER + 1]];
+      if (spec.minItems !== undefined) {
+        for (const n of [spec.minItems - 1, spec.minItems, spec.minItems + 1]) if (n >= 0) values.push(Array.from({ length: n }, (_, i) => i + 1));
+      }
+      if (spec.maxItems !== undefined) {
+        for (const n of [spec.maxItems - 1, spec.maxItems, spec.maxItems + 1]) if (n >= 0) values.push(Array.from({ length: n }, (_, i) => i + 1));
+      }
+      if (spec.items) for (const item of valuesFor("item", spec.items)) values.push([item]);
+      return values;
+    }
+    return stringBoundaries(spec);
+  };
+
+  const candidates = [base, { ...base, extra: true }];
+  for (const key of schema.required) {
+    const { [key]: _omit, ...rest } = base;
+    candidates.push(rest);
+  }
+  for (const [key, spec] of Object.entries(schema.properties ?? {})) {
+    for (const value of valuesFor(key, spec)) candidates.push({ ...base, [key]: value });
+  }
+  for (const value of candidates) {
+    assert.equal(gateAccepts(value), accepts(schema, value),
+      `关卡与 summary skill 的格式定义不一致:${JSON.stringify(value)}`);
+  }
+
+  // 端到端：合法示例仍能让关卡降级。
   const exampleMatch = /```aiwork-downgrade\n([\s\S]*?)\n```/.exec(skill);
   assert.ok(exampleMatch, "summary skill 必须有降级记录示例");
   const example = JSON.parse(exampleMatch[1]);
   example.head_sha = HEAD;
   assert.equal(accepts(schema, example), true);
-  assert.equal(recognize(example, example.reviews.map((id) => blockReview(id))), true);
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), ...example.reviews.map((id) => blockReview(id)), record(example)],
+  }), downgradePolicy);
+  assert.match(result.summary, /汇总降级/);
+  assert.doesNotMatch(result.summary, /❌ G5/);
 });
