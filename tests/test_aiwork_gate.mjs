@@ -1000,17 +1000,51 @@ test("汇总降级:当前 head 的降级记录不能降级同步沿用来的旧�
   assert.doesNotMatch(result.summary, /汇总降级/, "当前 head 的记录不能降级旧提交 BLOCK");
 });
 
-test("汇总降级:干净同步产生新 head 后旧 head 的降级记录不沿用，BLOCK 重新进入 G5（#242 已记录）", () => {
+test("汇总降级:干净同步产生新 head 后旧 head 上合法的降级记录跟原评审一样继续算数", () => {
   const oldBlock = review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" });
   const oldDowngrade = downgradeRecord({ head: OLD, commit_id: OLD, reviews: [5] });
   const result = decide(facts({
     files: ["web/src/a.ts"],
-    reviews: [...twoFamilies(), oldBlock, oldDowngrade],
+    reviews: [...twoFamilies(), oldBlock, oldDowngrade, approve()],
     synchronization: { review_heads: [OLD] },
   }), downgradePolicy);
-  assert.equal(result.conclusion, "failure", result.summary);
-  assert.match(result.summary, /❌ G5/, "旧 head 的降级记录不在当前 head，BLOCK 重新拦");
-  assert.doesNotMatch(result.summary, /汇总降级：评审 #5/, "旧 head 的降级记录不被当前判定采用");
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.doesNotMatch(result.summary, /❌ G5/, "沿用来源上的降级把 BLOCK 移走");
+  assert.match(result.summary, /汇总降级：评审 #5/, result.summary);
+  assert.equal(result.direct_merge.ok, false, "有降级记录仍要合并标签，不能直接合并");
+});
+
+test("汇总降级:旧 head 上两家的 BLOCK 全部降级，关卡干净同步到新 head 后仍按家族计入 G3（#242 已修）", () => {
+  const oldBlocks = [
+    review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" }),
+    review({ id: 6, commit: OLD, family: "deepseek", model: "deepseek-test", verdict: "BLOCK" }),
+  ];
+  const oldDowngrade = downgradeRecord({ head: OLD, commit_id: OLD, reviews: [5, 6] });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...oldBlocks, oldDowngrade, approve()],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.deepEqual(result.review_state.downgraded_families.sort(), ["deepseek", "google"]);
+  assert.equal(result.review_state.pass_families.length, 0, "这两家只有降级的 BLOCK，没有 PASS");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /汇总降级：评审 #5、评审 #6/, result.summary);
+});
+
+test("汇总降级:沿用来源上的降级记录只能降它自己那条提交的 BLOCK", () => {
+  const oldBlock = review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" });
+  const currentBlock = review({ id: 6, commit: HEAD, family: "deepseek", model: "deepseek-test", verdict: "BLOCK" });
+  const oldDowngrade = downgradeRecord({ head: OLD, commit_id: OLD, reviews: [5, 6] });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), oldBlock, currentBlock, oldDowngrade, approve()],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.match(result.summary, /❌ G5/, "记录没降成，旧提交和当前 head 的 BLOCK 都还在");
+  assert.deepEqual(result.blocks.map((b) => b.id).sort(), [5, 6], result.summary);
+  assert.doesNotMatch(result.summary, /汇总降级：评审 #5/, "列了别的提交的评审，整条记录不认");
+  assert.equal(result.direct_merge.ok, false, result.summary);
 });
 
 test("汇总降级:全部 BLOCK 降级且业主在当前 head 批准后放行（PR #172 情形），仍不能直接合并", () => {

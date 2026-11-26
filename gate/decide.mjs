@@ -209,8 +209,9 @@ function fencedBlocks(body, title) {
 const summaryBlocks = (body) => fencedBlocks(body, "aiwork-summary");
 const downgradeBlocks = (body) => fencedBlocks(body, "aiwork-downgrade");
 
-// 汇总降级的机器记录：只认登记账号在当前 head 上发出、未被改写、恰好一个记录围栏、
-// 字段恰好三个、核实过程非空，且列出的都是当前 head 上评审机器人的 BLOCK。
+// 汇总降级的机器记录：只认登记账号在判定采用的头（当前 head 或已核实的干净同步沿用来源）
+// 上发出、未被改写、恰好一个记录围栏、字段恰好三个、核实过程非空，且记录里的 head_sha
+// 就是它自己所在的提交。列出的编号是否属于同一提交，由调用方按 BLOCK 所在提交核对。
 // 格式定义在 summary skill；tests/test_aiwork_gate.mjs 从 schema 生成对照用例，只改一处会先红。
 const DOWNGRADE_FIELDS = "evidence,head_sha,reviews";
 export function parseDowngradeRecord(r, head) {
@@ -408,26 +409,25 @@ export function decide(facts, policy) {
     blocks.push({ id: r.id, bot: false, at: effectiveAt(r, policy), family: "评审人", model: `${login}${r.state === "DISMISSED" ? "(被撤销的评审)" : " 要求修改"}` });
   }
 
-  // 汇总降级只降当前 head 上评审机器人的 BLOCK:登记账号、未改写、格式完整、核实过程非空，
-  // 且列出的每条都在当前 head 的 BLOCK 里。人的反对不能这样降级。
-  // 只认当前 head 上的 BLOCK；同步沿用的旧提交评审不在降级范围里。
-  const currentBotBlocks = new Map(blocks
-    .filter((b) => b.bot && b.commit_id === head)
-    .map((b) => [b.id, b]));
+  // 汇总降级只降评审机器人的 BLOCK:登记账号、未改写、格式完整、核实过程非空，
+  // 且列出的每条都是同一提交上的 BLOCK。干净同步沿用来的来源提交上的降级记录
+  // 跟那些评审一样继续算数；记录只能降它自己那条提交上的 BLOCK，不能降别的提交的。
+  // 人的反对不能这样降级。
+  const botBlocksById = new Map(blocks.filter((b) => b.bot).map((b) => [b.id, b]));
   const downgraded = new Set();
   const summaryAccount = policy.modification_rounds?.summary_account;
   if (summaryAccount) {
     for (const r of facts.reviews) {
-      if (r.login?.toLowerCase() !== summaryAccount.toLowerCase() || r.commit_id !== head) continue;
-      const record = parseDowngradeRecord(r, head);
-      if (!record || !record.reviews.every((id) => currentBotBlocks.has(id))) continue;
+      if (r.login?.toLowerCase() !== summaryAccount.toLowerCase() || !reviewHeads.has(r.commit_id)) continue;
+      const record = parseDowngradeRecord(r, r.commit_id);
+      if (!record || !record.reviews.every((id) => botBlocksById.get(id)?.commit_id === r.commit_id)) continue;
       for (const id of record.reviews) downgraded.add(id);
     }
   }
   const downgradedFamilies = new Set();
   const uncountedDowngrades = [];
   for (const id of downgraded) {
-    const b = currentBotBlocks.get(id);
+    const b = botBlocksById.get(id);
     // 只降 G5 还不够补评审家数：调用正常计数同一个「能不能计家数」判断。
     // 改写过、看不懂、范围不合格的评审仍按 P2 降级，但不能拿正文里的家族补 G3/G6。
     if (!b) continue;

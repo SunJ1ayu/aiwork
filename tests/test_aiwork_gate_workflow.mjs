@@ -195,6 +195,19 @@ test("文档：汇总记录只能挡不能授权，任何汇总记录都不让�
   assert.match(workflow, /当前 head 上没有汇总记录时由关卡直接合并/);
 });
 
+test("文档：干净同步沿用来源上的汇总降级跟原评审一样继续算数，只降同一提交的 BLOCK", () => {
+  const readme = read("gate/README.md");
+  assert.doesNotMatch(readme, /旧 head 上（包括同步沿用的来源提交）的/);
+  assert.doesNotMatch(readme, /列出的编号都是当前 head 上评审机器人的 BLOCK/);
+  assert.match(readme, /干净同步沿用来源上的降级记录跟来源上的评审一样继续算数，不因同步失效/);
+  assert.match(readme, /每条记录只能降它自己那条提交上的 BLOCK，不能降别的提交（包括当前 head）的 BLOCK/);
+
+  const skill = read("workflow/skills/summary/SKILL.md");
+  assert.doesNotMatch(skill, /别人写的、旧 head 上的、改写过的、格式不合的记录，关卡都不认/);
+  assert.match(skill, /干净同步沿用来源上的降级记录跟来源上的评审一样继续算数，不因同步失效/);
+  assert.match(skill, /记录只能降它自己那条提交上的 BLOCK，不能降别的提交的 BLOCK/);
+});
+
 test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwork main 的关卡，不检出 PR", () => {
   const text = read("templates/aiwork-gate.yml");
   assert.match(text, /^name: aiwork-gate$/m);
