@@ -231,7 +231,8 @@ function parseDowngradeRecord(r, head) {
   return v;
 }
 
-// 汇总记录的唯一读取：轮数显示和普通 PR 直接合并都只调用这里。
+// 汇总记录的唯一读取：轮数显示，以及直接合并白名单里允许的汇总记录，都只调用这里；
+// 白名单对其余记录仍扫描原始评审列表。
 // 返回每个 head 最早的一条可信记录（byHead）、全部可信记录、上限，以及读不清的原因。
 // 别人写的、旧 head 的记录留在 byHead 的各 head 下，由调用方只看当前 head；改写过、格式错误、
 // 字段冲突的记录不进 byHead，只让轮数显示读不清，不提供合并结论。
@@ -281,7 +282,7 @@ function readSummaryRecords(reviews, config) {
 }
 
 // 只在直接合并的白名单里用：给挡住合并的记录一个可读名字。记录类型只影响摘要，
-// 是否允许一律由调用方按「是不是合格 PASS」判断。
+// 是否允许由调用方的白名单判断（合格 PASS、汇总唯一「合并」记录、业主当前批准）。
 function directRecordName(r, policy) {
   const who = r.login ?? "(未知账号)";
   if (summaryBlocks(r.body ?? "").length) return `汇总记录 #${r.id}（${who}）`;
@@ -310,7 +311,7 @@ export function decide(facts, policy) {
   const head = facts.pr.head_sha;
   const lines = [];
   const add = (ok, rule, text) => lines.push(`${ok ? "✅" : "❌"} ${rule} ${text}`);
-  // 汇总记录读一次：轮数显示和直接合并共用同一份解析。
+  // 汇总记录读一次：轮数显示和直接合并白名单里允许的汇总记录共用同一份解析。
   const summaryRead = policy.modification_rounds ? readSummaryRecords(facts.reviews, policy.modification_rounds) : null;
 
   // G1
@@ -342,7 +343,6 @@ export function decide(facts, policy) {
   const passes = [];
   const reviewed = new Set();
   const blocks = [];
-  const needsMore = [];
   const rejected = [];
   for (const r of onHead) {
     const p = parseReviewBlock(r.body);
@@ -362,7 +362,6 @@ export function decide(facts, policy) {
     const v = p.value;
     // 「需要更多信息」不直接合并，不管它是否因范围问题不能算合格评审。
     // 放在范围检查之前，避免 partial / 作者家族等被跳过时漏掉这种表态。
-    if (v.verdict === "NEEDS_MORE_INFO") needsMore.push({ id: r.id, family: v.family, model: v.model });
     if (scopeReason !== null) {
       rejected.push(`评审 #${r.id}:${scopeReason}`);
       continue;
@@ -374,19 +373,35 @@ export function decide(facts, policy) {
     passes.push({ id: r.id, family: count.family, model: v.model });
   }
   const stale = botReviews.length - onHead.length;
-  // 直接合并的白名单：当前 head 和同步沿用来源上，只允许上面计过家数的合格 PASS。
-  // 其余评审（含汇总/降级记录、读不清的记录、业主和其他账号的表态）都算「别的记录」。
-  const allowedDirectReviewIds = new Set(passes.map((p) => p.id));
-  const unexpectedDirectRecords = [];
-  for (const r of facts.reviews) {
-    if (!reviewHeads.has(r.commit_id) || allowedDirectReviewIds.has(r.id)) continue;
-    unexpectedDirectRecords.push(directRecordName(r, policy));
-  }
 
   // 人的表态:业主单独看(G7);其他人最后一次表态不是 Approve 的,都算 BLOCK(G5)
   const { all: stances, current: currentStances } = stancesOnHeads(facts.reviews, policy, head, reviewHeads);
   const ownerLast = [...stances.values()].find((r) => r.login === policy.owner && r.type === "User") ?? null;
   const ownerCurrent = [...currentStances.values()].find((r) => r.login === policy.owner && r.type === "User") ?? null;
+  // 直接合并的白名单：当前 head 和同步沿用来源上，只允许计过家数的合格 PASS，
+  // 外加业主在当前 head 上的批准、汇总在当前 head 上唯一合法且写「合并 / 无 P1」的记录。
+  // 其余可信账号记录、任何看不懂的记录都算「别的记录」。
+  const trustedDirectAccounts = new Set([
+    policy.owner,
+    policy.modification_rounds?.summary_account,
+    policy.reviewer_bot,
+    ...Object.keys(builderFamilies(policy)),
+  ].filter(Boolean).map((login) => login.toLowerCase()));
+  const allowedDirectReviewIds = new Set(passes.map((p) => p.id));
+  if (ownerCurrent?.state === "APPROVED") allowedDirectReviewIds.add(ownerCurrent.id);
+  // 汇总记录复用轮数显示的同一份解析：同 head 第二条、改写、格式坏、冲突都不会进 byHead，
+  // 或作为另一条记录留在下面被算作未允许，所以「唯一」不另写一份判断。
+  const summaryRecord = summaryRead?.byHead.get(head);
+  if (summaryRecord?.value.next_step === "合并" && summaryRecord.value.has_p1 === false) {
+    allowedDirectReviewIds.add(summaryRecord.id);
+  }
+  const unexpectedDirectRecords = [];
+  for (const r of facts.reviews) {
+    if (!reviewHeads.has(r.commit_id) || allowedDirectReviewIds.has(r.id)) continue;
+    // 非可信账号的普通评审意见（COMMENT）不挡直接合并；其「要求修改」仍由 G5 拦。
+    if (r.state === "COMMENTED" && !trustedDirectAccounts.has((r.login ?? "").toLowerCase())) continue;
+    unexpectedDirectRecords.push(directRecordName(r, policy));
+  }
   for (const [login, r] of stances) {
     if (login === policy.owner || r.state === "APPROVED") continue;
     blocks.push({ id: r.id, bot: false, at: effectiveAt(r, policy), family: "评审人", model: `${login}${r.state === "DISMISSED" ? "(被撤销的评审)" : " 要求修改"}` });
@@ -480,6 +495,10 @@ export function decide(facts, policy) {
   if (blocked) needOwner.push("有 BLOCK");
   if (downgraded.size) needOwner.push("汇总降级");
   if (high.length) needOwner.push("high 路径");
+  // 被白名单挡下的普通 PR：业主在当前 head 批准后才放行，贴合并标签不能单独成立。
+  if (policy.review_dispatch && unexpectedDirectRecords.length && !needOwner.length) {
+    needOwner.push("当前 head 上有不允许直接合并的记录");
+  }
   const ownerOk = !ownerObjection && (!needOwner.length || (approved && (!blocks.length || blockWaived)));
   if (ownerObjection) {
     // 反对可能来自当前 head，也可能来自沿用来源提交；位置要写对，不能一律说成当前 head。

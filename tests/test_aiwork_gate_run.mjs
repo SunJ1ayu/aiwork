@@ -593,6 +593,11 @@ const downgradeReview = (reviews, { id = 31, login = "summary-user", head = HEAD
   submitted_at: "2026-09-29T10:30:00Z",
   body: '```aiwork-downgrade\n' + JSON.stringify({ head_sha: head, reviews, evidence }) + '\n```\n',
 });
+const summaryReview = ({ id = 60, head = HEAD, next_step = "交业主", has_p1 = false } = {}) => ({
+  id, user: { login: "summary-user", type: "User" }, state: "COMMENTED", commit_id: head,
+  submitted_at: "2026-09-29T10:40:00Z",
+  body: '```aiwork-summary\n' + JSON.stringify({ head_sha: head, next_step, has_p1 }) + '\n```\n',
+});
 const summaries = (...items) => items.flat();
 const finishSummary = (calls, sha = HEAD) => calls.filter((c) => c[0] === "finish" && c[1] === sha).at(-1)?.[6] ?? "";
 
@@ -688,6 +693,36 @@ test("M16 汇总降级 + 业主当前 head 批准才放行；没有批准、或�
   const oldHead = await runCase([downgradeReview([5], { head: OTHER })]);
   assert.deepEqual(oldHead.merged, [], "旧 head 上的降级不认");
   assert.match(oldHead.summary, /G5/);
+});
+
+test("M18 有不允许的记录：没有业主批准时贴合并标签也不合；业主批准后才合", async () => {
+  const passes = [botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")];
+  const record = summaryReview({ next_step: "交业主" });
+  const runCase = async (extra) => {
+    const r = recorder();
+    const pr = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, record, ...extra),
+      labels: [MERGE], events: [labeled(policy.owner)] };
+    await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
+    return { merged: merges(r.calls), summary: finishSummary(r.calls) };
+  };
+  const without = await runCase([]);
+  assert.deepEqual(without.merged, [], "没有业主批准，贴标签也不合");
+  assert.match(without.summary, /业主.*批准/);
+  assert.match(without.summary, /汇总记录 #60/);
+
+  const withApproval = await runCase([ownerApprove()]);
+  assert.deepEqual(withApproval.merged, [[10, HEAD]], withApproval.summary);
+  assert.match(withApproval.summary, /不直接合并/);
+});
+
+test("M19 白名单允许的业主批准、汇总唯一「合并」记录不挡直接合并", async () => {
+  const passes = [botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")];
+  for (const extra of [ownerApprove(), summaryReview({ next_step: "合并" })]) {
+    const r = recorder();
+    const pr = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, extra) };
+    await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
+    assert.deepEqual(merges(r.calls), [[10, HEAD]], JSON.stringify(extra));
+  }
 });
 
 test("M17 全部 BLOCK 被汇总降级、业主当前 head 批准 → 关卡按合并标签合并（PR #172 情形）", async () => {
