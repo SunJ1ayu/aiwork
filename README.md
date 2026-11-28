@@ -1,6 +1,6 @@
 # aiwork
 
-Multi-model implementation and PR review tooling.
+aiwork 要能服务多个项目、多种任务，写代码只是其中一种；派活的环节按任务组合，由 agent 读项目规矩来拼，系统只硬挡代价大的错。业主在 Claude App 里拍板，其余交给 Agent。
 
 评审与修复规则见 [REVIEW-RULES.md](https://github.com/SunJ1ayu/aiwork/blob/main/REVIEW-RULES.md)，项目已接受风险见项目 main 的
 `.aiwork/accepted-risks.md`，正式评审与合并条件见项目关卡策略。
