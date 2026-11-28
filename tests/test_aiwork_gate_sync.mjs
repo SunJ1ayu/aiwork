@@ -56,7 +56,7 @@ function environment(over={}) {
  const at='2026-11-22T00:00:00Z', actor='aiwork-gate[bot]';
  const key=mergeBindingKey(1,p.merge_label,old,p.owner);
  const intent=syncIntent(1,old,base,'main','builder/one',actor,key,[],over.overlap?['web/a.ts']:[],common);
- const pr={number:1,state:'open',changed_files:1,labels:[{name:p.merge_label}],mergeable:true,
+ const pr={number:1,state:'open',changed_files:1,labels:over.noLabel?[]:[{name:p.merge_label}],mergeable:true,
   head:{sha:head,ref:'builder/one',repo:{full_name:'o/r'}},base:{sha:common,ref:'main'}};
  const activity=[{id:2,before:old,after:head,actor:{login:actor,type:'Bot'},activity_type:'push',timestamp:'2026-11-23'},
   {id:1,before:'0'.repeat(40),after:old,actor:{login:'SunJ1ayuBoT',type:'User'},activity_type:'branch_creation',timestamp:'2026-11-22'}];
@@ -99,7 +99,7 @@ function environment(over={}) {
   if(path.includes('/pulls/1/files'))return {data:[{filename:'web/a.ts'}]};
   if(path.includes('/pulls/1/reviews'))return {data:[{...pass(old),user:{login:p.reviewer_bot,type:'Bot'}}]};
   if(path.includes('/actions/runs'))return {data:{total_count:1,workflow_runs:[{id:1,path:p.ci.workflow_path,head_sha:pr.head.sha,event:p.ci.event,status:'completed',conclusion:'success',pull_requests:[{number:1}]}]}};
-  if(path.includes('/issues/1/events'))return {data:[{id:1,event:'labeled',label:{name:p.merge_label},actor:{login:p.owner},created_at:at}]};
+  if(path.includes('/issues/1/events'))return {data:over.noLabel?[]:[{id:1,event:'labeled',label:{name:p.merge_label},actor:{login:p.owner},created_at:at}]};
   if(path.includes('/activity?'))return {data:activity};
   if(path.includes('/check-runs?')){
    const records=path.includes(`/commits/${old}/`)?(path.includes(`check_name=${SYNC_CHECK}`)?[record]:[binding]):[];
@@ -115,10 +115,17 @@ test('收集与判定联测：关卡推送双亲与树差相同，作者仍是 B
  assert.equal(f.merge_request.bound,true);assert.deepEqual(f.synchronization.review_heads,[old]);
  assert.match(r.summary,/沿用提交/);
 });
+test('直接合并的 PR 没有合并标签，也能准备自动同步（绑定为空）',async()=>{
+ const e=environment({noLabel:true});const f=await collect(e.api,'o/r',1,p);
+ assert.equal(f.merge_request,null);
+ const sync=await prepareSynchronization(e.api,'o/r',1,f,'aiwork-gate[bot]');
+ assert.ok(sync?.intent);
+ assert.equal(sync.intent.binding,null);
+});
 test('收集链：main 碰了同一文件，旧评审和合并标签都不沿用',async()=>{
  const e=environment({overlap:true});const f=await collect(e.api,'o/r',1,p);
  assert.equal(f.merge_request.bound,false);assert.equal(decide(f,p).conclusion,'failure');
- assert.match(f.synchronization.note,/须重新评审并重贴合并标签/);
+ assert.match(f.synchronization.note,/须重新评审，再按当时的合并路径继续/);
 });
 test('同步后普通推送或推回同步 SHA 都截断标签和评审沿用',async()=>{
  for(const over of [{laterPush:true},{restore:true}]){
@@ -140,7 +147,7 @@ test('自动合并移动了 PR 文件仍不能沿用；树截断时认出同步�
  assert.equal(decide(t,p).author.known,true,'截断的树仍能认出这是关卡的同步推送，不能变成作者 UNKNOWN');
  assert.equal(t.merge_request.bound,false);
  assert.deepEqual(t.synchronization.review_heads,[]);
- assert.match(t.synchronization.note,/无法完整比对.*重新评审并重贴合并标签/);
+ assert.match(t.synchronization.note,/无法完整比对.*重新评审，再按当时的合并路径继续/);
  assert.notEqual(decide(t,p).conclusion,'success');
 });
 test('写意向之后 main 又前进：按合并提交的实际第二双亲核实并写明中途前进',async()=>{
@@ -216,7 +223,7 @@ test('超长同步意向截断成可读回且明确不能沿用；核心字段�
  const f=await collect(e.api,'o/r',1,p);
  assert.equal(f.merge_request.bound,false);
  assert.deepEqual(f.synchronization.review_heads,[]);
- assert.match(f.synchronization.note,/重新评审并重贴合并标签/);
+ assert.match(f.synchronization.note,/重新评审，再按当时的合并路径继续/);
  assert.match(f.synchronization.note,/同步意向超长被截断/,'不能把意向截断归因成 main 提交的文件列表截断');
 });
 function planning(over={}) {
@@ -254,7 +261,7 @@ test('同步计划：冲突不同步；逐提交含重命名旧路径的交集�
  }
  const capped=await prepareSynchronization(planning({files300:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
  assert.equal(capped.intent.overlap_unknown,true);assert.deepEqual(capped.intent.review_heads,[]);
- assert.match(capped.note,/可能被接口截断.*重新评审并重贴合并标签/);
+ assert.match(capped.note,/可能被接口截断.*重新评审，再按当时的合并路径继续/);
  const conflict=await prepareSynchronization(planning({conflict:true}).api,'o/r',1,planningFacts(),'aiwork-gate[bot]');
  assert.equal(conflict.conflict,true);assert.equal(conflict.intent,undefined);
  // 比较范围是固定提交，main 前进不会让条数自己变对；读取不全按 G8 拒绝，不能当成瞬时状态重读。

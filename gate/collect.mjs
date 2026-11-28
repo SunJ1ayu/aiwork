@@ -46,7 +46,7 @@ export function orderedCiRuns(runs, headSha, policy) {
 export function selectCiRun(runs, headSha, policy, prNumber) {
   const ciRuns = orderedCiRuns(runs, headSha, policy);
   return { run: ciRuns.find((r) => (r.pull_requests ?? []).some((p) => p.number === prNumber)) ?? null,
-           count: ciRuns.length };
+           count: ciRuns.length, latest: ciRuns[0] ?? null };
 }
 
 export async function collectCi(api, repo, headSha, policy, prNumber) {
@@ -55,10 +55,14 @@ export async function collectCi(api, repo, headSha, policy, prNumber) {
     `/repos/${repo}/actions/runs?head_sha=${headSha}&event=${policy.ci.event}&per_page=100`,
     "workflow_runs",
   );
-  const { run, count } = selectCiRun(runs, headSha, policy, prNumber);
+  const { run, count, latest } = selectCiRun(runs, headSha, policy, prNumber);
   if (!run) {
+    // 合并后 GitHub 不再把这些运行关联到 PR,但仍要带回创建时间:
+    // 派发桥给已合并的 PR 重算时靠它判断 CI 有没有测旧目标。
+    const createdAt = latest?.created_at ?? null;
     return count
-      ? { state: "failure", detail: `这个提交上有 ${count} 次 ci.yml 运行,但都没关联到 PR #${prNumber}` }
+      ? { state: "failure", detail: `这个提交上有 ${count} 次 ci.yml 运行,但都没关联到 PR #${prNumber}`,
+          ...(createdAt ? { created_at: createdAt } : {}) }
       : { state: "missing", detail: "没有 ci.yml 的运行" };
   }
   // created_at 是触发这次运行的事件的时间;重跑(re-run)沿用当时的合并提交,所以不看 run_started_at
@@ -175,16 +179,16 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
     const v=sync.current;
     const advanced=v.base_advanced ? `（写下意向后 main 又前进到 ${v.base.slice(0,7)}，已按实际合并基准核实）` : '';
     const note=v.tree_complete === false
-      ? `无法完整比对关卡同步前后的 Git tree（接口截断），不能证明 PR 自身改动未变，须按当前 head 重新评审并重贴合并标签${advanced}。`
+      ? `无法完整比对关卡同步前后的 Git tree（接口截断），不能证明 PR 自身改动未变，须按当前 head 重新评审，再按当时的合并路径继续${advanced}。`
       : !v.unchanged
-        ? `关卡同步后 PR 自身改动发生变化，须重新评审并重贴合并标签${advanced}。`
+        ? `关卡同步后 PR 自身改动发生变化，须重新评审，再按当时的合并路径继续${advanced}。`
         : v.retains
           ? `沿用提交 ${v.review_heads.join("、")} 的评审：关卡自动干净同步，main 新提交未碰本单文件${advanced}。`
           : v.truncated
-            ? `关卡自动干净同步，但同步意向超长被截断，无法确认是否碰了本单文件，须重新评审并重贴合并标签${advanced}。`
+            ? `关卡自动干净同步，但同步意向超长被截断，无法确认是否碰了本单文件，须重新评审，再按当时的合并路径继续${advanced}。`
             : v.overlap_unknown
-              ? `关卡自动干净同步，但 main 有提交的文件列表可能被接口截断，无法确认是否碰了本单文件，须重新评审并重贴合并标签${advanced}。`
-              : `关卡自动干净同步，但 main 碰了本单文件（${v.overlap.join("、")}），须重新评审并重贴合并标签${advanced}。`;
+              ? `关卡自动干净同步，但 main 有提交的文件列表可能被接口截断，无法确认是否碰了本单文件，须重新评审，再按当时的合并路径继续${advanced}。`
+              : `关卡自动干净同步，但 main 碰了本单文件（${v.overlap.join("、")}），须重新评审，再按当时的合并路径继续${advanced}。`;
     synchronization={review_heads:v.review_heads,note};
   }
   let mergeRequest = null;
@@ -219,7 +223,11 @@ export async function collect(api, repo, prNumber, policy, bindingApi = api) {
   delete pushes.activities;
   delete pushes.history;
   return {
-    pr: { number: pr.number, state: pr.state, head_sha: headSha, base_ref: pr.base?.ref },
+    pr: {
+      number: pr.number, state: pr.state, draft: pr.draft === true,
+      merged: pr.merged === true, merged_by: pr.merged_by?.login ?? null,
+      head_sha: headSha, base_ref: pr.base?.ref,
+    },
     files,
     reviews,
     ci,

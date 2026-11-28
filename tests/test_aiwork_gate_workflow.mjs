@@ -167,10 +167,51 @@ test("本仓库的两份 workflow 与模板逐字相同", () => {
   assert.equal(read(".github/workflows/aiwork-review-ping.yml"), read("templates/aiwork-review-ping.yml"));
 });
 
+test("文档：只有被白名单挡下的普通 PR 才要业主批准，合并路径由检查摘要区分", () => {
+  const readme = read("gate/README.md");
+  assert.doesNotMatch(readme, /其余 PR 仍要业主在当前 head 上批准并贴合并标签/);
+  assert.match(readme, /被白名单挡下（当前 head 或已核实的干净同步沿用来源上有不允许的记录）的普通 PR 要业主在当前 head 上批准并贴合并标签/);
+  assert.match(readme, /只到底线、没有不允许记录的普通 PR 仍按合并标签合并，不额外要求业主批准/);
+  const rules = read("REVIEW-RULES.md");
+  assert.doesNotMatch(rules, /否则业主批准并贴合并标签/);
+  assert.match(rules, /被白名单挡下的要业主批准并贴合并标签/);
+  assert.match(read("workflow/skills/patrol/SKILL.md"), /「实际合并路径」写明按目标家数直接合并/);
+});
+
+test("文档：汇总记录只能挡不能授权，任何汇总记录都不让普通 PR 直接合并", () => {
+  const readme = read("gate/README.md");
+  assert.doesNotMatch(readme, /「允许的记录」只有三种/);
+  assert.doesNotMatch(readme, /唯一一条格式合法、发出后未改写、写「合并」且 `has_p1: false` 的汇总记录/);
+  assert.match(readme, /「允许的记录」只有两种/);
+  assert.match(readme, /汇总账号的记录只能挡、不能授权/);
+  assert.match(readme, /写过任何记录，普通 PR 都不直接合并，合法的「合并 \/ 无 P1」记录也一样/);
+
+  const skill = read("workflow/skills/summary/SKILL.md");
+  assert.doesNotMatch(skill, /汇总唯一合法「合并」且无 P1 的记录外没有别的记录/);
+  assert.match(skill, /汇总记录只能挡、不能授权/);
+  assert.match(skill, /汇总账号在当前 head（含已核实的干净同步沿用来源）上写过任何记录/);
+
+  const workflow = read("workflow/CLAUDE.md");
+  assert.match(workflow, /当前 head 上没有汇总记录时由关卡直接合并/);
+});
+
+test("文档：干净同步沿用来源上的汇总降级跟原评审一样继续算数，只降同一提交的 BLOCK", () => {
+  const readme = read("gate/README.md");
+  assert.doesNotMatch(readme, /旧 head 上（包括同步沿用的来源提交）的/);
+  assert.doesNotMatch(readme, /列出的编号都是当前 head 上评审机器人的 BLOCK/);
+  assert.match(readme, /干净同步沿用来源上的降级记录跟来源上的评审一样继续算数，不因同步失效/);
+  assert.match(readme, /每条记录只能降它自己那条提交上的 BLOCK，不能降别的提交（包括当前 head）的 BLOCK/);
+
+  const skill = read("workflow/skills/summary/SKILL.md");
+  assert.doesNotMatch(skill, /别人写的、旧 head 上的、改写过的、格式不合的记录，关卡都不认/);
+  assert.match(skill, /干净同步沿用来源上的降级记录跟来源上的评审一样继续算数，不因同步失效/);
+  assert.match(skill, /记录只能降它自己那条提交上的 BLOCK，不能降别的提交的 BLOCK/);
+});
+
 test("aiwork-gate workflow：先检出调用方 main 的策略，再检出 aiwork main 的关卡，不检出 PR", () => {
   const text = read("templates/aiwork-gate.yml");
   assert.match(text, /^name: aiwork-gate$/m);
-  assert.match(text, /types: \[opened, synchronize, reopened, closed, labeled, edited\]/);
+  assert.match(text, /types: \[opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, labeled, edited\]/);
   assert.match(text, /workflows: \[ci, aiwork-review-ping\]/);
   assert.match(text, /types: \[requested, in_progress, completed\]/);
   assert.doesNotMatch(text, /^ {2}pull_request:/m);
