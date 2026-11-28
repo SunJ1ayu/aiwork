@@ -708,6 +708,8 @@ def public_dispatch_report(report):
                       if type(value := plan.get(key)) is int and value >= 0}
     if plan.get('tier') in ('documentation', 'code', 'high'):
         public['plan']['tier'] = plan['tier']
+    if report.get('finalized') is True:
+        public['finalized'] = True
     stopped = report.get('stopped')
     if stopped:
         try:
@@ -883,10 +885,12 @@ def auto_dispatch(repository: str, number: int, builder_family: str, *,
     finally:
         print(f'review-pr: dispatch record {directory}', file=sys.stderr)
     (directory / 'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    if not report['target_met'] or not report['reviewed_families']:
+    # 关卡已按这个 head 合并（直接合并或合并标签）时，这一轮已经收尾：
+    # 即使目标/底线家数没凑够也不再发失败通知。别的原因关闭仍由收尾前的读取报失败。
+    if not report.get('finalized') and (not report['target_met'] or not report['reviewed_families']):
         record_dispatch_failure(repository, number, report['head'], attempts, report, publication=notice_publication)
     print(json.dumps(public_dispatch_report(report), ensure_ascii=False, indent=2))
-    return 0 if report['minimum_met'] else 2
+    return 0 if report.get('finalized') or report['minimum_met'] else 2
 
 
 def main() -> int:

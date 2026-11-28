@@ -35,6 +35,7 @@ function prsApi(calls, prs, { fail = () => false, lists = null, bindingPolicy = 
   const pr = (n, read = false) => ({
     number: n,
     state: read ? prs[n].readState ?? "open" : "open",
+    draft: prs[n].draft === true,
     changed_files: prs[n].files.length,
     labels: (prs[n].labels ?? []).map((name) => ({ name })),
     head: { sha: read ? prs[n].readHead ?? prs[n].head : prs[n].head, ref: `claude/pr${n}`, repo: { full_name: "o/r" } },
@@ -338,6 +339,20 @@ test("M7 策略:merge_label 必须是非空字符串,merge_requesters 必须是�
   assert.ok(!policy.merge_requesters.includes(policy.owner), "业主一直算,不在名单里再写一遍");
 });
 
+test("M7a 策略:post_merge_check 可选,只认 all/sample/off 和合法的 sample_every", () => {
+  assert.doesNotThrow(() => validatePolicy(policy), "未配置时按 all");
+  for (const post_merge_check of [{ mode: "all" }, { mode: "off" }, { mode: "sample", sample_every: 3 }]) {
+    assert.doesNotThrow(() => validatePolicy({ ...policy, post_merge_check }), JSON.stringify(post_merge_check));
+  }
+  for (const post_merge_check of [null, [], {}, { mode: "every" }, { mode: "all", sample_every: 3 },
+    { mode: "off", sample_every: 3 }, { mode: "sample" }, { mode: "sample", sample_every: 0 },
+    { mode: "sample", sample_every: 1.5 }, { mode: "sample", sample_every: "3" },
+    { mode: "sample", sample_every: 3, extra: true }]) {
+    assert.throws(() => validatePolicy({ ...policy, post_merge_check }), /post_merge_check/,
+      JSON.stringify(post_merge_check));
+  }
+});
+
 test("M8 App 放行结论写回失败 → 不合并;其余 head 照算,运行最后报错", async () => {
   const r = recorder();
   const poster = { ...r.poster, async finish(sha, result, id) {
@@ -487,7 +502,7 @@ test('P1-1：重读轮只收尾没有最终结论的占位，不把已放行并�
   waitForState:async()=>{prs[11].head=NEW;},
  });
  const onMerged=finishes(r.calls).filter(f=>f[0]===HEAD);
- assert.deepEqual(onMerged.map(f=>[f[1],f[2]]),[['completed','success']],'已合并提交的检查保持放行');
+ assert.deepEqual(onMerged.map(f=>[f[1],f[2]]),[['completed','success'],['completed','success']],'已合并提交的结论和合并路径两次写入都保持放行');
  assert.ok(!onMerged.some(f=>/已不是开着的 PR 的 head/.test(f[3])),'不能被收尾改写成「已不是 head」');
  assert.deepEqual(merges(r.calls),[[10,HEAD]]);
  assert.deepEqual(finishes(r.calls).filter(f=>f[0]===NEW).map(f=>[f[1],f[2]]),
@@ -551,4 +566,210 @@ test('P1-1：同 head 的合并拒绝逐 PR 记录，不挡其余合并或改写
    assert.match(outcomes[0].summary,new RegExp(`PR #${number} 合并被拒`));
   }
  }
+});
+
+// ── 直接合并与汇总降级（issue #175）────────────────────────────────────────
+const DISPATCH = {
+  targets: { documentation: 1, code: 2, high: 3 },
+  documentation_paths: ["*.md", "**/*.md"],
+  minimum_families: 1,
+  candidates: ["subdeepseek-agent", "subkimi"],
+  selection: "random",
+};
+const directPolicy = { ...policy, review_dispatch: DISPATCH };
+const downgradePolicy = { ...directPolicy, modification_rounds: { summary_account: "summary-user" } };
+const reviewBlock = (verdict, family, model = `${family}-test`) =>
+  "```json\n" + JSON.stringify({ verdict, head_sha: HEAD, model, family, completeness: "complete" }) + "\n```";
+const botReview = (id, family, verdict = "PASS", at = "2026-09-29T09:00:00Z") => ({
+  id, user: { login: policy.reviewer_bot, type: "Bot" }, state: "COMMENTED", commit_id: HEAD,
+  submitted_at: at, body: reviewBlock(verdict, family),
+});
+const ownerApprove = (id = 30, at = "2026-09-29T11:00:00Z") => ({
+  id, user: { login: policy.owner, type: "User" }, state: "APPROVED", commit_id: HEAD,
+  submitted_at: at, body: "",
+});
+const downgradeReview = (reviews, { id = 31, login = "summary-user", head = HEAD, evidence = "跑了复现脚本,只是显示问题,按第二节第 1 条不算 P1" } = {}) => ({
+  id, user: { login, type: "User" }, state: "COMMENTED", commit_id: head,
+  submitted_at: "2026-09-29T10:30:00Z",
+  body: '```aiwork-downgrade\n' + JSON.stringify({ head_sha: head, reviews, evidence }) + '\n```\n',
+});
+const summaryReview = ({ id = 60, head = HEAD, next_step = "交业主", has_p1 = false } = {}) => ({
+  id, user: { login: "summary-user", type: "User" }, state: "COMMENTED", commit_id: head,
+  submitted_at: "2026-09-29T10:40:00Z",
+  body: '```aiwork-summary\n' + JSON.stringify({ head_sha: head, next_step, has_p1 }) + '\n```\n',
+});
+const summaries = (...items) => items.flat();
+const finishSummary = (calls, sha = HEAD) => calls.filter((c) => c[0] === "finish" && c[1] === sha).at(-1)?.[6] ?? "";
+
+test("M13 普通 PR 凑够目标家数、没有合并标签 → 关卡直接合并", async () => {
+  const r = recorder();
+  const api = prsApi(r.calls, {
+    10: { head: HEAD, files: ["web/a.ts"], verdict: null,
+      summaries: summaries(botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")) },
+  });
+  await run(r, api, { policy: directPolicy, merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), [[10, HEAD]]);
+  assert.match(finishSummary(r.calls), /实际合并路径：PR #10 按目标家数直接合并/);
+  const merged = r.calls.findIndex((c) => c[0] === "merge");
+  const wrote = r.calls.findIndex((c) => c[0] === "finish" && c[1] === HEAD && c[3] === "success");
+  assert.ok(wrote >= 0 && wrote < merged, "先写上放行结论,再直接合并");
+});
+
+test("M13b 草稿 PR 凑够目标家数也不直接合并", async () => {
+  const r = recorder();
+  const api = prsApi(r.calls, {
+    10: { head: HEAD, files: ["web/a.ts"], verdict: null, draft: true,
+      summaries: summaries(botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")) },
+  });
+  await run(r, api, { policy: directPolicy, merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), []);
+  assert.match(finishSummary(r.calls), /草稿 PR 不能直接合并/);
+});
+
+test("M13a 直接合并条件成立且分支落后 → 先自动同步，这一轮不直接合并", async () => {
+  const r = recorder();
+  const api = prsApi(r.calls, {
+    10: { head: HEAD, files: ["web/a.ts"], verdict: null,
+      summaries: summaries(botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")) },
+  });
+  let prepared = 0, applied = 0;
+  await run(r, api, { policy: directPolicy, merger: mergeRecorder(r), synchronizer: {
+    async prepare(number, facts) { prepared++; assert.equal(facts.merge_request, null); return { intent: { number }, note: "同步" }; },
+    async apply() { applied++; },
+  }});
+  assert.equal(prepared, 1);
+  assert.equal(applied, 1);
+  assert.deepEqual(merges(r.calls), [], "同步后等新 head 重算，不在这一轮合并");
+});
+
+test("M14 只凑到底线、没到目标家数 → 不直接合并，摘要写明差什么", async () => {
+  const r = recorder();
+  const api = prsApi(r.calls, {
+    10: { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: [botReview(1, "openai")] },
+  });
+  await run(r, api, { policy: directPolicy, merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), []);
+  assert.match(finishSummary(r.calls), /直接合并/);
+  assert.match(finishSummary(r.calls), /目标 2 家/);
+});
+
+test("M15 判卷面或 high 的 PR 凑够家数也不直接合并；没有合并标签就不合", async () => {
+  for (const files of [["AGENTS.md"], ["desktop/main.js"]]) {
+    const r = recorder();
+    const api = prsApi(r.calls, {
+      10: { head: HEAD, files, verdict: null,
+        summaries: summaries(botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z"), ownerApprove()) },
+    });
+    await run(r, api, { policy: directPolicy, merger: mergeRecorder(r) });
+    assert.deepEqual(merges(r.calls), [], files.join(","));
+    assert.match(finishSummary(r.calls), /直接合并/);
+  }
+});
+
+test("M16 汇总降级 + 业主当前 head 批准才放行；没有批准、或不是汇总账号写的降级都不认", async () => {
+  const passes = [botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")];
+  const block = botReview(5, "google", "BLOCK", "2026-09-29T09:02:00Z");
+  const runCase = async (extra, { policy: usePolicy = downgradePolicy, label = true } = {}) => {
+    const r = recorder();
+    const pr = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, block, extra),
+      ...(label ? { labels: [MERGE], events: [labeled(policy.owner)] } : {}) };
+    await run(r, prsApi(r.calls, { 10: pr }), { policy: usePolicy, merger: mergeRecorder(r) });
+    return { merged: merges(r.calls), summary: finishSummary(r.calls) };
+  };
+  const approved = await runCase([downgradeReview([5]), ownerApprove()]);
+  assert.deepEqual(approved.merged, [[10, HEAD]], approved.summary);
+  assert.match(approved.summary, /汇总降级/);
+
+  const withoutApproval = await runCase([downgradeReview([5])]);
+  assert.deepEqual(withoutApproval.merged, []);
+  assert.match(withoutApproval.summary, /汇总降级/);
+  assert.match(withoutApproval.summary, /业主.*批准/);
+
+  const stranger = await runCase([downgradeReview([5], { login: "other-user" })]);
+  assert.deepEqual(stranger.merged, [], "别人的降级不认");
+  assert.match(stranger.summary, /G5/);
+  assert.doesNotMatch(stranger.summary, /汇总降级/);
+
+  const oldHead = await runCase([downgradeReview([5], { head: OTHER })]);
+  assert.deepEqual(oldHead.merged, [], "旧 head 上的降级不认");
+  assert.match(oldHead.summary, /G5/);
+});
+
+test("M18 有不允许的记录：没有业主批准时贴合并标签也不合；业主批准后才合", async () => {
+  const passes = [botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")];
+  const record = summaryReview({ next_step: "交业主" });
+  const runCase = async (extra) => {
+    const r = recorder();
+    const pr = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, record, ...extra),
+      labels: [MERGE], events: [labeled(policy.owner)] };
+    await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
+    return { merged: merges(r.calls), summary: finishSummary(r.calls) };
+  };
+  const without = await runCase([]);
+  assert.deepEqual(without.merged, [], "没有业主批准，贴标签也不合");
+  assert.match(without.summary, /业主.*批准/);
+  assert.match(without.summary, /汇总记录 #60/);
+
+  const withApproval = await runCase([ownerApprove()]);
+  assert.deepEqual(withApproval.merged, [[10, HEAD]], withApproval.summary);
+  assert.match(withApproval.summary, /不直接合并/);
+});
+
+test("M19 业主在当前 head 上的批准不挡直接合并", async () => {
+  const passes = [botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")];
+  const r = recorder();
+  const pr = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, ownerApprove()) };
+  await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), [[10, HEAD]]);
+});
+
+test("M19b 汇总账号写过任何记录（含「合并 / 无 P1」）都不直接合并；业主批准后才按标签合并", async () => {
+  const passes = [botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")];
+  const record = summaryReview({ next_step: "合并" });
+
+  const without = recorder();
+  const plain = { head: HEAD, files: ["web/a.ts"], verdict: null, summaries: summaries(passes, record) };
+  await run(without, prsApi(without.calls, { 10: plain }), { policy: downgradePolicy, merger: mergeRecorder(without) });
+  assert.deepEqual(merges(without.calls), [], "汇总记录只能挡、不能授权");
+  assert.match(finishSummary(without.calls), /不直接合并/);
+  assert.match(finishSummary(without.calls), /汇总记录 #60/);
+
+  const approved = recorder();
+  const withOwner = {
+    head: HEAD, files: ["web/a.ts"], verdict: null,
+    summaries: summaries(passes, record, ownerApprove()),
+    labels: [MERGE], events: [labeled(policy.owner)],
+  };
+  await run(approved, prsApi(approved.calls, { 10: withOwner }), { policy: downgradePolicy, merger: mergeRecorder(approved) });
+  assert.deepEqual(merges(approved.calls), [[10, HEAD]], finishSummary(approved.calls));
+  assert.match(finishSummary(approved.calls), /实际合并路径：PR #10 按 SunJ1ayu 的合并标签合并/);
+});
+
+test("M20 两家 PASS 且贴了合并标签：摘要记的实际合并路径是标签，不是直接合并", async () => {
+  const r = recorder();
+  const pr = {
+    head: HEAD, files: ["web/a.ts"], verdict: null,
+    summaries: summaries(botReview(1, "openai"), botReview(2, "deepseek", "PASS", "2026-09-29T09:01:00Z")),
+    labels: [MERGE], events: [labeled(policy.owner)],
+  };
+  const logs = [];
+  await run(r, prsApi(r.calls, { 10: pr }), { policy: directPolicy, merger: mergeRecorder(r), log: (l) => logs.push(l) });
+  assert.deepEqual(merges(r.calls), [[10, HEAD]]);
+  assert.ok(logs.some((l) => /PR #10:按 SunJ1ayu 的请求合并了/.test(l)), "实际走的是合并标签路径");
+  const summary = finishSummary(r.calls);
+  assert.match(summary, /实际合并路径：PR #10 按 SunJ1ayu 的合并标签合并/, summary);
+  assert.doesNotMatch(summary, /实际合并路径：PR #10 按目标家数直接合并/, "摘要不能把标签路径记成直接合并");
+});
+
+test("M17 全部 BLOCK 被汇总降级、业主当前 head 批准 → 关卡按合并标签合并（PR #172 情形）", async () => {
+  const blocks = [botReview(5, "openai", "BLOCK"), botReview(6, "deepseek", "BLOCK", "2026-09-29T09:01:00Z")];
+  const pr = {
+    head: HEAD, files: ["web/a.ts"], verdict: null,
+    summaries: summaries(blocks, downgradeReview([5, 6]), ownerApprove()),
+    labels: [MERGE], events: [labeled(policy.owner)],
+  };
+  const r = recorder();
+  await run(r, prsApi(r.calls, { 10: pr }), { policy: downgradePolicy, merger: mergeRecorder(r) });
+  assert.deepEqual(merges(r.calls), [[10, HEAD]]);
+  assert.match(finishSummary(r.calls), /汇总降级按家族计入/);
 });

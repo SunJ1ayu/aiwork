@@ -7,9 +7,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const { decide, parseReviewBlock, matchAny, conclusionLines } = await import("../gate/decide.mjs");
+const { decide, parseReviewBlock, matchAny, conclusionLines, parseDowngradeRecord } = await import("../gate/decide.mjs");
 const { collect, collectCi, collectPushes, paginate } = await import("../gate/collect.mjs");
 const policy = JSON.parse(readFileSync(new URL("./fixtures/gate-logic-policy.json", import.meta.url), "utf8"));
+const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 
 const HEAD = "a".repeat(40);
 const OLD = "b".repeat(40);
@@ -383,6 +384,15 @@ test("R2 别的 PR 在同一提交上的 CI 不算到本 PR(G1)", async () => {
   assert.notEqual((await collectCi(unlinked, "o/r", HEAD, policy, 10)).state, "success", "没关联任何 PR 的运行也不算");
 });
 
+test("R2b 收集:已合并 PR 的 CI 运行丢了 PR 关联,仍带回创建时间给重算用", async () => {
+  const unlinked = { id: 9, path: ".github/workflows/ci.yml", head_sha: HEAD, status: "completed",
+    conclusion: "success", created_at: "2026-09-29T10:00:00Z", pull_requests: [] };
+  const api = { getPage: async () => ({ data: { workflow_runs: [unlinked] }, next: null }) };
+  const ci = await collectCi(api, "o/r", HEAD, policy, 10);
+  assert.equal(ci.state, "failure", "没关联到本 PR 的运行不能直接当成本 PR 的 CI 结论");
+  assert.equal(ci.created_at, "2026-09-29T10:00:00Z", "重算时还要靠这个时间判断 CI 是否测了旧目标");
+});
+
 test("R3 业主批准早于 BLOCK:豁免不了那条 BLOCK;BLOCK 之后再批准才算(G5 / G7)", () => {
   const early = run({ reviews: [review({ id: 1 }), approve(HEAD, "2026-09-29T11:00:00Z"), review({ id: 2, verdict: "BLOCK", at: "2026-09-29T12:00:00Z" })] });
   blocked(early, "G7");
@@ -681,3 +691,594 @@ test("R30 代码里的 conclusion: pending 不是结论行；独占一行的 Con
   blocked(run({ reviews: [withLine(9, "Conclusion: BLOCK")] }), "G5");
 });
 
+
+// ── 直接合并、汇总降级（issue #175）─────────────────────────────────────────
+// 目标家数来自 review_dispatch.targets；底线仍只由 G3 / G6 决定。
+const dispatch = {
+  targets: { documentation: 1, code: 2, high: 3 },
+  documentation_paths: ["*.md", "**/*.md"],
+  minimum_families: 1,
+  candidates: ["subdeepseek-agent", "subkimi"],
+  selection: "random",
+};
+const directPolicy = { ...policy, review_dispatch: dispatch };
+const twoFamilies = () => [review({ id: 1 }), review({ id: 2, family: "deepseek", model: "deepseek-test" })];
+const direct = (files, reviews, extra = {}) => decide(facts({ files, reviews, ...extra }), directPolicy);
+
+test("直接合并:普通 PR 凑够目标家数、无 BLOCK/需要更多信息、CI 绿 → 关卡直接合并", () => {
+  const result = direct(["web/src/a.ts"], twoFamilies());
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.equal(result.direct_merge.enabled, true);
+  assert.equal(result.direct_merge.ok, true, result.summary);
+  assert.match(result.summary, /✅ 直接合并/);
+  assert.match(result.summary, /目标 2 家/);
+});
+
+test("直接合并:草稿 PR 凑够目标家数也不直接合并", () => {
+  const result = direct(["web/src/a.ts"], twoFamilies(),
+    { pr: { number: 10, state: "open", draft: true, head_sha: HEAD } });
+  assert.equal(result.conclusion, "success", "草稿本身不改变放行条件");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /草稿 PR 不能直接合并/);
+});
+
+test("直接合并:只到底线不到目标家数 → 不直接合并，摘要写明差什么", () => {
+  const result = direct(["web/src/a.ts"], [review({})]);
+  assert.equal(result.conclusion, "success", "底线 1 家仍放行");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /直接合并/);
+  assert.match(result.summary, /目标 2 家/);
+  assert.match(result.summary, /合格 PASS 1 家/);
+});
+
+test("直接合并:判卷面或 high 的 PR 即使凑够家数也不直接合并", () => {
+  for (const [files, reviews] of [
+    [["AGENTS.md"], [...twoFamilies(), approve()]],
+    [["desktop/main.js"], [...twoFamilies(), approve()]],
+  ]) {
+    const result = direct(files, reviews);
+    assert.equal(result.conclusion, "success", result.summary);
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, /直接合并/);
+    assert.match(result.summary, /判卷面|high/);
+  }
+});
+
+test("直接合并:有 BLOCK 或需要更多信息 → 不直接合并", () => {
+  const nmi = direct(["web/src/a.ts"], [...twoFamilies(), review({ id: 3, family: "google", model: "gemini", verdict: "NEEDS_MORE_INFO" })]);
+  assert.equal(nmi.conclusion, "failure", "有不允许的记录时要业主批准");
+  assert.equal(nmi.direct_merge.ok, false, nmi.summary);
+  assert.match(nmi.summary, /未允许的记录/);
+  assert.match(nmi.summary, /评审记录 #3/);
+  assert.match(nmi.summary, /业主.*批准/);
+
+  const blockedResult = direct(["web/src/a.ts"], [...twoFamilies(), review({ id: 4, family: "google", model: "gemini", verdict: "BLOCK" })]);
+  assert.equal(blockedResult.conclusion, "failure", blockedResult.summary);
+  assert.equal(blockedResult.direct_merge.ok, false, blockedResult.summary);
+  assert.match(blockedResult.summary, /评审记录 #4/, blockedResult.summary);
+});
+
+test("直接合并:未配置 review_dispatch 的项目保持原行为，不新增直接合并", () => {
+  const result = decide(facts({ reviews: twoFamilies() }), policy);
+  assert.equal(result.direct_merge.enabled, false);
+  assert.equal(result.direct_merge.ok, false);
+  assert.doesNotMatch(result.summary, /直接合并/);
+});
+
+const downgradePolicy = { ...directPolicy, modification_rounds: { summary_account: "summary-user" } };
+const blockReview = (id = 5, family = "google", model = `${family}-block`) => review({ id, family, model, verdict: "BLOCK" });
+const downgradeRecord = ({ id = 20, head = HEAD, reviews = [5], evidence = "跑了复现脚本,按第二节第 1 条只是显示问题,不算 P1", ...over } = {}) => ({
+  id, login: "summary-user", type: "User", state: "COMMENTED", commit_id: head,
+  submitted_at: "2026-09-29T10:30:00Z", edited_at: null,
+  body: '```aiwork-downgrade\n' + JSON.stringify({ head_sha: head, reviews, evidence }) + '\n```\n',
+  ...over,
+});
+const summaryRecord = ({ id = 30, head = HEAD, next_step = "合并", has_p1 = false, task = "", ...over } = {}) => ({
+  id, login: "summary-user", type: "User", state: "COMMENTED", commit_id: head,
+  submitted_at: "2026-09-29T10:40:00Z", edited_at: null,
+  body: '```aiwork-summary\n' + JSON.stringify({ head_sha: head, next_step, has_p1 }) + '\n```\n' + (task ? `\n${task}` : ""),
+  ...over,
+});
+
+test("直接合并:汇总账号在当前 head 上写过任何记录（含「合并 / 无 P1」）都不直接合并", () => {
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), summaryRecord({ next_step: "合并", has_p1: false })],
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "failure", "汇总记录只能挡、不能授权，要业主批准");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /汇总记录 #30/, result.summary);
+  assert.match(result.summary, /业主.*批准/, result.summary);
+});
+
+test("直接合并:汇总正文写 BLOCK / 有 P1 / 照单修、记录却写「合并 / 无 P1」也不直接合并", () => {
+  const contradictory = summaryRecord({
+    next_step: "合并",
+    has_p1: false,
+    body: 'Conclusion: BLOCK\nP1：本轮实测有功能错误。\n下一步：照单修\n\n'
+      + '```aiwork-summary\n'
+      + JSON.stringify({ head_sha: HEAD, next_step: "合并", has_p1: false })
+      + '\n```\n',
+  });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), contradictory],
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "failure", result.summary);
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /汇总记录 #30/, result.summary);
+  assert.match(result.summary, /业主.*批准/, result.summary);
+});
+
+test("直接合并:汇总记录写 P1/其他下一步、多条、改写、读不清都挡住", () => {
+  const records = [
+    summaryRecord({ next_step: "照单修", has_p1: true, task: "修复已复现的问题" }),
+    summaryRecord({ next_step: "交业主", has_p1: false }),
+    summaryRecord({ next_step: "合并", has_p1: false, edited_at: "2026-09-29T10:41:00Z" }),
+    summaryRecord({ next_step: "合并", has_p1: false, body: "```aiwork-summary\nnot json\n```\n" }),
+  ];
+  for (const record of records) {
+    const result = decide(facts({
+      files: ["web/src/a.ts"],
+      reviews: [...twoFamilies(), record],
+    }), downgradePolicy);
+    assert.equal(result.conclusion, "failure", "有不允许的记录时要业主批准");
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, new RegExp(`汇总记录 #${record.id}`), result.summary);
+    assert.match(result.summary, /业主.*批准/, result.summary);
+  }
+
+  const twice = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), summaryRecord({ id: 30 }), summaryRecord({ id: 31 })],
+  }), downgradePolicy);
+  assert.equal(twice.direct_merge.ok, false, "同一 head 两条汇总记录不算唯一");
+  assert.match(twice.summary, /汇总记录 #31/, twice.summary);
+});
+
+test("直接合并:业主在当前 head 上批准不挡；要求修改、撤销、旧 head 批准都挡", () => {
+  const approved = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), approve()],
+  }), downgradePolicy);
+  assert.equal(approved.conclusion, "success", approved.summary);
+  assert.equal(approved.direct_merge.ok, true, approved.summary);
+
+  for (const state of ["CHANGES_REQUESTED", "DISMISSED"]) {
+    const result = decide(facts({
+      files: ["web/src/a.ts"],
+      reviews: [...twoFamilies(), approve(HEAD, "2026-09-29T11:00:00Z", state)],
+    }), downgradePolicy);
+    assert.equal(result.conclusion, "failure", result.summary);
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, /业主记录 #99/, result.summary);
+  }
+
+  const oldApproval = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), approve(OLD)],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.equal(oldApproval.direct_merge.ok, false, "只允许业主在当前 head 上的批准");
+  assert.match(oldApproval.summary, /业主记录 #99/, oldApproval.summary);
+});
+
+test("直接合并:业主同一 head 上的多次批准都不挡；更晚的要求修改、撤销仍挡", () => {
+  const first = { ...approve(HEAD, "2026-09-29T10:00:00Z"), id: 97 };
+  const second = { ...approve(HEAD, "2026-09-29T11:00:00Z"), id: 98 };
+  const twice = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), first, second],
+  }), downgradePolicy);
+  assert.equal(twice.conclusion, "success", twice.summary);
+  assert.equal(twice.direct_merge.ok, true, twice.summary);
+
+  const lateChanges = { ...approve(HEAD, "2026-09-29T12:00:00Z", "CHANGES_REQUESTED"), id: 100 };
+  const changed = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), first, second, lateChanges],
+  }), downgradePolicy);
+  assert.equal(changed.conclusion, "failure", changed.summary);
+  assert.equal(changed.direct_merge.ok, false, "更晚的要求修改照旧挡");
+  assert.match(changed.summary, /业主.*要求修改|G7/, changed.summary);
+});
+
+test("直接合并:可信账号的其他记录一律挡住；非可信账号 COMMENT 不挡；旧 head 且未同步沿用的不算", () => {
+  for (const record of [
+    { ...approve(), state: "COMMENTED", body: "" },
+    review({ id: 40, login: "SunJ1ayuBoT", type: "Bot" }),
+    review({ id: 41, login: "someone", type: "User", state: "APPROVED" }),
+  ]) {
+    const result = decide(facts({
+      files: ["web/src/a.ts"],
+      reviews: [...twoFamilies(), record],
+    }), downgradePolicy);
+    assert.equal(result.conclusion, "failure", result.summary);
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, /未允许的记录/, result.summary);
+  }
+
+  const outsiderComment = review({ id: 42, login: "someone", type: "User", state: "COMMENTED" });
+  const comment = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), outsiderComment],
+  }), downgradePolicy);
+  assert.equal(comment.conclusion, "success", comment.summary);
+  assert.equal(comment.direct_merge.ok, true, "非可信账号的普通评审意见不挡直接合并");
+
+  const outsiderChanges = review({ id: 43, login: "someone", type: "User", state: "CHANGES_REQUESTED" });
+  const changes = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), outsiderChanges],
+  }), downgradePolicy);
+  assert.equal(changes.conclusion, "failure", changes.summary);
+  assert.match(changes.summary, /G5/, "非可信账号的要求修改仍按 G5 拦");
+
+  const oldOnly = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), summaryRecord({ head: OLD, commit_id: OLD })],
+  }), downgradePolicy);
+  assert.equal(oldOnly.direct_merge.ok, true, "旧 head 且没有同步沿用，不在白名单检查范围");
+
+  const synced = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), summaryRecord({ head: OLD, commit_id: OLD })],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.equal(synced.direct_merge.ok, false, "同步沿用的旧 head 记录也要看");
+  assert.match(synced.summary, /汇总记录 #30/, synced.summary);
+});
+
+const downgraded = (extra = {}) => decide(facts({
+  files: ["web/src/a.ts"],
+  reviews: [...twoFamilies(), blockReview(), downgradeRecord(), approve(), ...(extra.reviews ?? [])],
+  ...extra.facts,
+}), extra.policy ?? downgradePolicy);
+
+test("汇总降级:当前 head 上登记账号的合法降级记录让 BLOCK 不再拦合并，但仍要业主批准", () => {
+  const withoutApproval = decide(facts({ reviews: [...twoFamilies(), blockReview(), downgradeRecord()] }), downgradePolicy);
+  assert.equal(withoutApproval.conclusion, "failure", withoutApproval.summary);
+  assert.doesNotMatch(withoutApproval.summary, /G5/, "降级后不再有 BLOCK");
+  assert.match(withoutApproval.summary, /汇总降级/);
+  assert.match(withoutApproval.summary, /业主.*批准/);
+
+  const result = downgraded();
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.equal(result.direct_merge.ok, false, "被降级的 BLOCK 不能让直接合并成立");
+  assert.match(result.summary, /直接合并/);
+  assert.match(result.summary, /汇总降级/);
+  assert.match(result.summary, /降级记录 #20/);
+});
+
+test("汇总降级:非汇总账号、旧 head、格式不合、降级对象不是当前 head 的 BLOCK 都不认", () => {
+  const base = [...twoFamilies(), blockReview()];
+  const withExtraField = {
+    ...downgradeRecord(),
+    body: '```aiwork-downgrade\n' + JSON.stringify({
+      head_sha: HEAD, reviews: [5], evidence: "核实过", extra: true,
+    }) + '\n```\n',
+  };
+  const cases = [
+    ["别人写的", downgradeRecord({ login: "other-user" })],
+    ["旧 head", downgradeRecord({ head: OLD })],
+    ["空核实过程", downgradeRecord({ evidence: "  " })],
+    ["降级一条 PASS", downgradeRecord({ reviews: [1] })],
+    ["降级不存在的评审", downgradeRecord({ reviews: [999] })],
+    ["格式多字段", withExtraField],
+    ["发出后改写", downgradeRecord({ edited_at: "2026-09-29T11:30:00Z" })],
+  ];
+  for (const [name, record] of cases) {
+    const result = decide(facts({ files: ["web/src/a.ts"], reviews: [...base, record] }), downgradePolicy);
+    assert.equal(result.conclusion, "failure", `${name}:${result.summary}`);
+    assert.match(result.summary, /G5/, name);
+  }
+});
+
+test("直接合并:评审范围不合格的需要更多信息也不能直接合并", () => {
+  for (const over of [
+    { completeness: "partial" },
+    { family: "anthropic", model: "claude-test" },
+  ]) {
+    const result = direct(["web/src/a.ts"], [
+      ...twoFamilies(),
+      review({ id: 3, family: "google", model: "gemini", verdict: "NEEDS_MORE_INFO", ...over }),
+    ]);
+    assert.equal(result.direct_merge.ok, false, result.summary);
+    assert.match(result.summary, /未允许的记录/);
+    assert.match(result.summary, /评审记录 #3/);
+  }
+});
+
+test("汇总降级:当前 head 的降级记录不能降级同步沿用来的旧提交 BLOCK", () => {
+  const oldBlock = review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), oldBlock, downgradeRecord({ reviews: [5] }), approve()],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.match(result.summary, /G5/, "旧提交上的 BLOCK 仍在 G5");
+  assert.doesNotMatch(result.summary, /汇总降级/, "当前 head 的记录不能降级旧提交 BLOCK");
+});
+
+test("汇总降级:干净同步产生新 head 后旧 head 上合法的降级记录跟原评审一样继续算数", () => {
+  const oldBlock = review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" });
+  const oldDowngrade = downgradeRecord({ head: OLD, commit_id: OLD, reviews: [5] });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), oldBlock, oldDowngrade, approve()],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.doesNotMatch(result.summary, /❌ G5/, "沿用来源上的降级把 BLOCK 移走");
+  assert.match(result.summary, /汇总降级：评审 #5/, result.summary);
+  assert.equal(result.direct_merge.ok, false, "有降级记录仍要合并标签，不能直接合并");
+});
+
+test("汇总降级:旧 head 上两家的 BLOCK 全部降级，关卡干净同步到新 head 后仍按家族计入 G3（#242 已修）", () => {
+  const oldBlocks = [
+    review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" }),
+    review({ id: 6, commit: OLD, family: "deepseek", model: "deepseek-test", verdict: "BLOCK" }),
+  ];
+  const oldDowngrade = downgradeRecord({ head: OLD, commit_id: OLD, reviews: [5, 6] });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...oldBlocks, oldDowngrade, approve()],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "success", result.summary);
+  assert.deepEqual(result.review_state.downgraded_families.sort(), ["deepseek", "google"]);
+  assert.equal(result.review_state.pass_families.length, 0, "这两家只有降级的 BLOCK，没有 PASS");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.match(result.summary, /汇总降级：评审 #5、评审 #6/, result.summary);
+});
+
+test("汇总降级:沿用来源上的降级记录只能降它自己那条提交的 BLOCK", () => {
+  const oldBlock = review({ id: 5, commit: OLD, family: "google", model: "gemini", verdict: "BLOCK" });
+  const currentBlock = review({ id: 6, commit: HEAD, family: "deepseek", model: "deepseek-test", verdict: "BLOCK" });
+  const oldDowngrade = downgradeRecord({ head: OLD, commit_id: OLD, reviews: [5, 6] });
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), oldBlock, currentBlock, oldDowngrade, approve()],
+    synchronization: { review_heads: [OLD] },
+  }), downgradePolicy);
+  assert.match(result.summary, /❌ G5/, "记录没降成，旧提交和当前 head 的 BLOCK 都还在");
+  assert.deepEqual(result.blocks.map((b) => b.id).sort(), [5, 6], result.summary);
+  assert.doesNotMatch(result.summary, /汇总降级：评审 #5/, "列了别的提交的评审，整条记录不认");
+  assert.equal(result.direct_merge.ok, false, result.summary);
+});
+
+test("汇总降级:全部 BLOCK 降级且业主在当前 head 批准后放行（PR #172 情形），仍不能直接合并", () => {
+  const allBlocks = [blockReview(5, "google", "gemini"), blockReview(6, "deepseek", "deepseek-test")];
+  const released = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [...allBlocks, downgradeRecord({ reviews: [5, 6] }), approve()],
+  }), downgradePolicy);
+  assert.equal(released.conclusion, "success", released.summary);
+  assert.match(released.summary, /汇总降级按家族计入:google、deepseek/);
+  assert.equal(released.direct_merge.ok, false, "被降级的 BLOCK 不能让直接合并成立");
+
+  const noApproval = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [...allBlocks, downgradeRecord({ reviews: [5, 6] })],
+  }), downgradePolicy);
+  assert.equal(noApproval.conclusion, "failure", noApproval.summary);
+  assert.match(noApproval.summary, /业主.*批准/);
+
+  const sameFamily = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [blockReview(5, "google"), blockReview(6, "google"), downgradeRecord({ reviews: [5, 6] }), approve()],
+  }), downgradePolicy);
+  assert.equal(sameFamily.conclusion, "failure", "同一家族不能凑成两家");
+  assert.match(sameFamily.summary, /high 路径/);
+});
+
+test("汇总降级:被改写过的 BLOCK 只移走 G5，不按改写后正文的家族计 G3/G6", () => {
+  const edited = (r) => ({ ...r, edited_at: "2026-09-29T10:20:00Z" });
+  const result = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [
+      edited(blockReview(5, "google", "gemini")),
+      edited(blockReview(6, "deepseek", "deepseek-test")),
+      downgradeRecord({ reviews: [5, 6] }), approve(),
+    ],
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "failure", result.summary);
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.deepEqual(result.review_state.downgraded_families, [], "改写过的正文不能提供家族数");
+  assert.deepEqual(result.review_state.pass_families, []);
+  assert.deepEqual(result.review_state.reviewed_families, [], "正常计数也不把改写过的评审算进来");
+  assert.match(result.summary, /已降级但不计家数/, result.summary);
+  assert.match(result.summary, /改写过/, "摘要要说明为什么不计家数");
+  assert.match(result.summary, /❌ G3/, "没有合格家数，不能放行");
+  assert.doesNotMatch(result.summary, /❌ G5/, "降级仍把 BLOCK 移出 G5");
+
+  // 对照：同样两条没改写的 BLOCK，降级后照旧能计家数并放行。
+  const intact = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [
+      blockReview(5, "google", "gemini"),
+      blockReview(6, "deepseek", "deepseek-test"),
+      downgradeRecord({ reviews: [5, 6] }), approve(),
+    ],
+  }), downgradePolicy);
+  assert.equal(intact.conclusion, "success", intact.summary);
+  assert.deepEqual([...intact.review_state.downgraded_families].sort(), ["deepseek", "google"]);
+});
+
+test("汇总降级:正文结论行与结论块不一致的 BLOCK 不计家数，降级也不能放行", () => {
+  // 评审机器人先写 Conclusion: PASS、最后写 Conclusion: BLOCK，但结论块里是 BLOCK。
+  // 这种评审看不清到底想说什么，不能提供家族数；降级只把它从 G5 移走。
+  const contradictory = (id, family, model) => {
+    const r = blockReview(id, family, model);
+    r.body = `Conclusion: PASS\n\n${r.body}\nConclusion: BLOCK\n`;
+    return r;
+  };
+  const result = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [
+      contradictory(5, "google", "gemini"),
+      contradictory(6, "deepseek", "deepseek-test"),
+      downgradeRecord({ reviews: [5, 6] }), approve(),
+    ],
+  }), downgradePolicy);
+  assert.equal(result.conclusion, "failure", result.summary);
+  assert.equal(result.direct_merge.ok, false, result.summary);
+  assert.deepEqual(result.review_state.downgraded_families, [], "正文结论矛盾的评审不能提供家族数");
+  assert.deepEqual(result.review_state.reviewed_families, [], "正常计数也不把正文结论矛盾的评审算进来");
+  assert.match(result.summary, /已降级但不计家数/, result.summary);
+  assert.match(result.summary, /正文结论行/, "摘要要说明为什么不计家数");
+  assert.match(result.summary, /❌ G3/, "没有合格家数，不能放行");
+  assert.doesNotMatch(result.summary, /❌ G5/, "降级仍把 BLOCK 移出 G5");
+
+  const stillBlocks = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [contradictory(7, "google", "gemini")],
+  }), downgradePolicy);
+  assert.equal(stillBlocks.conclusion, "failure", stillBlocks.summary);
+  assert.match(stillBlocks.summary, /❌ G5/, "没有降级时仍按 BLOCK 拦截");
+
+  // 对照：正文只有 Conclusion: BLOCK、和结论块一致的 BLOCK，降级后照旧计家数并放行。
+  const consistent = (id, family, model) => {
+    const r = blockReview(id, family, model);
+    r.body = `Conclusion: BLOCK\n\n${r.body}\n`;
+    return r;
+  };
+  const intact = decide(facts({
+    files: ["desktop/main.js"],
+    reviews: [
+      consistent(5, "google", "gemini"),
+      consistent(6, "deepseek", "deepseek-test"),
+      downgradeRecord({ reviews: [5, 6] }), approve(),
+    ],
+  }), downgradePolicy);
+  assert.equal(intact.conclusion, "success", intact.summary);
+  assert.deepEqual([...intact.review_state.downgraded_families].sort(), ["deepseek", "google"]);
+});
+
+test("summary skill 的降级记录定义直接生成关卡对照用例", () => {
+  const skill = read("../workflow/skills/summary/SKILL.md");
+  const match = /```aiwork-downgrade-schema\n([\s\S]*?)\n```/.exec(skill);
+  assert.ok(match, "降级记录格式必须在 summary skill 定义");
+  const schema = JSON.parse(match[1]);
+  assert.equal(schema.title, "aiwork-downgrade");
+
+  // 只解释 schema 用到的关键字；定义里出现新关键字时先在这里红，逼着补出对应边界。
+  const SUPPORTED = new Set([
+    "title", "type", "required", "additionalProperties", "properties",
+    "pattern", "minLength", "maxLength", "minItems", "maxItems", "uniqueItems",
+    "items", "minimum", "maximum", "enum", "const",
+  ]);
+  const seen = new Set();
+  const walk = (spec) => {
+    for (const key of Object.keys(spec)) seen.add(key);
+    for (const child of Object.values(spec.properties ?? {})) walk(child);
+    if (spec.items && typeof spec.items === "object") walk(spec.items);
+  };
+  walk(schema);
+  assert.deepEqual([...seen].filter((key) => !SUPPORTED.has(key)), [], "schema 出现未支持的约束");
+
+  function accepts(spec, value) {
+    if (Object.hasOwn(spec, "const") && value !== spec.const) return false;
+    if (spec.enum && !spec.enum.includes(value)) return false;
+    if (spec.type === "object" && (!value || typeof value !== "object" || Array.isArray(value))) return false;
+    if (spec.type === "array" && !Array.isArray(value)) return false;
+    if (spec.type === "integer" && !Number.isSafeInteger(value)) return false;
+    if (spec.type === "string" && typeof value !== "string") return false;
+    if (spec.type && !["object", "array", "integer", "string"].includes(spec.type) && typeof value !== spec.type) return false;
+    if (Object.hasOwn(spec, "pattern") && (typeof value !== "string" || !new RegExp(spec.pattern).test(value))) return false;
+    if (spec.minLength !== undefined && (typeof value !== "string" || value.length < spec.minLength)) return false;
+    if (spec.maxLength !== undefined && (typeof value !== "string" || value.length > spec.maxLength)) return false;
+    if (spec.minItems !== undefined && (!Array.isArray(value) || value.length < spec.minItems)) return false;
+    if (spec.maxItems !== undefined && (!Array.isArray(value) || value.length > spec.maxItems)) return false;
+    if (spec.uniqueItems && (!Array.isArray(value) || new Set(value).size !== value.length)) return false;
+    if (spec.minimum !== undefined && (typeof value !== "number" || value < spec.minimum)) return false;
+    if (spec.maximum !== undefined && (typeof value !== "number" || value > spec.maximum)) return false;
+    if (spec.required?.some((key) => !Object.hasOwn(value, key))) return false;
+    if (spec.additionalProperties === false && Object.keys(value).some((key) => !Object.hasOwn(spec.properties, key))) return false;
+    for (const [key, child] of Object.entries(spec.properties ?? {})) {
+      if (Object.hasOwn(value, key) && !accepts(child, value[key])) return false;
+    }
+    if (spec.items && Array.isArray(value) && !value.every((item) => accepts(spec.items, item))) return false;
+    return true;
+  }
+
+  const record = (value) => ({
+    id: 20, login: "summary-user", type: "User", state: "COMMENTED", commit_id: HEAD,
+    submitted_at: "2026-09-29T10:30:00Z", edited_at: null,
+    body: "```" + schema.title + "\n" + JSON.stringify(value) + "\n```\n",
+  });
+  // head 绑定是格式之外的规则：这里把合成记录的 commit_id/head 都对到候选值，
+  // 只比较「格式约束」本身；绑定由其他用例钉住。
+  const gateAccepts = (value) => {
+    const head = value && typeof value === "object" && typeof value.head_sha === "string" ? value.head_sha : HEAD;
+    return parseDowngradeRecord(record(value), head) !== null;
+  };
+
+  // 从 schema 的 required/properties 生成合法基线；字段改名或必填变化会直接反映在这里。
+  const base = {};
+  for (const key of schema.required) {
+    base[key] = key === "head_sha" ? HEAD : key === "reviews" ? [5] : key === "evidence" ? "核实过程" : "x";
+  }
+  assert.equal(accepts(schema, base), true, "schema 生成的基线应合法");
+
+  const stringBoundaries = (spec) => {
+    const values = ["", " ", "\n", "x", "xy", "x".repeat(3), "x".repeat(10), "0".repeat(40), "g".repeat(40), HEAD, HEAD.slice(1), HEAD + "0", HEAD.toUpperCase(), 42, null];
+    if (spec.minLength !== undefined) {
+      for (const n of [spec.minLength - 1, spec.minLength, spec.minLength + 1]) if (n >= 0) values.push("x".repeat(n));
+    }
+    if (spec.maxLength !== undefined) {
+      for (const n of [spec.maxLength - 1, spec.maxLength, spec.maxLength + 1]) if (n >= 0) values.push("x".repeat(n));
+    }
+    return values;
+  };
+  const valuesFor = (key, spec) => {
+    if (key === "head_sha") {
+      // 只给不合法或与当前 head 等长的值，避免把「有效但不同 head」的绑定规则混进格式对照。
+      return ["", "short", HEAD.slice(1), HEAD + "0", HEAD.toUpperCase(), "0".repeat(39), "0".repeat(41), "g".repeat(40), 42, null];
+    }
+    if (spec.type === "integer") {
+      const values = [0, -1, 1, 1.5, "1", Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1];
+      if (spec.minimum !== undefined) values.push(spec.minimum - 1, spec.minimum, spec.minimum + 1);
+      if (spec.maximum !== undefined) values.push(spec.maximum - 1, spec.maximum, spec.maximum + 1);
+      return values;
+    }
+    if (spec.type === "array") {
+      const values = [[], [5], [5, 5], [0], [-1], [1.5], ["5"], [Number.MAX_SAFE_INTEGER + 1]];
+      if (spec.minItems !== undefined) {
+        for (const n of [spec.minItems - 1, spec.minItems, spec.minItems + 1]) if (n >= 0) values.push(Array.from({ length: n }, (_, i) => i + 1));
+      }
+      if (spec.maxItems !== undefined) {
+        for (const n of [spec.maxItems - 1, spec.maxItems, spec.maxItems + 1]) if (n >= 0) values.push(Array.from({ length: n }, (_, i) => i + 1));
+      }
+      if (spec.items) for (const item of valuesFor("item", spec.items)) values.push([item]);
+      return values;
+    }
+    return stringBoundaries(spec);
+  };
+
+  const candidates = [base, { ...base, extra: true }];
+  for (const key of schema.required) {
+    const { [key]: _omit, ...rest } = base;
+    candidates.push(rest);
+  }
+  for (const [key, spec] of Object.entries(schema.properties ?? {})) {
+    for (const value of valuesFor(key, spec)) candidates.push({ ...base, [key]: value });
+  }
+  for (const value of candidates) {
+    assert.equal(gateAccepts(value), accepts(schema, value),
+      `关卡与 summary skill 的格式定义不一致:${JSON.stringify(value)}`);
+  }
+
+  // 端到端：合法示例仍能让关卡降级。
+  const exampleMatch = /```aiwork-downgrade\n([\s\S]*?)\n```/.exec(skill);
+  assert.ok(exampleMatch, "summary skill 必须有降级记录示例");
+  const example = JSON.parse(exampleMatch[1]);
+  example.head_sha = HEAD;
+  assert.equal(accepts(schema, example), true);
+  const result = decide(facts({
+    files: ["web/src/a.ts"],
+    reviews: [...twoFamilies(), ...example.reviews.map((id) => blockReview(id)), record(example)],
+  }), downgradePolicy);
+  assert.match(result.summary, /汇总降级/);
+  assert.doesNotMatch(result.summary, /❌ G5/);
+});
