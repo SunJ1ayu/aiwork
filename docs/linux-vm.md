@@ -53,7 +53,7 @@ limactl shell --workdir=/ "$AIWORK_VM_NAME" sudo -i
 
 `limactl copy` 只发送这一个公开程序，不共享目录。检查失败就停下，不继续放凭证。每次重启、改 Lima 配置、插拔或改存储以后，都要从 guest 初始挂载命名空间重新检查。
 
-**可选外接盘**：在创建新实例以前，把 `LIMA_HOME` 指到本人选定的已挂载目录，只在本机 shell 设置中保存它；每次运行 Lima 前先确认盘已挂好，不能让缺盘时自动建同名目录。最好使用加密磁盘。不要把实际盘名、路径写进模板、PR 或日志。Mac 上 autoloop 中台继续在内置盘 HOME 的默认目录，不随 `LIMA_HOME` 搬动。
+**可选外接盘**：在创建新实例以前，把 `LIMA_HOME` 指到本人选定的已挂载目录，只在本机 shell 设置中保存它；每次运行 Lima 前先确认盘已挂好，不能让缺盘时自动建同名目录。最好使用加密磁盘。不要把实际盘名、路径写进模板、PR 或日志。Mac 上 autoloop 中台继续放在内置盘，不随 `LIMA_HOME` 搬动。
 
 ## 2. guest：安装两份独立 Node 和 CLI
 
@@ -180,7 +180,7 @@ Mac 本机部署验收另交本人完成，PR 中的 Linux 测试不能代替：
 
 ## 4. autoloop：只安装和连接，不配置派活
 
-固定使用 [agent-autoloop 正式发布版](https://github.com/KKKKhazix/agent-autoloop/releases/tag/v1.6.1)。不要运行上游会选最新 Release 的安装器或 `update`，不要把上游代码、规则副本放进 aiwork。Mac 中台和 guest 接单程序分别匿名 clone 该 tag 到各自默认的 `~/.agent-autoloop/app`，已存在时先核实，不覆盖。
+固定使用 [agent-autoloop 正式发布版](https://github.com/KKKKhazix/agent-autoloop/releases/tag/v1.6.1)。不要运行上游会选最新 Release 的安装器或 `update`，不要把上游代码、规则副本放进 aiwork。Mac 中台和 guest 接单程序分别匿名 clone 该 tag，已存在时先核实，不覆盖。guest 接单程序装在默认的 `~/.agent-autoloop/app`，下方启动器和服务按此路径写；Mac 中台的安装路径属于本机设置。
 
 guest root shell：
 
@@ -200,7 +200,7 @@ chmod 755 "$HOME/.local/bin/agent-autoloop"
 /opt/node-autoloop/bin/node --version
 ```
 
-这是 Node 自带 TypeScript 支持的程序，不需要 `npm install`。上面的启动器用绝对路径选 Node，不改变测试用的 `node`。Mac 上复用已安装的 Node（要求 >=24；试用用过 Node 26），使用同一固定 tag 和默认目录，按上游该 tag 的 [INSTALL.md](https://github.com/KKKKhazix/agent-autoloop/blob/v1.6.1/INSTALL.md)和 [正式配置手册](https://github.com/KKKKhazix/agent-autoloop/blob/v1.6.1/skills/agent-autoloop/SKILL.md)配置中台；`hub.listen` 只用 `127.0.0.1:3350`，Mac 不配 worker。中台的 owner/channel Key 留在 Mac，guest 只领 worker Key。通知只保留 OpenClaw 一个通道，桌面通知关闭；不改现有 OpenClaw 程序。
+这是 Node 自带 TypeScript 支持的程序，不需要 `npm install`。上面的启动器用绝对路径选 Node，不改变测试用的 `node`。Mac 上复用已安装的 Node（要求 >=24；试用用过 Node 26），使用同一固定 tag，按上游该 tag 的 [INSTALL.md](https://github.com/KKKKhazix/agent-autoloop/blob/v1.6.1/INSTALL.md)和 [正式配置手册](https://github.com/KKKKhazix/agent-autoloop/blob/v1.6.1/skills/agent-autoloop/SKILL.md)配置中台；`hub.listen` 只用 `127.0.0.1:3350`，Mac 不配 worker。中台的 owner/channel Key 留在 Mac，guest 只领 worker Key。通知只保留 OpenClaw 一个通道，桌面通知关闭；不改现有 OpenClaw 程序。
 
 在 Mac 本机设置中生成一个专用于新 guest 的 worker 身份（不复用试验 worker），通过非公开本机操作交给 guest。guest 的 `~/.agent-autoloop/config.json` 只需 `url`、`worker.name`、`worker.key`，字段见上游 `host/config.ts`；地址为 `http://host.lima.internal:3350`。文件 600、父目录 700，不放 `hub`、`owner` 或 `channels`。不要把 Key 填进公开示例、终端录屏或命令行参数。
 
